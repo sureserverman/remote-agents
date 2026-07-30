@@ -1,0 +1,12 @@
+version: 1
+projects:
+  - path: /tmp/remote-agents-project-a
+    name: project-a
+    area: infra
+    enabled: true
+    added: 2026-07-30
+  - path: /tmp/remote-agents-project-disabled
+    name: disabled
+    area: infra
+    enabled: false
+    added: 2026-07-30
