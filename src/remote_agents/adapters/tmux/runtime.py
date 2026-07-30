@@ -34,6 +34,7 @@ class LaunchProfile:
     argv: tuple[str, ...]
     environment: dict[str, str]
     readiness_marker: str
+    graceful_keys: tuple[str, ...] = ("C-c",)
 
     def __post_init__(self) -> None:
         if (
@@ -61,6 +62,7 @@ class TmuxTerminal:
         self._profiles = profiles
         self._startup_timeout = startup_timeout
         self.invalidate_next_intent = False
+        self._session_profiles: dict[SessionId, LaunchProfile] = {}
 
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
@@ -95,6 +97,7 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="launch_failed"
             )
+        self._session_profiles[session_id] = profile
         deadline = asyncio.get_running_loop().time() + self._startup_timeout
         while asyncio.get_running_loop().time() < deadline:
             observation = await self.inspect(session_id)
@@ -109,9 +112,38 @@ class TmuxTerminal:
             session_id, live=False, preserved=False, detail="startup_timeout"
         )
 
+    async def graceful_stop(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> TerminalObservation:
+        """Send only the persisted profile sequence and retain the resulting dead pane."""
+        profile = self._session_profiles.get(session_id)
+        if profile is None or profile_id not in self._profiles:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="unknown_session"
+            )
+        await self._gateway.send_keys(session_id, profile.graceful_keys)
+        deadline = asyncio.get_running_loop().time() + self._startup_timeout
+        while asyncio.get_running_loop().time() < deadline:
+            observation = await self.inspect(session_id)
+            if observation is not None and observation.preserved:
+                return observation
+            await asyncio.sleep(0.01)
+        return TerminalObservation(
+            session_id, live=True, preserved=False, detail="graceful_timeout"
+        )
+
+    async def cleanup(self, session_id: SessionId) -> None:
+        """Remove only the exact managed session after preserved-output inspection."""
+        await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        self._session_profiles.pop(session_id, None)
+        (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
+
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         """Convert trusted dedicated-server pane evidence into terminal liveness."""
-        inventory = await self._gateway.inventory()
+        try:
+            inventory = await self._gateway.inventory()
+        except RuntimeError:
+            return None
         for pane in inventory.managed:
             if pane.session_id == session_id:
                 return TerminalObservation(session_id, pane.live, pane.preserved)

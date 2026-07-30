@@ -63,7 +63,10 @@ def make_terminal(
     socket = f"remote-agents-test-{uuid4().hex}"
     gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
     profile = LaunchProfile(
-        sys.executable, (sys.executable, str(agent), mode), {"PATH": os.environ["PATH"]}, "READY"
+        sys.executable,
+        (sys.executable, str(agent), mode),
+        {"PATH": os.environ["PATH"]},
+        "READY",
     )
     terminal = TmuxTerminal(
         gateway,

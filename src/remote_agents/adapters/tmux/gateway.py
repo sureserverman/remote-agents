@@ -82,6 +82,14 @@ class TmuxGateway:
             *self._base_argv(), "capture-pane", "-p", "-t", exact_session_target(f"ra-{session_id}")
         )
 
+    async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
+        """Send a profile-owned fixed key sequence to one exact managed target."""
+        if not keys:
+            raise ValueError("graceful stop requires a fixed key sequence")
+        await self._runner.run(
+            *self._base_argv(), "send-keys", "-t", exact_session_target(f"ra-{session_id}"), *keys
+        )
+
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId, cwd: Path
     ) -> None:
