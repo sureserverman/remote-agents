@@ -1,19 +1,26 @@
-"""Read-only health reporting for configured core dependencies."""
-
-from __future__ import annotations
-
-from pathlib import Path
+"""Technology-neutral health reporting for configured core dependencies."""
 
 
 def doctor(
-    dev_root: Path, registry_path: Path, database_path: Path, *, fake_terminal: bool
+    *,
+    database_ready: bool,
+    registered_projects: int,
+    discovered_projects: int,
+    catalogue_projects: int,
+    registry_error: str | None,
+    fake_terminal: bool,
 ) -> dict[str, object]:
-    """Return JSON-serializable health without starting Telegram or tmux."""
+    """Return structured status from adapter observations without starting a runtime."""
+    registry_ready = registry_error is None
     return {
-        "database": {"ready": database_path.parent.parent.exists()},
+        "healthy": database_ready and registry_ready and fake_terminal,
+        "database": {"ready": database_ready},
         "projects": {
-            "dev_root": str(dev_root),
-            "registry_configured": bool(registry_path),
+            "registered": registered_projects,
+            "discovered": discovered_projects,
+            "catalogue": catalogue_projects,
+            "registry_ready": registry_ready,
+            "degraded_reason": registry_error,
         },
         "terminal": {"fake_ready": fake_terminal},
     }

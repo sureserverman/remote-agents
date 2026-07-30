@@ -27,3 +27,17 @@ def open_database(
     except Exception:
         connection.close()
         raise
+
+
+def database_is_ready(path: Path) -> bool:
+    """Check an existing database is readable and at the current schema version."""
+    if not path.is_file():
+        return False
+    try:
+        connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        try:
+            return current_version(connection) == MIGRATIONS[-1][0]
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError):
+        return False

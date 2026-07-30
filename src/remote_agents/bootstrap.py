@@ -11,7 +11,11 @@ import argparse
 import json
 from pathlib import Path
 
+from remote_agents.adapters.projects.discovery import discover_projects
+from remote_agents.adapters.projects.registry import load_registry
+from remote_agents.adapters.sqlite.database import database_is_ready
 from remote_agents.application.doctor import doctor
+from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.config import load_config
 
 
@@ -29,10 +33,15 @@ def main() -> int:
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         config = load_config(arguments.config)
+        registry = load_registry(config.registry_path)
+        discovered = discover_projects(config.dev_root)
+        catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
         result = doctor(
-            config.dev_root,
-            config.registry_path,
-            config.database_path,
+            database_ready=database_is_ready(config.database_path),
+            registered_projects=len(registry.projects),
+            discovered_projects=len(discovered),
+            catalogue_projects=len(catalogue),
+            registry_error=registry.error,
             fake_terminal=arguments.fake_terminal,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.database import database_is_ready, open_database
 from remote_agents.adapters.sqlite.migrations import current_version
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.domain.models import (
@@ -39,6 +39,15 @@ def test_clean_database_creates_versioned_projection_and_event_tables(tmp_path: 
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
     assert {"sessions", "session_events", "schema_version"} <= names
+
+
+def test_database_health_rejects_incomplete_schema_version_table(tmp_path: Path) -> None:
+    path = tmp_path / "sessions.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    connection.close()
+
+    assert database_is_ready(path) is False
 
 
 def test_upgrade_creates_backup_before_new_migration(tmp_path: Path) -> None:
