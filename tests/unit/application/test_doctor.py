@@ -1,6 +1,8 @@
 """Doctor reports component health rather than configuration-shaped guesses."""
 
-from remote_agents.application.doctor import doctor
+from remote_agents.application.doctor import doctor, profile_doctor
+from remote_agents.domain.models import ProfileId
+from remote_agents.domain.profiles import ProfileCompatibility
 
 
 def test_doctor_reports_counts_and_any_unready_core_dependency() -> None:
@@ -24,4 +26,34 @@ def test_doctor_reports_counts_and_any_unready_core_dependency() -> None:
             "degraded_reason": "registry_invalid",
         },
         "terminal": {"fake_ready": True},
+    }
+
+
+def test_profile_doctor_lists_independent_compatibility_without_local_paths() -> None:
+    report = profile_doctor(
+        (
+            ProfileCompatibility(
+                ProfileId("claude"), True, "claude 1.2.3", "BLOCKED", "awaiting_live_qualification"
+            ),
+            ProfileCompatibility(ProfileId("codex"), False, None, "BLOCKED", "executable_missing"),
+        )
+    )
+
+    assert report == {
+        "profiles": [
+            {
+                "id": "claude",
+                "available": True,
+                "version": "claude 1.2.3",
+                "status": "BLOCKED",
+                "reason": "awaiting_live_qualification",
+            },
+            {
+                "id": "codex",
+                "available": False,
+                "version": None,
+                "status": "BLOCKED",
+                "reason": "executable_missing",
+            },
+        ]
     }

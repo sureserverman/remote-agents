@@ -1,5 +1,7 @@
 """Technology-neutral health reporting for configured core dependencies."""
 
+from remote_agents.domain.profiles import ProfileCompatibility
+
 
 def doctor(
     *,
@@ -23,4 +25,20 @@ def doctor(
             "degraded_reason": registry_error,
         },
         "terminal": {"fake_ready": fake_terminal},
+    }
+
+
+def profile_doctor(profiles: tuple[ProfileCompatibility, ...]) -> dict[str, object]:
+    """Render independent non-secret profile probe evidence for operator diagnostics."""
+    return {
+        "profiles": [
+            {
+                "id": str(profile.profile_id),
+                "available": profile.available,
+                "version": profile.version,
+                "status": profile.status,
+                "reason": profile.reason,
+            }
+            for profile in profiles
+        ]
     }
