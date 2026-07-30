@@ -74,7 +74,7 @@ class StopController:
     async def execute(self, request: StopRequest, service: object, record: object) -> bool:
         """Recheck the current record before dispatching one typed destructive command."""
 
-        if record.session_id != request.session_id:
+        if record.session_id != request.session_id or record.profile_id != request.profile_id:
             return False
         if request.action == "graceful" and record.state is SessionState.RUNNING:
             await service.graceful_stop(GracefulStopCommand(request.session_id, request.profile_id))

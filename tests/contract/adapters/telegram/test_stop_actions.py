@@ -24,9 +24,10 @@ class FakeService:
 
 
 class Record:
-    def __init__(self, session_id: SessionId, state: SessionState) -> None:
+    def __init__(self, session_id: SessionId, state: SessionState, profile_id: ProfileId) -> None:
         self.session_id = session_id
         self.state = state
+        self.profile_id = profile_id
 
 
 def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -> None:
@@ -76,5 +77,10 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
     assert claimed is not None
     service = FakeService()
 
-    assert not await controller.execute(claimed, service, Record(session, SessionState.PRESERVED))
+    assert not await controller.execute(
+        claimed, service, Record(session, SessionState.PRESERVED, ProfileId("claude"))
+    )
     assert service.actions == []
+    assert not await controller.execute(
+        claimed, service, Record(session, SessionState.RUNNING, ProfileId("codex"))
+    )
