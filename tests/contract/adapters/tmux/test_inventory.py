@@ -20,7 +20,7 @@ class RecordingRunner:
 
 
 def pane_line(session_id: SessionId, *, schema: str = "1") -> str:
-    return "\x1f".join(
+    return "|".join(
         (f"ra-{session_id}", "$1", "%1", "0", "0", schema, str(session_id), "opaque-editor", "claude")
     )
 

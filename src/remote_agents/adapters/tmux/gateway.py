@@ -76,6 +76,12 @@ class TmuxGateway:
             *self._base_argv(), operation, "-t", exact_session_target(session_name)
         )
 
+    async def capture(self, session_id: SessionId) -> str:
+        """Capture only one exact managed pane without tmux escape-sequence output."""
+        return await self._runner.run(
+            *self._base_argv(), "capture-pane", "-p", "-t", exact_session_target(f"ra-{session_id}")
+        )
+
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId, cwd: Path
     ) -> None:
@@ -113,3 +119,8 @@ class TmuxGateway:
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""
         return ("tmux", "-L", self._socket_name)
+
+    @property
+    def intent_directory(self) -> Path:
+        """Return the adapter-owned private directory supplied to the fixed runner."""
+        return self._intent_directory

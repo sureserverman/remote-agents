@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
-_DELIMITER = "\x1f"
+_DELIMITER = "|"
 _SCHEMA_VERSION = "1"
 PANE_FORMAT = _DELIMITER.join(
     (
@@ -56,7 +56,7 @@ def parse_pane(line: str) -> ManagedPane:
     )
     if schema != _SCHEMA_VERSION:
         raise ValueError("tmux management schema is missing or unsupported")
-    if any(not field for field in fields):
+    if any(not field for index, field in enumerate(fields) if index != 4):
         raise ValueError("tmux pane format has missing fields")
     session_id = SessionId.parse(raw_id)
     if name != f"ra-{session_id}":

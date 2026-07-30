@@ -8,7 +8,7 @@ from remote_agents.domain.models import SessionId
 
 def pane_line(*, schema: str = "1", session_id: SessionId | None = None) -> str:
     managed_id = session_id or SessionId.new()
-    return "\x1f".join(
+    return "|".join(
         (
             f"ra-{managed_id}",
             "$12",
@@ -42,23 +42,23 @@ def test_codec_rejects_missing_or_unknown_tag_schemas(schema: str) -> None:
 
 
 def test_codec_rejects_untrusted_name_or_invalid_identifier() -> None:
-    fields = pane_line().split("\x1f")
+    fields = pane_line().split("|")
     fields[0] = "shared-workspace"
     with pytest.raises(ValueError, match="name"):
-        parse_pane("\x1f".join(fields))
+        parse_pane("|".join(fields))
 
-    fields = pane_line().split("\x1f")
+    fields = pane_line().split("|")
     fields[6] = "not-a-uuid"
     with pytest.raises(ValueError, match="session ID"):
-        parse_pane("\x1f".join(fields))
+        parse_pane("|".join(fields))
 
 
 def test_codec_rejects_empty_stable_tmux_fields() -> None:
-    fields = pane_line().split("\x1f")
+    fields = pane_line().split("|")
     fields[2] = ""
 
     with pytest.raises(ValueError, match="missing"):
-        parse_pane("\x1f".join(fields))
+        parse_pane("|".join(fields))
 
 
 def test_exact_target_rejects_prefixes_and_only_accepts_generated_names() -> None:
