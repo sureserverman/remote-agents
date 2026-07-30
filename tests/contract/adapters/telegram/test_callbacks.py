@@ -44,3 +44,28 @@ def test_mutation_callback_nonce_is_claimed_exactly_once() -> None:
 
     assert store.claim_mutation(token, owner_id=7, chat_id=11, view_revision=3) is True
     assert store.claim_mutation(token, owner_id=7, chat_id=11, view_revision=3) is False
+
+
+def test_expired_callback_state_is_discarded_before_new_state_is_created() -> None:
+    current = datetime(2026, 7, 30, tzinfo=UTC)
+    clock = [current]
+    store = CallbackStateStore(now=lambda: clock[0], ttl=timedelta(minutes=1))
+    expired = store.create("launch.confirm", "project-1", 7, 11, 3, mutation=True)
+
+    assert store.claim_mutation(expired, owner_id=7, chat_id=11, view_revision=3) is True
+    clock[0] += timedelta(minutes=2)
+    store.create("view.refresh", "project-2", 7, 11, 4)
+
+    assert store.active_count == 1
+
+
+def test_callback_store_refuses_new_state_when_its_live_capacity_is_full() -> None:
+    store = CallbackStateStore(now=lambda: datetime(2026, 7, 30, tzinfo=UTC), limit=1)
+    store.create("view.refresh", "project-1", 7, 11, 3)
+
+    try:
+        store.create("view.refresh", "project-2", 7, 11, 4)
+    except ValueError as error:
+        assert "capacity" in str(error)
+    else:
+        raise AssertionError("callback store accepted state beyond its live capacity")

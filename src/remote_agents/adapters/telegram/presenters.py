@@ -99,12 +99,11 @@ def render_empty(subject: str, callbacks: NavigationCallbacks) -> RenderedMessag
     )
 
 
-def render_degraded(reason: str, callbacks: NavigationCallbacks) -> RenderedMessage:
-    """Render a safe degraded state and a deterministic way to retry or return home."""
+def render_degraded(callbacks: NavigationCallbacks) -> RenderedMessage:
+    """Render a safe degraded state without exposing an application error or path."""
 
-    suffix = "\nRefresh to try again."
     return _message(
-        _bounded_escaped(reason, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(suffix)) + suffix,
+        "The service is temporarily unavailable.\nRefresh to try again.",
         _navigation(callbacks, include_back=False),
     )
 

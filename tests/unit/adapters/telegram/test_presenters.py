@@ -35,10 +35,10 @@ def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
 
 def test_empty_and_degraded_views_offer_safe_recovery_actions() -> None:
     empty = render_empty("sessions", CALLBACKS)
-    degraded = render_degraded("Registry <offline>", CALLBACKS)
+    degraded = render_degraded(CALLBACKS)
 
     assert "No sessions available." in empty.text
-    assert "Registry &lt;offline&gt;" in degraded.text
+    assert degraded.text == "The service is temporarily unavailable.\nRefresh to try again."
     assert "Refresh" in degraded.text
     assert [button.text for row in empty.keyboard for button in row] == ["Refresh", "Home"]
     assert [button.text for row in degraded.keyboard for button in row] == ["Refresh", "Home"]

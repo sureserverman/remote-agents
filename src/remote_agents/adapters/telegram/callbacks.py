@@ -27,11 +27,15 @@ class CallbackStateStore:
         *,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         ttl: timedelta = timedelta(minutes=15),
+        limit: int = 4096,
     ) -> None:
         if ttl <= timedelta():
             raise ValueError("callback state TTL must be positive")
+        if limit < 1:
+            raise ValueError("callback state capacity must be positive")
         self._now = now
         self._ttl = ttl
+        self._limit = limit
         self._states: dict[str, CallbackState] = {}
         self._claimed: set[str] = set()
 
@@ -47,6 +51,9 @@ class CallbackStateStore:
     ) -> str:
         if not action or not entity_id or view_revision < 0:
             raise ValueError("callback state must contain a safe action, entity, and revision")
+        self._discard_expired()
+        if len(self._states) >= self._limit:
+            raise ValueError("callback state capacity is full")
         token = f"c1_{secrets.token_urlsafe(18)}"
         self._states[token] = CallbackState(
             action,
@@ -62,6 +69,7 @@ class CallbackStateStore:
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, view_revision: int
     ) -> CallbackState | None:
+        self._discard_expired()
         state = self._states.get(token)
         if (
             state is None
@@ -81,3 +89,18 @@ class CallbackStateStore:
             return False
         self._claimed.add(token)
         return True
+
+    @property
+    def active_count(self) -> int:
+        """Expose the number of live callback states for bounded-resource verification."""
+
+        self._discard_expired()
+        return len(self._states)
+
+    def _discard_expired(self) -> None:
+        expired_tokens = [
+            token for token, state in self._states.items() if self._now() >= state.expires_at
+        ]
+        for token in expired_tokens:
+            del self._states[token]
+            self._claimed.discard(token)

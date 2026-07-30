@@ -9,6 +9,8 @@ from typing import Protocol
 
 from telegram.ext import Application, ApplicationBuilder
 
+from remote_agents.adapters.telegram.authorization import AuthorizationGate, AuthorizationUpdate
+
 
 class TelegramRuntime(Protocol):
     async def initialize(self) -> None: ...
@@ -27,6 +29,10 @@ class RecordedUpdate:
     """Synthetic update data that intentionally omits Telegram usernames and messages."""
 
     token: str
+    sender_id: int | None = None
+    chat_id: int | None = None
+    chat_type: str | None = None
+    kind: str = "callback"
     callback_id: str | None = None
 
 
@@ -79,6 +85,7 @@ class PollingAdapter:
     def __init__(
         self,
         transport: PollingTransport,
+        authorization: AuthorizationGate,
         handle: Callable[[str], None],
         *,
         retries: int,
@@ -87,6 +94,7 @@ class PollingAdapter:
         if retries < 0:
             raise ValueError("retries cannot be negative")
         self._transport = transport
+        self._authorization = authorization
         self._handle = handle
         self._retries = retries
         self._wait = wait
@@ -103,7 +111,15 @@ class PollingAdapter:
         for update in updates:
             if update.callback_id is not None:
                 await self._transport.answer_callback(update.callback_id)
-            self._handle(update.token)
+            self._authorization.dispatch(
+                AuthorizationUpdate(
+                    sender_id=update.sender_id,
+                    chat_id=update.chat_id,
+                    chat_type=update.chat_type,
+                    kind=update.kind,
+                ),
+                lambda: self._handle(update.token),
+            )
 
 
 def build_ptb_application(token: str) -> Application:
