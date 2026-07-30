@@ -18,7 +18,7 @@ from remote_agents.adapters.tmux.profiles import probe_profiles
 from remote_agents.application.doctor import doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.config import load_config
-from remote_agents.domain.profiles import closed_profiles
+from remote_agents.domain.profiles import closed_profiles, qualified_profiles
 
 
 def main() -> int:
@@ -36,7 +36,9 @@ def main() -> int:
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         if arguments.profiles:
-            result = profile_doctor(probe_profiles(closed_profiles()))
+            result = profile_doctor(
+                probe_profiles(closed_profiles(), qualifications=qualified_profiles())
+            )
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
         if arguments.config is None:
