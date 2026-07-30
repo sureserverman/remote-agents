@@ -15,11 +15,18 @@ def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -
     )
     force = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "force", 7, 11, 1)
 
-    assert controller.claim(graceful, 7, 11, 1) == "graceful"
+    claimed = controller.claim(graceful, 7, 11, 1)
+    assert claimed is not None
+    assert (claimed.action, claimed.session_id, claimed.profile_id) == (
+        "graceful",
+        session,
+        ProfileId("claude"),
+    )
     assert controller.claim(graceful, 7, 11, 1) is None
     assert controller.claim(force, 7, 11, 1) is None
     assert controller.confirm_force(force, 7, 11, 1)
-    assert controller.claim(force, 7, 11, 1) == "force"
+    claimed_force = controller.claim(force, 7, 11, 1)
+    assert claimed_force is not None and claimed_force.action == "force"
 
 
 def test_cleanup_only_exists_for_preserved_sessions() -> None:
