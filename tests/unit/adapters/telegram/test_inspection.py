@@ -19,6 +19,19 @@ def test_oversized_utf8_text_becomes_a_text_attachment() -> None:
     assert result.filename == "session-output.txt"
 
 
+def test_truncation_notice_never_pushes_inline_text_beyond_telegram_limit() -> None:
+    # The first 500 sanitized lines contain exactly 4,096 UTF-16 code units. A
+    # 501st line makes the output truncated, so its notice must not overflow an
+    # otherwise full Telegram message.
+    raw = ("x" * 104 + "\n" + ("x" * 7 + "\n") * 498 + "x" * 7 + "\nignored").encode()
+
+    result = inspect_capture(raw)
+
+    assert result.truncated is True
+    assert result.kind == "attachment"
+    assert result.text == "Output is attached as UTF-8 text. Output was truncated."
+
+
 def test_binary_output_is_refused_without_an_attachment() -> None:
     result = inspect_capture(b"safe\x00binary")
 
