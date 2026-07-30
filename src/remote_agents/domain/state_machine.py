@@ -19,6 +19,8 @@ class LifecycleEvent(StrEnum):
     VERIFIED_FORCE_STOP = "verified_force_stop"
     CLEANUP_CONFIRMED = "cleanup_confirmed"
     AMBIGUOUS_TERMINAL_EVIDENCE = "ambiguous_terminal_evidence"
+    RECONCILED_TERMINAL_MISSING = "reconciled_terminal_missing"
+    RECONCILED_PANE_DEAD = "reconciled_pane_dead"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,12 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     ): SessionState.ORPHANED,
     (SessionState.PRESERVED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
     (SessionState.PRESERVED, LifecycleEvent.CLEANUP_CONFIRMED): SessionState.ENDED,
+    (SessionState.RUNNING, LifecycleEvent.RECONCILED_TERMINAL_MISSING): SessionState.ENDED,
+    (SessionState.STOP_REQUESTED, LifecycleEvent.RECONCILED_TERMINAL_MISSING): SessionState.ENDED,
+    (SessionState.PRESERVED, LifecycleEvent.RECONCILED_TERMINAL_MISSING): SessionState.ENDED,
+    (SessionState.RUNNING, LifecycleEvent.RECONCILED_PANE_DEAD): SessionState.PRESERVED,
+    (SessionState.PRESERVED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
 }
 
 

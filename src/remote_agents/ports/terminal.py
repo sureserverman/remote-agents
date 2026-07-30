@@ -14,6 +14,8 @@ class TerminalObservation:
     live: bool
     preserved: bool
     detail: str = ""
+    project_id: ProjectId | None = None
+    profile_id: ProfileId | None = None
 
 
 class TerminalPort(Protocol):

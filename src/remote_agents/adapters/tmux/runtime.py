@@ -158,5 +158,28 @@ class TmuxTerminal:
             return None
         for pane in inventory.managed:
             if pane.session_id == session_id:
-                return TerminalObservation(session_id, pane.live, pane.preserved)
+                return TerminalObservation(
+                    session_id,
+                    pane.live,
+                    pane.preserved,
+                    project_id=pane.project_id,
+                    profile_id=pane.profile_id,
+                )
         return None
+
+    async def managed_observations(self) -> tuple[TerminalObservation, ...]:
+        """Return trusted dedicated-server evidence for read-only reconciliation."""
+        try:
+            inventory = await self._gateway.inventory()
+        except RuntimeError:
+            return ()
+        return tuple(
+            TerminalObservation(
+                pane.session_id,
+                pane.live,
+                pane.preserved,
+                project_id=pane.project_id,
+                profile_id=pane.profile_id,
+            )
+            for pane in inventory.managed
+        )
