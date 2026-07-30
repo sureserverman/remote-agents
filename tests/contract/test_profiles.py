@@ -54,9 +54,7 @@ def test_profile_schema_rejects_non_curated_executables_and_dangerous_flags(
     profile_id: str, executable: str, launch_argv: tuple[str, ...]
 ) -> None:
     with pytest.raises(ProfileError):
-        ProfileDefinition(
-            ProfileId(profile_id), executable, launch_argv, ("--version",), ("C-c",)
-        )
+        ProfileDefinition(ProfileId(profile_id), executable, launch_argv, ("--version",), ("C-c",))
 
 
 def test_one_unavailable_profile_does_not_disable_other_version_probes() -> None:
