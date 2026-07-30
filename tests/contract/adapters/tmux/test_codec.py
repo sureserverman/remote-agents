@@ -1,0 +1,69 @@
+"""Pinned tmux 3.4 formatted-output codec contract."""
+
+import pytest
+
+from remote_agents.adapters.tmux.codec import PANE_FORMAT, exact_session_target, parse_pane
+from remote_agents.domain.models import SessionId
+
+
+def pane_line(*, schema: str = "1", session_id: SessionId | None = None) -> str:
+    managed_id = session_id or SessionId.new()
+    return "\x1f".join(
+        (
+            f"ra-{managed_id}",
+            "$12",
+            "%3",
+            "0",
+            "0",
+            schema,
+            str(managed_id),
+            "opaque-editor",
+            "claude",
+        )
+    )
+
+
+def test_codec_parses_only_the_pinned_management_schema() -> None:
+    session_id = SessionId.new()
+
+    observation = parse_pane(pane_line(session_id=session_id))
+
+    assert observation.session_id == session_id
+    assert observation.live is True
+    assert observation.preserved is False
+    assert observation.session_name == f"ra-{session_id}"
+    assert "#{@remote_agents_schema}" in PANE_FORMAT
+
+
+@pytest.mark.parametrize("schema", ("", "2", "unversioned"))
+def test_codec_rejects_missing_or_unknown_tag_schemas(schema: str) -> None:
+    with pytest.raises(ValueError, match="schema"):
+        parse_pane(pane_line(schema=schema))
+
+
+def test_codec_rejects_untrusted_name_or_invalid_identifier() -> None:
+    fields = pane_line().split("\x1f")
+    fields[0] = "shared-workspace"
+    with pytest.raises(ValueError, match="name"):
+        parse_pane("\x1f".join(fields))
+
+    fields = pane_line().split("\x1f")
+    fields[6] = "not-a-uuid"
+    with pytest.raises(ValueError, match="session ID"):
+        parse_pane("\x1f".join(fields))
+
+
+def test_codec_rejects_empty_stable_tmux_fields() -> None:
+    fields = pane_line().split("\x1f")
+    fields[2] = ""
+
+    with pytest.raises(ValueError, match="missing"):
+        parse_pane("\x1f".join(fields))
+
+
+def test_exact_target_rejects_prefixes_and_only_accepts_generated_names() -> None:
+    session_id = SessionId.new()
+
+    assert exact_session_target(f"ra-{session_id}") == f"=ra-{session_id}:"
+    with pytest.raises(ValueError, match="managed session"):
+        exact_session_target("ra-")
