@@ -51,4 +51,5 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
     assert page.items[0].identity.endswith("#1")
     assert inspection.text == "ready"
     assert token is not None
-    assert stops.claim(token, 7, 11, 1) == "graceful"
+    claimed = stops.claim(token, 7, 11, 1)
+    assert claimed is not None and claimed.action == "graceful"
