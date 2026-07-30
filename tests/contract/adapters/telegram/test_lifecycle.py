@@ -77,7 +77,13 @@ async def test_polling_adapter_authorizes_each_update_before_invoking_the_handle
         (
             (
                 RecordedUpdate("trusted", sender_id=7, chat_id=11, chat_type="private"),
-                RecordedUpdate("untrusted", sender_id=8, chat_id=11, chat_type="private"),
+                RecordedUpdate(
+                    "untrusted",
+                    sender_id=8,
+                    chat_id=11,
+                    chat_type="private",
+                    callback_id="untrusted-answer",
+                ),
             ),
         )
     )
@@ -95,6 +101,7 @@ async def test_polling_adapter_authorizes_each_update_before_invoking_the_handle
 
     assert handled == ["trusted"]
     assert denials.events == ("denied",)
+    assert transport.acknowledged == []
 
 
 def test_ptb_composition_can_be_built_without_starting_an_updater() -> None:

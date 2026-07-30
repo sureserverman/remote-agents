@@ -109,17 +109,20 @@ class PollingAdapter:
                     raise
                 await self._wait(0)
         for update in updates:
-            if update.callback_id is not None:
-                await self._transport.answer_callback(update.callback_id)
-            self._authorization.dispatch(
+            authorized = self._authorization.dispatch(
                 AuthorizationUpdate(
                     sender_id=update.sender_id,
                     chat_id=update.chat_id,
                     chat_type=update.chat_type,
                     kind=update.kind,
                 ),
-                lambda: self._handle(update.token),
+                lambda: None,
             )
+            if not authorized:
+                continue
+            if update.callback_id is not None:
+                await self._transport.answer_callback(update.callback_id)
+            self._handle(update.token)
 
 
 def build_ptb_application(token: str) -> Application:
