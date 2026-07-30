@@ -138,6 +138,18 @@ class TmuxTerminal:
         self._session_profiles.pop(session_id, None)
         (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
 
+    async def force_stop(self, session_id: SessionId) -> TerminalObservation:
+        """Recheck present trusted ownership immediately before exact target removal."""
+        inventory = await self._gateway.inventory()
+        if not any(pane.session_id == session_id for pane in inventory.managed):
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="ownership_lost"
+            )
+        await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        self._session_profiles.pop(session_id, None)
+        (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
+        return TerminalObservation(session_id, live=False, preserved=False)
+
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         """Convert trusted dedicated-server pane evidence into terminal liveness."""
         try:
