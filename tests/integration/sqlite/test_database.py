@@ -9,6 +9,9 @@ import pytest
 from remote_agents.adapters.sqlite.database import database_is_ready, open_database
 from remote_agents.adapters.sqlite.migrations import current_version
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tmux.fake import FakeTerminal
+from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.services import SessionService
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -34,11 +37,11 @@ def record() -> SessionRecord:
 def test_clean_database_creates_versioned_projection_and_event_tables(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "sessions.sqlite3")
 
-    assert current_version(connection) == 1
+    assert current_version(connection) == 2
     names = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    assert {"sessions", "session_events", "schema_version"} <= names
+    assert {"sessions", "session_events", "idempotency_claims", "schema_version"} <= names
 
 
 def test_database_health_rejects_incomplete_schema_version_table(tmp_path: Path) -> None:
@@ -56,7 +59,7 @@ def test_upgrade_creates_backup_before_new_migration(tmp_path: Path) -> None:
 
     connection = open_database(path)
 
-    assert current_version(connection) == 1
+    assert current_version(connection) == 2
     assert path.with_suffix(".sqlite3.bak").exists()
 
 
@@ -65,21 +68,35 @@ def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
 
     with pytest.raises(sqlite3.OperationalError):
         open_database(
-            tmp_path / "sessions.sqlite3", migrations=((1, ""), (2, "CREATE TABLE broken ("))
+            tmp_path / "sessions.sqlite3",
+            migrations=((1, ""), (2, ""), (3, "CREATE TABLE broken (")),
         )
 
-    assert current_version(connection) == 1
+    assert current_version(connection) == 2
 
 
-def test_store_uses_bound_values_append_only_events_and_unique_claims(tmp_path: Path) -> None:
+async def test_store_uses_bound_values_append_only_events_and_unique_claims(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "sessions.sqlite3")
     store = SQLiteSessionStore(connection)
     session = record()
-    store.save(session)
+    await store.save(session)
     store.append_event(str(session.session_id), LifecycleEvent.READY, idempotency_key="ready-1")
 
-    assert store.claim_idempotency_key("callback-1") is True
-    assert store.claim_idempotency_key("callback-1") is False
-    assert connection.execute("SELECT COUNT(*) FROM session_events").fetchone()[0] == 2
+    assert await store.claim_idempotency_key("callback-1") is True
+    assert await store.claim_idempotency_key("callback-1") is False
+    assert connection.execute("SELECT COUNT(*) FROM session_events").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM idempotency_claims").fetchone()[0] == 1
     columns = {row[1] for row in connection.execute("PRAGMA table_info(session_events)")}
     assert not {"pane", "prompt", "token", "environment"} & columns
+
+
+async def test_sqlite_store_composes_with_the_async_session_service(tmp_path: Path) -> None:
+    store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
+    service = SessionService(store, FakeTerminal())
+
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "launch-1")
+    )
+
+    assert record.state is SessionState.RUNNING
+    assert await service.list_sessions() == (record,)

@@ -17,6 +17,7 @@ def open_database(
     path.parent.mkdir(parents=True, exist_ok=True)
     needs_backup = path.exists()
     connection = sqlite3.connect(path)
+    connection.execute("PRAGMA foreign_keys = ON")
     try:
         before = current_version(connection)
         migrations = tuple(migrations)

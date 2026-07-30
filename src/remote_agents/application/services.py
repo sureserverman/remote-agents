@@ -12,13 +12,14 @@ from remote_agents.application.commands import (
     LaunchCommand,
 )
 from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
+from remote_agents.application.reconcile import SessionLocks
 from remote_agents.domain.models import (
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.state_machine import LifecycleEvent
+from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
@@ -26,9 +27,12 @@ from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 class SessionService:
     """Typed operations whose liveness authority is always TerminalPort."""
 
-    def __init__(self, store: SessionStore, terminal: TerminalPort) -> None:
+    def __init__(
+        self, store: SessionStore, terminal: TerminalPort, *, locks: SessionLocks | None = None
+    ) -> None:
         self._store = store
         self._terminal = terminal
+        self._locks = locks or SessionLocks()
 
     async def launch(self, command: LaunchCommand) -> SessionRecord:
         if not await self._store.claim_idempotency_key(command.idempotency_key):
@@ -59,23 +63,31 @@ class SessionService:
         return await self._terminal.inspect(query.session_id)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
-        await self._require_session(command.session_id)
-        await self._store.record_event(command.session_id, LifecycleEvent.GRACEFUL_STOP_REQUESTED)
-        observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
-        if observation.preserved:
-            await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
-        return observation
+        async with self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            transition(record.state, LifecycleEvent.GRACEFUL_STOP_REQUESTED)
+            await self._store.record_event(
+                command.session_id, LifecycleEvent.GRACEFUL_STOP_REQUESTED
+            )
+            observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
+            if observation.preserved:
+                await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
+            return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:
-        await self._require_session(command.session_id)
-        await self._terminal.cleanup(command.session_id)
-        await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
+        async with self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            transition(record.state, LifecycleEvent.CLEANUP_CONFIRMED)
+            await self._terminal.cleanup(command.session_id)
+            await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
 
     async def force_stop(self, command: ForceStopCommand) -> TerminalObservation:
-        await self._require_session(command.session_id)
-        observation = await self._terminal.force_stop(command.session_id)
-        await self._store.record_event(command.session_id, LifecycleEvent.VERIFIED_FORCE_STOP)
-        return observation
+        async with self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)
+            observation = await self._terminal.force_stop(command.session_id)
+            await self._store.record_event(command.session_id, LifecycleEvent.VERIFIED_FORCE_STOP)
+            return observation
 
     async def _require_session(self, session_id: SessionId) -> SessionRecord:
         record = await self._store.get(session_id)

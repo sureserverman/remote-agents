@@ -1,10 +1,11 @@
 """Use-case tests prove the sealed command surface and durable ordering."""
 
+import asyncio
 from collections.abc import Collection, Sequence
 
 import pytest
 
-from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.commands import ForceStopCommand, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -55,6 +56,7 @@ class FakeTerminal:
     def __init__(self, live: bool = True) -> None:
         self.live = live
         self.launches: list[tuple[SessionId, ProjectId, ProfileId]] = []
+        self.force_stop_calls = 0
 
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
@@ -74,6 +76,14 @@ class FakeTerminal:
         return None
 
     async def force_stop(self, session_id: SessionId) -> TerminalObservation:
+        self.force_stop_calls += 1
+        return TerminalObservation(session_id, live=False, preserved=False)
+
+
+class YieldingForceStopTerminal(FakeTerminal):
+    async def force_stop(self, session_id: SessionId) -> TerminalObservation:
+        self.force_stop_calls += 1
+        await asyncio.sleep(0)
         return TerminalObservation(session_id, live=False, preserved=False)
 
 
@@ -98,3 +108,20 @@ async def test_duplicate_launch_does_not_repeat_terminal_side_effect() -> None:
 
     with pytest.raises(DuplicateCommandError):
         await service.launch(command)
+
+
+async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> None:
+    terminal = YieldingForceStopTerminal()
+    service = SessionService(FakeStore(), terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+
+    results = await asyncio.gather(
+        service.force_stop(ForceStopCommand(record.session_id)),
+        service.force_stop(ForceStopCommand(record.session_id)),
+        return_exceptions=True,
+    )
+
+    assert terminal.force_stop_calls == 1
+    assert sum(isinstance(result, Exception) for result in results) == 1

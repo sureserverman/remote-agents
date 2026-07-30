@@ -28,6 +28,15 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        2,
+        """
+        CREATE TABLE idempotency_claims (
+            key TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
 
 
