@@ -1,4 +1,3 @@
-.remote-agents-git/
 .claude/plan-progress.json
 .venv/
 __pycache__/
