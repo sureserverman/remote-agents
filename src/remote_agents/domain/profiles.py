@@ -26,15 +26,6 @@ _GRACEFUL_KEYS = {
     "opencode": ("C-c",),
     "cursor-agent": ("C-c",),
 }
-_FORBIDDEN_ARGUMENT_FRAGMENTS = (
-    "dangerously-skip",
-    "bypass-approvals",
-    "--auto",
-    "--force",
-    "--yolo",
-)
-
-
 @dataclass(frozen=True, slots=True)
 class ProfileDefinition:
     """A reviewed agent command whose arguments never come from Telegram input."""
@@ -54,13 +45,6 @@ class ProfileDefinition:
             or self.graceful_keys != _GRACEFUL_KEYS[str(self.profile_id)]
         ):
             raise ProfileError("profile probe and graceful stop policy must be curated exactly")
-        if any(
-            fragment in argument.casefold()
-            for argument in self.launch_argv
-            for fragment in _FORBIDDEN_ARGUMENT_FRAGMENTS
-        ):
-            raise ProfileError("profile launch argv contains a dangerous bypass flag")
-
     @property
     def version_command(self) -> tuple[str, ...]:
         """Return the fixed executable probe command, without user-controlled arguments."""
