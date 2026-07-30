@@ -1,0 +1,70 @@
+"""The sole authority for legal managed-session lifecycle transitions."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from remote_agents.domain.models import SessionState
+
+
+class LifecycleEvent(StrEnum):
+    """Trusted events that may cause a persisted state transition."""
+
+    READY = "ready"
+    STARTUP_ERROR = "startup_error"
+    GRACEFUL_STOP_REQUESTED = "graceful_stop_requested"
+    PANE_EXITED = "pane_exited"
+    GRACEFUL_STOP_TIMED_OUT = "graceful_stop_timed_out"
+    VERIFIED_FORCE_STOP = "verified_force_stop"
+    CLEANUP_CONFIRMED = "cleanup_confirmed"
+    AMBIGUOUS_TERMINAL_EVIDENCE = "ambiguous_terminal_evidence"
+
+
+@dataclass(frozen=True, slots=True)
+class Transition:
+    """A valid state change approved by the lifecycle matrix."""
+
+    from_state: SessionState
+    event: LifecycleEvent
+    to_state: SessionState
+
+
+class InvalidTransition(ValueError):
+    """Raised when an event is not legal for a session's current state."""
+
+
+_TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
+    (SessionState.STARTING, LifecycleEvent.READY): SessionState.RUNNING,
+    (SessionState.STARTING, LifecycleEvent.STARTUP_ERROR): SessionState.FAILED,
+    (SessionState.STARTING, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    (SessionState.RUNNING, LifecycleEvent.GRACEFUL_STOP_REQUESTED): SessionState.STOP_REQUESTED,
+    (SessionState.RUNNING, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.RUNNING, LifecycleEvent.CLEANUP_CONFIRMED): SessionState.ENDED,
+    (SessionState.RUNNING, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    (SessionState.STOP_REQUESTED, LifecycleEvent.PANE_EXITED): SessionState.PRESERVED,
+    (SessionState.STOP_REQUESTED, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT): SessionState.RUNNING,
+    (SessionState.STOP_REQUESTED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.STOP_REQUESTED, LifecycleEvent.CLEANUP_CONFIRMED): SessionState.ENDED,
+    (
+        SessionState.STOP_REQUESTED,
+        LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE,
+    ): SessionState.ORPHANED,
+    (SessionState.PRESERVED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
+    (SessionState.PRESERVED, LifecycleEvent.CLEANUP_CONFIRMED): SessionState.ENDED,
+}
+
+
+def transition(from_state: SessionState, event: LifecycleEvent) -> Transition:
+    """Return the only legal transition for ``from_state`` and ``event``.
+
+    In particular, a graceful-stop timeout never escalates to force stop: it restores
+    ``RUNNING`` so the separately confirmed force-stop action remains explicit.
+    """
+    try:
+        to_state = _TRANSITIONS[(from_state, event)]
+    except KeyError as error:
+        raise InvalidTransition(
+            f"{event.value} is not legal while session is {from_state.value}"
+        ) from error
+    return Transition(from_state=from_state, event=event, to_state=to_state)

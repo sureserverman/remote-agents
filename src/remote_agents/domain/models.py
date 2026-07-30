@@ -103,8 +103,10 @@ class SessionDisplayIdentity:
             ("agent label", self.agent_label),
             ("mode", self.mode),
         ):
-            if not value or value != value.strip() or any(
-                character.isspace() or not character.isprintable() for character in value
+            if (
+                not value
+                or value != value.strip()
+                or any(character.isspace() or not character.isprintable() for character in value)
             ):
                 raise ValueError(f"{name} must be a non-empty single token")
         if self.custom_label is not None:

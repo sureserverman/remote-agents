@@ -9,6 +9,12 @@ from remote_agents.domain.models import (
     SessionState,
     allocate_next_sequence,
 )
+from remote_agents.domain.state_machine import (
+    InvalidTransition,
+    LifecycleEvent,
+    Transition,
+    transition,
+)
 
 __all__ = [
     "ProfileId",
@@ -17,5 +23,9 @@ __all__ = [
     "SessionId",
     "SessionRecord",
     "SessionState",
+    "InvalidTransition",
+    "LifecycleEvent",
+    "Transition",
     "allocate_next_sequence",
+    "transition",
 ]
