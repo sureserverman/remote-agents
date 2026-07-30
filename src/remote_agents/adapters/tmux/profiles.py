@@ -7,7 +7,21 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+from remote_agents.adapters.tmux.runtime import LaunchProfile
+from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, ProfileDefinition
+
+_READINESS_MARKERS = {
+    "claude": "Claude Code",
+    "claude-remote": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+    "cursor-agent": "Cursor",
+}
+_READINESS_BLOCKERS = {
+    "claude": ("Accessing workspace:",),
+    "claude-remote": ("Accessing workspace:",),
+}
 
 
 def probe_profiles(
@@ -73,3 +87,30 @@ def _sanitize_version(value: str) -> str:
     if not line:
         raise OSError("version probe returned no text")
     return "".join(character for character in line if character.isprintable())[:160]
+
+
+def build_launch_profile(
+    definition: ProfileDefinition,
+    executable: Path,
+    session_id: SessionId,
+    environment: dict[str, str],
+) -> LaunchProfile:
+    """Resolve a reviewed definition into a fixed tmux profile for one opaque session."""
+    if not executable.is_absolute():
+        raise ValueError("profile executable must be absolute")
+    argv = tuple(
+        str(executable)
+        if index == 0
+        else f"ra-{session_id}"
+        if argument == "{managed_name}"
+        else argument
+        for index, argument in enumerate(definition.launch_argv)
+    )
+    return LaunchProfile(
+        str(executable),
+        argv,
+        environment,
+        _READINESS_MARKERS[str(definition.profile_id)],
+        definition.graceful_keys,
+        _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
+    )

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.tmux.profiles import probe_profiles
-from remote_agents.domain.models import ProfileId
+from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
+from remote_agents.domain.models import ProfileId, SessionId
 from remote_agents.domain.profiles import ProfileDefinition, ProfileError, closed_profiles
 
 
@@ -26,7 +26,13 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
         ("opencode",),
         ("cursor-agent",),
     }
-    assert all(profile.graceful_keys == ("C-c",) for profile in profiles)
+    assert {str(profile.profile_id): profile.graceful_keys for profile in profiles} == {
+        "claude": ("/exit", "Enter"),
+        "claude-remote": ("/exit", "Enter"),
+        "codex": ("C-c",),
+        "opencode": ("C-c",),
+        "cursor-agent": ("C-c",),
+    }
 
 
 @pytest.mark.parametrize(
@@ -42,7 +48,9 @@ def test_profile_schema_rejects_non_curated_executables_and_dangerous_flags(
     profile_id: str, executable: str, launch_argv: tuple[str, ...]
 ) -> None:
     with pytest.raises(ProfileError):
-        ProfileDefinition(ProfileId(profile_id), executable, launch_argv, ("--version",), ("C-c",))
+        ProfileDefinition(
+            ProfileId(profile_id), executable, launch_argv, ("--version",), ("C-c",)
+        )
 
 
 def test_one_unavailable_profile_does_not_disable_other_version_probes() -> None:
@@ -65,3 +73,17 @@ def test_one_unavailable_profile_does_not_disable_other_version_probes() -> None
     assert by_id["codex"].version == "codex 1.2.3"
     assert by_id["opencode"].available is True
     assert by_id["cursor-agent"].available is True
+
+
+def test_remote_profile_substitutes_only_the_generated_managed_name() -> None:
+    definition = next(
+        profile for profile in closed_profiles() if str(profile.profile_id) == "claude-remote"
+    )
+    session_id = SessionId.new()
+
+    runtime = build_launch_profile(
+        definition, Path("/tools/claude"), session_id, {"PATH": "/tools"}
+    )
+
+    assert runtime.argv == ("/tools/claude", "--remote-control", f"ra-{session_id}")
+    assert runtime.readiness_blockers == ("Accessing workspace:",)

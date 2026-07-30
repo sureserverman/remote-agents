@@ -35,6 +35,7 @@ class LaunchProfile:
     environment: dict[str, str]
     readiness_marker: str
     graceful_keys: tuple[str, ...] = ("C-c",)
+    readiness_blockers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -101,10 +102,12 @@ class TmuxTerminal:
         deadline = asyncio.get_running_loop().time() + self._startup_timeout
         while asyncio.get_running_loop().time() < deadline:
             observation = await self.inspect(session_id)
+            capture = await self._gateway.capture(session_id) if observation is not None else ""
             if (
                 observation is not None
                 and observation.live
-                and profile.readiness_marker in await self._gateway.capture(session_id)
+                and profile.readiness_marker in capture
+                and not any(blocker in capture for blocker in profile.readiness_blockers)
             ):
                 return observation
             await asyncio.sleep(0.01)

@@ -18,6 +18,13 @@ _EXPECTED_LAUNCHES: dict[str, tuple[str, tuple[str, ...]]] = {
     "opencode": ("opencode", ("opencode",)),
     "cursor-agent": ("cursor-agent", ("cursor-agent",)),
 }
+_GRACEFUL_KEYS = {
+    "claude": ("/exit", "Enter"),
+    "claude-remote": ("/exit", "Enter"),
+    "codex": ("C-c",),
+    "opencode": ("C-c",),
+    "cursor-agent": ("C-c",),
+}
 _FORBIDDEN_ARGUMENT_FRAGMENTS = (
     "dangerously-skip",
     "bypass-approvals",
@@ -41,7 +48,10 @@ class ProfileDefinition:
         expected = _EXPECTED_LAUNCHES.get(str(self.profile_id))
         if expected is None or (self.executable, self.launch_argv) != expected:
             raise ProfileError("profile executable and launch argv must be curated exactly")
-        if self.version_argv != ("--version",) or self.graceful_keys != ("C-c",):
+        if (
+            self.version_argv != ("--version",)
+            or self.graceful_keys != _GRACEFUL_KEYS[str(self.profile_id)]
+        ):
             raise ProfileError("profile probe and graceful stop policy must be curated exactly")
         if any(
             fragment in argument.casefold()
@@ -70,6 +80,8 @@ class ProfileCompatibility:
 def closed_profiles() -> tuple[ProfileDefinition, ...]:
     """Return all and only the five reviewed profiles in stable UI order."""
     return tuple(
-        ProfileDefinition(ProfileId(profile_id), executable, argv, ("--version",), ("C-c",))
+        ProfileDefinition(
+            ProfileId(profile_id), executable, argv, ("--version",), _GRACEFUL_KEYS[profile_id]
+        )
         for profile_id, (executable, argv) in _EXPECTED_LAUNCHES.items()
     )
