@@ -1,0 +1,20 @@
+"""Technology-neutral durable session-store contract."""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Sequence
+from typing import Protocol
+
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.state_machine import LifecycleEvent
+
+
+class SessionStore(Protocol):
+    async def next_sequence(self, project_id: ProjectId, profile_id: ProfileId) -> int: ...
+    async def save(self, record: SessionRecord) -> None: ...
+    async def get(self, session_id: SessionId) -> SessionRecord | None: ...
+    async def list(
+        self, states: Collection[SessionState] | None = None
+    ) -> Sequence[SessionRecord]: ...
+    async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord: ...
+    async def claim_idempotency_key(self, key: str) -> bool: ...

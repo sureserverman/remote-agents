@@ -1,0 +1,28 @@
+"""Technology-neutral terminal observations and capabilities."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalObservation:
+    session_id: SessionId
+    live: bool
+    preserved: bool
+    detail: str = ""
+
+
+class TerminalPort(Protocol):
+    async def launch(
+        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+    ) -> TerminalObservation: ...
+    async def inspect(self, session_id: SessionId) -> TerminalObservation | None: ...
+    async def graceful_stop(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> TerminalObservation: ...
+    async def cleanup(self, session_id: SessionId) -> None: ...
+    async def force_stop(self, session_id: SessionId) -> TerminalObservation: ...
