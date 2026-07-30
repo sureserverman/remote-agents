@@ -62,3 +62,12 @@ def test_production_environment_must_be_owner_only(tmp_path: Path) -> None:
     paths.environment_path.chmod(0o600)
 
     assert paths.require_private_environment() == paths.environment_path
+
+
+def test_production_paths_refuse_a_symlinked_parent(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / ".config").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ConfigError, match="symlinks"):
+        ProductionPaths.for_home(tmp_path).ensure_directories()
