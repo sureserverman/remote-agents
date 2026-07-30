@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "remote-agents"
+version = "0.1.0"
+description = "Private Telegram control plane for curated local agent sessions"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "PyYAML==6.0.3",
+  "python-telegram-bot==22.8",
+]
+
+[project.scripts]
+remote-agents = "remote_agents.__main__:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.15.22",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/remote_agents"]
