@@ -44,7 +44,7 @@ class SessionService:
             command.project_id,
             command.profile_id,
             SessionDisplayIdentity(
-                str(command.project_id), str(command.profile_id), "regular", sequence
+                str(command.project_id), str(command.profile_id), "regular", sequence, command.label
             ),
             SessionState.STARTING,
             datetime.now(UTC),

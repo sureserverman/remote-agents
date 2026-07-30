@@ -12,6 +12,7 @@ class LaunchCommand:
     project_id: ProjectId
     profile_id: ProfileId
     idempotency_key: str
+    label: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
