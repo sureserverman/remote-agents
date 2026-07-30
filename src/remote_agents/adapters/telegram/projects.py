@@ -160,3 +160,10 @@ class ProjectNavigator:
             ),
             None,
         )
+
+    def current_project(self, opaque_id: str) -> CatalogProject | None:
+        """Resolve an opaque project ID against the current catalogue without a callback."""
+
+        return next(
+            (item for item in self._catalogue().projects if item.opaque_id == opaque_id), None
+        )
