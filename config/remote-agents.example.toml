@@ -1,0 +1,8 @@
+[paths]
+dev_root = "/home/user/dev"
+registry_path = "/home/user/.claude/projects-registry.yaml"
+database_path = "/home/user/.local/state/remote-agents/sessions.sqlite3"
+
+[limits]
+max_label_length = 40
+project_page_size = 10
