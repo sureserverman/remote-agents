@@ -22,6 +22,8 @@ class LaunchRequest:
 @dataclass(frozen=True, slots=True)
 class LaunchPreview:
     project_name: str
+    area: str
+    group: str
     profile_label: str
     label: str | None
     callback_token: str
@@ -46,6 +48,7 @@ class LaunchConfirmation:
     def preview(
         self, request: LaunchRequest, *, owner_id: int, chat_id: int, view_revision: int
     ) -> LaunchPreview:
+        _validate_label(request.label)
         project, profile = self._resolve_request(request)
         if project is None or profile is None:
             raise ValueError("launch request is no longer available")
@@ -58,7 +61,14 @@ class LaunchConfirmation:
             mutation=True,
         )
         self._requests[token] = request
-        return LaunchPreview(project.name, _profile_label(profile.profile_id), request.label, token)
+        return LaunchPreview(
+            project.name,
+            project.area,
+            project.group,
+            _profile_label(profile.profile_id),
+            request.label,
+            token,
+        )
 
     async def submit(self, token: str, *, owner_id: int, chat_id: int, view_revision: int) -> bool:
         request = self._requests.get(token)
@@ -71,7 +81,7 @@ class LaunchConfirmation:
             return False
         await self._launch(
             LaunchCommand(
-                ProjectId(project.name), ProfileId(profile.profile_id), token, request.label
+                ProjectId(project.opaque_id), ProfileId(profile.profile_id), token, request.label
             )
         )
         return True
@@ -101,3 +111,16 @@ def _profile_label(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }[profile_id]
+
+
+def _validate_label(label: str | None) -> None:
+    if label is None:
+        return
+    normalized = " ".join(label.split())
+    if (
+        label != normalized
+        or not normalized
+        or len(normalized) > 40
+        or any(not character.isprintable() for character in label)
+    ):
+        raise ValueError("launch label must be a normalized bounded display value")

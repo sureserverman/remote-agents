@@ -32,6 +32,8 @@ async def test_confirmation_revalidates_and_submits_one_typed_command() -> None:
     )
 
     assert preview.project_name == "opaque-editor"
+    assert preview.area == "writing"
+    assert preview.group == "Registered"
     assert preview.profile_label == "Claude Remote"
     assert preview.label == "план"
     assert await confirmation.submit(
@@ -41,7 +43,7 @@ async def test_confirmation_revalidates_and_submits_one_typed_command() -> None:
         preview.callback_token, owner_id=7, chat_id=11, view_revision=1
     )
     assert [(str(item.project_id), str(item.profile_id)) for item in launcher.commands] == [
-        ("opaque-editor", "claude-remote")
+        ("a" * 24, "claude-remote")
     ]
     assert launcher.commands[0].label == "план"
 
@@ -61,5 +63,32 @@ async def test_stale_or_revalidated_request_never_calls_the_application() -> Non
 
     assert not await confirmation.submit(
         preview.callback_token, owner_id=7, chat_id=11, view_revision=2
+    )
+    assert launcher.commands == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_names_remain_distinguishable_and_profile_changes_block_submit() -> None:
+    projects = [
+        CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
+        CatalogProject("b" * 24, "opaque-editor", "archive", "Unregistered"),
+    ]
+    profiles = [ProfileAvailability("claude", True)]
+    launcher = FakeLauncher()
+    confirmation = LaunchConfirmation(
+        lambda: tuple(projects), lambda: tuple(profiles), CallbackStateStore(), launcher
+    )
+    preview = confirmation.preview(
+        LaunchRequest("b" * 24, "claude", None), owner_id=7, chat_id=11, view_revision=3
+    )
+    profiles[0] = ProfileAvailability("claude", False, "version changed")
+
+    assert (preview.project_name, preview.area, preview.group) == (
+        "opaque-editor",
+        "archive",
+        "Unregistered",
+    )
+    assert not await confirmation.submit(
+        preview.callback_token, owner_id=7, chat_id=11, view_revision=3
     )
     assert launcher.commands == []
