@@ -30,8 +30,10 @@ def load_registry(path: Path) -> RegistryResult:
     try:
         loaded = yaml.safe_load(path.read_bytes())
         return RegistryResult(projects=_parse_document(loaded))
-    except (OSError, RegistrySchemaError, yaml.YAMLError) as error:
-        return RegistryResult(projects=(), error=str(error))
+    except OSError:
+        return RegistryResult(projects=(), error="registry_unavailable")
+    except (RegistrySchemaError, yaml.YAMLError):
+        return RegistryResult(projects=(), error="registry_invalid")
 
 
 class RegistrySchemaError(ValueError):

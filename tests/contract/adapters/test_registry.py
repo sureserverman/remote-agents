@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.projects.registry import load_registry
+from remote_agents.application.project_catalog import paginate_catalogue
 
 
 def fixture_path() -> Path:
@@ -78,3 +79,14 @@ def test_load_registry_never_rewrites_fixture_bytes() -> None:
     load_registry(path)
 
     assert sha256(path.read_bytes()).hexdigest() == before
+
+
+def test_degraded_registry_error_is_safe_to_present_without_a_path(tmp_path: Path) -> None:
+    missing_path = tmp_path / "private-registry.yaml"
+    result = load_registry(missing_path)
+
+    page = paginate_catalogue((), 1, 10, registry_error=result.error)
+
+    assert result.error == "registry_unavailable"
+    assert page.degraded_reason == "registry_unavailable"
+    assert str(missing_path) not in page.degraded_reason
