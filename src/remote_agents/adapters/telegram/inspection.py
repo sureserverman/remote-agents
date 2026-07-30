@@ -34,10 +34,11 @@ def inspect_capture(
     truncated = len(raw) > 128 * 1024 or raw.count(b"\n") + 1 > 500
     text = sanitize_capture(raw, max_lines=500, max_bytes=128 * 1024, redactions=redactions)
     redacted = "[REDACTED]" in text
-    if len(text.encode("utf-16-le")) // 2 <= telegram_limit:
+    inline_text = text + ("\n[output truncated]" if truncated else "")
+    if len(inline_text.encode("utf-16-le")) // 2 <= telegram_limit:
         return InspectionResult(
             "text",
-            text + ("\n[output truncated]" if truncated else ""),
+            inline_text,
             None,
             None,
             redacted,
