@@ -1,0 +1,26 @@
+.remote-agents-git/
+.claude/plan-progress.json
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.sqlite3
+*.sqlite3-*
+
+# ===== AI Tools =====
+.claude/
+.claude_memory
+.cursorrules
+.cursor/
+.aider*
+.copilot/
+CLAUDE.md
+AGENTS.md
+.github/copilot-instructions.md
+
+# ===== AI / Design Plans =====
+docs/plans/
+plans/
+# test fixtures are committed data, not local plan scratch
+!**/tests/fixtures/**/plans/
