@@ -35,26 +35,31 @@ class SessionService:
         self._locks = locks or SessionLocks()
 
     async def launch(self, command: LaunchCommand) -> SessionRecord:
-        if not await self._store.claim_idempotency_key(command.idempotency_key):
-            raise DuplicateCommandError("launch callback was already handled")
-        session_id = SessionId.new()
-        sequence = await self._store.next_sequence(command.project_id, command.profile_id)
-        record = SessionRecord(
-            session_id,
-            command.project_id,
-            command.profile_id,
-            SessionDisplayIdentity(
-                str(command.project_id), str(command.profile_id), "regular", sequence, command.label
-            ),
-            SessionState.STARTING,
-            datetime.now(UTC),
-        )
-        await self._store.save(record)
-        observation = await self._terminal.launch(
-            session_id, command.project_id, command.profile_id
-        )
-        event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-        return await self._store.record_event(session_id, event)
+        async with self._locks.operation():
+            if not await self._store.claim_idempotency_key(command.idempotency_key):
+                raise DuplicateCommandError("launch callback was already handled")
+            session_id = SessionId.new()
+            sequence = await self._store.next_sequence(command.project_id, command.profile_id)
+            record = SessionRecord(
+                session_id,
+                command.project_id,
+                command.profile_id,
+                SessionDisplayIdentity(
+                    str(command.project_id),
+                    str(command.profile_id),
+                    "regular",
+                    sequence,
+                    command.label,
+                ),
+                SessionState.STARTING,
+                datetime.now(UTC),
+            )
+            await self._store.save(record)
+            observation = await self._terminal.launch(
+                session_id, command.project_id, command.profile_id
+            )
+            event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
+            return await self._store.record_event(session_id, event)
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())
@@ -63,7 +68,7 @@ class SessionService:
         return await self._terminal.inspect(query.session_id)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
-        async with self._locks.for_session(command.session_id):
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
             transition(record.state, LifecycleEvent.GRACEFUL_STOP_REQUESTED)
             await self._store.record_event(
@@ -75,14 +80,14 @@ class SessionService:
             return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:
-        async with self._locks.for_session(command.session_id):
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
             transition(record.state, LifecycleEvent.CLEANUP_CONFIRMED)
             await self._terminal.cleanup(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
 
     async def force_stop(self, command: ForceStopCommand) -> TerminalObservation:
-        async with self._locks.for_session(command.session_id):
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
             transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)
             observation = await self._terminal.force_stop(command.session_id)

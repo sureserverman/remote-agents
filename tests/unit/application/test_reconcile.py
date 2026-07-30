@@ -3,6 +3,8 @@
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
+
 from remote_agents.application.reconcile import (
     ReconciliationResult,
     ReconciliationService,
@@ -154,3 +156,28 @@ async def test_per_session_lock_serializes_concurrent_mutations() -> None:
         ["first-start", "first-end", "second-start", "second-end"],
         ["second-start", "second-end", "first-start", "first-end"],
     )
+
+
+async def test_mutation_drain_waits_for_active_operation_and_closes_admission() -> None:
+    locks = SessionLocks()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def active_operation() -> None:
+        async with locks.operation():
+            entered.set()
+            await release.wait()
+
+    operation = asyncio.create_task(active_operation())
+    await entered.wait()
+    draining = asyncio.create_task(locks.drain())
+    await asyncio.sleep(0)
+    assert not draining.done()
+
+    release.set()
+    await operation
+    await draining
+
+    with pytest.raises(RuntimeError, match="mutations are draining"):
+        async with locks.operation():
+            pass

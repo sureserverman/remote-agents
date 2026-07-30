@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -140,6 +141,29 @@ class SessionLocks:
 
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}
+        self._active_operations = 0
+        self._accepting_operations = True
+        self._drained = asyncio.Event()
+        self._drained.set()
 
     def for_session(self, session_id: SessionId) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
+
+    @asynccontextmanager
+    async def operation(self):
+        """Track a mutation so shutdown can finish it without admitting new work."""
+        if not self._accepting_operations:
+            raise RuntimeError("mutations are draining")
+        self._active_operations += 1
+        self._drained.clear()
+        try:
+            yield
+        finally:
+            self._active_operations -= 1
+            if self._active_operations == 0:
+                self._drained.set()
+
+    async def drain(self) -> None:
+        """Close the mutation admission gate and wait for active operations to finish."""
+        self._accepting_operations = False
+        await self._drained.wait()
