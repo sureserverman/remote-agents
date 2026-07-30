@@ -27,3 +27,14 @@ def test_user_unit_contains_no_secret_literal() -> None:
         line for line in contents.splitlines() if line.startswith("EnvironmentFile=")
     ).removeprefix("EnvironmentFile=")
     assert "123456:" not in contents
+
+
+def test_transient_probe_keeps_the_same_kill_mode_without_production_configuration() -> None:
+    contents = Path("systemd/remote-agents-test.service").read_text(encoding="utf-8")
+
+    assert (
+        "ExecStart=%h/dev/infra/remote-agents/.venv/bin/python -m remote_agents.service_probe"
+        in contents
+    )
+    assert "KillMode=process" in contents
+    assert "EnvironmentFile=" not in contents

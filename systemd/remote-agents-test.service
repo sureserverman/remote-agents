@@ -1,0 +1,10 @@
+[Unit]
+Description=Remote Agents isolated lifecycle probe
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/infra/remote-agents
+ExecStart=%h/dev/infra/remote-agents/.venv/bin/python -m remote_agents.service_probe
+KillMode=process
+TimeoutStopSec=15s
+UMask=0077
