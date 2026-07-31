@@ -20,3 +20,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "live_profile: opt-in qualification using a generated dedicated tmux socket"
     )
+    config.addinivalue_line(
+        "markers", "live_telegram: opt-in check against the configured private Telegram bot"
+    )
