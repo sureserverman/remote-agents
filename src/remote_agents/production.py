@@ -81,10 +81,10 @@ class ProductionPaths:
         """Return the systemd EnvironmentFile only when it is a private regular file."""
         path = self.environment_path
         try:
-            details = path.stat()
+            details = path.lstat()
         except OSError as error:
             raise ConfigError("Telegram environment file is missing") from error
-        if not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid():
+        if path.is_symlink() or not stat.S_ISREG(details.st_mode) or details.st_uid != os.getuid():
             raise ConfigError("Telegram environment file must be owned regular file")
         if stat.S_IMODE(details.st_mode) != 0o600:
             raise ConfigError("Telegram environment file must have mode 0600")
