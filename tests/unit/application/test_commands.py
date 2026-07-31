@@ -5,7 +5,7 @@ from collections.abc import Collection, Sequence
 
 import pytest
 
-from remote_agents.application.commands import ForceStopCommand, LaunchCommand
+from remote_agents.application.commands import ForceStopCommand, GracefulStopCommand, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -53,8 +53,9 @@ class FakeStore:
 
 
 class FakeTerminal:
-    def __init__(self, live: bool = True) -> None:
+    def __init__(self, live: bool = True, *, graceful_preserved: bool = True) -> None:
         self.live = live
+        self.graceful_preserved = graceful_preserved
         self.launches: list[tuple[SessionId, ProjectId, ProfileId]] = []
         self.force_stop_calls = 0
 
@@ -75,7 +76,9 @@ class FakeTerminal:
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
-        return TerminalObservation(session_id, live=False, preserved=True)
+        return TerminalObservation(
+            session_id, live=not self.graceful_preserved, preserved=self.graceful_preserved
+        )
 
     async def cleanup(self, session_id: SessionId) -> None:
         return None
@@ -127,6 +130,23 @@ async def test_refresh_readiness_recovers_only_a_failed_launch_with_readiness_ev
 
     assert record.state is SessionState.FAILED
     assert refreshed[0].state is SessionState.RUNNING
+
+
+async def test_graceful_stop_timeout_restores_running_state_for_explicit_force_stop() -> None:
+    store = FakeStore()
+    service = SessionService(store, FakeTerminal(graceful_preserved=False))
+    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+
+    observation = await service.graceful_stop(
+        GracefulStopCommand(record.session_id, record.profile_id)
+    )
+
+    assert observation.preserved is False
+    assert store.records[record.session_id].state is SessionState.RUNNING
+    assert store.events[-2:] == [
+        LifecycleEvent.GRACEFUL_STOP_REQUESTED,
+        LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
+    ]
 
 
 async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> None:

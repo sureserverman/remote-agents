@@ -35,7 +35,7 @@ def test_closed_profile_catalogue_has_only_the_approved_fixed_launches() -> None
     assert {str(profile.profile_id): profile.graceful_keys for profile in profiles} == {
         "claude": ("/exit", "Enter"),
         "claude-remote": ("/exit", "Enter"),
-        "codex": ("C-c",),
+        "codex": ("/exit", "Enter"),
         "opencode": ("C-c",),
         "cursor-agent": ("C-c",),
     }

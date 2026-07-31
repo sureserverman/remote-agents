@@ -95,6 +95,10 @@ class SessionService:
             observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
             if observation.preserved:
                 await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
+            else:
+                await self._store.record_event(
+                    command.session_id, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+                )
             return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:
