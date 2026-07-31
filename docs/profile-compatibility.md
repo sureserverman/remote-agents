@@ -16,9 +16,9 @@ bypassed; the check reports a block rather than accepting a dialog.
 | --- | --- | --- | --- | --- | --- |
 | `claude` | `claude` | `2.1.220 (Claude Code)` | `QUALIFIED` | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
 | `claude-remote` | `claude --remote-control ra-<uuid>` | `2.1.220 (Claude Code)` | `QUALIFIED` | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
-| `codex` | `codex` | `codex-cli 0.146.0` | `QUALIFIED` | `Codex` interactive UI | `/exit`, Enter |
+| `codex` | `codex` | `codex-cli 0.146.0` | `QUALIFIED` | `/exit` command selection and submit | `/exit`, Enter, Enter |
 | `opencode` | `opencode` | `1.18.10` | `QUALIFIED` | `Ask anything...` interactive UI | Ctrl-C |
-| `cursor-agent` | `cursor-agent` | `2026.07.23-e383d2b` | `QUALIFIED` | `Cursor` interactive UI | `/quit`, Enter |
+| `cursor-agent` | `cursor-agent` | `2026.07.23-e383d2b` | `QUALIFIED` | `/quit` command selection and submit | `/quit`, Enter, Enter |
 
 The profile arguments are defined in the closed catalogue; Telegram does not provide an
 executable, path, raw argument, prompt, keystroke, bypass, or auto-approval flag. Live

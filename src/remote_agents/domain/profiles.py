@@ -22,9 +22,9 @@ _EXPECTED_LAUNCHES: dict[str, tuple[str, tuple[str, ...]]] = {
 _GRACEFUL_KEYS = {
     "claude": ("/exit", "Enter"),
     "claude-remote": ("/exit", "Enter"),
-    "codex": ("/exit", "Enter"),
+    "codex": ("/exit", "Enter", "Enter"),
     "opencode": ("C-c",),
-    "cursor-agent": ("/quit", "Enter"),
+    "cursor-agent": ("/quit", "Enter", "Enter"),
 }
 
 
