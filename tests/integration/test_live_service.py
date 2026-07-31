@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,14 @@ from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.bootstrap import _resolve_profile_executable, main
 from remote_agents.config import TelegramSecrets
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 
 
 def test_private_bot_boundary_accepts_only_the_exact_configured_private_chat() -> None:
@@ -105,6 +114,22 @@ async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
     assert callback.answers == [None]
 
 
+@pytest.mark.asyncio
+async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> None:
+    launcher = _Launcher()
+    launcher.records = [
+        _record(SessionState.RUNNING, "active"),
+        _record(SessionState.ENDED, "ended"),
+    ]
+    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+
+    reply = await boundary._sessions_reply()
+
+    labels = tuple(button.text for row in reply.keyboard for button in row)
+    assert labels == ("demo · codex · regular · #1 · active", "Home")
+    assert "ended" not in labels
+
+
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     tmp_path, monkeypatch
 ) -> None:
@@ -160,9 +185,13 @@ class _Connection:
 class _Launcher:
     def __init__(self) -> None:
         self.commands = []
+        self.records = []
 
     async def launch(self, command) -> None:
         self.commands.append(command)
+
+    async def list_sessions(self):
+        return self.records
 
 
 class _Message:
@@ -195,4 +224,15 @@ def _trusted_update(*, message: _Message | None = None, callback: _Callback | No
         effective_chat=SimpleNamespace(id=11, type="private"),
         effective_message=message,
         callback_query=callback,
+    )
+
+
+def _record(state: SessionState, label: str) -> SessionRecord:
+    return SessionRecord(
+        SessionId.new(),
+        ProjectId("demo"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("demo", "codex", "regular", 1, label),
+        state,
+        datetime.now(UTC),
     )

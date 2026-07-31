@@ -41,6 +41,7 @@ class StopController:
             SessionState.RUNNING,
             SessionState.STOP_REQUESTED,
             SessionState.PRESERVED,
+            SessionState.FAILED,
         }:
             return None
         return self._callbacks.create(
@@ -86,6 +87,7 @@ class StopController:
             SessionState.RUNNING,
             SessionState.STOP_REQUESTED,
             SessionState.PRESERVED,
+            SessionState.FAILED,
         }:
             await service.force_stop(ForceStopCommand(request.session_id))
             return True

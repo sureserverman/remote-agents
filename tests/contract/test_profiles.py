@@ -93,6 +93,27 @@ def test_remote_profile_substitutes_only_the_generated_managed_name() -> None:
     assert runtime.readiness_blockers == ("Accessing workspace:",)
 
 
+@pytest.mark.parametrize(
+    ("profile_id", "expected_blockers"),
+    (
+        ("codex", ("Do you trust the contents of this directory?",)),
+        ("cursor-agent", ("Workspace Trust Required",)),
+    ),
+)
+def test_profile_readiness_rejects_a_workspace_trust_dialogue(
+    profile_id: str, expected_blockers: tuple[str, ...]
+) -> None:
+    definition = next(
+        profile for profile in closed_profiles() if str(profile.profile_id) == profile_id
+    )
+
+    runtime = build_launch_profile(
+        definition, Path(f"/tools/{profile_id}"), SessionId.new(), {"PATH": "/tools"}
+    )
+
+    assert runtime.readiness_blockers == expected_blockers
+
+
 def test_profile_qualification_is_version_pinned_and_independent() -> None:
     profiles = closed_profiles()
     qualifications = (

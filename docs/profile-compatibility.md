@@ -34,10 +34,10 @@ Use the dedicated managed socket only. Never run the equivalent command without
 tmux -L remote-agents list-panes -a -F '#{session_name} #{pane_dead} #{@remote_agents_id}'
 
 # Inspect one exact managed pane; its UUID must match the stored session record.
-tmux -L remote-agents capture-pane -p -t =ra-<uuid>:
+tmux -L remote-agents capture-pane -p -t ra-<uuid>:
 
 # Remove one exact session only after verifying its ownership metadata and preserved output.
-tmux -L remote-agents kill-session -t =ra-<uuid>:
+tmux -L remote-agents kill-session -t ra-<uuid>:
 ```
 
 If SQLite is unavailable or a profile reports `BLOCKED`, do not issue a mutation from the

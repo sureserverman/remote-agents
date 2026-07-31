@@ -66,6 +66,26 @@ def test_cleanup_only_exists_for_preserved_sessions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup() -> None:
+    controller = StopController(CallbackStateStore())
+    session = SessionId(UUID(int=1))
+    token = controller.offer(
+        session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11, 1
+    )
+
+    assert token is not None
+    assert controller.confirm_force(token, 7, 11, 1)
+    request = controller.claim(token, 7, 11, 1)
+    assert request is not None
+    service = FakeService()
+
+    assert await controller.execute(
+        request, service, Record(session, SessionState.FAILED, ProfileId("codex"))
+    )
+    assert service.actions == ["force"]
+
+
+@pytest.mark.asyncio
 async def test_claimed_action_rechecks_current_state_before_typed_service_dispatch() -> None:
     controller = StopController(CallbackStateStore())
     session = SessionId(UUID(int=1))

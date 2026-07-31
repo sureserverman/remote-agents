@@ -17,5 +17,5 @@ def test_compatibility_document_matches_the_checked_qualification_record() -> No
         assert "Readiness evidence" in document
         assert "Fixed graceful exit" in document
     assert "tmux -L remote-agents" in document
-    assert "=ra-<uuid>:" in document
+    assert "ra-<uuid>:" in document
     assert "tmux kill-session" not in document

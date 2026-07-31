@@ -26,6 +26,8 @@ _READINESS_MARKERS = {
 _READINESS_BLOCKERS = {
     "claude": ("Accessing workspace:",),
     "claude-remote": ("Accessing workspace:",),
+    "codex": ("Do you trust the contents of this directory?",),
+    "cursor-agent": ("Workspace Trust Required",),
 }
 
 

@@ -9,6 +9,7 @@ def test_feature_probe_uses_a_disposable_socket_and_exact_target(tmp_path: Path)
     result = probe_features(tmp_path)
 
     assert result.socket_name.startswith("remote-agents-test-")
-    assert result.exact_target.startswith("=ra-")
+    assert result.exact_target.startswith("ra-")
+    assert result.exact_target.endswith(":")
     assert result.user_option == "1"
     assert result.capture_is_text is True

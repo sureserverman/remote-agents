@@ -205,7 +205,11 @@ class PrivateBotBoundary:
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:
             return ()
-        return tuple(await self.launcher.list_sessions())
+        return tuple(
+            record
+            for record in await self.launcher.list_sessions()
+            if record.state is not SessionState.ENDED
+        )
 
     async def _record(self, session_value: str) -> SessionRecord | None:
         return next(
