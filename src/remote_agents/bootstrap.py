@@ -13,7 +13,7 @@ from pathlib import Path
 
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
-from remote_agents.adapters.sqlite.database import database_is_ready
+from remote_agents.adapters.sqlite.database import database_is_ready, restore_database
 from remote_agents.adapters.tmux.profiles import probe_profiles
 from remote_agents.application.doctor import doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
@@ -33,6 +33,9 @@ def main() -> int:
     doctor_parser.add_argument("--fake-terminal", action="store_true")
     doctor_parser.add_argument("--profiles", action="store_true")
     doctor_parser.add_argument("--json", action="store_true")
+    restore_parser = subcommands.add_parser("restore-database")
+    restore_parser.add_argument("--database", type=Path, required=True)
+    restore_parser.add_argument("--backup", type=Path)
     arguments = parser.parse_args()
     if arguments.command == "doctor":
         if arguments.profiles:
@@ -56,4 +59,7 @@ def main() -> int:
             fake_terminal=arguments.fake_terminal,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
+    if arguments.command == "restore-database":
+        restore_database(arguments.database, arguments.backup)
+        print("database restored")
     return 0
