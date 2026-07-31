@@ -118,9 +118,10 @@ class TmuxTerminal:
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
-        """Send only the persisted profile sequence and retain the resulting dead pane."""
-        profile = self._session_profiles.get(session_id)
-        if profile is None or profile_id not in self._profiles:
+        """Send a known profile sequence only after rechecking current trusted ownership."""
+        profile = self._session_profiles.get(session_id) or self._profiles.get(profile_id)
+        observation = await self.inspect(session_id)
+        if profile is None or observation is None or observation.profile_id != profile_id:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="unknown_session"
             )
