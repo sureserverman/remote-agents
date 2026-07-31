@@ -115,16 +115,26 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         for result in compatibility
     )
     definitions_by_id = {definition.profile_id: definition for definition in definitions}
+    executables = {
+        result.profile_id: _resolve_profile_executable(
+            definitions_by_id[result.profile_id].executable, paths.home
+        )
+        for result in compatibility
+    }
     profile_factories = {}
     allowed_environment = {
         name: os.environ[name]
         for name in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
         if name in os.environ
     }
+    profile_directories = sorted(
+        {str(executable.parent) for executable in executables.values() if executable is not None}
+    )
+    allowed_environment["PATH"] = ":".join(
+        (*profile_directories, allowed_environment.get("PATH", ""))
+    ).rstrip(":")
     for result in compatibility:
-        executable = _resolve_profile_executable(
-            definitions_by_id[result.profile_id].executable, paths.home
-        )
+        executable = executables[result.profile_id]
         if result.status == "QUALIFIED" and executable is not None:
             definition = definitions_by_id[result.profile_id]
             profile_factories[result.profile_id] = _profile_factory(

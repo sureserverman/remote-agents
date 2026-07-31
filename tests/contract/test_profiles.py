@@ -69,7 +69,7 @@ def test_one_unavailable_profile_does_not_disable_other_version_probes() -> None
     results = probe_profiles(
         profiles,
         resolve=lambda executable: paths.get(executable),
-        run_version=lambda argv: f"{argv[0]} 1.2.3",
+        run_version=lambda argv: f"{Path(argv[0]).name} 1.2.3",
     )
 
     by_id = {str(result.profile_id): result for result in results}
@@ -103,8 +103,10 @@ def test_profile_qualification_is_version_pinned_and_independent() -> None:
     results = probe_profiles(
         profiles,
         qualifications=qualifications,
-        resolve=lambda _executable: Path("/tools/agent"),
-        run_version=lambda argv: "claude 1.2.3" if argv[0] == "claude" else "other 1.2.3",
+        resolve=lambda executable: Path(f"/tools/{executable}"),
+        run_version=lambda argv: (
+            "claude 1.2.3" if Path(argv[0]).name == "claude" else "other 1.2.3"
+        ),
     )
 
     by_id = {str(result.profile_id): result for result in results}

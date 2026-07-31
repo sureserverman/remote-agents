@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -50,7 +51,7 @@ def probe_profiles(
             )
             continue
         try:
-            version = _sanitize_version(run_version(profile.version_command))
+            version = _sanitize_version(run_version((str(path), *profile.version_argv)))
         except (OSError, subprocess.SubprocessError):
             results.append(
                 ProfileCompatibility(
@@ -75,6 +76,10 @@ def _resolve_executable(executable: str) -> Path | None:
 
 
 def _run_version(argv: tuple[str, ...]) -> str:
+    executable_directory = str(Path(argv[0]).parent)
+    environment = os.environ | {
+        "PATH": f"{executable_directory}:{os.environ.get('PATH', '')}".rstrip(":")
+    }
     completed = subprocess.run(
         argv,
         check=True,
@@ -83,6 +88,7 @@ def _run_version(argv: tuple[str, ...]) -> str:
         stderr=subprocess.STDOUT,
         text=True,
         timeout=5,
+        env=environment,
     )
     return completed.stdout
 
