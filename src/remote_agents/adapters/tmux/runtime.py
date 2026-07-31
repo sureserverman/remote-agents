@@ -176,6 +176,10 @@ class TmuxTerminal:
                 )
         return None
 
+    async def capture(self, session_id: SessionId) -> str:
+        """Return one managed pane's output for the presentation boundary to sanitize."""
+        return await self._gateway.capture(session_id)
+
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation."""
         try:

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.bootstrap import main
 from remote_agents.config import TelegramSecrets
 
@@ -37,7 +39,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
     await boundary.start(update, None)
 
     assert message.replies[0]["text"] == "<b>Remote agents</b>\nChoose an action."
-    refresh = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    refresh = message.replies[0]["reply_markup"].inline_keyboard[2][0].callback_data
     callback = _Callback(refresh)
     await boundary.callback(_trusted_update(callback=callback), None)
 
@@ -48,6 +50,36 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     assert callback.answers == [None, "This view has expired."]
     assert len(callback.edits) == 1
+
+
+@pytest.mark.asyncio
+async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> None:
+    launcher = _Launcher()
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        profiles=(ProfileAvailability("claude", True),),
+        launcher=launcher,
+    )
+    message = _Message()
+    await boundary.start(_trusted_update(message=message), None)
+    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    projects = _Callback(launch)
+    await boundary.callback(_trusted_update(callback=projects), None)
+    project = projects.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    profiles = _Callback(project)
+    await boundary.callback(_trusted_update(callback=profiles), None)
+    profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    confirmation = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=confirmation), None)
+    confirm = confirmation.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    submitted = _Callback(confirm)
+    await boundary.callback(_trusted_update(callback=submitted), None)
+
+    assert len(launcher.commands) == 1
+    assert str(launcher.commands[0].project_id) == "a" * 24
+    assert str(launcher.commands[0].profile_id) == "claude"
 
 
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
@@ -64,7 +96,7 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     )
     received: list[TelegramSecrets] = []
 
-    async def serve(secrets: TelegramSecrets) -> None:
+    async def serve(secrets: TelegramSecrets, _boundary: PrivateBotBoundary) -> None:
         received.append(secrets)
 
     monkeypatch.setattr(
@@ -73,6 +105,10 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     monkeypatch.setattr(
         "remote_agents.bootstrap.ProductionPaths.for_home",
         lambda _home: _Paths(tmp_path / "sessions.sqlite3"),
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._private_boundary",
+        lambda _config, _connection, _paths: PrivateBotBoundary(7, 11),
     )
 
     assert main(["serve", "--config", str(config)], serve_runner=serve) == 0
@@ -96,6 +132,14 @@ class _Paths:
 class _Connection:
     def close(self) -> None:
         return None
+
+
+class _Launcher:
+    def __init__(self) -> None:
+        self.commands = []
+
+    async def launch(self, command) -> None:
+        self.commands.append(command)
 
 
 class _Message:

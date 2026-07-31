@@ -5,17 +5,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import shutil
 from collections.abc import Awaitable, Callable
+from hashlib import sha256
 from pathlib import Path
 
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import database_is_ready, restore_database
-from remote_agents.adapters.telegram.service import run_private_bot
-from remote_agents.adapters.tmux.profiles import probe_profiles
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, run_private_bot
+from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.adapters.tmux.gateway import TmuxGateway
+from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
+from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.application.doctor import doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
+from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
+from remote_agents.domain.models import ProjectId
 from remote_agents.domain.profiles import closed_profiles, qualified_profiles
 from remote_agents.production import ProductionPaths
 
@@ -23,7 +32,9 @@ from remote_agents.production import ProductionPaths
 def main(
     argv: list[str] | None = None,
     *,
-    serve_runner: Callable[[TelegramSecrets], Awaitable[None]] = run_private_bot,
+    serve_runner: Callable[[TelegramSecrets, PrivateBotBoundary], Awaitable[None]] = (
+        run_private_bot
+    ),
 ) -> int:
     """Run the current composition-root command-line interface."""
     parser = argparse.ArgumentParser(
@@ -79,7 +90,61 @@ def main(
         paths.require_private_environment()
         connection = paths.open_database()
         try:
-            asyncio.run(serve_runner(load_secrets()))
+            asyncio.run(serve_runner(load_secrets(), _private_boundary(config, connection, paths)))
         finally:
             connection.close()
     return 0
+
+
+def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotBoundary:
+    registry = load_registry(config.registry_path)
+    discovered = discover_projects(config.dev_root)
+    catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
+    project_paths = {
+        ProjectId(_opaque_id(project.path)): project.path.resolve(strict=True)
+        for project in (*registry.projects, *discovered)
+    }
+    definitions = closed_profiles()
+    compatibility = probe_profiles(definitions, qualifications=qualified_profiles())
+    profiles = tuple(
+        ProfileAvailability(str(result.profile_id), result.status == "QUALIFIED")
+        for result in compatibility
+    )
+    definitions_by_id = {definition.profile_id: definition for definition in definitions}
+    profile_factories = {}
+    allowed_environment = {
+        name: os.environ[name]
+        for name in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
+        if name in os.environ
+    }
+    for result in compatibility:
+        executable = shutil.which(str(definitions_by_id[result.profile_id].executable))
+        if result.status == "QUALIFIED" and executable is not None:
+            definition = definitions_by_id[result.profile_id]
+            profile_factories[result.profile_id] = _profile_factory(
+                definition, Path(executable), allowed_environment
+            )
+    terminal = TmuxTerminal(
+        TmuxGateway("remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory),
+        project_paths,
+        {},
+        startup_timeout=20,
+        profile_factories=profile_factories,
+    )
+    secrets = load_secrets()
+    return PrivateBotBoundary(
+        secrets.owner_user_id,
+        secrets.owner_chat_id,
+        catalogue=catalogue,
+        profiles=profiles,
+        launcher=SessionService(SQLiteSessionStore(connection), terminal),
+        capture=terminal.capture,
+    )
+
+
+def _opaque_id(path: Path) -> str:
+    return sha256(str(path.resolve(strict=False)).encode("utf-8")).hexdigest()[:24]
+
+
+def _profile_factory(definition, executable: Path, environment: dict[str, str]):
+    return lambda session_id: build_launch_profile(definition, executable, session_id, environment)
