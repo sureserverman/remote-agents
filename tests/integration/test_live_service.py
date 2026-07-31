@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from telegram.error import BadRequest
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
@@ -82,6 +83,19 @@ async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> 
     assert str(launcher.commands[0].profile_id) == "claude"
 
 
+@pytest.mark.asyncio
+async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
+    boundary = PrivateBotBoundary(7, 11)
+    message = _Message()
+    await boundary.start(_trusted_update(message=message), None)
+    refresh = message.replies[0]["reply_markup"].inline_keyboard[2][0].callback_data
+    callback = _Callback(refresh, edit_error=BadRequest("Message is not modified"))
+
+    await boundary.callback(_trusted_update(callback=callback), None)
+
+    assert callback.answers == [None]
+
+
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     tmp_path, monkeypatch
 ) -> None:
@@ -151,8 +165,9 @@ class _Message:
 
 
 class _Callback:
-    def __init__(self, data: str) -> None:
+    def __init__(self, data: str, *, edit_error: Exception | None = None) -> None:
         self.data = data
+        self.edit_error = edit_error
         self.answers: list[str | None] = []
         self.edits: list[dict[str, object]] = []
 
@@ -160,6 +175,8 @@ class _Callback:
         self.answers.append(text)
 
     async def edit_message_text(self, **kwargs: object) -> None:
+        if self.edit_error is not None:
+            raise self.edit_error
         self.edits.append(kwargs)
 
 

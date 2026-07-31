@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -79,9 +80,13 @@ class PrivateBotBoundary:
             await query.answer("This view has expired.")
             return
         await query.answer()
-        await query.edit_message_text(
-            **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
-        )
+        try:
+            await query.edit_message_text(
+                **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
+            )
+        except BadRequest as error:
+            if "Message is not modified" not in str(error):
+                raise
 
     def _home_reply(self) -> dict[str, object]:
         self._next_revision(self.owner_user_id, self.owner_chat_id)
