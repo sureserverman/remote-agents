@@ -230,18 +230,17 @@ class PrivateBotBoundary:
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
+        buttons = tuple(
+            Button(
+                _profile_name(profile.profile_id),
+                self._callback("launch.profile", f"{project_id}|{profile.profile_id}"),
+            )
+            for profile in self.profiles
+            if profile.available
+        )
         return self._message(
             "<b>Select an agent</b>",
-            tuple(
-                (
-                    Button(
-                        _profile_name(profile.profile_id),
-                        self._callback("launch.profile", f"{project_id}|{profile.profile_id}"),
-                    ),
-                )
-                for profile in self.profiles
-                if profile.available
-            ),
+            _button_rows(buttons),
         )
 
     def _confirm_reply(self, entity_id: str) -> RenderedMessage:
@@ -356,3 +355,7 @@ def _available_stops(state: SessionState) -> tuple[str, ...]:
     if state is SessionState.PRESERVED:
         actions.insert(0, "cleanup")
     return tuple(actions)
+
+
+def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
+    return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))

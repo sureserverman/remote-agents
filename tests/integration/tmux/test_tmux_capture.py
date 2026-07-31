@@ -29,7 +29,7 @@ def test_capture_from_a_disposable_tmux_socket_is_cleaned(tmp_path: Path) -> Non
             check=True,
         )
         output = subprocess.run(
-            ["tmux", "-L", socket, "capture-pane", "-p", "-t", f"={session}:"],
+            ["tmux", "-L", socket, "capture-pane", "-p", "-t", f"{session}:"],
             check=True,
             capture_output=True,
         ).stdout

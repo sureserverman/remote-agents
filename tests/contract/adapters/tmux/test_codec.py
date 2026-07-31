@@ -64,6 +64,6 @@ def test_codec_rejects_empty_stable_tmux_fields() -> None:
 def test_exact_target_rejects_prefixes_and_only_accepts_generated_names() -> None:
     session_id = SessionId.new()
 
-    assert exact_session_target(f"ra-{session_id}") == f"=ra-{session_id}:"
+    assert exact_session_target(f"ra-{session_id}") == f"ra-{session_id}:"
     with pytest.raises(ValueError, match="managed session"):
         exact_session_target("ra-")

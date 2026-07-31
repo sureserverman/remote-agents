@@ -43,7 +43,7 @@ def exact_session_target(session_name: str) -> str:
         session_id = SessionId.parse(session_name.removeprefix("ra-"))
     except ValueError as error:
         raise ValueError("managed session name must contain a canonical UUID") from error
-    return f"=ra-{session_id}:"
+    return f"ra-{session_id}:"
 
 
 def parse_pane(line: str) -> ManagedPane:
