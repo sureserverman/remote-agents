@@ -23,3 +23,6 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "live_telegram: opt-in check against the configured private Telegram bot"
     )
+    config.addinivalue_line(
+        "markers", "live_acceptance: opt-in audit of owner-driven Telegram lifecycle traces"
+    )

@@ -24,7 +24,7 @@ _GRACEFUL_KEYS = {
     "claude-remote": ("/exit", "Enter"),
     "codex": ("/exit", "Enter"),
     "opencode": ("C-c",),
-    "cursor-agent": ("C-c",),
+    "cursor-agent": ("/quit", "Enter"),
 }
 
 
