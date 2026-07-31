@@ -1,27 +1,30 @@
-"""Composition root for the application.
-
-The runtime composition is introduced after the core and adapter stages. This temporary
-help-only command keeps the installed package executable without leaking policy into the
-package entry point.
-"""
+"""Composition root for the private Telegram control-plane service."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import database_is_ready, restore_database
+from remote_agents.adapters.telegram.service import run_private_bot
 from remote_agents.adapters.tmux.profiles import probe_profiles
 from remote_agents.application.doctor import doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
-from remote_agents.config import load_config
+from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.profiles import closed_profiles, qualified_profiles
+from remote_agents.production import ProductionPaths
 
 
-def main() -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    serve_runner: Callable[[TelegramSecrets], Awaitable[None]] = run_private_bot,
+) -> int:
     """Run the current composition-root command-line interface."""
     parser = argparse.ArgumentParser(
         prog="remote-agents",
@@ -36,7 +39,9 @@ def main() -> int:
     restore_parser = subcommands.add_parser("restore-database")
     restore_parser.add_argument("--database", type=Path, required=True)
     restore_parser.add_argument("--backup", type=Path)
-    arguments = parser.parse_args()
+    serve_parser = subcommands.add_parser("serve")
+    serve_parser.add_argument("--config", type=Path, required=True)
+    arguments = parser.parse_args(argv)
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(
@@ -62,4 +67,19 @@ def main() -> int:
     if arguments.command == "restore-database":
         restore_database(arguments.database, arguments.backup)
         print("database restored")
+    if arguments.command == "serve":
+        config = load_config(arguments.config)
+        paths = ProductionPaths.for_home(Path.home())
+        if config.database_path != paths.database_path:
+            raise ConfigError(
+                "production database path must be "
+                f"{paths.database_path}; refusing to write outside the private state directory"
+            )
+        paths.ensure_directories()
+        paths.require_private_environment()
+        connection = paths.open_database()
+        try:
+            asyncio.run(serve_runner(load_secrets()))
+        finally:
+            connection.close()
     return 0
