@@ -118,15 +118,20 @@ async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
 async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> None:
     launcher = _Launcher()
     launcher.records = [
-        _record(SessionState.RUNNING, "active"),
-        _record(SessionState.ENDED, "ended"),
+        _record(SessionState.RUNNING, "active", ProjectId("a" * 24)),
+        _record(SessionState.ENDED, "ended", ProjectId("a" * 24)),
     ]
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
 
     reply = await boundary._sessions_reply()
 
     labels = tuple(button.text for row in reply.keyboard for button in row)
-    assert labels == ("demo · codex · regular · #1 · active", "Home")
+    assert labels == ("Demo · codex · regular · #1 · active", "Home")
     assert "ended" not in labels
 
 
@@ -227,10 +232,10 @@ def _trusted_update(*, message: _Message | None = None, callback: _Callback | No
     )
 
 
-def _record(state: SessionState, label: str) -> SessionRecord:
+def _record(state: SessionState, label: str, project_id: ProjectId) -> SessionRecord:
     return SessionRecord(
         SessionId.new(),
-        ProjectId("demo"),
+        project_id,
         ProfileId("codex"),
         SessionDisplayIdentity("demo", "codex", "regular", 1, label),
         state,

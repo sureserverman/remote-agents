@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import signal
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -173,7 +174,9 @@ class PrivateBotBoundary:
             )
             if token is not None:
                 buttons.append((Button(action.title(), token),))
-        return self._message(f"<b>{record.display.rendered}</b>\n{record.state}", tuple(buttons))
+        return self._message(
+            f"<b>{escape(record.display.rendered)}</b>\n{record.state}", tuple(buttons)
+        )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:
         if self.capture is None:
@@ -205,8 +208,9 @@ class PrivateBotBoundary:
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:
             return ()
+        project_names = {project.opaque_id: project.name for project in self.catalogue}
         return tuple(
-            record
+            _with_project_name(record, project_names.get(str(record.project_id)))
             for record in await self.launcher.list_sessions()
             if record.state is not SessionState.ENDED
         )
@@ -359,6 +363,16 @@ def _available_stops(state: SessionState) -> tuple[str, ...]:
     if state is SessionState.PRESERVED:
         actions.insert(0, "cleanup")
     return tuple(actions)
+
+
+def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
+    if name is None or name == record.display.project_slug:
+        return record
+    try:
+        display = replace(record.display, project_slug=name)
+    except ValueError:
+        return record
+    return replace(record, display=display)
 
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
