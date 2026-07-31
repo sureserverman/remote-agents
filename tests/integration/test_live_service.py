@@ -10,7 +10,7 @@ from telegram.error import BadRequest
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.bootstrap import main
+from remote_agents.bootstrap import _resolve_profile_executable, main
 from remote_agents.config import TelegramSecrets
 
 
@@ -29,6 +29,15 @@ def test_private_bot_boundary_accepts_only_the_exact_configured_private_chat() -
     assert boundary.permits(trusted)
     assert not boundary.permits(foreign_user)
     assert not boundary.permits(group)
+
+
+def test_profile_executable_resolver_includes_the_user_nvm_installation(tmp_path) -> None:
+    executable = tmp_path / ".nvm" / "versions" / "node" / "v22" / "bin" / "codex"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
+
+    assert _resolve_profile_executable("codex", tmp_path) == executable
 
 
 @pytest.mark.asyncio

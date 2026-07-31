@@ -105,7 +105,11 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         for project in (*registry.projects, *discovered)
     }
     definitions = closed_profiles()
-    compatibility = probe_profiles(definitions, qualifications=qualified_profiles())
+    compatibility = probe_profiles(
+        definitions,
+        qualifications=qualified_profiles(),
+        resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
+    )
     profiles = tuple(
         ProfileAvailability(str(result.profile_id), result.status == "QUALIFIED")
         for result in compatibility
@@ -118,11 +122,13 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         if name in os.environ
     }
     for result in compatibility:
-        executable = shutil.which(str(definitions_by_id[result.profile_id].executable))
+        executable = _resolve_profile_executable(
+            definitions_by_id[result.profile_id].executable, paths.home
+        )
         if result.status == "QUALIFIED" and executable is not None:
             definition = definitions_by_id[result.profile_id]
             profile_factories[result.profile_id] = _profile_factory(
-                definition, Path(executable), allowed_environment
+                definition, executable, allowed_environment
             )
     terminal = TmuxTerminal(
         TmuxGateway("remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory),
@@ -148,3 +154,14 @@ def _opaque_id(path: Path) -> str:
 
 def _profile_factory(definition, executable: Path, environment: dict[str, str]):
     return lambda session_id: build_launch_profile(definition, executable, session_id, environment)
+
+
+def _resolve_profile_executable(executable: str, home: Path) -> Path | None:
+    for candidate in (
+        home / ".local" / "bin" / executable,
+        *sorted((home / ".nvm" / "versions" / "node").glob(f"*/bin/{executable}")),
+    ):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    resolved = shutil.which(executable)
+    return Path(resolved) if resolved is not None else None
