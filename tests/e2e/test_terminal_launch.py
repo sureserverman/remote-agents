@@ -50,6 +50,45 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
             pass
 
 
+async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_path: Path) -> None:
+    agent = tmp_path / "fake_agent.py"
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(1)\n", encoding="utf-8")
+    session_id = SessionId.new()
+    created_for: list[SessionId] = []
+
+    def profile_factory(received_session_id: SessionId) -> LaunchProfile:
+        created_for.append(received_session_id)
+        return LaunchProfile(
+            sys.executable,
+            (sys.executable, str(agent), f"ra-{received_session_id}"),
+            {"PATH": os.environ["PATH"]},
+            "READY",
+        )
+
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {},
+        startup_timeout=0.3,
+        profile_factories={ProfileId("fake"): profile_factory},
+    )
+    try:
+        launched = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+
+        assert launched.live
+        assert created_for == [session_id]
+    finally:
+        try:
+            await gateway.mutate("kill-session", f"ra-{session_id}")
+        except RuntimeError:
+            pass
+
+
 def make_terminal(
     tmp_path: Path, *, timeout: float, mode: str = "ready"
 ) -> tuple[TmuxTerminal, TmuxGateway]:

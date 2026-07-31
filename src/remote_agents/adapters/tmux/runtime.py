@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,10 +58,12 @@ class TmuxTerminal:
         profiles: dict[ProfileId, LaunchProfile],
         *,
         startup_timeout: float,
+        profile_factories: dict[ProfileId, Callable[[SessionId], LaunchProfile]] | None = None,
     ) -> None:
         self._gateway = gateway
         self._project_paths = project_paths
         self._profiles = profiles
+        self._profile_factories = profile_factories or {}
         self._startup_timeout = startup_timeout
         self.invalidate_next_intent = False
         self._session_profiles: dict[SessionId, LaunchProfile] = {}
@@ -71,7 +74,9 @@ class TmuxTerminal:
         """Persist a resolved intent, launch it, then require observed pane liveness."""
         try:
             cwd = self._project_paths[project_id].resolve(strict=True)
-            profile = self._profiles[profile_id]
+            profile = self._profiles.get(profile_id)
+            if profile is None:
+                profile = self._profile_factories[profile_id](session_id)
         except (KeyError, OSError):
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"
