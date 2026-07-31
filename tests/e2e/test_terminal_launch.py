@@ -1,5 +1,6 @@
 """Dedicated-socket startup readiness outcomes using harmless fake agents."""
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -43,6 +44,24 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
 
         assert observation.live is False
         assert observation.detail == "startup_timeout"
+    finally:
+        try:
+            await gateway.mutate("kill-session", f"ra-{session_id}")
+        except RuntimeError:
+            pass
+
+
+async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_path: Path) -> None:
+    terminal, gateway = make_terminal(tmp_path, timeout=0.01, mode="delayed")
+    session_id = SessionId.new()
+    try:
+        launched = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        assert not launched.live
+        assert not (await terminal.confirm_ready(session_id, ProfileId("fake"))).live
+
+        await asyncio.sleep(0.06)
+
+        assert (await terminal.confirm_ready(session_id, ProfileId("fake"))).live
     finally:
         try:
             await gateway.mutate("kill-session", f"ra-{session_id}")

@@ -67,6 +67,11 @@ class FakeTerminal:
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         return TerminalObservation(session_id, live=self.live, preserved=False)
 
+    async def confirm_ready(
+        self, session_id: SessionId, _profile_id: ProfileId
+    ) -> TerminalObservation:
+        return TerminalObservation(session_id, live=self.live, preserved=False)
+
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
@@ -108,6 +113,20 @@ async def test_duplicate_launch_does_not_repeat_terminal_side_effect() -> None:
 
     with pytest.raises(DuplicateCommandError):
         await service.launch(command)
+
+
+async def test_refresh_readiness_recovers_only_a_failed_launch_with_readiness_evidence() -> None:
+    terminal = FakeTerminal(live=False)
+    service = SessionService(FakeStore(), terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "key")
+    )
+
+    terminal.live = True
+    refreshed = await service.refresh_readiness()
+
+    assert record.state is SessionState.FAILED
+    assert refreshed[0].state is SessionState.RUNNING
 
 
 async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> None:

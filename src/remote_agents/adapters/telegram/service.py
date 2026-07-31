@@ -142,6 +142,8 @@ class PrivateBotBoundary:
         return _reply_arguments(self._message("Session launch requested."))
 
     async def _sessions_reply(self) -> RenderedMessage:
+        if self.launcher is not None:
+            await self.launcher.refresh_readiness()
         records = await self._records()
         return self._message(
             "<b>Sessions</b>",

@@ -198,6 +198,9 @@ class _Launcher:
     async def list_sessions(self):
         return self.records
 
+    async def refresh_readiness(self) -> None:
+        return None
+
 
 class _Message:
     def __init__(self) -> None:

@@ -141,6 +141,31 @@ class TmuxTerminal:
             session_id, live=True, preserved=False, detail="graceful_timeout"
         )
 
+    async def confirm_ready(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> TerminalObservation:
+        """Recheck a failed launch against the profile's readiness evidence."""
+        profile = self._session_profiles.get(session_id) or self._profiles.get(profile_id)
+        if profile is None:
+            try:
+                profile = self._profile_factories[profile_id](session_id)
+            except KeyError:
+                return TerminalObservation(
+                    session_id, live=False, preserved=False, detail="unknown_profile"
+                )
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="terminal_not_live"
+            )
+        capture = await self._gateway.capture(session_id)
+        if (
+            profile.readiness_marker not in capture
+            or any(blocker in capture for blocker in profile.readiness_blockers)
+        ):
+            return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
+        return observation
+
     async def cleanup(self, session_id: SessionId) -> None:
         """Remove only the exact managed session after preserved-output inspection."""
         await self._gateway.mutate("kill-session", f"ra-{session_id}")

@@ -39,6 +39,7 @@ class InvalidTransition(ValueError):
 _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     (SessionState.STARTING, LifecycleEvent.READY): SessionState.RUNNING,
     (SessionState.STARTING, LifecycleEvent.STARTUP_ERROR): SessionState.FAILED,
+    (SessionState.FAILED, LifecycleEvent.READY): SessionState.RUNNING,
     (SessionState.STARTING, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.RUNNING, LifecycleEvent.GRACEFUL_STOP_REQUESTED): SessionState.STOP_REQUESTED,
     (SessionState.RUNNING, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,

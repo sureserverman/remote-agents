@@ -64,6 +64,24 @@ class SessionService:
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())
 
+    async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
+        """Promote only failed launches whose owned panes now show readiness evidence."""
+        async with self._locks.operation():
+            records = tuple(await self._store.list())
+            for record in records:
+                if record.state is not SessionState.FAILED:
+                    continue
+                async with self._locks.for_session(record.session_id):
+                    current = await self._require_session(record.session_id)
+                    if current.state is not SessionState.FAILED:
+                        continue
+                    observation = await self._terminal.confirm_ready(
+                        current.session_id, current.profile_id
+                    )
+                    if observation.live:
+                        await self._store.record_event(current.session_id, LifecycleEvent.READY)
+            return tuple(await self._store.list())
+
     async def inspect(self, query: InspectQuery) -> TerminalObservation | None:
         return await self._terminal.inspect(query.session_id)
 
