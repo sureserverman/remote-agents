@@ -49,6 +49,50 @@ def test_profile_executable_resolver_includes_the_user_nvm_installation(tmp_path
     assert _resolve_profile_executable("codex", tmp_path) == executable
 
 
+def test_doctor_uses_the_private_default_config_and_reports_operational_components(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        encoding="utf-8",
+    )
+    paths = _DoctorPaths(config)
+    monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
+    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", lambda _argv: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._telegram_credentials_are_private", lambda _paths: True
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
+    monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
+    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.probe_profiles",
+        lambda *_args, **_kwargs: (
+            _compatibility("claude"),
+            _compatibility("claude-remote"),
+            _compatibility("codex"),
+            _compatibility("opencode"),
+            _compatibility("cursor-agent"),
+        ),
+    )
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = __import__("json").loads(capsys.readouterr().out)
+    assert report["healthy"] is True
+    assert set(report["components"]) == {"core", "store", "tmux", "telegram", "service", "profiles"}
+    assert [profile["status"] for profile in report["profiles"]] == ["QUALIFIED"] * 5
+
+
 @pytest.mark.asyncio
 async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_callbacks() -> None:
     boundary = PrivateBotBoundary(7, 11)
@@ -225,6 +269,18 @@ class _Paths:
 
     def open_database(self):
         return _Connection()
+
+
+class _DoctorPaths:
+    def __init__(self, config_path) -> None:
+        self.config_path = config_path
+        self.home = config_path.parent
+
+
+def _compatibility(profile_id: str):
+    from remote_agents.domain.profiles import ProfileCompatibility
+
+    return ProfileCompatibility(ProfileId(profile_id), True, "1.2.3", "QUALIFIED", "verified")
 
 
 class _Connection:

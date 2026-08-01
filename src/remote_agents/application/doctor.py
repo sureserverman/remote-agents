@@ -1,5 +1,6 @@
 """Technology-neutral health reporting for configured core dependencies."""
 
+from remote_agents.application.health import health_report
 from remote_agents.domain.profiles import ProfileCompatibility
 
 
@@ -42,3 +43,36 @@ def profile_doctor(profiles: tuple[ProfileCompatibility, ...]) -> dict[str, obje
             for profile in profiles
         ]
     }
+
+
+def production_doctor(
+    *,
+    core_ready: bool,
+    database_ready: bool,
+    tmux_ready: bool,
+    telegram_ready: bool,
+    service_ready: bool,
+    profiles: tuple[ProfileCompatibility, ...],
+    registered_projects: int,
+    discovered_projects: int,
+    catalogue_projects: int,
+) -> dict[str, object]:
+    """Render the installed service's non-secret dependency health report."""
+    profiles_ready = bool(profiles) and all(profile.status == "QUALIFIED" for profile in profiles)
+    report = health_report(
+        {
+            "core": (core_ready, "registry_unavailable"),
+            "store": (database_ready, "database_unavailable"),
+            "tmux": (tmux_ready, "tmux_unavailable"),
+            "telegram": (telegram_ready, "credentials_unavailable"),
+            "service": (service_ready, "service_inactive"),
+            "profiles": (profiles_ready, "profile_blocked"),
+        }
+    )
+    report["projects"] = {
+        "registered": registered_projects,
+        "discovered": discovered_projects,
+        "catalogue": catalogue_projects,
+    }
+    report.update(profile_doctor(profiles))
+    return report

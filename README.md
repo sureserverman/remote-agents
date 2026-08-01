@@ -39,6 +39,7 @@ install -m 600 systemd/remote-agents.service ~/.config/systemd/user/remote-agent
 systemctl --user daemon-reload
 systemctl --user enable --now remote-agents.service
 systemctl --user is-active remote-agents.service
+uv run --locked remote-agents doctor --json | python -m json.tool
 ```
 
 Use Telegram `/start` for a fresh Home view. Launch supports project-name search and an
@@ -65,5 +66,9 @@ uv run --locked remote-agents doctor --profiles --json | python -m json.tool
 The command returns `QUALIFIED` only when the installed version matches a recorded live
 launch/readiness/graceful-exit/cleanup qualification. A missing executable, failed probe, or
 version change is reported as `BLOCKED`; one blocked profile does not affect the others.
+
+The full doctor command reads only the private credential-file boundary, not its values. It
+reports the core registry, SQLite store, fixed tmux command, active user service, Telegram
+credential-file boundary, and every profile together; `healthy` is true only when all are ready.
 
 See [the compatibility matrix and dedicated-socket recovery commands](docs/profile-compatibility.md).

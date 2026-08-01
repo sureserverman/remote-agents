@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from pathlib import Path
@@ -20,7 +21,7 @@ from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
-from remote_agents.application.doctor import doctor, profile_doctor
+from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
@@ -60,19 +61,28 @@ def main(
             )
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
-        if arguments.config is None:
-            doctor_parser.error("--config is required unless --profiles is selected")
-        config = load_config(arguments.config)
+        paths = ProductionPaths.for_home(Path.home())
+        config = load_config(arguments.config or paths.config_path)
         registry = load_registry(config.registry_path)
         discovered = discover_projects(config.dev_root)
         catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
-        result = doctor(
+        profiles = probe_profiles(
+            closed_profiles(),
+            qualifications=qualified_profiles(),
+            resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
+        )
+        result = production_doctor(
+            core_ready=registry.error is None,
             database_ready=database_is_ready(config.database_path),
+            tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+            telegram_ready=_telegram_credentials_are_private(paths),
+            service_ready=_command_succeeds(
+                ("systemctl", "--user", "is-active", "--quiet", "remote-agents.service")
+            ),
+            profiles=profiles,
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
             catalogue_projects=len(catalogue),
-            registry_error=registry.error,
-            fake_terminal=arguments.fake_terminal,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -175,3 +185,28 @@ def _resolve_profile_executable(executable: str, home: Path) -> Path | None:
             return candidate
     resolved = shutil.which(executable)
     return Path(resolved) if resolved is not None else None
+
+
+def _command_succeeds(argv: tuple[str, ...]) -> bool:
+    """Check one fixed local dependency command without a shell or captured content."""
+    try:
+        completed = subprocess.run(
+            argv,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
+def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
+    """Verify only the private credential-file boundary; never read or print its values."""
+    try:
+        paths.require_private_environment()
+    except ConfigError:
+        return False
+    return True

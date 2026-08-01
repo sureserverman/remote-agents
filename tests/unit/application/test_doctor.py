@@ -1,6 +1,6 @@
 """Doctor reports component health rather than configuration-shaped guesses."""
 
-from remote_agents.application.doctor import doctor, profile_doctor
+from remote_agents.application.doctor import doctor, production_doctor, profile_doctor
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import ProfileCompatibility
 
@@ -57,3 +57,35 @@ def test_profile_doctor_lists_independent_compatibility_without_local_paths() ->
             },
         ]
     }
+
+
+def test_production_doctor_requires_every_operational_component_and_profile() -> None:
+    profiles = (
+        ProfileCompatibility(
+            ProfileId("claude"), True, "claude 1.2.3", "QUALIFIED", "live_qualification_verified"
+        ),
+        ProfileCompatibility(
+            ProfileId("codex"), True, "codex 1.2.3", "BLOCKED", "version_probe_failed"
+        ),
+    )
+
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=profiles,
+        registered_projects=2,
+        discovered_projects=3,
+        catalogue_projects=4,
+    )
+
+    assert report["healthy"] is False
+    assert report["components"]["profiles"] == {
+        "status": "degraded",
+        "reason": "profile_blocked",
+    }
+    assert report["components"]["telegram"] == {"status": "healthy", "reason": None}
+    assert report["projects"] == {"registered": 2, "discovered": 3, "catalogue": 4}
+    assert report["profiles"][1]["id"] == "codex"

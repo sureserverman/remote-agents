@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from telegram import Bot
 from telegram.constants import ChatType
+from telegram.error import InvalidToken
 
 from remote_agents.config import load_secrets
 
@@ -24,3 +25,14 @@ async def test_configured_bot_is_reachable_private_and_not_webhook_backed() -> N
     assert webhook.url == ""
     assert chat.id == secrets.owner_chat_id
     assert chat.type == ChatType.PRIVATE
+
+
+@pytest.mark.live_telegram
+async def test_rejected_credential_cannot_access_the_bot() -> None:
+    """Exercise credential denial without replacing the configured production credential."""
+    bot = Bot("000000000:invalid-token")
+    try:
+        with pytest.raises(InvalidToken):
+            await bot.get_me()
+    finally:
+        await bot.shutdown()

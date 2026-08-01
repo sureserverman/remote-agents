@@ -17,3 +17,8 @@ REMOTE_AGENTS_LIVE_ACCEPTANCE=1 \
 The dedicated managed tmux server was empty after the final cleanup. Service restarts retained
 the dedicated tmux server while polling restarted, as required by `KillMode=process`. No default
 tmux-server session was targeted.
+
+The full production doctor reported healthy core, SQLite store, dedicated tmux command, private
+Telegram credential-file boundary, active user service, and all five qualified profiles. The
+credential-denial drill uses a known-invalid credential and does not replace the production
+credential; incident rotation and rollback are documented in the operator runbook.

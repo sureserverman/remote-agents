@@ -11,11 +11,14 @@ systemctl --user daemon-reload
 systemctl --user enable --now remote-agents.service
 systemctl --user is-active remote-agents.service
 systemctl --user is-enabled remote-agents.service
+uv run --locked remote-agents doctor --json | python -m json.tool
 uv run --locked remote-agents doctor --profiles --json | python -m json.tool
 ```
 
 `active` and `enabled` are required. Profile entries must remain `QUALIFIED`; a changed or
 missing executable is `BLOCKED` and must not be launched from Telegram.
+The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
+boundary, service, and each profile. It must report `healthy: true` before normal operation.
 
 ## Telegram acceptance checklist
 
@@ -39,13 +42,22 @@ REMOTE_AGENTS_LIVE_ACCEPTANCE=1 \
   uv run --locked pytest -m live_acceptance tests/live/test_profiles_through_telegram.py -q
 ```
 
-## Telegram credential failure drill
+## Telegram credential denial and recovery drill
 
-Do not revoke a working production token merely to test this path. Instead, rotate a token only
-when required by an incident. The expected service behavior after a revoked or replaced token is
-polling failure and a systemd restart attempt; it must not mutate tmux sessions. Restore service
-only after the replacement token is present in `~/.config/remote-agents/telegram.env` with mode
-`0600`:
+The test suite exercises a known-invalid credential against Telegram without reading or replacing
+the production credential. Run it together with the configured-owner check:
+
+```bash
+set -a
+. ~/.config/remote-agents/telegram.env
+set +a
+uv run --locked pytest -m live_telegram tests/live/test_telegram_owner.py -q
+```
+
+Rotate a production credential only when required by an incident. A revoked or replaced
+credential must cause polling failure and a systemd restart attempt; it must not mutate tmux
+sessions. Restore service only after the replacement token is present in
+`~/.config/remote-agents/telegram.env` with mode `0600`:
 
 ```bash
 systemctl --user restart remote-agents.service
