@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,9 +87,11 @@ class TmuxGateway:
         """Send a profile-owned fixed key sequence to one exact managed target."""
         if not keys:
             raise ValueError("graceful stop requires a fixed key sequence")
-        await self._runner.run(
-            *self._base_argv(), "send-keys", "-t", exact_session_target(f"ra-{session_id}"), *keys
-        )
+        target = exact_session_target(f"ra-{session_id}")
+        for index, key in enumerate(keys):
+            await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+            if index < len(keys) - 1:
+                await asyncio.sleep(0.15)
 
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId, cwd: Path
