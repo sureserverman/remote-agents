@@ -26,7 +26,11 @@ from remote_agents.adapters.telegram.presenters import Button, RenderedMessage
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import LaunchCommand
-from remote_agents.application.project_catalog import CatalogProject, search_catalogue
+from remote_agents.application.project_catalog import (
+    CatalogProject,
+    paginate_catalogue,
+    search_catalogue,
+)
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 
@@ -47,6 +51,8 @@ class PrivateBotBoundary:
     _force_confirmed: set[str] = field(default_factory=set)
     _awaiting_text: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
     _labels: dict[str, str] = field(default_factory=dict)
+    _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
+    project_page_size: int = 10
 
     def __post_init__(self) -> None:
         self.stops = StopController(self.callbacks)
@@ -83,7 +89,9 @@ class PrivateBotBoundary:
         if action == "launch.search":
             self._next_revision(self.owner_user_id, self.owner_chat_id)
             await update.effective_message.reply_text(
-                **_reply_arguments(self._projects_reply(search_catalogue(self.catalogue, value)))
+                **_reply_arguments(
+                    self._projects_reply(search_catalogue(self.catalogue, value), view_id="search")
+                )
             )
             return
         try:
@@ -146,7 +154,9 @@ class PrivateBotBoundary:
             return await self._stop_reply(action, token)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         if action == "launch.open":
-            return _reply_arguments(self._projects_reply(self.catalogue))
+            return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+        if action == "launch.page":
+            return _reply_arguments(self._project_page_reply(entity_id))
         if action in {"launch.search", "launch.label"}:
             self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
             text = "Send a project-name search." if action == "launch.search" else "Send a label."
@@ -265,7 +275,14 @@ class PrivateBotBoundary:
             None,
         )
 
-    def _projects_reply(self, projects: tuple[CatalogProject, ...]) -> RenderedMessage:
+    def _projects_reply(
+        self, projects: tuple[CatalogProject, ...], *, view_id: str, page: int = 1
+    ) -> RenderedMessage:
+        self._project_views[view_id] = projects
+        try:
+            rendered = paginate_catalogue(projects, page, self.project_page_size)
+        except ValueError:
+            return self._message("That project view has expired.")
         buttons = [
             (
                 Button(
@@ -273,13 +290,37 @@ class PrivateBotBoundary:
                     self._callback("launch.project", project.opaque_id),
                 ),
             )
-            for project in projects[:20]
+            for project in rendered.projects
         ]
+        navigation = []
+        if rendered.page > 1:
+            navigation.append(
+                Button("Previous", self._callback("launch.page", f"{view_id}|{rendered.page - 1}"))
+            )
+        if rendered.page < rendered.page_count:
+            navigation.append(
+                Button("Next", self._callback("launch.page", f"{view_id}|{rendered.page + 1}"))
+            )
+        if navigation:
+            buttons.append(tuple(navigation))
         buttons.append((Button("Search", self._callback("launch.search", "search")),))
         return self._message(
-            "<b>Projects</b>\nSelect a project to launch.",
+            f"<b>Projects {rendered.page}/{rendered.page_count}</b>\nSelect a project to launch.",
             tuple(buttons),
         )
+
+    def _project_page_reply(self, entity_id: str) -> RenderedMessage:
+        view_id, separator, page_value = entity_id.partition("|")
+        if not separator or view_id not in {"all", "search"}:
+            return self._message("That project view has expired.")
+        try:
+            page = int(page_value)
+        except ValueError:
+            return self._message("That project view has expired.")
+        projects = self._project_views.get(view_id)
+        if projects is None:
+            return self._message("That project view has expired.")
+        return self._projects_reply(projects, view_id=view_id, page=page)
 
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):

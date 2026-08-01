@@ -42,8 +42,8 @@ systemctl --user is-active remote-agents.service
 uv run --locked remote-agents doctor --json | python -m json.tool
 ```
 
-Use Telegram `/start` for a fresh Home view. Launch supports project-name search and an
-optional label; Sessions lists only active managed sessions. Ended records remain in local
+Use Telegram `/start` for a fresh Home view. Launch shows paginated project choices, supports
+project-name search and an optional label; Sessions lists only active managed sessions. Ended records remain in local
 SQLite history but do not clutter the Telegram list. After a service restart, begin with a
 fresh `/start` because old button callbacks are intentionally expired.
 

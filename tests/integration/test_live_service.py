@@ -224,6 +224,42 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     assert launcher.commands[0].label == "review"
 
 
+@pytest.mark.asyncio
+async def test_private_bot_boundary_pages_through_the_entire_project_catalogue() -> None:
+    catalogue = tuple(
+        CatalogProject(f"{number:024d}", f"Project {number}", "tests", "Registered")
+        for number in range(25)
+    )
+    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, project_page_size=10)
+    message = _Message()
+    await boundary.start(_trusted_update(message=message), None)
+    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    first = _Callback(launch)
+    await boundary.callback(_trusted_update(callback=first), None)
+
+    first_page = first.edits[0]["reply_markup"].inline_keyboard
+    assert first.edits[0]["text"] == "<b>Projects 1/3</b>\nSelect a project to launch."
+    assert [row[0].text for row in first_page[:10]] == [f"Project {number}" for number in range(10)]
+    second = _Callback(
+        next(button.callback_data for row in first_page for button in row if button.text == "Next")
+    )
+    await boundary.callback(_trusted_update(callback=second), None)
+
+    second_page = second.edits[0]["reply_markup"].inline_keyboard
+    assert [row[0].text for row in second_page[:10]] == [
+        f"Project {number}" for number in range(10, 20)
+    ]
+    third = _Callback(
+        next(button.callback_data for row in second_page for button in row if button.text == "Next")
+    )
+    await boundary.callback(_trusted_update(callback=third), None)
+
+    third_page = third.edits[0]["reply_markup"].inline_keyboard
+    assert [row[0].text for row in third_page[:5]] == [
+        f"Project {number}" for number in range(20, 25)
+    ]
+
+
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     tmp_path, monkeypatch
 ) -> None:

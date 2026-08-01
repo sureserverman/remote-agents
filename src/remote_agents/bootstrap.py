@@ -163,6 +163,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         secrets.owner_chat_id,
         catalogue=catalogue,
         profiles=profiles,
+        project_page_size=config.project_page_size,
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
         capture=terminal.capture,
     )
