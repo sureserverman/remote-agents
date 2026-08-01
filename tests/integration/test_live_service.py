@@ -135,6 +135,51 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
     assert "ended" not in labels
 
 
+@pytest.mark.asyncio
+async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> None:
+    launcher = _Launcher()
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(
+            CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
+            CatalogProject("b" * 24, "opaque-verse", "writing", "Registered"),
+        ),
+        profiles=(ProfileAvailability("codex", True),),
+        launcher=launcher,
+    )
+    message = _Message()
+    await boundary.start(_trusted_update(message=message), None)
+    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    projects = _Callback(launch)
+    await boundary.callback(_trusted_update(callback=projects), None)
+    search = projects.edits[0]["reply_markup"].inline_keyboard[2][0].callback_data
+    awaiting_search = _Callback(search)
+    await boundary.callback(_trusted_update(callback=awaiting_search), None)
+
+    result = _Message("verse")
+    await boundary.text(_trusted_update(message=result), None)
+
+    project = result.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    profiles = _Callback(project)
+    await boundary.callback(_trusted_update(callback=profiles), None)
+    profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    confirmation = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=confirmation), None)
+    label = confirmation.edits[0]["reply_markup"].inline_keyboard[1][0].callback_data
+    awaiting_label = _Callback(label)
+    await boundary.callback(_trusted_update(callback=awaiting_label), None)
+
+    labelled = _Message("  review  ")
+    await boundary.text(_trusted_update(message=labelled), None)
+    confirm = labelled.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    submitted = _Callback(confirm)
+    await boundary.callback(_trusted_update(callback=submitted), None)
+
+    assert str(launcher.commands[0].project_id) == "b" * 24
+    assert launcher.commands[0].label == "review"
+
+
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     tmp_path, monkeypatch
 ) -> None:
@@ -203,8 +248,9 @@ class _Launcher:
 
 
 class _Message:
-    def __init__(self) -> None:
+    def __init__(self, text: str | None = None) -> None:
         self.replies: list[dict[str, object]] = []
+        self.text = text
 
     async def reply_text(self, **kwargs: object) -> None:
         self.replies.append(kwargs)

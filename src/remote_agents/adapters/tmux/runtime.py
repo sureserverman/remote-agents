@@ -159,9 +159,8 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="terminal_not_live"
             )
         capture = await self._gateway.capture(session_id)
-        if (
-            profile.readiness_marker not in capture
-            or any(blocker in capture for blocker in profile.readiness_blockers)
+        if profile.readiness_marker not in capture or any(
+            blocker in capture for blocker in profile.readiness_blockers
         ):
             return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
         return observation

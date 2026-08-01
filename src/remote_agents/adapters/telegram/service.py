@@ -16,6 +16,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
@@ -24,7 +26,7 @@ from remote_agents.adapters.telegram.presenters import Button, RenderedMessage
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import LaunchCommand
-from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.project_catalog import CatalogProject, search_catalogue
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 
@@ -43,6 +45,8 @@ class PrivateBotBoundary:
     stops: StopController = field(init=False)
     _view_revisions: dict[tuple[int, int], int] = field(default_factory=dict)
     _force_confirmed: set[str] = field(default_factory=set)
+    _awaiting_text: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
+    _labels: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.stops = StopController(self.callbacks)
@@ -63,7 +67,36 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
+        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
         await update.effective_message.reply_text(**self._home_reply())
+
+    async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Accept bounded local catalogue search or a session label while explicitly requested."""
+        del context
+        if not self.permits(update) or update.effective_message is None:
+            return
+        request = self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
+        if request is None:
+            return
+        value = update.effective_message.text or ""
+        action, entity_id = request
+        if action == "launch.search":
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            await update.effective_message.reply_text(
+                **_reply_arguments(self._projects_reply(search_catalogue(self.catalogue, value)))
+            )
+            return
+        try:
+            self._labels[entity_id] = _label(value)
+        except ValueError:
+            await update.effective_message.reply_text(
+                **_reply_arguments(self._message("Use a visible label of up to 40 characters."))
+            )
+            return
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        await update.effective_message.reply_text(
+            **_reply_arguments(self._confirm_reply(entity_id))
+        )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Acknowledge and refresh only callbacks issued to this exact private chat."""
@@ -113,7 +146,11 @@ class PrivateBotBoundary:
             return await self._stop_reply(action, token)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         if action == "launch.open":
-            return _reply_arguments(self._projects_reply())
+            return _reply_arguments(self._projects_reply(self.catalogue))
+        if action in {"launch.search", "launch.label"}:
+            self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
+            text = "Send a project-name search." if action == "launch.search" else "Send a label."
+            return _reply_arguments(self._message(text))
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
@@ -136,7 +173,12 @@ class PrivateBotBoundary:
             return _reply_arguments(self._message("That request has expired."))
         project_id, profile_id = _split_launch(entity_id)
         await self.launcher.launch(
-            LaunchCommand(ProjectId(project_id), ProfileId(profile_id), token)
+            LaunchCommand(
+                ProjectId(project_id),
+                ProfileId(profile_id),
+                token,
+                self._labels.pop(entity_id, None),
+            )
         )
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         return _reply_arguments(self._message("Session launch requested."))
@@ -223,18 +265,20 @@ class PrivateBotBoundary:
             None,
         )
 
-    def _projects_reply(self) -> RenderedMessage:
+    def _projects_reply(self, projects: tuple[CatalogProject, ...]) -> RenderedMessage:
+        buttons = [
+            (
+                Button(
+                    project.name,
+                    self._callback("launch.project", project.opaque_id),
+                ),
+            )
+            for project in projects[:20]
+        ]
+        buttons.append((Button("Search", self._callback("launch.search", "search")),))
         return self._message(
             "<b>Projects</b>\nSelect a project to launch.",
-            tuple(
-                (
-                    Button(
-                        project.name,
-                        self._callback("launch.project", project.opaque_id),
-                    ),
-                )
-                for project in self.catalogue[:20]
-            ),
+            tuple(buttons),
         )
 
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
@@ -263,7 +307,10 @@ class PrivateBotBoundary:
             return self._message("That agent is unavailable.")
         return self._message(
             f"Launch {_profile_name(profile_id)}?",
-            ((Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),),
+            (
+                (Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),
+                (Button("Add label", self._callback("launch.label", entity_id)),),
+            ),
         )
 
     def _message(self, text: str, keyboard: tuple[tuple[Button, ...], ...] = ()) -> RenderedMessage:
@@ -296,6 +343,7 @@ async def run_private_bot(
     application = ApplicationBuilder().token(secrets.bot_token).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CallbackQueryHandler(boundary.callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, boundary.text))
     stopping = asyncio.Event()
     _install_stop_signals(stopping)
     await application.initialize()
@@ -379,3 +427,14 @@ def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
     return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
+
+
+def _label(value: str) -> str:
+    normalized = " ".join(value.split())
+    if (
+        not normalized
+        or len(normalized) > 40
+        or any(not character.isprintable() for character in value)
+    ):
+        raise ValueError("label is invalid")
+    return normalized

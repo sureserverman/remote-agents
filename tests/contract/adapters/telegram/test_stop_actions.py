@@ -69,9 +69,7 @@ def test_cleanup_only_exists_for_preserved_sessions() -> None:
 async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup() -> None:
     controller = StopController(CallbackStateStore())
     session = SessionId(UUID(int=1))
-    token = controller.offer(
-        session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11, 1
-    )
+    token = controller.offer(session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11, 1)
 
     assert token is not None
     assert controller.confirm_force(token, 7, 11, 1)
