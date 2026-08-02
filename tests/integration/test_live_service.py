@@ -178,7 +178,8 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
     reply = await boundary._sessions_reply()
 
     labels = tuple(button.text for row in reply.keyboard for button in row)
-    assert labels == ("Demo · codex · regular · #1 · active", "Home")
+    assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
+    assert labels[1:] == ("Home",)
     assert "ended" not in labels
 
 

@@ -6,6 +6,7 @@ import asyncio
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from html import escape
 
 from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -241,7 +242,7 @@ class PrivateBotBoundary:
             tuple(
                 (
                     Button(
-                        record.display.rendered,
+                        _session_row_label(record),
                         self._callback("session.detail", str(record.session_id)),
                     ),
                 )
@@ -268,7 +269,9 @@ class PrivateBotBoundary:
             if token is not None:
                 buttons.append((Button(action.title(), token),))
         return self._message(
-            f"<b>{escape(record.display.rendered)}</b>\n{record.state}", tuple(buttons)
+            f"<b>{escape(record.display.rendered)}</b>\n"
+            f"State: {record.state.value}\n{_state_explanation(record.state)}",
+            tuple(buttons),
         )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:
@@ -276,7 +279,7 @@ class PrivateBotBoundary:
             return self._message("Inspection is unavailable.")
         captured = await self.capture(SessionId.parse(session_value))
         result = inspect_capture(captured.encode())
-        return self._message(result.text)
+        return self._message(f"<pre>{escape(result.text)}</pre>")
 
     async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
         revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
@@ -296,7 +299,7 @@ class PrivateBotBoundary:
         if record is None or not await self.stops.execute(request, self.launcher, record):
             return _reply_arguments(self._message("That session changed; refresh it first."))
         self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(self._message("Session action completed."))
+        return _reply_arguments(self._message(f"{action.title()} completed for this session."))
 
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:
@@ -547,3 +550,21 @@ def _label(value: str) -> str:
     ):
         raise ValueError("label is invalid")
     return normalized
+
+
+def _age(created_at: datetime) -> str:
+    minutes = max(0, int((datetime.now(UTC) - created_at).total_seconds() // 60))
+    return f"{minutes}m ago"
+
+
+def _session_row_label(record: SessionRecord) -> str:
+    return f"{record.display.rendered} · {record.state.value} · {_age(record.created_at)}"
+
+
+def _state_explanation(state: SessionState) -> str:
+    return {
+        SessionState.RUNNING: "The agent is running.",
+        SessionState.STOP_REQUESTED: "A graceful stop is in progress.",
+        SessionState.PRESERVED: "The agent exited; its output is preserved for inspection.",
+        SessionState.FAILED: "The session needs local attention before another action.",
+    }.get(state, "This session is no longer active.")
