@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from remote_agents.adapters.tmux.runtime import LaunchProfile
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import (
     ProfileCompatibility,
@@ -109,6 +110,27 @@ def build_launch_profile(
         else argument
         for index, argument in enumerate(definition.launch_argv)
     )
+    return LaunchProfile(
+        str(executable),
+        argv,
+        environment,
+        _READINESS_MARKERS[str(definition.profile_id)],
+        definition.graceful_keys,
+        _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
+    )
+
+
+def build_resume_profile(
+    definition: ProfileDefinition,
+    executable: Path,
+    session_id: SessionId,
+    source_id: ProviderConversationId,
+    environment: dict[str, str],
+) -> LaunchProfile:
+    """Resolve only a curated provider resume argv into a managed launch profile."""
+    if not executable.is_absolute():
+        raise ValueError("profile executable must be absolute")
+    argv = (str(executable), *definition.resume_argv(source_id)[1:])
     return LaunchProfile(
         str(executable),
         argv,
