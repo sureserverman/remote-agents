@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from html import escape
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -87,26 +87,44 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        request = self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
+        request = self._awaiting_text.get((self.owner_user_id, self.owner_chat_id))
         if request is None:
             return
         value = update.effective_message.text or ""
         action, entity_id = request
+        if value.casefold() in {"cancel", "back"}:
+            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
+            await update.effective_message.reply_text(**(await self._home_reply()))
+            return
         if action == "launch.search":
+            projects = search_catalogue(self.catalogue, value)
+            if not projects:
+                await update.effective_message.reply_text(
+                    **self._prompt_reply("launch.search", "No projects found. Try another name.")
+                )
+                return
+            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
             self._next_revision(self.owner_user_id, self.owner_chat_id)
             await update.effective_message.reply_text(
-                **_reply_arguments(
-                    self._projects_reply(search_catalogue(self.catalogue, value), view_id="search")
-                )
+                **_reply_arguments(self._projects_reply(projects, view_id="search"))
+            )
+            return
+        if value.casefold() == "skip":
+            self._labels.pop(entity_id, None)
+            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            await update.effective_message.reply_text(
+                **_reply_arguments(self._confirm_reply(entity_id))
             )
             return
         try:
             self._labels[entity_id] = _label(value)
         except ValueError:
             await update.effective_message.reply_text(
-                **_reply_arguments(self._message("Use a visible label of up to 40 characters."))
+                **self._prompt_reply("launch.label", "Use a visible label of up to 40 characters.")
             )
             return
+        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         await update.effective_message.reply_text(
             **_reply_arguments(self._confirm_reply(entity_id))
@@ -170,10 +188,7 @@ class PrivateBotBoundary:
             return _reply_arguments(self._project_page_reply(entity_id))
         if action in {"launch.search", "launch.label"}:
             self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
-            text = "Send a project-name search." if action == "launch.search" else "Send a label."
-            return _reply_arguments(
-                self._message(text, ((Button("Cancel", self._callback("nav.home", "home")),),))
-            )
+            return self._prompt_reply(action)
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
@@ -393,6 +408,20 @@ class PrivateBotBoundary:
             previous=self._callback("nav.home", "home"),
             next=self._callback("nav.home", "home"),
         )
+
+    def _prompt_reply(self, action: str, text: str | None = None) -> dict[str, object]:
+        is_search = action == "launch.search"
+        return {
+            "text": text
+            or (
+                "Reply with a project name. Send Cancel or Back to leave this step."
+                if is_search
+                else "Reply with a label, or send Skip, Cancel, or Back."
+            ),
+            "reply_markup": ForceReply(
+                input_field_placeholder="Project name" if is_search else "Optional session label"
+            ),
+        }
 
     def _next_revision(self, owner_id: int, chat_id: int) -> int:
         key = (owner_id, chat_id)
