@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.config import ConfigError
 from remote_agents.production import ProductionPaths
 
@@ -16,7 +18,7 @@ def test_production_paths_create_only_private_declared_directories_and_database(
 ) -> None:
     paths = ProductionPaths.for_home(tmp_path)
 
-    connection = paths.open_database()
+    connection = paths.open_database(open_database, migrations=MIGRATIONS)
     connection.close()
 
     assert paths.database_path.is_file()
@@ -38,13 +40,16 @@ def test_production_paths_create_only_private_declared_directories_and_database(
 
 def test_production_database_backup_precedes_an_upgrade(tmp_path: Path) -> None:
     paths = ProductionPaths.for_home(tmp_path)
-    paths.open_database(migrations=((1, "CREATE TABLE first_table (id INTEGER);"),)).close()
+    paths.open_database(
+        open_database, migrations=((1, "CREATE TABLE first_table (id INTEGER);"),)
+    ).close()
 
     paths.open_database(
+        open_database,
         migrations=(
             (1, "CREATE TABLE first_table (id INTEGER);"),
             (2, "CREATE TABLE second_table (id INTEGER);"),
-        )
+        ),
     ).close()
 
     assert paths.database_path.with_suffix(".sqlite3.bak").is_file()

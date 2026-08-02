@@ -5,12 +5,10 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from remote_agents.adapters.sqlite.database import open_database
-from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.config import ConfigError
 
 
@@ -91,10 +89,13 @@ class ProductionPaths:
         return path
 
     def open_database(
-        self, *, migrations: Iterable[tuple[int, str]] = MIGRATIONS
+        self,
+        database_opener: Callable[[Path, Iterable[tuple[int, str]]], sqlite3.Connection],
+        *,
+        migrations: Iterable[tuple[int, str]],
     ) -> sqlite3.Connection:
         """Migrate only the declared state database and make it owner-readable."""
         self.ensure_directories()
-        connection = open_database(self.database_path, migrations=migrations)
+        connection = database_opener(self.database_path, migrations=migrations)
         os.chmod(self.database_path, 0o600)
         return connection

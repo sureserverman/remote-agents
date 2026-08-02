@@ -14,7 +14,12 @@ from pathlib import Path
 
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
-from remote_agents.adapters.sqlite.database import database_is_ready, restore_database
+from remote_agents.adapters.sqlite.database import (
+    database_is_ready,
+    open_database,
+    restore_database,
+)
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, run_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
@@ -98,7 +103,7 @@ def main(
             )
         paths.ensure_directories()
         paths.require_private_environment()
-        connection = paths.open_database()
+        connection = paths.open_database(open_database, migrations=MIGRATIONS)
         try:
             asyncio.run(serve_runner(load_secrets(), _private_boundary(config, connection, paths)))
         finally:

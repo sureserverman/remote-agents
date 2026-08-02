@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import re
-
-_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 
 def sanitize_capture(
@@ -15,12 +13,9 @@ def sanitize_capture(
     redactions: tuple[str, ...] = (),
 ) -> str:
     """Return bounded UTF-8 pane text with ANSI, unsafe controls, and secrets removed."""
-    if max_lines < 1 or max_bytes < 1:
-        raise ValueError("capture limits must be positive")
-    text = raw[:max_bytes].decode("utf-8", errors="replace")
-    text = _ANSI_ESCAPE.sub("", text)
-    text = "".join(character for character in text if character == "\n" or character >= " ")
-    for pattern in redactions:
-        if pattern:
-            text = text.replace(pattern, "[REDACTED]")
-    return "\n".join(text.splitlines()[:max_lines]).strip()
+    return sanitize_terminal_text(
+        raw,
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+        redactions=redactions,
+    )

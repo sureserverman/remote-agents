@@ -50,9 +50,9 @@ def internal_imports(path: Path, source_root: Path) -> Iterable[tuple[int, str]]
 def module_layer(path: Path, source_root: Path) -> str:
     """Return the architecture layer that owns a source module."""
     parts = path.relative_to(source_root).parts
-    if len(parts) > 1 and parts[0] == PACKAGE_NAME and parts[1] == "bootstrap.py":
-        return "bootstrap"
-    return parts[1] if len(parts) > 1 and parts[0] == PACKAGE_NAME else "root"
+    if parts[0] != PACKAGE_NAME or len(parts) < 3:
+        return "bootstrap" if parts == (PACKAGE_NAME, "bootstrap.py") else "root"
+    return parts[1]
 
 
 def allowed_import(path: Path, source_root: Path, layer: str, imported: str) -> bool:
@@ -72,11 +72,17 @@ def allowed_import(path: Path, source_root: Path, layer: str, imported: str) -> 
             return True
         parts = path.relative_to(source_root).parts
         adapter_name = parts[2] if len(parts) > 2 else None
+        if adapter_name == "telegram" and imported.startswith(
+            (f"{PACKAGE_NAME}.application", f"{PACKAGE_NAME}.config")
+        ):
+            return True
         return adapter_name is not None and imported.startswith(
             f"{PACKAGE_NAME}.adapters.{adapter_name}"
         )
     if layer == "root":
-        return imported == f"{PACKAGE_NAME}.bootstrap"
+        return imported == f"{PACKAGE_NAME}.bootstrap" or imported.startswith(
+            (f"{PACKAGE_NAME}.config", f"{PACKAGE_NAME}.production")
+        )
     if layer == "bootstrap":
         return True
     return True

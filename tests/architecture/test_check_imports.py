@@ -47,6 +47,45 @@ def test_checker_rejects_imports_between_adapter_families(tmp_path: Path) -> Non
     assert len(find_violations(source_root)) == 1
 
 
+def test_checker_allows_the_driving_telegram_adapter_to_invoke_application(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    write_module(
+        source_root,
+        "remote_agents/adapters/telegram/service.py",
+        "import remote_agents.application.commands\nimport remote_agents.config\n",
+    )
+
+    assert find_violations(source_root) == []
+
+
+def test_checker_rejects_telegram_to_tmux_coupling(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    write_module(
+        source_root,
+        "remote_agents/adapters/telegram/service.py",
+        "import remote_agents.adapters.tmux.gateway\n",
+    )
+
+    violations = find_violations(source_root)
+
+    assert len(violations) == 1
+    assert violations[0].reason == "forbidden from adapters"
+
+
+def test_checker_rejects_non_bootstrap_composition_import(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    write_module(
+        source_root,
+        "remote_agents/config.py",
+        "import remote_agents.adapters.sqlite.session_store\n",
+    )
+
+    violations = find_violations(source_root)
+
+    assert len(violations) == 1
+    assert violations[0].reason == "forbidden from root"
+
+
 def test_checker_resolves_and_rejects_relative_domain_to_adapter_import(tmp_path: Path) -> None:
     source_root = tmp_path / "src"
     write_module(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from remote_agents.adapters.tmux.capture import sanitize_capture
+from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +32,7 @@ def inspect_capture(
             "refused", "binary output cannot be displayed.", None, None, False, False
         )
     truncated = len(raw) > 128 * 1024 or raw.count(b"\n") + 1 > 500
-    text = sanitize_capture(raw, max_lines=500, max_bytes=128 * 1024, redactions=redactions)
+    text = sanitize_terminal_text(raw, max_lines=500, max_bytes=128 * 1024, redactions=redactions)
     redacted = "[REDACTED]" in text
     inline_text = text + ("\n[output truncated]" if truncated else "")
     if len(inline_text.encode("utf-16-le")) // 2 <= telegram_limit:
