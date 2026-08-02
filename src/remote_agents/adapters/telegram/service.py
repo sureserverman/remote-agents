@@ -22,7 +22,13 @@ from telegram.ext import (
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.presenters import Button, RenderedMessage
+from remote_agents.adapters.telegram.presenters import (
+    Button,
+    NavigationCallbacks,
+    RenderedMessage,
+    render_home,
+    render_message,
+)
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import LaunchCommand
@@ -133,13 +139,10 @@ class PrivateBotBoundary:
     def _home_reply(self) -> dict[str, object]:
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         return _reply_arguments(
-            self._message(
-                "<b>Remote agents</b>\nChoose an action.",
-                (
-                    (Button("Launch", self._callback("launch.open", "projects")),),
-                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                    (Button("Refresh", self._callback("nav.refresh", "home")),),
-                ),
+            render_home(
+                self._navigation_callbacks(),
+                launch=self._callback("launch.open", "projects"),
+                sessions=self._callback("sessions.open", "sessions"),
             )
         )
 
@@ -356,7 +359,7 @@ class PrivateBotBoundary:
 
     def _message(self, text: str, keyboard: tuple[tuple[Button, ...], ...] = ()) -> RenderedMessage:
         home = Button("Home", self._callback("nav.home", "home"))
-        return RenderedMessage(text, keyboard + ((home,),))
+        return render_message(text, keyboard + ((home,),))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
         revision = self._view_revisions.get((self.owner_user_id, self.owner_chat_id), 0)
@@ -367,6 +370,15 @@ class PrivateBotBoundary:
             self.owner_chat_id,
             revision,
             mutation=mutation,
+        )
+
+    def _navigation_callbacks(self) -> NavigationCallbacks:
+        return NavigationCallbacks(
+            home=self._callback("nav.home", "home"),
+            back=self._callback("nav.home", "home"),
+            refresh=self._callback("nav.refresh", "home"),
+            previous=self._callback("nav.home", "home"),
+            next=self._callback("nav.home", "home"),
         )
 
     def _next_revision(self, owner_id: int, chat_id: int) -> int:

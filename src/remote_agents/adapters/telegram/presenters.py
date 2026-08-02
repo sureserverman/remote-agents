@@ -26,6 +26,12 @@ class RenderedMessage:
     keyboard: tuple[tuple[Button, ...], ...]
 
 
+def render_message(text: str, keyboard: tuple[tuple[Button, ...], ...] = ()) -> RenderedMessage:
+    """Create the sole typed Telegram screen model after enforcing its text budget."""
+
+    return _message(text, keyboard)
+
+
 @dataclass(frozen=True, slots=True)
 class NavigationCallbacks:
     """Opaque callback tokens issued by :class:`CallbackStateStore`."""
@@ -78,12 +84,16 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
     return Page(items=tuple(items[start : start + page_size]), index=index, count=count)
 
 
-def render_home(callbacks: NavigationCallbacks) -> RenderedMessage:
+def render_home(callbacks: NavigationCallbacks, *, launch: str, sessions: str) -> RenderedMessage:
     """Render the fixed root view."""
 
     return _message(
         "<b>Remote agents</b>\nChoose an action.",
-        _navigation(callbacks, include_back=False),
+        (
+            (Button("Launch", launch),),
+            (Button("Sessions", sessions),),
+            *_navigation(callbacks, include_back=False),
+        ),
     )
 
 

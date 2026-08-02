@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from remote_agents.adapters.telegram.presenters import (
     MAX_TELEGRAM_TEXT_UNITS,
+    Button,
     NavigationCallbacks,
     Page,
     bounded_text,
@@ -9,6 +10,7 @@ from remote_agents.adapters.telegram.presenters import (
     render_degraded,
     render_empty,
     render_home,
+    render_message,
     render_paginated,
 )
 
@@ -22,12 +24,14 @@ CALLBACKS = NavigationCallbacks(
 
 
 def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
-    first = render_home(CALLBACKS)
-    second = render_home(CALLBACKS)
+    first = render_home(CALLBACKS, launch="c1_launch", sessions="c1_sessions")
+    second = render_home(CALLBACKS, launch="c1_launch", sessions="c1_sessions")
 
     assert first == second
     assert first.text == "<b>Remote agents</b>\nChoose an action."
     assert [(button.text, button.callback_data) for row in first.keyboard for button in row] == [
+        ("Launch", "c1_launch"),
+        ("Sessions", "c1_sessions"),
         ("Refresh", "c1_refresh"),
         ("Home", "c1_home"),
     ]
@@ -97,8 +101,15 @@ def test_presenters_reject_non_opaque_callback_data() -> None:
     )
 
     try:
-        render_home(unsafe)
+        render_home(unsafe, launch="c1_launch", sessions="c1_sessions")
     except ValueError as error:
         assert "opaque" in str(error)
     else:
         raise AssertionError("unsafe callback data was accepted")
+
+
+def test_generic_message_presenter_preserves_typed_keyboard_and_enforces_text_limit() -> None:
+    rendered = render_message("<b>Safe static markup</b>", ((Button("Back", "c1_back"),),))
+
+    assert rendered.text == "<b>Safe static markup</b>"
+    assert rendered.keyboard == ((Button("Back", "c1_back"),),)

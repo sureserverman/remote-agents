@@ -303,7 +303,7 @@ class _Paths:
     def require_private_environment(self):
         return None
 
-    def open_database(self):
+    def open_database(self, *_args, **_kwargs):
         return _Connection()
 
 
