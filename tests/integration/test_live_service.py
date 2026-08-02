@@ -156,6 +156,35 @@ async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> 
 
 
 @pytest.mark.asyncio
+async def test_failed_launch_explains_that_workspace_trust_is_never_approved_remotely() -> None:
+    failed = _record(SessionState.FAILED, "failed", ProjectId("a" * 24))
+    launcher = _Launcher()
+    launcher.launch_result = failed
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        profiles=(ProfileAvailability("cursor-agent", True),),
+        launcher=launcher,
+    )
+    boundary._view_revisions[(7, 11)] = 1
+    token = boundary.callbacks.create(
+        "launch.confirm", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
+    )
+
+    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token)
+
+    assert "Session did not become ready" in reply["text"]
+    assert "never approved remotely" in reply["text"]
+    assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
+        "Details",
+        "Sessions",
+        "Launch another",
+        "Home",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
     boundary = PrivateBotBoundary(7, 11)
     message = _Message()
@@ -211,6 +240,10 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     search = projects.edits[0]["reply_markup"].inline_keyboard[2][0].callback_data
     awaiting_search = _Callback(search)
     await boundary.callback(_trusted_update(callback=awaiting_search), None)
+    assert awaiting_search.edits[0]["text"] == "Reply below with a project name."
+    assert (
+        awaiting_search.message.replies[0]["reply_markup"].input_field_placeholder == "Project name"
+    )
 
     result = _Message("verse")
     await boundary.text(_trusted_update(message=result), None)
@@ -224,6 +257,11 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     label = confirmation.edits[0]["reply_markup"].inline_keyboard[1][0].callback_data
     awaiting_label = _Callback(label)
     await boundary.callback(_trusted_update(callback=awaiting_label), None)
+    assert awaiting_label.edits[0]["text"] == "Reply below with an optional session label."
+    assert (
+        awaiting_label.message.replies[0]["reply_markup"].input_field_placeholder
+        == "Optional session label"
+    )
 
     labelled = _Message("  review  ")
     await boundary.text(_trusted_update(message=labelled), None)
@@ -444,9 +482,11 @@ class _Launcher:
     def __init__(self) -> None:
         self.commands = []
         self.records = []
+        self.launch_result = None
 
-    async def launch(self, command) -> None:
+    async def launch(self, command):
         self.commands.append(command)
+        return self.launch_result
 
     async def list_sessions(self):
         return self.records

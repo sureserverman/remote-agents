@@ -202,6 +202,9 @@ class PrivateBotBoundary:
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
+            if state.action in {"launch.search", "launch.label"}:
+                await self._begin_guided_text_entry(query, state.action, state.entity_id)
+                return
             await query.edit_message_text(
                 **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
             )
@@ -236,9 +239,6 @@ class PrivateBotBoundary:
             return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
         if action == "launch.page":
             return _reply_arguments(self._project_page_reply(entity_id))
-        if action in {"launch.search", "launch.label"}:
-            self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
-            return self._guided_text_reply(action)
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
@@ -271,6 +271,24 @@ class PrivateBotBoundary:
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         if record is None:
             return _reply_arguments(self._message("Session launch requested."))
+        if record.state is SessionState.FAILED:
+            return _reply_arguments(
+                self._message(
+                    f"<b>Session did not become ready</b>\n{escape(record.display.rendered)}\n"
+                    "Workspace trust is never approved remotely. Resolve any trust or startup "
+                    "check locally, then open Sessions to recheck.",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                        (Button("Sessions", self._callback("sessions.open", "sessions")),),
+                        (Button("Launch another", self._callback("launch.open", "projects")),),
+                    ),
+                )
+            )
         return _reply_arguments(
             self._message(
                 f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
@@ -349,6 +367,17 @@ class PrivateBotBoundary:
             return None
         captured = await self.capture(SessionId.parse(session_value))
         return inspect_capture(captured.encode())
+
+    async def _begin_guided_text_entry(self, query, action: str, entity_id: str) -> None:
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
+        text = (
+            "Reply below with a project name."
+            if action == "launch.search"
+            else "Reply below with an optional session label."
+        )
+        await query.edit_message_text(**_reply_arguments(self._message(text)))
+        await query.message.reply_text(**self._guided_text_reply(action))
 
     async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
         revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
