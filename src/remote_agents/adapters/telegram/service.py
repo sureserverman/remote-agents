@@ -9,7 +9,15 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
 
-from telegram import ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    BotCommand,
+    BotCommandScopeChat,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MenuButtonCommands,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -40,6 +48,15 @@ from remote_agents.application.project_catalog import (
 )
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+
+_BOT_DESCRIPTION = "Private control for curated local agent sessions."
+_BOT_SHORT_DESCRIPTION = "Private local agent-session control"
+_OWNER_COMMANDS = (
+    BotCommand("start", "Open the status dashboard"),
+    BotCommand("launch", "Launch a curated agent"),
+    BotCommand("sessions", "View managed sessions"),
+    BotCommand("help", "Show available actions"),
+)
 
 
 @dataclass(slots=True)
@@ -134,6 +151,29 @@ class PrivateBotBoundary:
         await update.effective_message.reply_text(
             **_reply_arguments(self._confirm_reply(entity_id))
         )
+
+    async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            await update.effective_message.reply_text(
+                **_reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+            )
+
+    async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            await update.effective_message.reply_text(
+                **_reply_arguments(await self._sessions_reply())
+            )
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            await update.effective_message.reply_text(
+                "Use Launch to start a curated agent, or Sessions to inspect and stop "
+                "managed sessions."
+            )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Acknowledge and refresh only callbacks issued to this exact private chat."""
@@ -458,12 +498,16 @@ async def run_private_bot(
     boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
     application = ApplicationBuilder().token(secrets.bot_token).build()
     application.add_handler(CommandHandler("start", boundary.start))
+    application.add_handler(CommandHandler("launch", boundary.launch_command))
+    application.add_handler(CommandHandler("sessions", boundary.sessions_command))
+    application.add_handler(CommandHandler("help", boundary.help_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, boundary.text))
     stopping = asyncio.Event()
     _install_stop_signals(stopping)
     await application.initialize()
     try:
+        await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
         webhook = await application.bot.get_webhook_info()
         if webhook.url:
             raise RuntimeError("Telegram webhook is configured; refusing concurrent polling")
@@ -478,6 +522,15 @@ async def run_private_bot(
         if application.running:
             await application.stop()
         await application.shutdown()
+
+
+async def _sync_owner_metadata(bot, owner_chat_id: int) -> None:
+    scope = BotCommandScopeChat(owner_chat_id)
+    await bot.delete_my_commands()
+    await bot.set_my_commands(_OWNER_COMMANDS, scope=scope)
+    await bot.set_chat_menu_button(chat_id=owner_chat_id, menu_button=MenuButtonCommands())
+    await bot.set_my_description(_BOT_DESCRIPTION)
+    await bot.set_my_short_description(_BOT_SHORT_DESCRIPTION)
 
 
 def _install_stop_signals(stopping: asyncio.Event) -> None:
