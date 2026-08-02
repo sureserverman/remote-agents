@@ -1,4 +1,4 @@
-"""Opt-in audit of each qualified profile's real private Telegram lifecycle trace."""
+"""Opt-in audit of each supported profile's real private Telegram lifecycle trace."""
 
 from __future__ import annotations
 

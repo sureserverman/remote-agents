@@ -4,7 +4,7 @@ The private production service was enabled and active after `systemctl --user da
 `systemctl --user enable --now remote-agents.service`. The reviewed unit passed
 `systemd-analyze --user verify`.
 
-The owner-driven Telegram trace covered all currently qualified profiles: Claude, Claude Remote,
+The owner-driven Telegram trace covered all supported profiles: Claude, Claude Remote,
 Codex, OpenCode, and Cursor Agent. Each recorded readiness, graceful stop, preserved-pane exit,
 and cleanup. Confirmed force-stop traces were also recorded. The production acceptance audit
 passed:
@@ -19,7 +19,7 @@ the dedicated tmux server while polling restarted, as required by `KillMode=proc
 tmux-server session was targeted.
 
 The full production doctor reported healthy core, SQLite store, dedicated tmux command, private
-Telegram credential-file boundary, active user service, and all five qualified profiles. The
+Telegram credential-file boundary, active user service, and all five available profiles. The
 credential-denial drill uses a known-invalid credential and does not replace the production
 credential; incident rotation and rollback are documented in the operator runbook.
 
@@ -31,7 +31,8 @@ empty. The bot description, short description, and reviewed circular avatar were
 private rollback snapshot was recorded. The read-only `telegram-ui-audit` command verifies those
 metadata values without emitting the credential.
 
-The executable fake journey now covers the status Home, search and optional-label recovery,
-Review and outcome, lifecycle detail, escaped inline inspection, UTF-8 attachment inspection,
-Back/Cancel, and expired-view recovery. A separate real mobile owner journey remains the final
-visual qualification step; this record does not claim that it has been witnessed yet.
+The executable fake journey covers the status Home, search and optional-label recovery, Review
+and outcome, lifecycle detail, escaped inline inspection, UTF-8 attachment inspection,
+Back/Cancel, and expired-view recovery. The owner then confirmed the real Telegram-client Search,
+Add label, and OpenCode launch flows after deployment. Workspace trust remains a local action;
+the Telegram bot never approves it remotely.
