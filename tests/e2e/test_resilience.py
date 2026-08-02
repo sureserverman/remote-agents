@@ -13,11 +13,10 @@ from test_terminal_launch import make_terminal
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.authorization import AuthorizationGate, ContentFreeDenialLog
-from remote_agents.adapters.telegram.lifecycle import (
-    FakeTelegramTransport,
-    PollingAdapter,
-    RecordedUpdate,
+from remote_agents.adapters.telegram.authorization import (
+    AuthorizationGate,
+    AuthorizationUpdate,
+    ContentFreeDenialLog,
 )
 from remote_agents.adapters.tmux.runtime import LaunchProfile, TmuxTerminal
 from remote_agents.application.commands import GracefulStopCommand, InspectQuery, LaunchCommand
@@ -33,6 +32,63 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.ports.terminal import TerminalObservation
+
+
+class RecordedUpdate:
+    def __init__(
+        self,
+        token: str,
+        *,
+        sender_id: int | None = None,
+        chat_id: int | None = None,
+        chat_type: str | None = None,
+    ) -> None:
+        self.token = token
+        self.sender_id = sender_id
+        self.chat_id = chat_id
+        self.chat_type = chat_type
+
+
+class FakeTelegramTransport:
+    def __init__(self, batches, *, failures: int = 0) -> None:
+        self._batches = list(batches)
+        self._failures = failures
+
+    async def get_updates(self):
+        if self._failures:
+            self._failures -= 1
+            raise RuntimeError("synthetic_poll_failure")
+        return self._batches.pop(0) if self._batches else ()
+
+
+class PollingAdapter:
+    def __init__(self, transport, authorization, handle, *, retries: int, wait) -> None:
+        self._transport = transport
+        self._authorization = authorization
+        self._handle = handle
+        self._retries = retries
+        self._wait = wait
+
+    async def poll_once(self) -> None:
+        for attempt in range(self._retries + 1):
+            try:
+                updates = await self._transport.get_updates()
+                break
+            except RuntimeError:
+                if attempt == self._retries:
+                    raise
+                await self._wait(0)
+        for update in updates:
+            if self._authorization.dispatch(
+                AuthorizationUpdate(
+                    sender_id=update.sender_id,
+                    chat_id=update.chat_id,
+                    chat_type=update.chat_type,
+                    kind="callback",
+                ),
+                lambda: None,
+            ):
+                self._handle(update.token)
 
 
 def _record(session_id: SessionId, state: SessionState, sequence: int) -> SessionRecord:
