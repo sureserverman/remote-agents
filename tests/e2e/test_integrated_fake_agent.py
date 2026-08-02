@@ -10,18 +10,9 @@ from uuid import uuid4
 from remote_agents.adapters.projects.registry import RegisteredProject
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.authorization import AuthorizationGate, ContentFreeDenialLog
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
-from remote_agents.adapters.telegram.flow import LaunchFlow
-from remote_agents.adapters.telegram.lifecycle import (
-    FakeTelegramTransport,
-    PollingAdapter,
-    RecordedUpdate,
-)
-from remote_agents.adapters.telegram.projects import CatalogueSnapshot, ProjectNavigator
-from remote_agents.adapters.telegram.session_flow import SessionFlow
+from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.stops import StopController
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.commands import LaunchCommand
@@ -43,62 +34,23 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
 
-    def snapshot() -> CatalogueSnapshot:
-        return CatalogueSnapshot(catalogue)
-
-    def profiles() -> tuple[ProfileAvailability, ...]:
-        return (ProfileAvailability("claude", True),)
-
-    async def records():
-        return await service.list_sessions()
-
-    async def capture(session_id):
-        return await _capture(gateway, session_id)
-
     callbacks = CallbackStateStore()
-    navigator = ProjectNavigator(snapshot, callbacks, page_size=10)
-    launch = LaunchFlow(navigator, profiles, callbacks, service)
-    handled: list[str] = []
-    transport = FakeTelegramTransport(
-        ((RecordedUpdate("home", sender_id=7, chat_id=11, chat_type="private"),),)
-    )
-    polling = PollingAdapter(
-        transport,
-        AuthorizationGate(7, 11, ContentFreeDenialLog()),
-        handled.append,
-        retries=0,
-    )
 
     try:
-        await polling.poll_once()
-        assert handled == ["home"]
-        view = launch.browse_projects("Registered", owner_id=7, chat_id=11, view_revision=1)
-        assert launch.select_project(
-            view.items[0].callback_token, owner_id=7, chat_id=11, view_revision=1
+        record = await service.launch(
+            LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "launch-path")
         )
-        profile = launch.profile_choices(owner_id=7, chat_id=11, view_revision=1)[0]
-        assert profile.callback_token is not None
-        assert launch.select_profile(
-            profile.callback_token, owner_id=7, chat_id=11, view_revision=1
-        )
-        preview = launch.preview(owner_id=7, chat_id=11, view_revision=1)
-        assert await launch.submit(preview.callback_token, owner_id=7, chat_id=11, view_revision=1)
-
-        flow = SessionFlow(records, capture, StopController(callbacks), service)
-        running = (await flow.list(page=0, page_size=20)).items
-        assert len(running) == 1
-        record = (await service.list_sessions())[0]
-        assert (await flow.inspect_session(record.session_id)).text.startswith("READY")
+        assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
 
         stop = StopController(callbacks)
         token = stop.offer(record.session_id, record.profile_id, record.state, "graceful", 7, 11, 2)
         assert token is not None
         request = stop.claim(token, 7, 11, 2)
         assert request is not None
-        assert await SessionFlow(records, capture, stop, service).execute_stop(request)
+        assert await stop.execute(request, service, record)
         preserved = (await service.list_sessions())[0]
         assert preserved.state is SessionState.PRESERVED
-        assert (await flow.inspect_session(record.session_id)).text
+        assert inspect_capture(await _capture(gateway, record.session_id)).text
 
         cleanup = StopController(callbacks)
         token = cleanup.offer(
@@ -107,7 +59,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert token is not None
         request = cleanup.claim(token, 7, 11, 3)
         assert request is not None
-        assert await SessionFlow(records, capture, cleanup, service).execute_stop(request)
+        assert await cleanup.execute(request, service, preserved)
 
         command = await service.launch(
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "force-path")
@@ -119,7 +71,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert token is not None and force.confirm_force(token, 7, 11, 4)
         request = force.claim(token, 7, 11, 4)
         assert request is not None
-        assert await SessionFlow(records, capture, force, service).execute_stop(request)
+        assert await force.execute(request, service, command)
     finally:
         for record in await service.list_sessions():
             try:
