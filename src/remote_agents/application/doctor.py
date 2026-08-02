@@ -58,7 +58,7 @@ def production_doctor(
     catalogue_projects: int,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report."""
-    profiles_ready = bool(profiles) and all(profile.status == "QUALIFIED" for profile in profiles)
+    profiles_ready = bool(profiles) and all(profile.available for profile in profiles)
     report = health_report(
         {
             "core": (core_ready, "registry_unavailable"),

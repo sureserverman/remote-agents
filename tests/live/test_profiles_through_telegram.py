@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 
 from remote_agents.config import load_config
-from remote_agents.domain.profiles import qualified_profiles
+from remote_agents.domain.profiles import closed_profiles
 
 
 @pytest.mark.live_acceptance
-def test_qualified_profiles_have_complete_owner_driven_telegram_lifecycles() -> None:
+def test_supported_profiles_have_complete_owner_driven_telegram_lifecycles() -> None:
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
     config_path = Path(
@@ -27,14 +27,14 @@ def test_qualified_profiles_have_complete_owner_driven_telegram_lifecycles() -> 
         pytest.skip("BLOCKED: production session database is unavailable")
 
     traces = _traces(database_path)
-    qualified = {str(profile.profile_id) for profile in qualified_profiles()}
+    supported = {str(profile.profile_id) for profile in closed_profiles()}
     graceful = {"ready", "graceful_stop_requested", "pane_exited", "cleanup_confirmed"}
     missing = {
         profile_id: graceful - events
         for profile_id, events in traces.items()
-        if profile_id in qualified and not graceful <= events
+        if profile_id in supported and not graceful <= events
     }
-    untraced = qualified - traces.keys()
+    untraced = supported - traces.keys()
 
     assert not untraced, f"missing Telegram lifecycle trace for: {sorted(untraced)}"
     assert not missing, f"incomplete Telegram lifecycle trace: {missing}"

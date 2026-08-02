@@ -15,8 +15,10 @@ uv run --locked remote-agents doctor --json | python -m json.tool
 uv run --locked remote-agents doctor --profiles --json | python -m json.tool
 ```
 
-`active` and `enabled` are required. Profile entries must remain `QUALIFIED`; a changed or
-missing executable is `BLOCKED` and must not be launched from Telegram.
+`active` and `enabled` are required. Profile entries are `AVAILABLE` when their executable is
+present; version reporting is informative and local updates remain launchable. A missing
+executable is `BLOCKED` and must not be launched from Telegram. Each launch still has to reach
+its agent-specific readiness state.
 The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
 boundary, service, and each profile. It must report `healthy: true` before normal operation.
 

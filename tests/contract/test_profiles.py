@@ -1,6 +1,5 @@
 """Closed curated-profile contract independent of locally installed CLIs."""
 
-from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from remote_agents.domain.models import ProfileId, SessionId
 from remote_agents.domain.profiles import (
     ProfileDefinition,
     ProfileError,
-    ProfileQualification,
     closed_profiles,
 )
 
@@ -114,16 +112,9 @@ def test_profile_readiness_rejects_a_workspace_trust_dialogue(
     assert runtime.readiness_blockers == expected_blockers
 
 
-def test_profile_qualification_is_version_pinned_and_independent() -> None:
-    profiles = closed_profiles()
-    qualifications = (
-        ProfileQualification(ProfileId("claude"), "claude 1.2.3", date(2026, 7, 30)),
-        ProfileQualification(ProfileId("claude-remote"), "claude 1.2.3", date(2026, 7, 30)),
-    )
-
+def test_profile_availability_is_not_version_pinned() -> None:
     results = probe_profiles(
-        profiles,
-        qualifications=qualifications,
+        closed_profiles(),
         resolve=lambda executable: Path(f"/tools/{executable}"),
         run_version=lambda argv: (
             "claude 1.2.3" if Path(argv[0]).name == "claude" else "other 1.2.3"
@@ -131,6 +122,7 @@ def test_profile_qualification_is_version_pinned_and_independent() -> None:
     )
 
     by_id = {str(result.profile_id): result for result in results}
-    assert by_id["claude"].status == "QUALIFIED"
-    assert by_id["claude-remote"].status == "QUALIFIED"
-    assert by_id["codex"].reason == "awaiting_live_qualification"
+    assert by_id["claude"].status == "AVAILABLE"
+    assert by_id["claude-remote"].status == "AVAILABLE"
+    assert by_id["codex"].status == "AVAILABLE"
+    assert by_id["codex"].reason is None

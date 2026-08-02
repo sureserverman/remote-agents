@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 
 from remote_agents.domain.models import ProfileId
 
@@ -56,26 +55,13 @@ class ProfileDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ProfileCompatibility:
-    """Non-secret probe evidence for a profile that remains disabled until qualified."""
+    """Non-secret installed-agent availability and diagnostic version evidence."""
 
     profile_id: ProfileId
     available: bool
     version: str | None
     status: str
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class ProfileQualification:
-    """Host-local evidence that one exact profile binary passed the interactive contract."""
-
-    profile_id: ProfileId
-    version: str
-    qualified_on: date
-
-    def __post_init__(self) -> None:
-        if not self.version or len(self.version) > 160:
-            raise ProfileError("qualified version must be concise non-empty text")
+    reason: str | None
 
 
 def closed_profiles() -> tuple[ProfileDefinition, ...]:
@@ -85,16 +71,4 @@ def closed_profiles() -> tuple[ProfileDefinition, ...]:
             ProfileId(profile_id), executable, argv, ("--version",), _GRACEFUL_KEYS[profile_id]
         )
         for profile_id, (executable, argv) in _EXPECTED_LAUNCHES.items()
-    )
-
-
-def qualified_profiles() -> tuple[ProfileQualification, ...]:
-    """Return the current host's reviewed live-profile evidence without credentials or logs."""
-    qualified_on = date(2026, 7, 30)
-    return (
-        ProfileQualification(ProfileId("claude"), "2.1.220 (Claude Code)", qualified_on),
-        ProfileQualification(ProfileId("claude-remote"), "2.1.220 (Claude Code)", qualified_on),
-        ProfileQualification(ProfileId("codex"), "codex-cli 0.146.0", qualified_on),
-        ProfileQualification(ProfileId("opencode"), "1.18.10", qualified_on),
-        ProfileQualification(ProfileId("cursor-agent"), "2026.07.23-e383d2b", qualified_on),
     )

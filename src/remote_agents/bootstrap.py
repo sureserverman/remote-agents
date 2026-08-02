@@ -35,7 +35,7 @@ from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.models import ProjectId
-from remote_agents.domain.profiles import closed_profiles, qualified_profiles
+from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
 
 
@@ -67,9 +67,7 @@ def main(
     arguments = parser.parse_args(argv)
     if arguments.command == "doctor":
         if arguments.profiles:
-            result = profile_doctor(
-                probe_profiles(closed_profiles(), qualifications=qualified_profiles())
-            )
+            result = profile_doctor(probe_profiles(closed_profiles()))
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
         paths = ProductionPaths.for_home(Path.home())
@@ -79,7 +77,6 @@ def main(
         catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
         profiles = probe_profiles(
             closed_profiles(),
-            qualifications=qualified_profiles(),
             resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
         )
         result = production_doctor(
@@ -134,11 +131,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
     definitions = closed_profiles()
     compatibility = probe_profiles(
         definitions,
-        qualifications=qualified_profiles(),
         resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
     )
     profiles = tuple(
-        ProfileAvailability(str(result.profile_id), result.status == "QUALIFIED")
+        ProfileAvailability(str(result.profile_id), result.available, result.reason)
         for result in compatibility
     )
     definitions_by_id = {definition.profile_id: definition for definition in definitions}
@@ -162,7 +158,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
     ).rstrip(":")
     for result in compatibility:
         executable = executables[result.profile_id]
-        if result.status == "QUALIFIED" and executable is not None:
+        if result.available and executable is not None:
             definition = definitions_by_id[result.profile_id]
             profile_factories[result.profile_id] = _profile_factory(
                 definition, executable, allowed_environment

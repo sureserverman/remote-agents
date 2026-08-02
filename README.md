@@ -63,16 +63,17 @@ Do not put secrets in this repository.
 
 ## Curated profiles and recovery
 
-This host enables only the five fixed, version-qualified interactive profiles. Check the
-current machine's non-secret compatibility record with:
+This host enables only five fixed interactive profiles. Their installed versions are
+operator-managed and reported for diagnosis, not used as a launch gate. Check the current
+machine's non-secret profile record with:
 
 ```bash
 uv run --locked remote-agents doctor --profiles --json | python -m json.tool
 ```
 
-The command returns `QUALIFIED` only when the installed version matches a recorded live
-launch/readiness/graceful-exit/cleanup qualification. A missing executable, failed probe, or
-version change is reported as `BLOCKED`; one blocked profile does not affect the others.
+The command reports `AVAILABLE` when the executable is present. A version probe is informative
+only: local updates remain launchable and each launch must still reach its profile's readiness
+state. A missing executable is `BLOCKED`; one blocked profile does not affect the others.
 
 The full doctor command reads only the private credential-file boundary, not its values. It
 reports the core registry, SQLite store, fixed tmux command, active user service, Telegram

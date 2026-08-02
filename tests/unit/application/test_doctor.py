@@ -32,9 +32,7 @@ def test_doctor_reports_counts_and_any_unready_core_dependency() -> None:
 def test_profile_doctor_lists_independent_compatibility_without_local_paths() -> None:
     report = profile_doctor(
         (
-            ProfileCompatibility(
-                ProfileId("claude"), True, "claude 1.2.3", "BLOCKED", "awaiting_live_qualification"
-            ),
+            ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
             ProfileCompatibility(ProfileId("codex"), False, None, "BLOCKED", "executable_missing"),
         )
     )
@@ -45,8 +43,8 @@ def test_profile_doctor_lists_independent_compatibility_without_local_paths() ->
                 "id": "claude",
                 "available": True,
                 "version": "claude 1.2.3",
-                "status": "BLOCKED",
-                "reason": "awaiting_live_qualification",
+                "status": "AVAILABLE",
+                "reason": None,
             },
             {
                 "id": "codex",
@@ -59,13 +57,11 @@ def test_profile_doctor_lists_independent_compatibility_without_local_paths() ->
     }
 
 
-def test_production_doctor_requires_every_operational_component_and_profile() -> None:
+def test_production_doctor_keeps_agents_available_when_version_reporting_fails() -> None:
     profiles = (
+        ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
         ProfileCompatibility(
-            ProfileId("claude"), True, "claude 1.2.3", "QUALIFIED", "live_qualification_verified"
-        ),
-        ProfileCompatibility(
-            ProfileId("codex"), True, "codex 1.2.3", "BLOCKED", "version_probe_failed"
+            ProfileId("codex"), True, "codex 1.2.3", "AVAILABLE", "version_probe_failed"
         ),
     )
 
@@ -81,11 +77,30 @@ def test_production_doctor_requires_every_operational_component_and_profile() ->
         catalogue_projects=4,
     )
 
+    assert report["healthy"] is True
+    assert report["components"]["profiles"] == {"status": "healthy", "reason": None}
+    assert report["components"]["telegram"] == {"status": "healthy", "reason": None}
+    assert report["projects"] == {"registered": 2, "discovered": 3, "catalogue": 4}
+    assert report["profiles"][1]["id"] == "codex"
+
+
+def test_production_doctor_blocks_a_missing_agent_executable() -> None:
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("codex"), False, None, "BLOCKED", "executable_missing"),
+        ),
+        registered_projects=2,
+        discovered_projects=3,
+        catalogue_projects=4,
+    )
+
     assert report["healthy"] is False
     assert report["components"]["profiles"] == {
         "status": "degraded",
         "reason": "profile_blocked",
     }
-    assert report["components"]["telegram"] == {"status": "healthy", "reason": None}
-    assert report["projects"] == {"registered": 2, "discovered": 3, "catalogue": 4}
-    assert report["profiles"][1]["id"] == "codex"
