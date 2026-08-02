@@ -14,12 +14,17 @@ from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
 from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_DISCONNECT_KEYS,
     REMOTE_CONTROL_ENABLE_KEYS,
+    REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
 )
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.terminal import TerminalObservation
+
+_REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
+_REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
+_REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
 
 
 class AsyncTmuxRunner(TmuxRunner):
@@ -273,12 +278,14 @@ class TmuxTerminal:
             and current is RemoteControlState.UNKNOWN
         ):
             return current
-        keys = (
-            REMOTE_CONTROL_ENABLE_KEYS
-            if desired_state is RemoteControlState.ACTIVE
-            else REMOTE_CONTROL_DISCONNECT_KEYS
-        )
-        await self._gateway.send_keys(session_id, keys)
+        if desired_state is RemoteControlState.ACTIVE:
+            await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
+            await asyncio.sleep(_REMOTE_CONTROL_ENABLE_WAIT_SECONDS)
+        else:
+            await self._gateway.send_keys(session_id, REMOTE_CONTROL_OPEN_MENU_KEYS)
+            await asyncio.sleep(_REMOTE_CONTROL_MENU_WAIT_SECONDS)
+            await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
+            await asyncio.sleep(_REMOTE_CONTROL_DISABLE_WAIT_SECONDS)
         return _remote_control_state(await self._gateway.capture(session_id))
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:

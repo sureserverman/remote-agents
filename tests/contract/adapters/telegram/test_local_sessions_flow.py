@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.domain.conversations import ProviderConversationId
@@ -82,3 +83,40 @@ async def test_local_session_adoption_requires_a_confirmed_opaque_callback() -> 
     result = await boundary._local_adopt_reply(adopt_state.entity_id, confirm_token)
     assert "Session adopted" in result["text"]
     assert launcher.adopted
+
+
+async def test_local_sessions_callback_renders_the_discovered_external_rows() -> None:
+    boundary = PrivateBotBoundary(7, 11, launcher=Launcher())
+    home = await boundary._home_reply()
+    token = next(
+        button.callback_data
+        for row in home["reply_markup"].inline_keyboard
+        for button in row
+        if button.text == "Local Sessions"
+    )
+
+    class Query:
+        data = token
+
+        def __init__(self) -> None:
+            self.answer_calls: list[str | None] = []
+            self.edited: dict[str, object] | None = None
+
+        async def answer(self, text: str | None = None) -> None:
+            self.answer_calls.append(text)
+
+        async def edit_message_text(self, **kwargs: object) -> None:
+            self.edited = kwargs
+
+    query = Query()
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        effective_chat=SimpleNamespace(id=11, type="private"),
+        callback_query=query,
+    )
+
+    await boundary.callback(update, None)  # type: ignore[arg-type]
+
+    assert query.answer_calls == [None]
+    assert query.edited is not None
+    assert query.edited["text"].startswith("<b>Local Sessions</b>")

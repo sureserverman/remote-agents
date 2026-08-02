@@ -38,12 +38,50 @@ class Gateway:
         self.sent.append((session_id, keys))
 
 
-async def test_enable_treats_a_clean_claude_prompt_as_inactive_then_verifies_active():
+async def test_enable_waits_for_claude_to_report_active_after_the_fixed_interaction(monkeypatch):
     session_id = SessionId.new()
     gateway = Gateway(session_id)
     terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+    waits = []
+
+    async def record_wait(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("remote_agents.adapters.tmux.runtime.asyncio.sleep", record_wait)
 
     state = await terminal.remote_control(session_id, RemoteControlState.ACTIVE)
 
     assert state is RemoteControlState.ACTIVE
     assert gateway.sent == [(session_id, ("/remote-control", "Enter"))]
+    assert waits == [3]
+
+
+async def test_disable_opens_the_remote_control_menu_before_disconnect(monkeypatch):
+    session_id = SessionId.new()
+
+    class ActiveGateway(Gateway):
+        async def capture(self, _session_id):
+            self.capture_count += 1
+            return (
+                "/remote-control is active"
+                if self.capture_count == 1
+                else "Remote Control disconnected."
+            )
+
+    gateway = ActiveGateway(session_id)
+    terminal = TmuxTerminal(gateway, {}, {}, startup_timeout=1)
+    waits = []
+
+    async def record_wait(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("remote_agents.adapters.tmux.runtime.asyncio.sleep", record_wait)
+
+    state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
+
+    assert state is RemoteControlState.INACTIVE
+    assert gateway.sent == [
+        (session_id, ("/remote-control", "Enter")),
+        (session_id, ("Up", "Up", "Enter")),
+    ]
+    assert waits == [1, 2]

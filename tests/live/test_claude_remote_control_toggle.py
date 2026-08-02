@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -11,16 +10,10 @@ import pytest
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
-from remote_agents.adapters.tmux.remote_control import (
-    REMOTE_CONTROL_DISCONNECT_KEYS,
-    REMOTE_CONTROL_ENABLE_KEYS,
-    REMOTE_CONTROL_OPEN_MENU_KEYS,
-    RemoteControlState,
-    classify_remote_control_capture,
-)
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
+from remote_agents.domain.remote_control import RemoteControlState
 
 
 @pytest.mark.live_acceptance
@@ -63,16 +56,10 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
     try:
         launched = await terminal.launch(session_id, project_id, definition.profile_id)
         assert launched.live, launched.detail
-        await gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)
-        await asyncio.sleep(3)
-        enabled_state = classify_remote_control_capture(await gateway.capture(session_id))
+        enabled_state = await terminal.remote_control(session_id, RemoteControlState.ACTIVE)
         assert enabled_state is RemoteControlState.ACTIVE
 
-        await gateway.send_keys(session_id, REMOTE_CONTROL_OPEN_MENU_KEYS)
-        await asyncio.sleep(1)
-        await gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
-        await asyncio.sleep(2)
-        disabled_state = classify_remote_control_capture(await gateway.capture(session_id))
+        disabled_state = await terminal.remote_control(session_id, RemoteControlState.INACTIVE)
         assert disabled_state is RemoteControlState.INACTIVE
     finally:
         try:
