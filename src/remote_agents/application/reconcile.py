@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
+    ProfileId,
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
@@ -141,6 +143,7 @@ class SessionLocks:
 
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}
+        self._conversation_locks: dict[tuple[ProfileId, ProviderConversationId], asyncio.Lock] = {}
         self._active_operations = 0
         self._accepting_operations = True
         self._drained = asyncio.Event()
@@ -148,6 +151,11 @@ class SessionLocks:
 
     def for_session(self, session_id: SessionId) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
+
+    def for_conversation(
+        self, profile_id: ProfileId, source_id: ProviderConversationId
+    ) -> asyncio.Lock:
+        return self._conversation_locks.setdefault((profile_id, source_id), asyncio.Lock())
 
     @asynccontextmanager
     async def operation(self):
