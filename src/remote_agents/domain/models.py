@@ -136,6 +136,21 @@ class SessionRecord:
     display: SessionDisplayIdentity
     state: SessionState
     created_at: datetime
+    resume_profile_id: ProfileId | None = None
+    resume_source_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.resume_profile_id is None) != (self.resume_source_id is None):
+            raise ValueError("resume identity must include both profile and source")
+        if self.resume_source_id is not None and (
+            not self.resume_source_id
+            or len(self.resume_source_id) > 256
+            or any(
+                not character.isprintable() or character.isspace()
+                for character in self.resume_source_id
+            )
+        ):
+            raise ValueError("resume source ID must be a bounded visible token")
 
 
 def allocate_next_sequence(

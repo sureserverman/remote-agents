@@ -37,9 +37,10 @@ class SQLiteSessionStore:
             self._connection.execute(
                 """
                 INSERT INTO sessions(
-                    session_id, project_id, profile_id, display_identity, state, created_at
+                    session_id, project_id, profile_id, display_identity, state, created_at,
+                    resume_profile_id, resume_source_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.session_id),
@@ -48,6 +49,8 @@ class SQLiteSessionStore:
                     record.display.rendered,
                     record.state.value,
                     record.created_at.astimezone(UTC).isoformat(),
+                    str(record.resume_profile_id) if record.resume_profile_id else None,
+                    record.resume_source_id,
                 ),
             )
 
@@ -55,17 +58,32 @@ class SQLiteSessionStore:
         """Load one immutable projection by its opaque session identifier."""
         row = self._connection.execute(
             """
-            SELECT session_id, project_id, profile_id, display_identity, state, created_at
+            SELECT session_id, project_id, profile_id, display_identity, state, created_at,
+                   resume_profile_id, resume_source_id
             FROM sessions WHERE session_id = ?
             """,
             (str(session_id),),
         ).fetchone()
         return _record_from_row(row) if row is not None else None
 
+    async def get_by_resume_source(
+        self, profile_id: ProfileId, source_id: str
+    ) -> SessionRecord | None:
+        row = self._connection.execute(
+            """
+            SELECT session_id, project_id, profile_id, display_identity, state, created_at,
+                   resume_profile_id, resume_source_id
+            FROM sessions WHERE resume_profile_id = ? AND resume_source_id = ?
+            """,
+            (str(profile_id), source_id),
+        ).fetchone()
+        return _record_from_row(row) if row is not None else None
+
     async def list(self, states: Collection[SessionState] | None = None) -> Sequence[SessionRecord]:
         """Return durable projections, optionally filtered by approved lifecycle states."""
         query = (
-            "SELECT session_id, project_id, profile_id, display_identity, state, created_at "
+            "SELECT session_id, project_id, profile_id, display_identity, state, created_at, "
+            "resume_profile_id, resume_source_id "
             "FROM sessions"
         )
         values: tuple[str, ...] = ()
@@ -155,7 +173,9 @@ class SQLiteSessionStore:
         return True
 
 
-def _record_from_row(row: tuple[str, str, str, str, str, str]) -> SessionRecord:
+def _record_from_row(
+    row: tuple[str, str, str, str, str, str, str | None, str | None],
+) -> SessionRecord:
     """Rebuild a validated domain record from one trusted SQLite projection row."""
     display_parts = row[3].split(" · ", 4)
     if len(display_parts) not in {4, 5} or not display_parts[3].startswith("#"):
@@ -174,4 +194,6 @@ def _record_from_row(row: tuple[str, str, str, str, str, str]) -> SessionRecord:
         display,
         SessionState(row[4]),
         datetime.fromisoformat(row[5]),
+        ProfileId(row[6]) if row[6] is not None else None,
+        row[7],
     )

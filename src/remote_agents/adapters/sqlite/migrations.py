@@ -37,6 +37,16 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    (
+        3,
+        """
+        ALTER TABLE sessions ADD COLUMN resume_profile_id TEXT;
+        ALTER TABLE sessions ADD COLUMN resume_source_id TEXT;
+        CREATE UNIQUE INDEX sessions_resume_identity
+        ON sessions(resume_profile_id, resume_source_id)
+        WHERE resume_profile_id IS NOT NULL AND resume_source_id IS NOT NULL;
+        """,
+    ),
 )
 
 

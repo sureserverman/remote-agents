@@ -10,6 +10,7 @@ from remote_agents.application.commands import (
     GracefulStopCommand,
     InspectQuery,
     LaunchCommand,
+    ResumeCommand,
 )
 from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
 from remote_agents.application.reconcile import SessionLocks
@@ -53,6 +54,36 @@ class SessionService:
                 ),
                 SessionState.STARTING,
                 datetime.now(UTC),
+            )
+            await self._store.save(record)
+            observation = await self._terminal.launch(
+                session_id, command.project_id, command.profile_id
+            )
+            event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
+            return await self._store.record_event(session_id, event)
+
+    async def resume(self, command: ResumeCommand) -> SessionRecord:
+        """Create one managed identity for a server-resolved provider conversation."""
+        source_id = command.conversation.provider_conversation_id.value
+        async with self._locks.operation():
+            existing = await self._store.get_by_resume_source(command.profile_id, source_id)
+            if existing is not None:
+                return existing
+            if not await self._store.claim_idempotency_key(command.idempotency_key):
+                raise DuplicateCommandError("resume callback was already handled")
+            session_id = SessionId.new()
+            sequence = await self._store.next_sequence(command.project_id, command.profile_id)
+            record = SessionRecord(
+                session_id,
+                command.project_id,
+                command.profile_id,
+                SessionDisplayIdentity(
+                    str(command.project_id), str(command.profile_id), "resumed", sequence
+                ),
+                SessionState.STARTING,
+                datetime.now(UTC),
+                command.conversation.summary.profile_id,
+                source_id,
             )
             await self._store.save(record)
             observation = await self._terminal.launch(
