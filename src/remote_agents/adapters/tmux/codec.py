@@ -46,6 +46,11 @@ def exact_session_target(session_name: str) -> str:
     return f"ra-{session_id}:"
 
 
+def attach_command(session_id: SessionId) -> str:
+    """Return the one copyable attach command for a currently verified managed session."""
+    return f"tmux -L remote-agents attach-session -t {exact_session_target(f'ra-{session_id}')}"
+
+
 def parse_pane(line: str) -> ManagedPane:
     """Decode one managed tmux pane or refuse ambiguous and untrusted metadata."""
     fields = line.rstrip("\n").split(_DELIMITER)

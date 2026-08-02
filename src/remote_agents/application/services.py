@@ -119,6 +119,19 @@ class SessionService:
     async def inspect(self, query: InspectQuery) -> TerminalObservation | None:
         return await self._terminal.inspect(query.session_id)
 
+    async def copy_attach(self, session_id: SessionId) -> str | None:
+        """Return a copyable command only after current record and terminal ownership agree."""
+        record = await self._require_session(session_id)
+        observation = await self._terminal.inspect(session_id)
+        if (
+            observation is None
+            or not observation.live
+            or observation.project_id != record.project_id
+            or observation.profile_id != record.profile_id
+        ):
+            return None
+        return await self._terminal.copy_attach(session_id)
+
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)

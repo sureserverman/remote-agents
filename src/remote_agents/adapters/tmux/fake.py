@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.terminal import TerminalObservation
@@ -36,6 +37,10 @@ class FakeTerminal:
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         """Return the current fake terminal observation, if it remains managed."""
         return self._observations.get(session_id)
+
+    async def copy_attach(self, session_id: SessionId) -> str | None:
+        observation = await self.inspect(session_id)
+        return attach_command(session_id) if observation is not None and observation.live else None
 
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId

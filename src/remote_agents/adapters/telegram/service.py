@@ -42,7 +42,7 @@ from remote_agents.adapters.telegram.presenters import (
 )
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
-from remote_agents.application.commands import LaunchCommand, ResumeCommand
+from remote_agents.application.commands import InspectQuery, LaunchCommand, ResumeCommand
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -261,6 +261,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._resume_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id))
+        if action == "session.attach":
+            return _reply_arguments(await self._attach_reply(entity_id))
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
         return _reply_arguments(self._message("This view has expired."))
@@ -373,6 +375,10 @@ class PrivateBotBoundary:
         if record is None:
             return self._message("That session is no longer available.")
         buttons = [(Button("Inspect", self._callback("session.inspect", session_value)),)]
+        if await self._can_copy_attach(record):
+            buttons.append(
+                (Button("Copy attach", self._callback("session.attach", session_value)),)
+            )
         for action in _available_stops(record.state):
             token = self.stops.offer(
                 record.session_id,
@@ -389,6 +395,33 @@ class PrivateBotBoundary:
             f"<b>{escape(record.display.rendered)}</b>\n"
             f"State: {record.state.value}\n{_state_explanation(record.state)}",
             tuple(buttons),
+        )
+
+    async def _attach_reply(self, session_value: str) -> RenderedMessage:
+        record = await self._record(session_value)
+        if record is None or not await self._can_copy_attach(record):
+            return self._message("Copy Attach is unavailable until this managed pane is live.")
+        copy = getattr(self.launcher, "copy_attach", None)
+        command = await copy(record.session_id) if copy is not None else None
+        if command is None:
+            return self._message("Copy Attach is unavailable until this managed pane is live.")
+        return self._message(
+            "<b>Copy attach command</b>\n"
+            f"<code>{escape(command)}</code>"
+        )
+
+    async def _can_copy_attach(self, record: SessionRecord) -> bool:
+        if self.launcher is None:
+            return False
+        inspect = getattr(self.launcher, "inspect", None)
+        if inspect is None:
+            return False
+        observation = await inspect(InspectQuery(record.session_id))
+        return bool(
+            observation is not None
+            and observation.live
+            and observation.project_id == record.project_id
+            and observation.profile_id == record.profile_id
         )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -239,6 +240,13 @@ class TmuxTerminal:
     async def capture(self, session_id: SessionId) -> str:
         """Return one managed pane's output for the presentation boundary to sanitize."""
         return await self._gateway.capture(session_id)
+
+    async def copy_attach(self, session_id: SessionId) -> str | None:
+        """Recheck exact trusted pane liveness immediately before rendering its attach command."""
+        observation = await self.inspect(session_id)
+        if observation is None or not observation.live:
+            return None
+        return attach_command(session_id)
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation."""
