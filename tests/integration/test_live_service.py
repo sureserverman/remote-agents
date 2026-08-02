@@ -101,13 +101,16 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     await boundary.start(update, None)
 
-    assert message.replies[0]["text"] == "<b>Remote agents</b>\nChoose an action."
-    refresh = message.replies[0]["reply_markup"].inline_keyboard[2][0].callback_data
-    callback = _Callback(refresh)
+    assert (
+        message.replies[0]["text"]
+        == "<b>Remote agents</b>\nActive: 0 · Preserved: 0\nChoose an action."
+    )
+    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    callback = _Callback(launch)
     await boundary.callback(_trusted_update(callback=callback), None)
 
     assert callback.answers == [None]
-    assert callback.edits[0]["text"] == "<b>Remote agents</b>\nChoose an action."
+    assert callback.edits[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
@@ -150,8 +153,8 @@ async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
     boundary = PrivateBotBoundary(7, 11)
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
-    refresh = message.replies[0]["reply_markup"].inline_keyboard[2][0].callback_data
-    callback = _Callback(refresh, edit_error=BadRequest("Message is not modified"))
+    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    callback = _Callback(launch, edit_error=BadRequest("Message is not modified"))
 
     await boundary.callback(_trusted_update(callback=callback), None)
 

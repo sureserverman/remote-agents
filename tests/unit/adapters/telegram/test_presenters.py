@@ -24,16 +24,18 @@ CALLBACKS = NavigationCallbacks(
 
 
 def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
-    first = render_home(CALLBACKS, launch="c1_launch", sessions="c1_sessions")
-    second = render_home(CALLBACKS, launch="c1_launch", sessions="c1_sessions")
+    first = render_home(
+        CALLBACKS, launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
+    )
+    second = render_home(
+        CALLBACKS, launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
+    )
 
     assert first == second
-    assert first.text == "<b>Remote agents</b>\nChoose an action."
+    assert first.text == "<b>Remote agents</b>\nActive: 2 · Preserved: 1\nChoose an action."
     assert [(button.text, button.callback_data) for row in first.keyboard for button in row] == [
         ("Launch", "c1_launch"),
         ("Sessions", "c1_sessions"),
-        ("Refresh", "c1_refresh"),
-        ("Home", "c1_home"),
     ]
 
 
@@ -101,7 +103,7 @@ def test_presenters_reject_non_opaque_callback_data() -> None:
     )
 
     try:
-        render_home(unsafe, launch="c1_launch", sessions="c1_sessions")
+        render_empty("sessions", unsafe)
     except ValueError as error:
         assert "opaque" in str(error)
     else:

@@ -80,7 +80,7 @@ class PrivateBotBoundary:
         if not self.permits(update) or update.effective_message is None:
             return
         self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-        await update.effective_message.reply_text(**self._home_reply())
+        await update.effective_message.reply_text(**(await self._home_reply()))
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Accept bounded local catalogue search or a session label while explicitly requested."""
@@ -136,13 +136,16 @@ class PrivateBotBoundary:
             if "Message is not modified" not in str(error):
                 raise
 
-    def _home_reply(self) -> dict[str, object]:
+    async def _home_reply(self) -> dict[str, object]:
         self._next_revision(self.owner_user_id, self.owner_chat_id)
+        records = await self._records()
         return _reply_arguments(
             render_home(
                 self._navigation_callbacks(),
                 launch=self._callback("launch.open", "projects"),
                 sessions=self._callback("sessions.open", "sessions"),
+                active=sum(record.state is SessionState.RUNNING for record in records),
+                preserved=sum(record.state is SessionState.PRESERVED for record in records),
             )
         )
 
@@ -150,7 +153,7 @@ class PrivateBotBoundary:
         self, action: str, entity_id: str, *, token: str = ""
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
-            return self._home_reply()
+            return await self._home_reply()
         if action == "launch.confirm":
             return await self._launch_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
