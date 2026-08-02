@@ -210,7 +210,7 @@ class PrivateBotBoundary:
         ):
             return _reply_arguments(self._message("That request has expired."))
         project_id, profile_id = _split_launch(entity_id)
-        await self.launcher.launch(
+        record = await self.launcher.launch(
             LaunchCommand(
                 ProjectId(project_id),
                 ProfileId(profile_id),
@@ -219,7 +219,18 @@ class PrivateBotBoundary:
             )
         )
         self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(self._message("Session launch requested."))
+        if record is None:
+            return _reply_arguments(self._message("Session launch requested."))
+        return _reply_arguments(
+            self._message(
+                f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
+                (
+                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
+                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
+                    (Button("Launch another", self._callback("launch.open", "projects")),),
+                ),
+            )
+        )
 
     async def _sessions_reply(self) -> RenderedMessage:
         if self.launcher is not None:
@@ -375,8 +386,11 @@ class PrivateBotBoundary:
             profile.profile_id == profile_id and profile.available for profile in self.profiles
         ):
             return self._message("That agent is unavailable.")
+        project = next(project for project in self.catalogue if project.opaque_id == project_id)
+        label = self._labels.get(entity_id)
         return self._message(
-            f"Launch {_profile_name(profile_id)}?",
+            f"<b>Review launch</b>\nProject: {escape(project.name)}\n"
+            f"Agent: {_profile_name(profile_id)}\nLabel: {escape(label) if label else 'None'}",
             (
                 (Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),
                 (Button("Add label", self._callback("launch.label", entity_id)),),
