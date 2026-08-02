@@ -46,6 +46,7 @@ from remote_agents.application.commands import (
     AdoptionCommand,
     InspectQuery,
     LaunchCommand,
+    RemoteControlCommand,
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
@@ -62,6 +63,7 @@ from remote_agents.domain.external_sessions import (
     ExternalSessionState,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.remote_control import RemoteControlState
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
@@ -251,6 +253,8 @@ class PrivateBotBoundary:
             return await self._resume_reply(entity_id, token)
         if action == "local.confirm":
             return await self._local_adopt_reply(entity_id, token)
+        if action == "remote.confirm":
+            return await self._remote_control_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
             return await self._stop_reply(action, token)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
@@ -282,6 +286,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._detail_reply(entity_id))
         if action == "session.attach":
             return _reply_arguments(await self._attach_reply(entity_id))
+        if action == "remote.control":
+            return _reply_arguments(await self._remote_control_confirm_reply(entity_id))
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
         return _reply_arguments(self._message("This view has expired."))
@@ -488,6 +494,23 @@ class PrivateBotBoundary:
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
             )
+        if record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING:
+            buttons.append(
+                (
+                    Button(
+                        "Enable Remote Control",
+                        self._callback("remote.control", f"{session_value}|active"),
+                    ),
+                )
+            )
+            buttons.append(
+                (
+                    Button(
+                        "Disable Remote Control",
+                        self._callback("remote.control", f"{session_value}|inactive"),
+                    ),
+                )
+            )
         for action in _available_stops(record.state):
             token = self.stops.offer(
                 record.session_id,
@@ -518,6 +541,45 @@ class PrivateBotBoundary:
             "<b>Copy attach command</b>\n"
             f"<code>{escape(command)}</code>"
         )
+
+    async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
+        session_value, separator, state_value = entity_id.partition("|")
+        if not separator or state_value not in {"active", "inactive"}:
+            return self._message("That Remote Control request has expired.")
+        record = await self._record(session_value)
+        if record is None or record.profile_id != ProfileId("claude"):
+            return self._message("Remote Control is unavailable for this session.")
+        action = "Enable" if state_value == "active" else "Disable"
+        return self._message(
+            f"<b>{action} Remote Control?</b>\nThis uses only the verified Claude interaction.",
+            (
+                (
+                    Button(
+                        action,
+                        self._callback("remote.confirm", entity_id, mutation=True),
+                    ),
+                ),
+                (Button("Cancel", self._callback("session.detail", session_value)),),
+            ),
+        )
+
+    async def _remote_control_reply(self, entity_id: str, token: str) -> dict[str, object]:
+        if self.launcher is None or not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+        ):
+            return _reply_arguments(self._message("That request has expired."))
+        session_value, separator, state_value = entity_id.partition("|")
+        if not separator:
+            return _reply_arguments(self._message("That request has expired."))
+        state = RemoteControlState(state_value)
+        result = await self.launcher.set_remote_control(
+            RemoteControlCommand(SessionId.parse(session_value), state, token)
+        )
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        return _reply_arguments(self._message(f"Remote Control: {result.value}."))
 
     async def _can_copy_attach(self, record: SessionRecord) -> bool:
         if self.launcher is None:
