@@ -7,6 +7,7 @@ from typing import Protocol
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.remote_control import RemoteControlState
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,9 @@ class TerminalPort(Protocol):
         source_id: ProviderConversationId,
     ) -> TerminalObservation: ...
     async def copy_attach(self, session_id: SessionId) -> str | None: ...
+    async def remote_control(
+        self, session_id: SessionId, desired_state: RemoteControlState
+    ) -> RemoteControlState: ...
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None: ...
     async def confirm_ready(
         self, session_id: SessionId, profile_id: ProfileId

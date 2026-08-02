@@ -5,6 +5,7 @@ from __future__ import annotations
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.terminal import TerminalObservation
 
 
@@ -41,6 +42,15 @@ class FakeTerminal:
     async def copy_attach(self, session_id: SessionId) -> str | None:
         observation = await self.inspect(session_id)
         return attach_command(session_id) if observation is not None and observation.live else None
+
+    async def remote_control(
+        self, session_id: SessionId, desired_state: RemoteControlState
+    ) -> RemoteControlState:
+        return (
+            desired_state
+            if await self.inspect(session_id) is not None
+            else RemoteControlState.UNKNOWN
+        )
 
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId

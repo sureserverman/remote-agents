@@ -12,6 +12,7 @@ from remote_agents.application.commands import (
     GracefulStopCommand,
     InspectQuery,
     LaunchCommand,
+    RemoteControlCommand,
     ResumeCommand,
 )
 from remote_agents.application.errors import (
@@ -29,11 +30,13 @@ from remote_agents.domain.conversations import (
 )
 from remote_agents.domain.external_sessions import ExternalSessionReference, ExternalSessionSummary
 from remote_agents.domain.models import (
+    ProfileId,
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.ports.local_processes import LocalProcessCatalog
 from remote_agents.ports.session_store import SessionStore
@@ -191,6 +194,16 @@ class SessionService:
         ):
             return None
         return await self._terminal.copy_attach(session_id)
+
+    async def set_remote_control(self, command: RemoteControlCommand) -> RemoteControlState:
+        """Execute a profile-owned state transition only once for an exact Claude session."""
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            if record.profile_id != ProfileId("claude"):
+                raise ValueError("remote control is available only for Claude")
+            if not await self._store.claim_idempotency_key(command.idempotency_key):
+                raise DuplicateCommandError("remote control callback was already handled")
+            return await self._terminal.remote_control(command.session_id, command.desired_state)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
         async with self._locks.operation(), self._locks.for_session(command.session_id):

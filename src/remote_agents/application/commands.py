@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.external_sessions import ExternalSessionState, ResolvedExternalSession
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.remote_control import RemoteControlState
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,3 +65,14 @@ class CleanupCommand:
 @dataclass(frozen=True, slots=True)
 class ForceStopCommand:
     session_id: SessionId
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteControlCommand:
+    session_id: SessionId
+    desired_state: RemoteControlState
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        if self.desired_state is RemoteControlState.UNKNOWN:
+            raise ValueError("remote control state must be active or inactive")
