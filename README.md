@@ -4,8 +4,10 @@ Remote Agents will be a private, single-owner Telegram control plane for curated
 sessions running in isolated tmux servers on this host.
 
 Its approved scope is limited to project browsing and managed session lifecycle actions:
-launch, list, inspect, graceful stop, cleanup, and confirmed force stop. It does not
-provide remote shell access, prompt relay, raw agent arguments, or registry mutation.
+launch, selected resume, local-session safe handoff, list, inspect, Copy Attach, graceful stop,
+cleanup, confirmed force stop, and confirmed Claude Remote Control state changes. It does not
+provide remote shell access, prompt relay, raw agent arguments, arbitrary keystrokes, or registry
+mutation.
 
 ## Development
 
@@ -57,6 +59,12 @@ UTF-8 `session-output.txt` attachment; it is read-only captured output, never an
 For safe stop behavior, choose Graceful, inspect preserved output, then Cleanup. Force stop
 requires a second confirmation and is for a live session that cannot exit gracefully. The bot
 never relays arbitrary commands, agent text, shell access, or approval responses.
+
+Resume uses only a server-resolved, content-free catalogue selection. Local Sessions never moves
+an external process: exit it locally, then confirm a new managed resume after liveness is rechecked.
+Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
+available only on a live managed Claude pane, requires a second confirmation, and uses the single
+qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback.
 Do not put secrets in this repository.

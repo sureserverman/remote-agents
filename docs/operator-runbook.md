@@ -53,6 +53,9 @@ owner-only entry points from Telegram's command menu.
    session has the same identity.
 8. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
+9. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
+   Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
+   share the resulting Remote Control URL or a pane capture outside the owner workflow.
 
 For the auditable host-local profile trace, run:
 

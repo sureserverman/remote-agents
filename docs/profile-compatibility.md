@@ -20,6 +20,10 @@ bypassed; a trust dialog remains a local operator action.
 | `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
 | `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |
 
+Claude Remote Control is available only for a live managed `claude` pane. Enable and Disable each
+require confirmation and use the qualified in-pane interaction; a stale or unclassifiable capture
+fails closed. It is not available for `claude-remote` or any other profile.
+
 The profile arguments are defined in the closed catalogue; Telegram does not provide an
 executable, path, raw argument, prompt, keystroke, bypass, or auto-approval flag.
 
