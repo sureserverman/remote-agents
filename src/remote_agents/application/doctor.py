@@ -1,6 +1,7 @@
 """Technology-neutral health reporting for configured core dependencies."""
 
 from remote_agents.application.health import health_report
+from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
 
 
@@ -29,8 +30,14 @@ def doctor(
     }
 
 
-def profile_doctor(profiles: tuple[ProfileCompatibility, ...]) -> dict[str, object]:
+def profile_doctor(
+    profiles: tuple[ProfileCompatibility, ...],
+    resume_capabilities: tuple[ProfileResumeCapability, ...] = (),
+) -> dict[str, object]:
     """Render independent non-secret profile probe evidence for operator diagnostics."""
+    capability_by_profile = {
+        capability.profile_id: capability for capability in resume_capabilities
+    }
     return {
         "profiles": [
             {
@@ -39,9 +46,24 @@ def profile_doctor(profiles: tuple[ProfileCompatibility, ...]) -> dict[str, obje
                 "version": profile.version,
                 "status": profile.status,
                 "reason": profile.reason,
+                "resume": _resume_status(capability_by_profile.get(profile.profile_id)),
             }
             for profile in profiles
         ]
+    }
+
+
+def _resume_status(capability: ProfileResumeCapability | None) -> dict[str, object]:
+    if capability is None:
+        return {
+            "catalogue_available": False,
+            "selected_resume_available": False,
+            "reason": "capability_unqualified",
+        }
+    return {
+        "catalogue_available": capability.catalogue_available,
+        "selected_resume_available": capability.selected_resume_available,
+        "reason": capability.reason,
     }
 
 

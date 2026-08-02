@@ -12,13 +12,13 @@ information only, so a local update does not disable Telegram launches. Every la
 to reach its agent-specific readiness state. Authentication and workspace trust are never
 bypassed; a trust dialog remains a local operator action.
 
-| Profile | Fixed launch argv | Availability/auth/trust | Readiness evidence | Fixed graceful exit |
-| --- | --- | --- | --- | --- |
-| `claude` | `claude` | executable must be present; local auth/trust stays local | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
-| `claude-remote` | `claude --remote-control ra-<uuid>` | executable must be present; local auth/trust stays local | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
-| `codex` | `codex` | executable must be present; local auth/trust stays local | `/exit` command selection and submit | `/exit`, Enter, Enter |
-| `opencode` | `opencode` | executable must be present; local auth/trust stays local | `Ask anything...` interactive UI | Ctrl-C |
-| `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | `/quit` command selection and submit | `/quit`, Enter, Enter |
+| Profile | Fixed launch argv | Availability/auth/trust | Resume catalogue / selection | Readiness evidence | Fixed graceful exit |
+| --- | --- | --- | --- | --- | --- |
+| `claude` | `claude` | executable must be present; local auth/trust stays local | documented UUID filenames and project directories; enabled only when the content-free catalogue is available | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
+| `claude-remote` | `claude --remote-control ra-<uuid>` | executable must be present; local auth/trust stays local | not a resume profile | `Claude Code`, rejecting workspace-trust dialog | `/exit`, Enter |
+| `codex` | `codex` | executable must be present; local auth/trust stays local | feature-probed app-server `thread/list`; enabled only after bounded content-free paging succeeds | `/exit` command selection and submit | `/exit`, Enter, Enter |
+| `opencode` | `opencode` | executable must be present; local auth/trust stays local | `session list --format json`; enabled only after its JSON contract succeeds | `Ask anything...` interactive UI | Ctrl-C |
+| `cursor-agent` | `cursor-agent` | executable must be present; local auth/trust stays local | disabled: `ls` is interactive and has no structured safe identifier catalogue | `/quit` command selection and submit | `/quit`, Enter, Enter |
 
 The profile arguments are defined in the closed catalogue; Telegram does not provide an
 executable, path, raw argument, prompt, keystroke, bypass, or auto-approval flag.

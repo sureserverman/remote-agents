@@ -1,6 +1,7 @@
 """Doctor reports component health rather than configuration-shaped guesses."""
 
 from remote_agents.application.doctor import doctor, production_doctor, profile_doctor
+from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import ProfileCompatibility
 
@@ -45,6 +46,11 @@ def test_profile_doctor_lists_independent_compatibility_without_local_paths() ->
                 "version": "claude 1.2.3",
                 "status": "AVAILABLE",
                 "reason": None,
+                "resume": {
+                    "catalogue_available": False,
+                    "selected_resume_available": False,
+                    "reason": "capability_unqualified",
+                },
             },
             {
                 "id": "codex",
@@ -52,8 +58,26 @@ def test_profile_doctor_lists_independent_compatibility_without_local_paths() ->
                 "version": None,
                 "status": "BLOCKED",
                 "reason": "executable_missing",
+                "resume": {
+                    "catalogue_available": False,
+                    "selected_resume_available": False,
+                    "reason": "capability_unqualified",
+                },
             },
         ]
+    }
+
+
+def test_profile_doctor_reports_selected_resume_only_when_qualified() -> None:
+    report = profile_doctor(
+        (ProfileCompatibility(ProfileId("codex"), True, None, "AVAILABLE", None),),
+        (ProfileResumeCapability(ProfileId("codex"), True, True),),
+    )
+
+    assert report["profiles"][0]["resume"] == {
+        "catalogue_available": True,
+        "selected_resume_available": True,
+        "reason": None,
     }
 
 
