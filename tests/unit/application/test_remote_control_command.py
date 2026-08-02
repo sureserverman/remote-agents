@@ -43,6 +43,7 @@ async def test_remote_control_is_typed_profile_limited_and_idempotent():
     )
     service = SessionService(Store(record), FakeTerminal())
     command = RemoteControlCommand(record.session_id, RemoteControlState.ACTIVE, "remote-1")
+
     assert await service.set_remote_control(command) is RemoteControlState.UNKNOWN
     with pytest.raises(DuplicateCommandError):
         await service.set_remote_control(command)
