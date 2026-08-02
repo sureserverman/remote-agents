@@ -42,13 +42,15 @@ from remote_agents.adapters.telegram.presenters import (
 )
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
-from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.commands import LaunchCommand, ResumeCommand
+from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
     search_catalogue,
 )
 from remote_agents.config import TelegramSecrets
+from remote_agents.domain.conversations import ConversationReference, ConversationState
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
@@ -70,6 +72,7 @@ class PrivateBotBoundary:
     catalogue: tuple[CatalogProject, ...] = ()
     profiles: tuple[ProfileAvailability, ...] = ()
     launcher: object | None = None
+    conversations: ConversationService | None = None
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     callbacks: CallbackStateStore = field(default_factory=CallbackStateStore)
     stops: StopController = field(init=False)
@@ -219,6 +222,7 @@ class PrivateBotBoundary:
             render_home(
                 self._navigation_callbacks(),
                 launch=self._callback("launch.open", "projects"),
+                resume=(self._callback("resume.open", "projects") if self.conversations else None),
                 sessions=self._callback("sessions.open", "sessions"),
                 active=sum(record.state is SessionState.RUNNING for record in records),
                 preserved=sum(record.state is SessionState.PRESERVED for record in records),
@@ -232,6 +236,8 @@ class PrivateBotBoundary:
             return await self._home_reply()
         if action == "launch.confirm":
             return await self._launch_reply(entity_id, token)
+        if action == "resume.confirm":
+            return await self._resume_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
             return await self._stop_reply(action, token)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
@@ -245,6 +251,14 @@ class PrivateBotBoundary:
             return _reply_arguments(self._confirm_reply(entity_id))
         if action == "sessions.open":
             return _reply_arguments(await self._sessions_reply())
+        if action == "resume.open":
+            return _reply_arguments(self._resume_projects_reply())
+        if action == "resume.project":
+            return _reply_arguments(await self._resume_profiles_reply(entity_id))
+        if action in {"resume.profile", "resume.page"}:
+            return _reply_arguments(await self._resume_catalogue_reply(entity_id))
+        if action == "resume.select":
+            return _reply_arguments(await self._resume_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id))
         if action == "session.inspect":
@@ -296,6 +310,42 @@ class PrivateBotBoundary:
                     (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
                     (Button("Sessions", self._callback("sessions.open", "sessions")),),
                     (Button("Launch another", self._callback("launch.open", "projects")),),
+                ),
+            )
+        )
+
+    async def _resume_reply(self, reference_value: str, token: str) -> dict[str, object]:
+        if self.launcher is None or self.conversations is None or not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+        ):
+            return _reply_arguments(self._message("That request has expired."))
+        resolved = await self._resolve_resume(reference_value)
+        if resolved is None or resolved.summary.project_id is None:
+            return _reply_arguments(self._message("That conversation is no longer available."))
+        record = await self.launcher.resume(
+            ResumeCommand(
+                resolved.summary.project_id,
+                resolved.summary.profile_id,
+                resolved,
+                token,
+            )
+        )
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        if record.state is SessionState.FAILED:
+            return _reply_arguments(
+                self._message(
+                    "<b>Resume did not become ready</b>\nOpen Sessions after local attention."
+                )
+            )
+        return _reply_arguments(
+            self._message(
+                f"<b>Session resumed</b>\n{escape(record.display.rendered)}\nState: {record.state}",
+                (
+                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
+                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
                 ),
             )
         )
@@ -462,6 +512,156 @@ class PrivateBotBoundary:
         if projects is None:
             return self._message("That project view has expired.")
         return self._projects_reply(projects, view_id=view_id, page=page)
+
+    def _resume_projects_reply(self) -> RenderedMessage:
+        buttons = tuple(
+            (
+                Button(project.name, self._callback("resume.project", project.opaque_id)),
+            )
+            for project in self.catalogue
+        )
+        return self._message(
+            "<b>Resume</b>\nSelect the project for the prior conversation.",
+            buttons or ((Button("No projects available", self._callback("nav.home", "home")),),),
+        )
+
+    async def _resume_profiles_reply(self, project_id: str) -> RenderedMessage:
+        if not any(project.opaque_id == project_id for project in self.catalogue):
+            return self._message("The project is no longer available.")
+        if self.conversations is None:
+            return self._message("Resume is unavailable.")
+        capabilities = {
+            str(item.profile_id): item for item in await self.conversations.capabilities()
+        }
+        buttons = []
+        unavailable = []
+        for profile in self.profiles:
+            capability = capabilities.get(profile.profile_id)
+            if (
+                profile.available
+                and capability is not None
+                and capability.catalogue_available
+                and capability.selected_resume_available
+            ):
+                buttons.append(
+                    Button(
+                        _profile_name(profile.profile_id),
+                        self._callback("resume.profile", f"{project_id}|{profile.profile_id}|1"),
+                    )
+                )
+            else:
+                reason = (
+                    profile.reason
+                    or (capability.reason if capability is not None else "catalogue_unavailable")
+                )
+                unavailable.append(f"{_profile_name(profile.profile_id)} ({reason})")
+        text = "<b>Select a resumable agent</b>"
+        if unavailable:
+            text += "\nUnavailable: " + escape(", ".join(unavailable))
+        return self._message(
+            text,
+            _button_rows(tuple(buttons))
+            + ((Button("Back", self._callback("resume.open", "projects")),),),
+        )
+
+    async def _resume_catalogue_reply(self, entity_id: str) -> RenderedMessage:
+        parsed = _split_resume_page(entity_id)
+        if parsed is None or self.conversations is None:
+            return self._message("That resume view has expired.")
+        project_id, profile_id, page = parsed
+        if not any(project.opaque_id == project_id for project in self.catalogue):
+            return self._message("The project is no longer available.")
+        try:
+            result = await self.conversations.catalogue(
+                ConversationCatalogueQuery(page, 10, ProfileId(profile_id), ProjectId(project_id))
+            )
+        except ValueError:
+            return self._message("That resume view has expired.")
+        if result.unavailable_reason is not None:
+            return self._message(f"Resume is unavailable ({escape(result.unavailable_reason)}).")
+        buttons = tuple(
+            (
+                Button(
+                    f"Resumable · {summary.updated_at:%Y-%m-%d %H:%M UTC}",
+                    self._callback("resume.select", str(summary.reference)),
+                ),
+            )
+            for summary in result.conversations
+            if summary.state is ConversationState.RESUMABLE
+        )
+        navigation = []
+        if result.page > 1:
+            navigation.append(
+                Button(
+                    "Previous",
+                    self._callback(
+                        "resume.page", f"{project_id}|{profile_id}|{result.page - 1}"
+                    ),
+                )
+            )
+        if result.page < result.page_count:
+            navigation.append(
+                Button(
+                    "Next",
+                    self._callback(
+                        "resume.page", f"{project_id}|{profile_id}|{result.page + 1}"
+                    ),
+                )
+            )
+        rows = list(buttons)
+        if navigation:
+            rows.append(tuple(navigation))
+        rows.append((Button("Back", self._callback("resume.project", project_id)),))
+        return self._message(
+            f"<b>Prior conversations {result.page}/{result.page_count}</b>\n"
+            "Select a resumable conversation.",
+            tuple(rows)
+            if buttons
+            else (
+                (
+                    Button(
+                        "No resumable conversations",
+                        self._callback("resume.project", project_id),
+                    ),
+                ),
+            ),
+        )
+
+    async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
+        resolved = await self._resolve_resume(reference_value)
+        if resolved is None or resolved.summary.project_id is None:
+            return self._message("That conversation is no longer available.")
+        summary = resolved.summary
+        if summary.state is not ConversationState.RESUMABLE:
+            return self._message("That conversation cannot be resumed safely.")
+        project = next(
+            (item for item in self.catalogue if item.opaque_id == str(summary.project_id)), None
+        )
+        if project is None:
+            return self._message("The project is no longer available.")
+        return self._message(
+            f"<b>Review resume</b>\nProject: {escape(project.name)}\n"
+            f"Agent: {_profile_name(str(summary.profile_id))}\n"
+            f"Last updated: {summary.updated_at:%Y-%m-%d %H:%M UTC}",
+            (
+                (
+                    Button(
+                        "Resume",
+                        self._callback("resume.confirm", reference_value, mutation=True),
+                    ),
+                ),
+                (Button("Cancel", self._callback("nav.home", "home")),),
+            ),
+        )
+
+    async def _resolve_resume(self, reference_value: str):
+        if self.conversations is None:
+            return None
+        try:
+            reference = ConversationReference(reference_value)
+        except ValueError:
+            return None
+        return await self.conversations.resolve_for_resume(reference)
 
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
@@ -649,6 +849,18 @@ def _split_launch(value: str) -> tuple[str, str]:
     if not separator:
         raise ValueError("launch callback is invalid")
     return project_id, profile_id
+
+
+def _split_resume_page(value: str) -> tuple[str, str, int] | None:
+    project_id, separator, remainder = value.partition("|")
+    profile_id, separator2, page_value = remainder.partition("|")
+    if not separator or not separator2:
+        return None
+    try:
+        page = int(page_value)
+    except ValueError:
+        return None
+    return (project_id, profile_id, page) if page > 0 else None
 
 
 def _profile_name(profile_id: str) -> str:

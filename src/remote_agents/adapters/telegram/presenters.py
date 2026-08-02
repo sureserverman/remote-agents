@@ -85,16 +85,21 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
 
 
 def render_home(
-    callbacks: NavigationCallbacks, *, launch: str, sessions: str, active: int, preserved: int
+    callbacks: NavigationCallbacks,
+    *,
+    launch: str,
+    sessions: str,
+    active: int,
+    preserved: int,
+    resume: str | None = None,
 ) -> RenderedMessage:
     """Render the fixed root view."""
 
     return _message(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
-        (
-            (Button("Launch", launch),),
-            (Button("Sessions", sessions),),
-        ),
+        ((Button("Launch", launch),),)
+        + (((Button("Resume", resume),),) if resume is not None else ())
+        + ((Button("Sessions", sessions),),),
     )
 
 

@@ -12,6 +12,14 @@ from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from pathlib import Path
 
+from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
+from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
+from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
+from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
+from remote_agents.adapters.agents.opencode_sessions import (
+    OpenCodeCliRunner,
+    OpenCodeSessionCatalogue,
+)
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import (
@@ -34,11 +42,12 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
-from remote_agents.domain.models import ProjectId
+from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
 
@@ -179,6 +188,16 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
+    conversations = ConversationService(
+        ProfileConversationCatalogue(
+            {
+                ProfileId("claude"): ClaudeSessionCatalogue(project_paths),
+                ProfileId("codex"): CodexSessionCatalogue(project_paths, CodexAppServerClient()),
+                ProfileId("opencode"): OpenCodeSessionCatalogue(project_paths, OpenCodeCliRunner()),
+                ProfileId("cursor-agent"): CursorSessionCatalogue(),
+            }
+        )
+    )
     secrets = load_secrets()
     return PrivateBotBoundary(
         secrets.owner_user_id,
@@ -187,6 +206,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         profiles=profiles,
         project_page_size=config.project_page_size,
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
+        conversations=conversations,
         capture=terminal.capture,
     )
 
