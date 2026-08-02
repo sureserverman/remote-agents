@@ -567,7 +567,7 @@ class PrivateBotBoundary:
     async def _resume_catalogue_reply(self, entity_id: str) -> RenderedMessage:
         parsed = _split_resume_page(entity_id)
         if parsed is None or self.conversations is None:
-            return self._message("That resume view has expired.")
+            return self._message("That continuation view has expired.")
         project_id, profile_id, page = parsed
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
@@ -576,7 +576,7 @@ class PrivateBotBoundary:
                 ConversationCatalogueQuery(page, 10, ProfileId(profile_id), ProjectId(project_id))
             )
         except ValueError:
-            return self._message("That resume view has expired.")
+            return self._message("That continuation view has expired.")
         if result.unavailable_reason is not None:
             return self._message(f"Resume is unavailable ({escape(result.unavailable_reason)}).")
         buttons = tuple(

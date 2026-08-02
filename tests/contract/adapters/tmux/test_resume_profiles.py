@@ -35,4 +35,10 @@ def test_cursor_cannot_construct_a_selected_resume_argv() -> None:
         profile for profile in closed_profiles() if profile.profile_id == ProfileId("cursor-agent")
     )
     with pytest.raises(ProfileError, match="no qualified"):
-        definition.resume_argv(ProviderConversationId("source-123"))
+        build_resume_profile(
+            definition,
+            Path("/tools/cursor-agent"),
+            SessionId.new(),
+            ProviderConversationId("source-123"),
+            {"PATH": "/tools"},
+        )

@@ -45,7 +45,7 @@ class ConversationService:
     async def resolve_for_resume(
         self, reference: ConversationReference
     ) -> ResolvedConversation | None:
-        """Resolve a server-issued selection for a later typed resume command."""
+        """Resolve a server-issued selection for a later typed continuation command."""
         return await self._catalog.resolve_conversation(reference)
 
     async def capabilities(self) -> tuple[ProfileResumeCapability, ...]:

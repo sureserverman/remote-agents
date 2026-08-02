@@ -14,7 +14,14 @@ from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import (
     ProfileCompatibility,
     ProfileDefinition,
+    ProfileError,
 )
+
+_RESUME_ARGUMENTS = {
+    "claude": ("--resume",),
+    "codex": ("resume",),
+    "opencode": ("--session",),
+}
 
 _READINESS_MARKERS = {
     "claude": "Claude Code",
@@ -130,7 +137,10 @@ def build_resume_profile(
     """Resolve only a curated provider resume argv into a managed launch profile."""
     if not executable.is_absolute():
         raise ValueError("profile executable must be absolute")
-    argv = (str(executable), *definition.resume_argv(source_id)[1:])
+    arguments = _RESUME_ARGUMENTS.get(str(definition.profile_id))
+    if arguments is None:
+        raise ProfileError("profile has no qualified selected-resume command")
+    argv = (str(executable), *arguments, source_id.value)
     return LaunchProfile(
         str(executable),
         argv,

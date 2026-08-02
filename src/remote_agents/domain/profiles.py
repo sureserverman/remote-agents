@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId
 
 
@@ -26,13 +25,6 @@ _GRACEFUL_KEYS = {
     "opencode": ("C-c",),
     "cursor-agent": ("/quit", "Enter", "Enter"),
 }
-_RESUME_ARGUMENTS = {
-    "claude": ("--resume",),
-    "codex": ("resume",),
-    "opencode": ("--session",),
-}
-
-
 @dataclass(frozen=True, slots=True)
 class ProfileDefinition:
     """A reviewed agent command whose arguments never come from Telegram input."""
@@ -57,14 +49,6 @@ class ProfileDefinition:
     def version_command(self) -> tuple[str, ...]:
         """Return the fixed executable probe command, without user-controlled arguments."""
         return (self.executable, *self.version_argv)
-
-    def resume_argv(self, source_id: ProviderConversationId) -> tuple[str, ...]:
-        """Construct one provider-owned resume argv from an internal resolved source only."""
-        arguments = _RESUME_ARGUMENTS.get(str(self.profile_id))
-        if arguments is None:
-            raise ProfileError("profile has no qualified selected-resume command")
-        return (self.executable, *arguments, source_id.value)
-
 
 @dataclass(frozen=True, slots=True)
 class ProfileCompatibility:
