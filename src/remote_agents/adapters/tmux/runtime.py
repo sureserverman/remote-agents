@@ -11,8 +11,14 @@ from pathlib import Path
 
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
+from remote_agents.adapters.tmux.remote_control import (
+    REMOTE_CONTROL_DISCONNECT_KEYS,
+    REMOTE_CONTROL_ENABLE_KEYS,
+    classify_remote_control_capture,
+)
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.terminal import TerminalObservation
 
 
@@ -248,6 +254,30 @@ class TmuxTerminal:
             return None
         return attach_command(session_id)
 
+    async def remote_control(
+        self, session_id: SessionId, desired_state: RemoteControlState
+    ) -> RemoteControlState:
+        """Run only the qualified Claude key sequences against one idle exact managed pane."""
+        observation = await self.inspect(session_id)
+        if (
+            observation is None
+            or not observation.live
+            or observation.profile_id != ProfileId("claude")
+        ):
+            return RemoteControlState.UNKNOWN
+        current = _remote_control_state(await self._gateway.capture(session_id))
+        if current is desired_state:
+            return current
+        if current is RemoteControlState.UNKNOWN:
+            return current
+        keys = (
+            REMOTE_CONTROL_ENABLE_KEYS
+            if desired_state is RemoteControlState.ACTIVE
+            else REMOTE_CONTROL_DISCONNECT_KEYS
+        )
+        await self._gateway.send_keys(session_id, keys)
+        return _remote_control_state(await self._gateway.capture(session_id))
+
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation."""
         try:
@@ -264,3 +294,7 @@ class TmuxTerminal:
             )
             for pane in inventory.managed
         )
+
+
+def _remote_control_state(capture: str) -> RemoteControlState:
+    return RemoteControlState(classify_remote_control_capture(capture).value)
