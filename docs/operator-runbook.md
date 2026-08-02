@@ -20,19 +20,36 @@ missing executable is `BLOCKED` and must not be launched from Telegram.
 The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
 boundary, service, and each profile. It must report `healthy: true` before normal operation.
 
+Confirm Telegram's discoverable owner shell without printing the credential:
+
+```bash
+uv run --locked remote-agents telegram-ui-audit --json | python -m json.tool
+```
+
+The report must be healthy, with no default/global commands and exactly `/start`, `/launch`,
+`/sessions`, and `/help` in the configured owner's chat scope. The owner chat's menu opens
+commands; the bot description and short description are checked against the reviewed values.
+
 ## Telegram acceptance checklist
 
-Begin with `/start`. Use only the configured private chat.
+Begin with `/start`. Use only the configured private chat. The Home dashboard shows Active and
+Preserved counts, then Launch and Sessions. `/launch`, `/sessions`, and `/help` offer the same
+owner-only entry points from Telegram's command menu.
 
-1. Open Launch and use Search to find a project by name.
-2. Launch two sessions for the same project/profile, applying an optional label to one. Their
+1. Open Launch and use Search to find a project by name. The reply prompt names the expected
+   input; use Cancel or Back to leave it, and retry an empty or unmatched search.
+2. Select an agent, add an optional label or Skip it, and confirm that Review names the project,
+   agent, and label before Launch. Back restores the preceding choice; Cancel makes no mutation.
+3. Launch two sessions for the same project/profile, applying an optional label to one. Their
    project, agent, mode, and sequence remain distinguishable.
-3. Open Sessions, inspect one active session, and verify that the output is bounded and clean.
-4. Gracefully stop one session, inspect its preserved output, then choose Cleanup.
-5. For a separate active session, use Force and confirm the second Force stop button.
-6. Restart `remote-agents.service`, open a fresh `/start`, and verify the remaining managed
+4. Open Sessions, inspect one active session, and verify that inline output is bounded, escaped,
+   and clean. For oversized output, verify the separate UTF-8 `session-output.txt` attachment.
+5. Gracefully stop one session, inspect its preserved output, then choose Cleanup.
+6. For a separate active session, use Force and confirm the second Force stop button.
+7. Restart `remote-agents.service`, press an expired pre-restart button, and verify that it
+   acknowledges expiry and replaces the view with a fresh Home. Verify the remaining managed
    session has the same identity.
-7. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
+8. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
 
 For the auditable host-local profile trace, run:
@@ -76,6 +93,11 @@ tmux -L remote-agents list-panes -a
 
 Restore the last reviewed unit, run `systemctl --user daemon-reload`, then enable the service
 again. Do not remove a managed tmux session until its ownership and output have been inspected.
+
+Before changing bot profile metadata, retain a private rollback snapshot of the avatar,
+descriptions, owner-scoped commands, and menu behavior. Restore that snapshot through the
+Telegram profile controls if a rollback is required; do not replace the credential as part of a
+usability rollback.
 
 For a damaged session database, follow [database recovery](database-recovery.md). The restore
 command refuses to replace a healthy database and preserves corrupt evidence.

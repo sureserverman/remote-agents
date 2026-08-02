@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -10,6 +11,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from telegram import (
+    Bot,
     BotCommand,
     BotCommandScopeChat,
     ForceReply,
@@ -197,6 +199,9 @@ class PrivateBotBoundary:
             return
         await query.answer()
         try:
+            if state.action == "session.inspect":
+                await self._send_inspection(query, state.entity_id)
+                return
             await query.edit_message_text(
                 **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
             )
@@ -319,11 +324,31 @@ class PrivateBotBoundary:
         )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:
-        if self.capture is None:
+        result = await self._inspection_result(session_value)
+        if result is None:
             return self._message("Inspection is unavailable.")
-        captured = await self.capture(SessionId.parse(session_value))
-        result = inspect_capture(captured.encode())
         return self._message(f"<pre>{escape(result.text)}</pre>")
+
+    async def _send_inspection(self, query, session_value: str) -> None:
+        result = await self._inspection_result(session_value)
+        if result is None:
+            await query.edit_message_text(
+                **_reply_arguments(self._message("Inspection is unavailable."))
+            )
+            return
+        await query.edit_message_text(
+            **_reply_arguments(self._message(f"<pre>{escape(result.text)}</pre>"))
+        )
+        if result.attachment is not None and result.filename is not None:
+            await query.message.reply_document(
+                document=io.BytesIO(result.attachment), filename=result.filename
+            )
+
+    async def _inspection_result(self, session_value: str):
+        if self.capture is None:
+            return None
+        captured = await self.capture(SessionId.parse(session_value))
+        return inspect_capture(captured.encode())
 
     async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
         revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
@@ -531,6 +556,38 @@ async def _sync_owner_metadata(bot, owner_chat_id: int) -> None:
     await bot.set_chat_menu_button(chat_id=owner_chat_id, menu_button=MenuButtonCommands())
     await bot.set_my_description(_BOT_DESCRIPTION)
     await bot.set_my_short_description(_BOT_SHORT_DESCRIPTION)
+
+
+async def audit_owner_metadata(secrets: TelegramSecrets) -> dict[str, object]:
+    """Read the public Telegram shell without exposing the configured credential."""
+    async with Bot(secrets.bot_token) as bot:
+        return await audit_bot_metadata(bot, secrets.owner_chat_id)
+
+
+async def audit_bot_metadata(bot, owner_chat_id: int) -> dict[str, object]:
+    """Check owner-only command metadata against the reviewed bot shell."""
+    owner_scope = BotCommandScopeChat(owner_chat_id)
+    default_commands = await bot.get_my_commands()
+    owner_commands = await bot.get_my_commands(scope=owner_scope)
+    menu = await bot.get_chat_menu_button(chat_id=owner_chat_id)
+    description = await bot.get_my_description()
+    short_description = await bot.get_my_short_description()
+    expected_commands = [command.command for command in _OWNER_COMMANDS]
+    report = {
+        "default_commands": [command.command for command in default_commands],
+        "owner_commands": [command.command for command in owner_commands],
+        "owner_menu": getattr(menu, "type", None),
+        "description_matches": description.description == _BOT_DESCRIPTION,
+        "short_description_matches": short_description.short_description == _BOT_SHORT_DESCRIPTION,
+    }
+    report["healthy"] = (
+        not report["default_commands"]
+        and report["owner_commands"] == expected_commands
+        and report["owner_menu"] == "commands"
+        and report["description_matches"]
+        and report["short_description_matches"]
+    )
+    return report
 
 
 def _install_stop_signals(stopping: asyncio.Event) -> None:

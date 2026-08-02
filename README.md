@@ -42,10 +42,17 @@ systemctl --user is-active remote-agents.service
 uv run --locked remote-agents doctor --json | python -m json.tool
 ```
 
-Use Telegram `/start` for a fresh Home view. Launch shows paginated project choices, supports
-project-name search and an optional label; Sessions lists only active managed sessions. Ended records remain in local
-SQLite history but do not clutter the Telegram list. After a service restart, begin with a
-fresh `/start` because old button callbacks are intentionally expired.
+The configured owner sees only `/start`, `/launch`, `/sessions`, and `/help` in Telegram's
+command menu. `/start` opens a compact Home dashboard with active and preserved counts;
+`/launch` opens the paginated project list and `/sessions` opens current managed sessions.
+Search and optional-label entry use Telegram reply prompts: send `Skip`, `Cancel`, or `Back`
+instead of leaving an input step stranded. Review shows the project, agent, and label before
+creating a session. Back restores the preceding choice and Cancel returns Home without a
+mutation. Ended records remain in local SQLite history but do not clutter the Telegram list.
+After a service restart or an expired button, Telegram replaces the old view with a fresh Home.
+
+Inspect shows safely escaped terminal text inline when it fits. Oversized output is sent as a
+UTF-8 `session-output.txt` attachment; it is read-only captured output, never an input channel.
 
 For safe stop behavior, choose Graceful, inspect preserved output, then Cleanup. Force stop
 requires a second confirmation and is for a live session that cannot exit gracefully. The bot

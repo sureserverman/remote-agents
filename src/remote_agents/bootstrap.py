@@ -21,7 +21,11 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary, run_private_bot
+from remote_agents.adapters.telegram.service import (
+    PrivateBotBoundary,
+    audit_owner_metadata,
+    run_private_bot,
+)
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
@@ -58,6 +62,8 @@ def main(
     restore_parser.add_argument("--backup", type=Path)
     serve_parser = subcommands.add_parser("serve")
     serve_parser.add_argument("--config", type=Path, required=True)
+    telegram_audit_parser = subcommands.add_parser("telegram-ui-audit")
+    telegram_audit_parser.add_argument("--json", action="store_true")
     arguments = parser.parse_args(argv)
     if arguments.command == "doctor":
         if arguments.profiles:
@@ -93,6 +99,12 @@ def main(
     if arguments.command == "restore-database":
         restore_database(arguments.database, arguments.backup)
         print("database restored")
+    if arguments.command == "telegram-ui-audit":
+        paths = ProductionPaths.for_home(Path.home())
+        secrets = _load_private_telegram_secrets(paths)
+        result = asyncio.run(audit_owner_metadata(secrets))
+        print(json.dumps(result, sort_keys=True) if arguments.json else result)
+        return 0 if result["healthy"] else 1
     if arguments.command == "serve":
         config = load_config(arguments.config)
         paths = ProductionPaths.for_home(Path.home())
@@ -216,3 +228,20 @@ def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     except ConfigError:
         return False
     return True
+
+
+def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
+    """Read the checked private EnvironmentFile for this read-only metadata audit."""
+    environment_path = paths.require_private_environment()
+    environment: dict[str, str] = {}
+    for line in environment_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, separator, value = stripped.partition("=")
+        if not separator:
+            raise ConfigError("Telegram environment file contains an invalid assignment")
+        environment[name] = value
+    secrets = load_secrets(environment)
+    assert secrets is not None
+    return secrets

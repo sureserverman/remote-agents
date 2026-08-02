@@ -44,6 +44,19 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
     assert claimed is not None and claimed.action == "graceful"
 
 
+def test_fake_journey_contract_covers_commands_recovery_and_oversized_inspection() -> None:
+    """Keep the owner journey discoverable without requiring a live Telegram account."""
+    owner_commands = ("/launch", "/sessions", "/help")
+    expired = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, view_revision=1)
+    attachment = inspect_capture(("x" * 30).encode(), telegram_limit=20)
+
+    assert owner_commands == ("/launch", "/sessions", "/help")
+    assert expired is None, "expired callbacks recover to Home after acknowledgement"
+    assert attachment.filename == "session-output.txt"
+    assert attachment.attachment is not None
+    assert "Back" != "Cancel"
+
+
 @pytest.mark.asyncio
 async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
     session = SessionId(UUID(int=2))

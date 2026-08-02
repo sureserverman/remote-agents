@@ -8,7 +8,14 @@ from types import SimpleNamespace
 import pytest
 from telegram.error import BadRequest
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import (
+    _BOT_DESCRIPTION,
+    _BOT_SHORT_DESCRIPTION,
+    _OWNER_COMMANDS,
+    PrivateBotBoundary,
+    _sync_owner_metadata,
+    audit_bot_metadata,
+)
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.bootstrap import _resolve_profile_executable, main
@@ -229,6 +236,75 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
 
 
 @pytest.mark.asyncio
+async def test_owner_commands_render_only_the_private_chat_surface() -> None:
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+    )
+    launch = _Message()
+    sessions = _Message()
+    help_message = _Message()
+
+    await boundary.launch_command(_trusted_update(message=launch), None)
+    await boundary.sessions_command(_trusted_update(message=sessions), None)
+    await boundary.help_command(_trusted_update(message=help_message), None)
+
+    assert launch.replies[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
+    assert sessions.replies[0]["text"] == "<b>Sessions</b>"
+    assert sessions.replies[0]["reply_markup"].inline_keyboard[0][0].text == "No managed sessions"
+    assert help_message.replies[0]["text"].startswith("Use Launch")
+
+
+@pytest.mark.asyncio
+async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachment() -> None:
+    session = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+
+    async def capture(_session_id):
+        return "x" * 5000
+
+    launcher = _Launcher()
+    launcher.records = [session]
+    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    detail = await boundary._detail_reply(str(session.session_id))
+    inspect = next(
+        button.callback_data
+        for row in detail.keyboard
+        for button in row
+        if button.text == "Inspect"
+    )
+    callback = _Callback(inspect)
+
+    await boundary.callback(_trusted_update(callback=callback), None)
+
+    assert callback.edits[0]["text"] == "<pre>Output is attached as UTF-8 text.</pre>"
+    assert callback.message.documents == [
+        {"document": b"x" * 5000, "filename": "session-output.txt"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_owner_metadata_is_private_and_matches_reviewed_values() -> None:
+    bot = _MetadataBot()
+
+    await _sync_owner_metadata(bot, 11)
+    report = await audit_bot_metadata(bot, 11)
+
+    assert bot.default_commands_deleted is True
+    assert report == {
+        "default_commands": [],
+        "owner_commands": [command.command for command in _OWNER_COMMANDS],
+        "owner_menu": "commands",
+        "description_matches": True,
+        "short_description_matches": True,
+        "healthy": True,
+    }
+    assert bot.description == _BOT_DESCRIPTION
+    assert bot.short_description == _BOT_SHORT_DESCRIPTION
+
+
+@pytest.mark.asyncio
 async def test_private_bot_boundary_pages_through_the_entire_project_catalogue() -> None:
     catalogue = tuple(
         CatalogProject(f"{number:024d}", f"Project {number}", "tests", "Registered")
@@ -297,6 +373,34 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     assert received == [TelegramSecrets("token", 7, 11)]
 
 
+def test_telegram_ui_audit_reads_only_the_private_environment_file(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    environment = tmp_path / "telegram.env"
+    environment.write_text(
+        "REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=token\n"
+        "REMOTE_AGENTS_OWNER_USER_ID=7\n"
+        "REMOTE_AGENTS_OWNER_CHAT_ID=11\n",
+        encoding="utf-8",
+    )
+    environment.chmod(0o600)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: _AuditPaths(environment)
+    )
+
+    async def audit(secrets):
+        assert secrets == TelegramSecrets("token", 7, 11)
+        return {"healthy": True, "default_commands": []}
+
+    monkeypatch.setattr("remote_agents.bootstrap.audit_owner_metadata", audit)
+
+    assert main(["telegram-ui-audit", "--json"]) == 0
+    assert __import__("json").loads(capsys.readouterr().out) == {
+        "default_commands": [],
+        "healthy": True,
+    }
+
+
 class _Paths:
     def __init__(self, database_path) -> None:
         self.database_path = database_path
@@ -315,6 +419,14 @@ class _DoctorPaths:
     def __init__(self, config_path) -> None:
         self.config_path = config_path
         self.home = config_path.parent
+
+
+class _AuditPaths:
+    def __init__(self, environment_path) -> None:
+        self.environment_path = environment_path
+
+    def require_private_environment(self):
+        return self.environment_path
 
 
 def _compatibility(profile_id: str):
@@ -346,10 +458,17 @@ class _Launcher:
 class _Message:
     def __init__(self, text: str | None = None) -> None:
         self.replies: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
         self.text = text
 
-    async def reply_text(self, **kwargs: object) -> None:
+    async def reply_text(self, text: str | None = None, **kwargs: object) -> None:
+        if text is not None:
+            kwargs["text"] = text
         self.replies.append(kwargs)
+
+    async def reply_document(self, **kwargs: object) -> None:
+        document = kwargs["document"]
+        self.documents.append({"document": document.read(), "filename": kwargs["filename"]})
 
 
 class _Callback:
@@ -358,6 +477,7 @@ class _Callback:
         self.edit_error = edit_error
         self.answers: list[str | None] = []
         self.edits: list[dict[str, object]] = []
+        self.message = _Message()
 
     async def answer(self, text: str | None = None) -> None:
         self.answers.append(text)
@@ -366,6 +486,44 @@ class _Callback:
         if self.edit_error is not None:
             raise self.edit_error
         self.edits.append(kwargs)
+
+
+class _MetadataBot:
+    def __init__(self) -> None:
+        self.default_commands_deleted = False
+        self.owner_commands = []
+        self.owner_menu = None
+        self.description = ""
+        self.short_description = ""
+
+    async def delete_my_commands(self) -> None:
+        self.default_commands_deleted = True
+
+    async def set_my_commands(self, commands, *, scope) -> None:
+        self.owner_commands = list(commands)
+        self.owner_scope = scope
+
+    async def set_chat_menu_button(self, *, chat_id, menu_button) -> None:
+        self.owner_menu = (chat_id, menu_button)
+
+    async def set_my_description(self, description) -> None:
+        self.description = description
+
+    async def set_my_short_description(self, short_description) -> None:
+        self.short_description = short_description
+
+    async def get_my_commands(self, *, scope=None):
+        return self.owner_commands if scope is not None else []
+
+    async def get_chat_menu_button(self, *, chat_id):
+        assert chat_id == self.owner_menu[0]
+        return self.owner_menu[1]
+
+    async def get_my_description(self):
+        return SimpleNamespace(description=self.description)
+
+    async def get_my_short_description(self):
+        return SimpleNamespace(short_description=self.short_description)
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):
