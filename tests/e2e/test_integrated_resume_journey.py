@@ -117,12 +117,22 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         assert inspection is not None and inspection.text.startswith("READY")
 
         detail = await boundary._detail_reply(str(record.session_id))
-        graceful = detail.keyboard[1][0].callback_data
+        graceful = next(
+            button.callback_data
+            for row in detail.keyboard
+            for button in row
+            if button.text == "Graceful"
+        )
         await boundary._stop_reply("graceful", graceful)
         assert (await service.list_sessions())[0].state is SessionState.PRESERVED
 
         detail = await boundary._detail_reply(str(record.session_id))
-        cleanup = detail.keyboard[1][0].callback_data
+        cleanup = next(
+            button.callback_data
+            for row in detail.keyboard
+            for button in row
+            if button.text == "Cleanup"
+        )
         await boundary._stop_reply("cleanup", cleanup)
         assert (await service.list_sessions())[0].state is SessionState.ENDED
     finally:

@@ -53,6 +53,7 @@ class LinuxLocalProcessCatalog:
         self._proc_root = proc_root
         self._claude_sessions_root = claude_sessions_root
         self._resolved: dict[ExternalSessionReference, _Evidence] = {}
+        self._external: dict[ExternalSessionReference, ResolvedExternalSession] = {}
 
     async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]:
         """Return only bounded summaries after a fresh read-only local scan."""
@@ -61,10 +62,7 @@ class LinuxLocalProcessCatalog:
     async def resolve_external_session(
         self, reference: ExternalSessionReference
     ) -> ResolvedExternalSession | None:
-        evidence = self._resolved.get(reference)
-        if evidence is None:
-            return None
-        return await asyncio.to_thread(self._resolve, reference, evidence)
+        return self._external.get(reference)
 
     async def is_still_running(self, reference: ExternalSessionReference) -> bool:
         evidence = self._resolved.get(reference)
@@ -80,6 +78,7 @@ class LinuxLocalProcessCatalog:
             )[:_MAX_PROCESSES]
         except OSError:
             self._resolved = {}
+            self._external = {}
             return ()
         for directory in process_directories:
             evidence = self._evidence(directory)
@@ -103,32 +102,9 @@ class LinuxLocalProcessCatalog:
             summary = ExternalSessionSummary(reference, profile_id, project_id, state)
             summaries.append(summary)
             resolved[reference] = evidence
+            self._external[reference] = ResolvedExternalSession(summary, evidence.pid, source)
         self._resolved = resolved
         return tuple(summaries)
-
-    def _resolve(
-        self, reference: ExternalSessionReference, evidence: _Evidence
-    ) -> ResolvedExternalSession | None:
-        if not self._matches(evidence):
-            return None
-        profile_id = _CURATED_EXECUTABLES.get(evidence.executable.name)
-        if profile_id is None:
-            return None
-        project_id = self._project_for(evidence.cwd)
-        directory = self._proc_root / str(evidence.pid)
-        source = (
-            self._claude_source(directory, project_id)
-            if profile_id == ProfileId("claude")
-            else None
-        )
-        state = (
-            ExternalSessionState.RUNNING_EXTERNALLY
-            if source is not None and evidence.terminal.startswith("/dev/")
-            else ExternalSessionState.NOT_SAFELY_ADOPTABLE
-        )
-        return ResolvedExternalSession(
-            ExternalSessionSummary(reference, profile_id, project_id, state), evidence.pid, source
-        )
 
     def _matches(self, expected: _Evidence) -> bool:
         actual = self._evidence(self._proc_root / str(expected.pid))

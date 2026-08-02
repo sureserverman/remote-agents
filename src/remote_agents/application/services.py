@@ -27,6 +27,7 @@ from remote_agents.domain.conversations import (
     ConversationSummary,
     ResolvedConversation,
 )
+from remote_agents.domain.external_sessions import ExternalSessionReference, ExternalSessionSummary
 from remote_agents.domain.models import (
     SessionDisplayIdentity,
     SessionId,
@@ -148,6 +149,14 @@ class SessionService:
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())
+
+    async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]:
+        return () if self._processes is None else await self._processes.list_external_sessions()
+
+    async def resolve_external_session(self, reference: ExternalSessionReference):
+        if self._processes is None:
+            return None
+        return await self._processes.resolve_external_session(reference)
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         """Promote only failed launches whose owned panes now show readiness evidence."""
