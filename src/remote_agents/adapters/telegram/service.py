@@ -126,6 +126,11 @@ class PrivateBotBoundary:
         )
         if state is None:
             await query.answer("This view has expired.")
+            try:
+                await query.edit_message_text(**(await self._home_reply()))
+            except BadRequest as error:
+                if "Message is not modified" not in str(error):
+                    raise
             return
         await query.answer()
         try:
@@ -166,7 +171,9 @@ class PrivateBotBoundary:
         if action in {"launch.search", "launch.label"}:
             self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
             text = "Send a project-name search." if action == "launch.search" else "Send a label."
-            return _reply_arguments(self._message(text))
+            return _reply_arguments(
+                self._message(text, ((Button("Cancel", self._callback("nav.home", "home")),),))
+            )
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
@@ -310,6 +317,7 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         buttons.append((Button("Search", self._callback("launch.search", "search")),))
+        buttons.append((Button("Back", self._callback("nav.home", "home")),))
         return self._message(
             f"<b>Projects {rendered.page}/{rendered.page_count}</b>\nSelect a project to launch.",
             tuple(buttons),
@@ -341,7 +349,7 @@ class PrivateBotBoundary:
         )
         return self._message(
             "<b>Select an agent</b>",
-            _button_rows(buttons),
+            _button_rows(buttons) + ((Button("Back", self._callback("launch.open", "projects")),),),
         )
 
     def _confirm_reply(self, entity_id: str) -> RenderedMessage:
@@ -357,6 +365,8 @@ class PrivateBotBoundary:
             (
                 (Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),
                 (Button("Add label", self._callback("launch.label", entity_id)),),
+                (Button("Back", self._callback("launch.project", project_id)),),
+                (Button("Cancel", self._callback("nav.home", "home")),),
             ),
         )
 

@@ -115,7 +115,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
     await boundary.callback(_trusted_update(callback=callback), None)
 
     assert callback.answers == [None, "This view has expired."]
-    assert len(callback.edits) == 1
+    assert callback.edits[1]["text"].startswith("<b>Remote agents</b>")
 
 
 @pytest.mark.asyncio
