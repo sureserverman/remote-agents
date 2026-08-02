@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway, TmuxRunner
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.terminal import TerminalObservation
 
@@ -59,11 +60,15 @@ class TmuxTerminal:
         *,
         startup_timeout: float,
         profile_factories: dict[ProfileId, Callable[[SessionId], LaunchProfile]] | None = None,
+        resume_profile_factories: (
+            dict[ProfileId, Callable[[SessionId, ProviderConversationId], LaunchProfile]] | None
+        ) = None,
     ) -> None:
         self._gateway = gateway
         self._project_paths = project_paths
         self._profiles = profiles
         self._profile_factories = profile_factories or {}
+        self._resume_profile_factories = resume_profile_factories or {}
         self._startup_timeout = startup_timeout
         self.invalidate_next_intent = False
         self._session_profiles: dict[SessionId, LaunchProfile] = {}
@@ -73,10 +78,41 @@ class TmuxTerminal:
     ) -> TerminalObservation:
         """Persist a resolved intent, launch it, then require observed pane liveness."""
         try:
-            cwd = self._project_paths[project_id].resolve(strict=True)
             profile = self._profiles.get(profile_id)
             if profile is None:
                 profile = self._profile_factories[profile_id](session_id)
+        except KeyError:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
+        return await self._launch_profile(session_id, project_id, profile_id, profile)
+
+    async def resume(
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        source_id: ProviderConversationId,
+    ) -> TerminalObservation:
+        """Launch only a curated, adapter-resolved resume profile on the owned tmux server."""
+        try:
+            profile = self._resume_profile_factories[profile_id](session_id, source_id)
+        except KeyError:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
+        return await self._launch_profile(session_id, project_id, profile_id, profile)
+
+    async def _launch_profile(
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        profile: LaunchProfile,
+    ) -> TerminalObservation:
+        """Persist and execute one already-curated profile through the fixed tmux runner."""
+        try:
+            cwd = self._project_paths[project_id].resolve(strict=True)
         except (KeyError, OSError):
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="invalid_intent"

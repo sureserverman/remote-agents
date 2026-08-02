@@ -6,7 +6,7 @@ import pytest
 
 from remote_agents.adapters.tmux.codec import PANE_FORMAT
 from remote_agents.adapters.tmux.gateway import TmuxGateway
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 
 class RecordingRunner:
@@ -53,3 +53,15 @@ async def test_gateway_refuses_forbidden_or_prefix_mutations_before_subprocess()
         await gateway.mutate("kill-session", "ra-prefix")
 
     assert runner.calls == []
+
+
+async def test_gateway_never_exposes_resume_arguments_to_the_tmux_command_boundary(
+    tmp_path,
+) -> None:
+    runner = RecordingRunner()
+    gateway = TmuxGateway("remote-agents", runner, intent_directory=tmp_path / "intents")
+    session_id = SessionId.new()
+
+    await gateway.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
+
+    assert all("--resume" not in argument for call in runner.calls for argument in call)

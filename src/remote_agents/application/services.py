@@ -86,8 +86,11 @@ class SessionService:
                 source_id,
             )
             await self._store.save(record)
-            observation = await self._terminal.launch(
-                session_id, command.project_id, command.profile_id
+            observation = await self._terminal.resume(
+                session_id,
+                command.project_id,
+                command.profile_id,
+                command.conversation.provider_conversation_id,
             )
             event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
             return await self._store.record_event(session_id, event)

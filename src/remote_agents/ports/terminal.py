@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 
@@ -21,6 +22,13 @@ class TerminalObservation:
 class TerminalPort(Protocol):
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+    ) -> TerminalObservation: ...
+    async def resume(
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        source_id: ProviderConversationId,
     ) -> TerminalObservation: ...
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None: ...
     async def confirm_ready(

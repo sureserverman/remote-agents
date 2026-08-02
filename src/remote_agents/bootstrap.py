@@ -28,7 +28,11 @@ from remote_agents.adapters.telegram.service import (
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
-from remote_agents.adapters.tmux.profiles import build_launch_profile, probe_profiles
+from remote_agents.adapters.tmux.profiles import (
+    build_launch_profile,
+    build_resume_profile,
+    probe_profiles,
+)
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.project_catalog import build_catalogue
@@ -145,6 +149,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         for result in compatibility
     }
     profile_factories = {}
+    resume_profile_factories = {}
     allowed_environment = {
         name: os.environ[name]
         for name in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
@@ -163,12 +168,16 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
             profile_factories[result.profile_id] = _profile_factory(
                 definition, executable, allowed_environment
             )
+            resume_profile_factories[result.profile_id] = _resume_profile_factory(
+                definition, executable, allowed_environment
+            )
     terminal = TmuxTerminal(
         TmuxGateway("remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory),
         project_paths,
         {},
         startup_timeout=20,
         profile_factories=profile_factories,
+        resume_profile_factories=resume_profile_factories,
     )
     secrets = load_secrets()
     return PrivateBotBoundary(
@@ -188,6 +197,12 @@ def _opaque_id(path: Path) -> str:
 
 def _profile_factory(definition, executable: Path, environment: dict[str, str]):
     return lambda session_id: build_launch_profile(definition, executable, session_id, environment)
+
+
+def _resume_profile_factory(definition, executable: Path, environment: dict[str, str]):
+    return lambda session_id, source_id: build_resume_profile(
+        definition, executable, session_id, source_id, environment
+    )
 
 
 def _resolve_profile_executable(executable: str, home: Path) -> Path | None:

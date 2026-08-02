@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.terminal import TerminalObservation
 
@@ -20,6 +21,17 @@ class FakeTerminal:
         observation = TerminalObservation(session_id, live=True, preserved=False)
         self._observations[session_id] = observation
         return observation
+
+    async def resume(
+        self,
+        session_id: SessionId,
+        project_id: ProjectId,
+        profile_id: ProfileId,
+        source_id: ProviderConversationId,
+    ) -> TerminalObservation:
+        """Model a trusted provider selection without accepting Telegram arguments."""
+        del source_id
+        return await self.launch(session_id, project_id, profile_id)
 
     async def inspect(self, session_id: SessionId) -> TerminalObservation | None:
         """Return the current fake terminal observation, if it remains managed."""
