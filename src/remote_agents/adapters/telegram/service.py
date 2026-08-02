@@ -101,7 +101,9 @@ class PrivateBotBoundary:
             projects = search_catalogue(self.catalogue, value)
             if not projects:
                 await update.effective_message.reply_text(
-                    **self._prompt_reply("launch.search", "No projects found. Try another name.")
+                    **self._guided_text_reply(
+                        "launch.search", "No projects found. Try another name."
+                    )
                 )
                 return
             self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
@@ -122,7 +124,9 @@ class PrivateBotBoundary:
             self._labels[entity_id] = _label(value)
         except ValueError:
             await update.effective_message.reply_text(
-                **self._prompt_reply("launch.label", "Use a visible label of up to 40 characters.")
+                **self._guided_text_reply(
+                    "launch.label", "Use a visible label of up to 40 characters."
+                )
             )
             return
         self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
@@ -189,7 +193,7 @@ class PrivateBotBoundary:
             return _reply_arguments(self._project_page_reply(entity_id))
         if action in {"launch.search", "launch.label"}:
             self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
-            return self._prompt_reply(action)
+            return self._guided_text_reply(action)
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
@@ -426,7 +430,7 @@ class PrivateBotBoundary:
             next=self._callback("nav.home", "home"),
         )
 
-    def _prompt_reply(self, action: str, text: str | None = None) -> dict[str, object]:
+    def _guided_text_reply(self, action: str, text: str | None = None) -> dict[str, object]:
         is_search = action == "launch.search"
         return {
             "text": text
