@@ -60,8 +60,11 @@ For safe stop behavior, choose Graceful, inspect preserved output, then Cleanup.
 requires a second confirmation and is for a live session that cannot exit gracefully. The bot
 never relays arbitrary commands, agent text, shell access, or approval responses.
 
-Resume uses only a server-resolved, content-free catalogue selection. Local Sessions never moves
-an external process: exit it locally, then confirm a new managed resume after liveness is rechecked.
+Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
+or provider resume description (Claude's stored last prompt and Codex's thread preview when no
+title is available); provider IDs and transcript output remain server-side. Local Sessions never
+moves an external process: exit it locally, then confirm a new managed resume after liveness is
+rechecked.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
 available only on a live managed Claude pane, requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.

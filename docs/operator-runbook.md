@@ -56,6 +56,10 @@ owner-only entry points from Telegram's command menu.
 9. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
    Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
    share the resulting Remote Control URL or a pane capture outside the owner workflow.
+10. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
+    provider title or resume description when supplied, never a provider ID. Open Local Sessions
+    and confirm running local Claude/Codex processes are listed as read-only evidence; only a
+    uniquely correlated Claude process may be adopted after it exits locally.
 
 For the auditable host-local profile trace, run:
 

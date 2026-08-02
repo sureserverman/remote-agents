@@ -786,7 +786,7 @@ class PrivateBotBoundary:
         buttons = tuple(
             (
                 Button(
-                    f"Resumable · {summary.updated_at:%Y-%m-%d %H:%M UTC}",
+                    _resume_button_text(summary.description, summary.updated_at),
                     self._callback("resume.select", str(summary.reference)),
                 ),
             )
@@ -830,7 +830,6 @@ class PrivateBotBoundary:
                 ),
             ),
         )
-
     async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
@@ -1065,6 +1064,12 @@ def _split_resume_page(value: str) -> tuple[str, str, int] | None:
     except ValueError:
         return None
     return (project_id, profile_id, page) if page > 0 else None
+
+
+def _resume_button_text(description: str | None, updated_at: datetime) -> str:
+    """Keep owner-approved titles useful without overflowing the compact keyboard."""
+    prefix = description[:48].rstrip() if description else "Resumable"
+    return f"{prefix} · {updated_at:%Y-%m-%d %H:%M UTC}"
 
 
 def _profile_name(profile_id: str) -> str:

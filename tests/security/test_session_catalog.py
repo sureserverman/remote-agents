@@ -3,7 +3,7 @@ from pathlib import Path
 from remote_agents.domain.conversations import ConversationSummary
 
 
-def test_session_catalogue_adapters_do_not_read_transcript_content_or_expose_source_ids() -> None:
+def test_session_catalogue_adapters_keep_provider_ids_out_of_selection_metadata() -> None:
     root = Path(__file__).parents[2]
     sources = "\n".join(
         (root / "src" / "remote_agents" / "adapters" / "agents" / name).read_text(encoding="utf-8")

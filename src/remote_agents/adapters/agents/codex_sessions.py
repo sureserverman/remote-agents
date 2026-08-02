@@ -17,6 +17,7 @@ from remote_agents.domain.conversations import (
     ProfileResumeCapability,
     ProviderConversationId,
     ResolvedConversation,
+    display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 
@@ -135,7 +136,12 @@ def _thread_entries(rows: list[object], project_id: ProjectId) -> list[ResolvedC
         digest = sha256(f"codex\0{project_id}\0{source.value}".encode()).hexdigest()
         reference = ConversationReference(f"c-{digest}")
         summary = ConversationSummary(
-            reference, ProfileId("codex"), project_id, ConversationState.RESUMABLE, updated_at
+            reference,
+            ProfileId("codex"),
+            project_id,
+            ConversationState.RESUMABLE,
+            updated_at,
+            display_description(row.get("name") or row.get("title") or row.get("preview")),
         )
         entries.append(ResolvedConversation(summary, source))
     return entries

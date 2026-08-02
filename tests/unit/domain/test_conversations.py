@@ -8,6 +8,7 @@ from remote_agents.domain.conversations import (
     ConversationState,
     ConversationSummary,
     ProviderConversationId,
+    display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 
@@ -40,3 +41,9 @@ def test_provider_conversation_id_is_bounded_and_cannot_contain_whitespace() -> 
 def test_catalogue_page_rejects_invalid_pagination() -> None:
     with pytest.raises(ValueError, match="page bounds"):
         ConversationCataloguePage((), 2, 1)
+
+
+def test_display_description_normalizes_and_bounds_an_owner_approved_title() -> None:
+    assert display_description("  Useful\n title ") == "Useful title"
+    assert display_description("x" * 121) == "x" * 120
+    assert display_description(42) is None

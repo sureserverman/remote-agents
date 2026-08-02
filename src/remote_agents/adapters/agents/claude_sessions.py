@@ -1,7 +1,8 @@
-"""Content-free Claude session-file catalogue; JSONL transcript bodies are never read."""
+"""Claude session catalogue using UUID paths, mtimes, and bounded resume descriptions."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -16,12 +17,13 @@ from remote_agents.domain.conversations import (
     ProfileResumeCapability,
     ProviderConversationId,
     ResolvedConversation,
+    display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 
 
 class ClaudeSessionCatalogue:
-    """List only UUID filenames, project binding, and mtime from Claude's documented store."""
+    """List UUID sessions with an owner-approved bounded resume description."""
 
     def __init__(
         self,
@@ -65,6 +67,7 @@ class ClaudeSessionCatalogue:
                         candidate_project_id,
                         ConversationState.RESUMABLE,
                         updated_at,
+                        _resume_description(transcript),
                     )
                     entries.append(ResolvedConversation(summary, source))
         except OSError:
@@ -113,6 +116,30 @@ def _uuid_filename(path: Path) -> ProviderConversationId | None:
 def _reference(project_id: ProjectId, source: ProviderConversationId) -> ConversationReference:
     digest = sha256(f"claude\0{project_id}\0{source.value}".encode()).hexdigest()
     return ConversationReference(f"c-{digest}")
+
+
+def _resume_description(transcript: Path) -> str | None:
+    """Read at most 256 records for a generated title or Claude's resume description."""
+    last_prompt: str | None = None
+    try:
+        with transcript.open(encoding="utf-8") as records:
+            for _ in range(256):
+                line = records.readline(16_385)
+                if not line:
+                    return last_prompt
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if record.get("type") == "ai-title":
+                    return display_description(record.get("aiTitle"))
+                if record.get("type") == "last-prompt":
+                    last_prompt = display_description(record.get("lastPrompt"))
+    except OSError:
+        return None
+    return last_prompt
 
 
 def _page(

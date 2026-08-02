@@ -19,6 +19,7 @@ from remote_agents.domain.conversations import (
     ProfileResumeCapability,
     ProviderConversationId,
     ResolvedConversation,
+    display_description,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 
@@ -122,6 +123,7 @@ def _entries(
             mapped_project,
             ConversationState.RESUMABLE,
             updated_at,
+            display_description(row.get("title") or row.get("name")),
         )
         entries.append(ResolvedConversation(summary, source))
     return entries

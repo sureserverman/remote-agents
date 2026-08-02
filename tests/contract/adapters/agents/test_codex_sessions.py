@@ -22,6 +22,7 @@ class FakeThreadClient:
         return {
             "data": [
                 {"id": "thread-two", "updatedAt": 1_754_130_800, "name": "secret"},
+                {"id": "thread-three", "updatedAt": 1_754_131_000, "preview": "visible preview"},
                 {"id": "bad source id", "updatedAt": 1_754_134_400},
                 {"id": "overflow", "updatedAt": 10**100},
             ]
@@ -40,12 +41,13 @@ async def test_codex_catalogue_feature_probes_thread_list_with_bounded_paginatio
         profile_id=ProfileId("codex"), project_id=project_id, page=1, page_size=20
     )
 
-    assert len(page.conversations) == 2
-    assert page.conversations[0].updated_at.isoformat() == "2025-08-02T10:33:20+00:00"
-    assert all(
-        "private" not in str(summary) and "secret" not in str(summary)
-        for summary in page.conversations
-    )
+    assert len(page.conversations) == 3
+    assert page.conversations[0].updated_at.isoformat() == "2025-08-02T10:36:40+00:00"
+    assert [summary.description for summary in page.conversations] == [
+        "visible preview",
+        "secret",
+        "private",
+    ]
     assert client.calls == [(tmp_path, None, 50), (tmp_path, "second-page", 50)]
     assert await catalogue.resolve_conversation(page.conversations[0].reference) is not None
 

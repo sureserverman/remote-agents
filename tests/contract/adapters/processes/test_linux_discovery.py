@@ -60,6 +60,46 @@ async def test_linux_discovery_fails_closed_when_provider_artifact_or_tty_is_mis
     assert sessions[0].state is ExternalSessionState.NOT_SAFELY_ADOPTABLE
 
 
+async def test_linux_discovery_recognizes_the_installed_claude_version_binary(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    _process(
+        proc_root,
+        41,
+        executable=".local/share/claude/versions/2.1.220",
+        cwd=project,
+        terminal="/dev/pts/9",
+    )
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions()
+
+    assert len(sessions) == 1
+    assert str(sessions[0].profile_id) == "claude"
+
+
+async def test_linux_discovery_prioritizes_recent_processes_within_its_bound(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    for pid in range(1, 1_025):
+        (proc_root / str(pid)).mkdir(parents=True)
+    _process(proc_root, 2_000, executable="codex", cwd=project, terminal="/dev/pts/10")
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions()
+
+    assert len(sessions) == 1
+    assert str(sessions[0].profile_id) == "codex"
+
+
 def _process(
     proc_root: Path,
     pid: int,
@@ -72,6 +112,7 @@ def _process(
     directory = proc_root / str(pid)
     (directory / "fd").mkdir(parents=True)
     executable_path = proc_root.parent / executable
+    executable_path.parent.mkdir(parents=True, exist_ok=True)
     executable_path.touch()
     (directory / "exe").symlink_to(executable_path)
     (directory / "cwd").symlink_to(cwd)

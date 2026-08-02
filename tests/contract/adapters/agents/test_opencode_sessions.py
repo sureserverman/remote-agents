@@ -31,7 +31,7 @@ async def test_opencode_catalogue_accepts_only_json_entries_bound_to_a_known_pro
     )
 
     assert len(page.conversations) == 1
-    assert "private" not in str(page.conversations[0])
+    assert page.conversations[0].description == "private"
     assert runner.limits == [250]
     assert await catalogue.resolve_conversation(page.conversations[0].reference) is not None
 

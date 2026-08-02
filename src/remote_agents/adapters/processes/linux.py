@@ -27,6 +27,10 @@ _CURATED_EXECUTABLES = {
     "opencode": ProfileId("opencode"),
     "cursor-agent": ProfileId("cursor-agent"),
 }
+_CLAUDE_EXECUTABLE_PATH_MARKERS = (
+    "/.local/share/claude/versions/",
+    "/anthropic.claude-code-",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,11 +74,13 @@ class LinuxLocalProcessCatalog:
 
     def _scan(self) -> tuple[ExternalSessionSummary, ...]:
         resolved: dict[ExternalSessionReference, _Evidence] = {}
+        external: dict[ExternalSessionReference, ResolvedExternalSession] = {}
         summaries: list[ExternalSessionSummary] = []
         try:
             process_directories = sorted(
                 (path for path in self._proc_root.iterdir() if path.name.isdecimal()),
                 key=lambda path: int(path.name),
+                reverse=True,
             )[:_MAX_PROCESSES]
         except OSError:
             self._resolved = {}
@@ -84,7 +90,7 @@ class LinuxLocalProcessCatalog:
             evidence = self._evidence(directory)
             if evidence is None:
                 continue
-            profile_id = _CURATED_EXECUTABLES.get(evidence.executable.name)
+            profile_id = _provider_for(evidence.executable)
             if profile_id is None:
                 continue
             project_id = self._project_for(evidence.cwd)
@@ -102,9 +108,10 @@ class LinuxLocalProcessCatalog:
             summary = ExternalSessionSummary(reference, profile_id, project_id, state)
             summaries.append(summary)
             resolved[reference] = evidence
-            self._external[reference] = ResolvedExternalSession(summary, evidence.pid, source)
+            external[reference] = ResolvedExternalSession(summary, evidence.pid, source)
         self._resolved = resolved
-        return tuple(summaries)
+        self._external = external
+        return tuple(reversed(summaries))
 
     def _matches(self, expected: _Evidence) -> bool:
         actual = self._evidence(self._proc_root / str(expected.pid))
@@ -161,6 +168,15 @@ def _reference(
         f"{profile_id}\0{evidence.pid}\0{evidence.executable}\0{evidence.cwd}\0{source}".encode()
     ).hexdigest()
     return ExternalSessionReference(f"p-{digest}")
+
+
+def _provider_for(executable: Path) -> ProfileId | None:
+    direct = _CURATED_EXECUTABLES.get(executable.name)
+    if direct is not None:
+        return direct
+    if any(marker in str(executable) for marker in _CLAUDE_EXECUTABLE_PATH_MARKERS):
+        return ProfileId("claude")
+    return None
 
 
 def _claude_project_directory(path: Path) -> str:

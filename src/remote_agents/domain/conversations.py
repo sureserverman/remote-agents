@@ -1,4 +1,4 @@
-"""Typed, content-free records for resumable provider conversations."""
+"""Typed, minimally disclosed records for resumable provider conversations."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from enum import StrEnum
 from string import ascii_lowercase, digits
 
 from remote_agents.domain.models import ProfileId, ProjectId
+
+_MAX_DISPLAY_DESCRIPTION = 120
 
 
 class ConversationState(StrEnum):
@@ -52,13 +54,34 @@ class ProviderConversationId:
 
 @dataclass(frozen=True, slots=True)
 class ConversationSummary:
-    """Metadata safe to present; it intentionally excludes provider content and IDs."""
+    """Safe selection metadata; provider IDs remain server-side."""
 
     reference: ConversationReference
     profile_id: ProfileId
     project_id: ProjectId | None
     state: ConversationState
     updated_at: datetime
+    description: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.description is None:
+            return
+        if (
+            not self.description
+            or len(self.description) > _MAX_DISPLAY_DESCRIPTION
+            or any(not character.isprintable() for character in self.description)
+        ):
+            raise ValueError("conversation description must be bounded printable text")
+
+
+def display_description(value: object) -> str | None:
+    """Normalize an owner-approved provider title to a bounded single line."""
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    if not normalized:
+        return None
+    return normalized[:_MAX_DISPLAY_DESCRIPTION]
 
 
 @dataclass(frozen=True, slots=True)
