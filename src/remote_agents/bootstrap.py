@@ -21,6 +21,7 @@ from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeSessionCatalogue,
 )
 from remote_agents.adapters.processes.linux import LinuxLocalProcessCatalog
+from remote_agents.adapters.processes.linux_control import LinuxExternalProcessController
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import (
@@ -210,6 +211,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
             SQLiteSessionStore(connection),
             terminal,
             processes=LinuxLocalProcessCatalog(project_paths),
+            process_controller=LinuxExternalProcessController(),
         ),
         conversations=conversations,
         capture=terminal.capture,

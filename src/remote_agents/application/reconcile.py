@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from remote_agents.domain.conversations import ProviderConversationId
+from remote_agents.domain.external_sessions import ExternalSessionReference
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -144,6 +145,7 @@ class SessionLocks:
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}
         self._conversation_locks: dict[tuple[ProfileId, ProviderConversationId], asyncio.Lock] = {}
+        self._external_locks: dict[ExternalSessionReference, asyncio.Lock] = {}
         self._active_operations = 0
         self._accepting_operations = True
         self._drained = asyncio.Event()
@@ -156,6 +158,9 @@ class SessionLocks:
         self, profile_id: ProfileId, source_id: ProviderConversationId
     ) -> asyncio.Lock:
         return self._conversation_locks.setdefault((profile_id, source_id), asyncio.Lock())
+
+    def for_external(self, reference: ExternalSessionReference) -> asyncio.Lock:
+        return self._external_locks.setdefault(reference, asyncio.Lock())
 
     @asynccontextmanager
     async def operation(self):

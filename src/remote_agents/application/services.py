@@ -8,6 +8,7 @@ from hashlib import sha256
 from remote_agents.application.commands import (
     AdoptionCommand,
     CleanupCommand,
+    ExternalStopCommand,
     ForceStopCommand,
     GracefulStopCommand,
     InspectQuery,
@@ -28,7 +29,12 @@ from remote_agents.domain.conversations import (
     ConversationSummary,
     ResolvedConversation,
 )
-from remote_agents.domain.external_sessions import ExternalSessionReference, ExternalSessionSummary
+from remote_agents.domain.external_sessions import (
+    ExternalSessionReference,
+    ExternalSessionSummary,
+    ExternalStopOutcome,
+)
+from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -38,6 +44,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
+from remote_agents.ports.external_process_control import ExternalProcessController
 from remote_agents.ports.local_processes import LocalProcessCatalog
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
@@ -52,11 +59,13 @@ class SessionService:
         terminal: TerminalPort,
         *,
         processes: LocalProcessCatalog | None = None,
+        process_controller: ExternalProcessController | None = None,
         locks: SessionLocks | None = None,
     ) -> None:
         self._store = store
         self._terminal = terminal
         self._processes = processes
+        self._process_controller = process_controller
         self._locks = locks or SessionLocks()
 
     async def launch(self, command: LaunchCommand) -> SessionRecord:
@@ -117,6 +126,43 @@ class SessionService:
                     command.idempotency_key,
                 )
             )
+
+    async def terminate_and_resume(self, command: ExternalStopCommand) -> SessionRecord:
+        if self._processes is None or self._process_controller is None:
+            raise ExternalSessionUnavailableError("external control is unavailable")
+        external = command.external
+        identity = external.identity
+        assert identity is not None
+        async with self._locks.operation(), self._locks.for_external(external.summary.reference):
+            async with self._locks.for_conversation(
+                command.conversation.summary.profile_id,
+                command.conversation.provider_conversation_id,
+            ):
+                if not await self._store.claim_idempotency_key(command.idempotency_key):
+                    raise DuplicateCommandError("external handoff callback was already handled")
+                intent = HandoffIntent(
+                    f"h-{command.idempotency_key}",
+                    command.conversation.summary.profile_id,
+                    command.conversation.summary.project_id,
+                    command.conversation.provider_conversation_id.value,
+                    identity,
+                    HandoffState.REQUESTED,
+                )
+                await self._store.save_handoff_intent(intent)
+                result = await self._process_controller.terminate(identity)
+                if result.outcome is not ExternalStopOutcome.EXITED:
+                    raise ExternalSessionUnavailableError("external process did not exit")
+                await self._store.update_handoff_state(intent.intent_id, HandoffState.STOP_SENT)
+                resumed = await self._resume_locked(
+                    ResumeCommand(
+                        command.conversation.summary.project_id,
+                        command.conversation.summary.profile_id,
+                        command.conversation,
+                        f"resume-{command.idempotency_key}",
+                    )
+                )
+                await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
+                return resumed
 
     async def _resume_locked(self, command: ResumeCommand) -> SessionRecord:
         """Create or return a durable resume identity while its conversation lock is held."""
