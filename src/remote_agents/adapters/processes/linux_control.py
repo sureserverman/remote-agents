@@ -16,6 +16,8 @@ from remote_agents.domain.external_sessions import (
     ExternalStopResult,
 )
 
+_CURATED_CONTROLLABLE_PROCESS_NAMES = frozenset({"claude", "codex", "opencode"})
+
 
 class LinuxExternalProcessController:
     """Revalidate one same-UID process and send only SIGTERM through a stable identity."""
@@ -26,10 +28,12 @@ class LinuxExternalProcessController:
         proc_root: Path = Path("/proc"),
         wait_timeout_seconds: float = 5.0,
         effective_uid: int | None = None,
+        curated_process_names: frozenset[str] = _CURATED_CONTROLLABLE_PROCESS_NAMES,
     ) -> None:
         self._proc_root = proc_root
         self._wait_timeout_seconds = wait_timeout_seconds
         self._effective_uid = os.geteuid() if effective_uid is None else effective_uid
+        self._curated_process_names = curated_process_names
 
     @property
     def capability(self) -> ExternalProcessControlCapability:
@@ -45,6 +49,8 @@ class LinuxExternalProcessController:
             name = process.name()
         except (psutil.AccessDenied, psutil.NoSuchProcess):
             return None
+        if name not in self._curated_process_names:
+            return None
         start_ticks = _start_ticks(self._proc_root / str(pid))
         if start_ticks is None:
             return None
@@ -57,10 +63,10 @@ class LinuxExternalProcessController:
         return await asyncio.to_thread(self._terminate, identity)
 
     def _terminate(self, identity: ExternalProcessIdentity) -> ExternalStopResult:
-        if not self._matches(identity):
-            return ExternalStopResult(ExternalStopOutcome.IDENTITY_CHANGED)
         try:
             process = psutil.Process(identity.pid)
+            if not self._matches(identity, process):
+                return ExternalStopResult(ExternalStopOutcome.IDENTITY_CHANGED)
             if _pidfd_supported():
                 self._terminate_with_pidfd(identity, process)
             else:
@@ -84,7 +90,7 @@ class LinuxExternalProcessController:
         send_signal = signal.pidfd_send_signal
         pidfd = pidfd_open(identity.pid, 0)
         try:
-            if not self._matches(identity):
+            if not self._matches(identity, process):
                 raise ProcessLookupError(identity.pid)
             send_signal(pidfd, signal.SIGTERM, None, 0)
             # Keep psutil's PID-plus-create-time wait behaviour as the bounded observer.
@@ -94,11 +100,14 @@ class LinuxExternalProcessController:
         finally:
             os.close(pidfd)
 
-    def _matches(self, identity: ExternalProcessIdentity) -> bool:
-        if identity.effective_uid != self._effective_uid:
+    def _matches(self, identity: ExternalProcessIdentity, process: psutil.Process) -> bool:
+        if (
+            identity.effective_uid != self._effective_uid
+            or identity.process_name not in self._curated_process_names
+            or not process.is_running()
+        ):
             return False
         try:
-            process = psutil.Process(identity.pid)
             return (
                 process.uids().effective == identity.effective_uid
                 and process.name() == identity.process_name

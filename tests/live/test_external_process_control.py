@@ -40,7 +40,9 @@ async def test_external_controller_terminates_only_a_transient_restricted_helper
                 text=True,
             ).stdout.strip()
         )
-        controller = LinuxExternalProcessController(wait_timeout_seconds=5)
+        controller = LinuxExternalProcessController(
+            wait_timeout_seconds=5, curated_process_names=frozenset({"sleep"})
+        )
         identity = controller.identify(pid)
         assert identity is not None
 
