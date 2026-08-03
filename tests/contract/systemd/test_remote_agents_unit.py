@@ -16,6 +16,8 @@ def test_user_unit_has_private_paths_bounded_restart_and_tmux_survival() -> None
     assert "TimeoutStopSec=30s" in contents
     assert "KillMode=process" in contents
     assert "UMask=0077" in contents
+    assert "NoNewPrivileges=yes" in contents
+    assert "RestrictSUIDSGID=yes" in contents
     assert "ProtectHome=" not in contents
     assert "PrivateTmp=" not in contents
 
