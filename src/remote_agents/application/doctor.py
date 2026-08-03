@@ -2,6 +2,7 @@
 
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
+from remote_agents.domain.external_sessions import ExternalProcessControlCapability
 from remote_agents.domain.profiles import ProfileCompatibility
 
 
@@ -50,6 +51,19 @@ def profile_doctor(
             }
             for profile in profiles
         ]
+    }
+
+
+def external_process_control_doctor(
+    capability: ExternalProcessControlCapability,
+) -> dict[str, object]:
+    """Render only feature-level evidence for the fixed external stop boundary."""
+    return {
+        "external_process_control": {
+            "available": capability.backend is not None,
+            "backend": capability.backend,
+            "reason": None if capability.backend is not None else "identity_controller_unavailable",
+        }
     }
 
 
