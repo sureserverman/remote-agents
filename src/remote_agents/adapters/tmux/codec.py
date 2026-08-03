@@ -72,7 +72,7 @@ def parse_pane(line: str) -> ManagedPane:
     ) = fields
     if schema != _SCHEMA_VERSION:
         raise ValueError("tmux management schema is missing or unsupported")
-    if any(not field for index, field in enumerate(fields) if index != 4):
+    if any(not field for index, field in enumerate(fields) if index not in {4, 5}):
         raise ValueError("tmux pane format has missing fields")
     session_id = SessionId.parse(raw_id)
     if name != f"ra-{session_id}":

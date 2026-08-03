@@ -22,6 +22,8 @@ from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, 
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import main
+from remote_agents.domain.external_sessions import ExternalProcessIdentity
+from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.terminal import TerminalObservation
 
@@ -101,6 +103,24 @@ async def test_corrupt_database_is_preserved_before_verified_backup_restore(tmp_
     SQLiteSessionStore(open_database(destination))
 
 
+async def test_handoff_intent_survives_a_store_reopen_for_recovery(tmp_path: Path) -> None:
+    path = tmp_path / "sessions.sqlite3"
+    store = SQLiteSessionStore(open_database(path))
+    intent = HandoffIntent(
+        "h-recovery",
+        ProfileId("claude"),
+        ProjectId("opaque-editor"),
+        "source-1",
+        ExternalProcessIdentity(42, 9, 1000, "claude"),
+        HandoffState.STOP_SENT,
+    )
+    await store.save_handoff_intent(intent)
+
+    recovered = await SQLiteSessionStore(open_database(path)).get_handoff_intent(intent.intent_id)
+
+    assert recovered == intent
+
+
 def test_restore_command_uses_the_default_backup_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -162,7 +182,7 @@ def _terminal(tmp_path: Path) -> tuple[TmuxTerminal, TmuxGateway]:
                     "READY",
                 )
             },
-            startup_timeout=0.3,
+            startup_timeout=1,
         ),
         gateway,
     )
