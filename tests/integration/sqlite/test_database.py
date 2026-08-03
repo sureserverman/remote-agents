@@ -37,11 +37,17 @@ def record() -> SessionRecord:
 def test_clean_database_creates_versioned_projection_and_event_tables(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "sessions.sqlite3")
 
-    assert current_version(connection) == 3
+    assert current_version(connection) == 4
     names = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
-    assert {"sessions", "session_events", "idempotency_claims", "schema_version"} <= names
+    assert {
+        "sessions",
+        "session_events",
+        "idempotency_claims",
+        "handoff_intents",
+        "schema_version",
+    } <= names
 
 
 def test_database_health_rejects_incomplete_schema_version_table(tmp_path: Path) -> None:
@@ -59,7 +65,7 @@ def test_upgrade_creates_backup_before_new_migration(tmp_path: Path) -> None:
 
     connection = open_database(path)
 
-    assert current_version(connection) == 3
+    assert current_version(connection) == 4
     assert path.with_suffix(".sqlite3.bak").exists()
 
 
@@ -69,10 +75,10 @@ def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
     with pytest.raises(sqlite3.OperationalError):
         open_database(
             tmp_path / "sessions.sqlite3",
-            migrations=((1, ""), (2, ""), (3, ""), (4, "CREATE TABLE broken (")),
+            migrations=((1, ""), (2, ""), (3, ""), (4, ""), (5, "CREATE TABLE broken (")),
         )
 
-    assert current_version(connection) == 3
+    assert current_version(connection) == 4
 
 
 async def test_store_uses_bound_values_append_only_events_and_unique_claims(tmp_path: Path) -> None:
