@@ -119,4 +119,4 @@ async def test_local_sessions_callback_renders_the_discovered_external_rows() ->
 
     assert query.answer_calls == [None]
     assert query.edited is not None
-    assert query.edited["text"].startswith("<b>Local Sessions</b>")
+    assert query.edited["text"].startswith("<b>Local Sessions</b>\nFound 1 external agent process")

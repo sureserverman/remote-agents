@@ -30,4 +30,5 @@ async def test_telegram_adoption_fake_backend_shows_running_external_state() -> 
     reply = await boundary._local_sessions_reply()
 
     assert "Local Sessions" in reply.text
+    assert "Found 1 external agent process" in reply.text
     assert reply.keyboard[0][0].text == "Claude · running_externally"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -67,6 +68,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
+_LOG = logging.getLogger(__name__)
 _OWNER_COMMANDS = (
     BotCommand("start", "Open the status dashboard"),
     BotCommand("launch", "Launch a curated agent"),
@@ -380,8 +382,10 @@ class PrivateBotBoundary:
     async def _local_sessions_reply(self) -> RenderedMessage:
         list_external = getattr(self.launcher, "list_external_sessions", None)
         if list_external is None:
+            _LOG.warning("Local Sessions is unavailable because the launcher lacks discovery")
             return self._message("Local session discovery is unavailable.")
         sessions = await list_external()
+        _LOG.warning("Local Sessions rendered %d external-process rows", len(sessions))
         rows = tuple(
             (
                 Button(
@@ -392,7 +396,8 @@ class PrivateBotBoundary:
             for item in sessions
         )
         return self._message(
-            "<b>Local Sessions</b>\nExternal sessions are read-only evidence.",
+            f"<b>Local Sessions</b>\nFound {len(sessions)} external agent process(es). "
+            "External sessions are read-only evidence.",
             rows or ((Button("No local sessions", self._callback("nav.home", "home")),),),
         )
 
