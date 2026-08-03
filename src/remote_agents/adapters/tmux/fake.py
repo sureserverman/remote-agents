@@ -15,6 +15,9 @@ class FakeTerminal:
     def __init__(self) -> None:
         self._observations: dict[SessionId, TerminalObservation] = {}
 
+    async def managed_process_roots(self) -> tuple[int, ...]:
+        return ()
+
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
     ) -> TerminalObservation:

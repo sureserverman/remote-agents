@@ -21,6 +21,7 @@ class TerminalObservation:
 
 
 class TerminalPort(Protocol):
+    async def managed_process_roots(self) -> tuple[int, ...]: ...
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
     ) -> TerminalObservation: ...

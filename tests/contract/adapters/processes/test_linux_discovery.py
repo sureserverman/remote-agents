@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from remote_agents.adapters.processes.linux import LinuxLocalProcessCatalog
-from remote_agents.domain.external_sessions import ExternalSessionState
+from remote_agents.domain.external_sessions import ExternalSessionState, ExternalStopEligibility
 from remote_agents.domain.models import ProjectId
 
 
@@ -41,6 +41,35 @@ async def test_linux_discovery_marks_only_a_tty_bound_claude_artifact_as_running
     assert resolved is not None
     assert resolved.provider_conversation_id is not None
     assert resolved.provider_conversation_id.value == "01234567-89ab-cdef-0123-456789abcdef"
+
+
+async def test_linux_discovery_excludes_a_descendant_of_a_managed_pane_root(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    _process(proc_root, 100, executable="bash", cwd=project, terminal="/dev/pts/1")
+    _process(proc_root, 101, executable="claude", cwd=project, terminal="/dev/pts/2", ppid=100)
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions(excluded_process_roots=(100,))
+
+    assert sessions == ()
+
+
+async def test_linux_discovery_marks_an_uncorrelated_curated_process_selection_required(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    _process(proc_root, 41, executable="codex", cwd=project, terminal="/dev/pts/10")
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions()
+
+    assert sessions[0].stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED
 
 
 async def test_linux_discovery_fails_closed_when_provider_artifact_or_tty_is_missing(
@@ -147,6 +176,7 @@ def _process(
     cwd: Path,
     terminal: str,
     artifact: Path | None = None,
+    ppid: int = 1,
 ) -> None:
     directory = proc_root / str(pid)
     (directory / "fd").mkdir(parents=True)
@@ -156,5 +186,8 @@ def _process(
     (directory / "exe").symlink_to(executable_path)
     (directory / "cwd").symlink_to(cwd)
     (directory / "fd" / "0").symlink_to(terminal)
+    (directory / "stat").write_text(
+        f"{pid} ({executable}) S {ppid} " + "0 " * 17 + "9\n", encoding="utf-8"
+    )
     if artifact is not None:
         (directory / "fd" / "4").symlink_to(artifact)

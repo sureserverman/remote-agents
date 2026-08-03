@@ -12,9 +12,11 @@ from uuid import UUID
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.external_sessions import (
+    ExternalProcessIdentity,
     ExternalSessionReference,
     ExternalSessionState,
     ExternalSessionSummary,
+    ExternalStopEligibility,
     ResolvedExternalSession,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
@@ -40,6 +42,8 @@ class _Evidence:
     cwd: Path | None
     terminal: str | None
     process_name: str | None
+    start_ticks: int | None
+    effective_uid: int | None
 
 
 class LinuxLocalProcessCatalog:
@@ -60,9 +64,12 @@ class LinuxLocalProcessCatalog:
         self._resolved: dict[ExternalSessionReference, _Evidence] = {}
         self._external: dict[ExternalSessionReference, ResolvedExternalSession] = {}
 
-    async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]:
+    async def list_external_sessions(
+        self, *, excluded_process_roots: tuple[int, ...] = ()
+    ) -> tuple[ExternalSessionSummary, ...]:
         """Return only bounded summaries after a fresh read-only local scan."""
-        return await asyncio.to_thread(self._scan)
+        roots = frozenset((*excluded_process_roots, os.getpid()))
+        return await asyncio.to_thread(self._scan, roots)
 
     async def resolve_external_session(
         self, reference: ExternalSessionReference
@@ -73,7 +80,7 @@ class LinuxLocalProcessCatalog:
         evidence = self._resolved.get(reference)
         return evidence is not None and await asyncio.to_thread(self._matches, evidence)
 
-    def _scan(self) -> tuple[ExternalSessionSummary, ...]:
+    def _scan(self, excluded_process_roots: frozenset[int]) -> tuple[ExternalSessionSummary, ...]:
         resolved: dict[ExternalSessionReference, _Evidence] = {}
         external: dict[ExternalSessionReference, ResolvedExternalSession] = {}
         summaries: list[ExternalSessionSummary] = []
@@ -91,6 +98,8 @@ class LinuxLocalProcessCatalog:
             evidence = self._evidence(directory)
             if evidence is None:
                 continue
+            if self._is_excluded(evidence.pid, excluded_process_roots):
+                continue
             profile_id = _provider_for(evidence.executable, evidence.process_name)
             if profile_id is None:
                 continue
@@ -107,11 +116,13 @@ class LinuxLocalProcessCatalog:
                 and evidence.terminal.startswith("/dev/")
                 else ExternalSessionState.NOT_SAFELY_ADOPTABLE
             )
+            identity = self._identity(evidence)
+            eligibility = _eligibility(profile_id, source, identity)
             reference = _reference(profile_id, evidence, source)
-            summary = ExternalSessionSummary(reference, profile_id, project_id, state)
+            summary = ExternalSessionSummary(reference, profile_id, project_id, state, eligibility)
             summaries.append(summary)
             resolved[reference] = evidence
-            external[reference] = ResolvedExternalSession(summary, evidence.pid, source)
+            external[reference] = ResolvedExternalSession(summary, evidence.pid, source, identity)
         self._resolved = resolved
         self._external = external
         return tuple(reversed(summaries))
@@ -137,7 +148,44 @@ class LinuxLocalProcessCatalog:
             terminal = os.readlink(directory / "fd" / "0")
         except OSError:
             terminal = None
-        return _Evidence(pid, executable, cwd, terminal, _process_name(directory))
+        try:
+            effective_uid = directory.stat().st_uid
+        except OSError:
+            effective_uid = None
+        return _Evidence(
+            pid,
+            executable,
+            cwd,
+            terminal,
+            _process_name(directory),
+            _start_ticks(directory),
+            effective_uid,
+        )
+
+    def _identity(self, evidence: _Evidence) -> ExternalProcessIdentity | None:
+        if evidence.start_ticks is None or evidence.effective_uid != os.geteuid():
+            return None
+        process_name = evidence.process_name or (
+            evidence.executable.name if evidence.executable else ""
+        )
+        try:
+            return ExternalProcessIdentity(
+                evidence.pid, evidence.start_ticks, evidence.effective_uid, process_name
+            )
+        except ValueError:
+            return None
+
+    def _is_excluded(self, pid: int, roots: frozenset[int]) -> bool:
+        """Fail closed when bounded parent evidence reaches the service or a managed pane root."""
+        current = pid
+        for _ in range(64):
+            if current in roots:
+                return True
+            parent = _parent_pid(self._proc_root / str(current))
+            if parent is None or parent == current:
+                return False
+            current = parent
+        return True
 
     def _project_for(self, cwd: Path | None) -> ProjectId | None:
         if cwd is None:
@@ -201,6 +249,36 @@ def _process_name(directory: Path) -> str | None:
     except OSError:
         return None
     return value if value in _CURATED_EXECUTABLES else None
+
+
+def _start_ticks(directory: Path) -> int | None:
+    try:
+        fields = (directory / "stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        return int(fields[19])
+    except (IndexError, OSError, ValueError):
+        return None
+
+
+def _parent_pid(directory: Path) -> int | None:
+    try:
+        fields = (directory / "stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        return int(fields[1])
+    except (IndexError, OSError, ValueError):
+        return None
+
+
+def _eligibility(
+    profile_id: ProfileId,
+    source: ProviderConversationId | None,
+    identity: ExternalProcessIdentity | None,
+) -> ExternalStopEligibility:
+    if identity is None or profile_id == ProfileId("cursor-agent"):
+        return ExternalStopEligibility.READ_ONLY
+    return (
+        ExternalStopEligibility.VERIFIED_SOURCE
+        if source is not None
+        else ExternalStopEligibility.SELECTION_REQUIRED
+    )
 
 
 def _claude_project_directory(path: Path) -> str:

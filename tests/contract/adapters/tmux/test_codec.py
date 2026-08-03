@@ -13,6 +13,7 @@ def pane_line(*, schema: str = "1", session_id: SessionId | None = None) -> str:
             f"ra-{managed_id}",
             "$12",
             "%3",
+            "100",
             "0",
             "0",
             schema,
@@ -48,7 +49,7 @@ def test_codec_rejects_untrusted_name_or_invalid_identifier() -> None:
         parse_pane("|".join(fields))
 
     fields = pane_line().split("|")
-    fields[6] = "not-a-uuid"
+    fields[7] = "not-a-uuid"
     with pytest.raises(ValueError, match="session ID"):
         parse_pane("|".join(fields))
 

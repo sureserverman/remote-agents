@@ -13,6 +13,7 @@ PANE_FORMAT = _DELIMITER.join(
         "#{session_name}",
         "#{session_id}",
         "#{pane_id}",
+        "#{pane_pid}",
         "#{pane_dead}",
         "#{pane_dead_status}",
         "#{@remote_agents_schema}",
@@ -31,6 +32,7 @@ class ManagedPane:
     session_id: SessionId
     project_id: ProjectId
     profile_id: ProfileId
+    process_id: int
     live: bool
     preserved: bool
 
@@ -54,11 +56,20 @@ def attach_command(session_id: SessionId) -> str:
 def parse_pane(line: str) -> ManagedPane:
     """Decode one managed tmux pane or refuse ambiguous and untrusted metadata."""
     fields = line.rstrip("\n").split(_DELIMITER)
-    if len(fields) != 9:
+    if len(fields) != 10:
         raise ValueError("tmux pane format has missing fields")
-    name, _tmux_session_id, _pane_id, pane_dead, _dead_status, schema, raw_id, project, profile = (
-        fields
-    )
+    (
+        name,
+        _tmux_session_id,
+        _pane_id,
+        raw_pid,
+        pane_dead,
+        _dead_status,
+        schema,
+        raw_id,
+        project,
+        profile,
+    ) = fields
     if schema != _SCHEMA_VERSION:
         raise ValueError("tmux management schema is missing or unsupported")
     if any(not field for index, field in enumerate(fields) if index != 4):
@@ -68,11 +79,18 @@ def parse_pane(line: str) -> ManagedPane:
         raise ValueError("managed session name does not match its opaque identifier")
     if pane_dead not in {"0", "1"}:
         raise ValueError("tmux pane-dead field is invalid")
+    try:
+        process_id = int(raw_pid)
+    except ValueError as error:
+        raise ValueError("tmux pane PID is invalid") from error
+    if process_id <= 1:
+        raise ValueError("tmux pane PID is invalid")
     return ManagedPane(
         name,
         session_id,
         ProjectId(project),
         ProfileId(profile),
+        process_id,
         live=pane_dead == "0",
         preserved=pane_dead == "1",
     )

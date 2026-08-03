@@ -14,7 +14,9 @@ from remote_agents.domain.external_sessions import (
 class LocalProcessCatalog(Protocol):
     """Exposes bounded, content-free evidence without any unmanaged-process control."""
 
-    async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]: ...
+    async def list_external_sessions(
+        self, *, excluded_process_roots: tuple[int, ...] = ()
+    ) -> tuple[ExternalSessionSummary, ...]: ...
     async def resolve_external_session(
         self, reference: ExternalSessionReference
     ) -> ResolvedExternalSession | None: ...

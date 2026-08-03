@@ -305,6 +305,14 @@ class TmuxTerminal:
             for pane in inventory.managed
         )
 
+    async def managed_process_roots(self) -> tuple[int, ...]:
+        """Expose trusted dedicated-pane roots solely for external-process exclusion."""
+        try:
+            inventory = await self._gateway.inventory()
+        except RuntimeError:
+            return ()
+        return tuple(pane.process_id for pane in inventory.managed)
+
 
 def _remote_control_state(capture: str) -> RemoteControlState:
     return RemoteControlState(classify_remote_control_capture(capture).value)

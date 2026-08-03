@@ -154,7 +154,11 @@ class SessionService:
         return tuple(await self._store.list())
 
     async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]:
-        return () if self._processes is None else await self._processes.list_external_sessions()
+        if self._processes is None:
+            return ()
+        return await self._processes.list_external_sessions(
+            excluded_process_roots=await self._terminal.managed_process_roots()
+        )
 
     async def resolve_external_session(self, reference: ExternalSessionReference):
         if self._processes is None:

@@ -23,6 +23,7 @@ class Gateway:
                     self.session_id,
                     ProjectId("opaque-editor"),
                     ProfileId("claude"),
+                    100,
                     True,
                     False,
                 ),

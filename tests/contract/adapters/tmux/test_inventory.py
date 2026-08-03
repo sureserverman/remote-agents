@@ -21,7 +21,18 @@ class RecordingRunner:
 
 def pane_line(session_id: SessionId, *, schema: str = "1") -> str:
     return "|".join(
-        (f"ra-{session_id}", "$1", "%1", "0", "0", schema, str(session_id), "opaque-editor", "claude")
+        (
+            f"ra-{session_id}",
+            "$1",
+            "%1",
+            "100",
+            "0",
+            "0",
+            schema,
+            str(session_id),
+            "opaque-editor",
+            "claude",
+        )
     )
 
 
@@ -33,6 +44,7 @@ async def test_inventory_uses_only_the_configured_socket_and_quarantines_bad_tag
     inventory = await gateway.inventory()
 
     assert inventory.managed[0].session_id == session_id
+    assert inventory.managed[0].process_id == 100
     assert inventory.orphans[0].reason == "tmux management schema is missing or unsupported"
     assert runner.calls == [("tmux", "-L", "remote-agents", "list-panes", "-a", "-F", PANE_FORMAT)]
 
