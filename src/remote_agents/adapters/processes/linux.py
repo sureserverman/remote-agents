@@ -36,9 +36,10 @@ _CLAUDE_EXECUTABLE_PATH_MARKERS = (
 @dataclass(frozen=True, slots=True)
 class _Evidence:
     pid: int
-    executable: Path
-    cwd: Path
-    terminal: str
+    executable: Path | None
+    cwd: Path | None
+    terminal: str | None
+    process_name: str | None
 
 
 class LinuxLocalProcessCatalog:
@@ -90,7 +91,7 @@ class LinuxLocalProcessCatalog:
             evidence = self._evidence(directory)
             if evidence is None:
                 continue
-            profile_id = _provider_for(evidence.executable)
+            profile_id = _provider_for(evidence.executable, evidence.process_name)
             if profile_id is None:
                 continue
             project_id = self._project_for(evidence.cwd)
@@ -101,7 +102,9 @@ class LinuxLocalProcessCatalog:
             )
             state = (
                 ExternalSessionState.RUNNING_EXTERNALLY
-                if source is not None and evidence.terminal.startswith("/dev/")
+                if source is not None
+                and evidence.terminal is not None
+                and evidence.terminal.startswith("/dev/")
                 else ExternalSessionState.NOT_SAFELY_ADOPTABLE
             )
             reference = _reference(profile_id, evidence, source)
@@ -119,16 +122,26 @@ class LinuxLocalProcessCatalog:
 
     def _evidence(self, directory: Path) -> _Evidence | None:
         try:
-            return _Evidence(
-                int(directory.name),
-                Path(os.readlink(directory / "exe")),
-                Path(os.readlink(directory / "cwd")).resolve(strict=False),
-                os.readlink(directory / "fd" / "0"),
-            )
-        except (OSError, ValueError):
+            pid = int(directory.name)
+        except ValueError:
             return None
+        try:
+            executable = Path(os.readlink(directory / "exe"))
+        except OSError:
+            executable = None
+        try:
+            cwd = Path(os.readlink(directory / "cwd")).resolve(strict=False)
+        except OSError:
+            cwd = None
+        try:
+            terminal = os.readlink(directory / "fd" / "0")
+        except OSError:
+            terminal = None
+        return _Evidence(pid, executable, cwd, terminal, _process_name(directory))
 
-    def _project_for(self, cwd: Path) -> ProjectId | None:
+    def _project_for(self, cwd: Path | None) -> ProjectId | None:
+        if cwd is None:
+            return None
         return next(
             (project_id for project_id, path in self._project_paths.items() if path == cwd), None
         )
@@ -170,13 +183,24 @@ def _reference(
     return ExternalSessionReference(f"p-{digest}")
 
 
-def _provider_for(executable: Path) -> ProfileId | None:
-    direct = _CURATED_EXECUTABLES.get(executable.name)
+def _provider_for(executable: Path | None, process_name: str | None) -> ProfileId | None:
+    direct = _CURATED_EXECUTABLES.get(executable.name) if executable is not None else None
     if direct is not None:
         return direct
-    if any(marker in str(executable) for marker in _CLAUDE_EXECUTABLE_PATH_MARKERS):
+    if executable is not None and any(
+        marker in str(executable) for marker in _CLAUDE_EXECUTABLE_PATH_MARKERS
+    ):
         return ProfileId("claude")
-    return None
+    return _CURATED_EXECUTABLES.get(process_name)
+
+
+def _process_name(directory: Path) -> str | None:
+    """Read Linux's bounded task name only when protected metadata links are unavailable."""
+    try:
+        value = (directory / "comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value if value in _CURATED_EXECUTABLES else None
 
 
 def _claude_project_directory(path: Path) -> str:

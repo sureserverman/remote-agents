@@ -60,6 +60,45 @@ async def test_linux_discovery_fails_closed_when_provider_artifact_or_tty_is_mis
     assert sessions[0].state is ExternalSessionState.NOT_SAFELY_ADOPTABLE
 
 
+async def test_linux_discovery_still_lists_a_provider_when_its_terminal_link_is_protected(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    _process(proc_root, 41, executable="claude", cwd=project, terminal="/dev/pts/9")
+    (proc_root / "41" / "fd" / "0").unlink()
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions()
+
+    assert len(sessions) == 1
+    assert sessions[0].state is ExternalSessionState.NOT_SAFELY_ADOPTABLE
+
+
+async def test_linux_discovery_falls_back_to_a_bounded_process_name_when_metadata_links_are_hidden(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    proc_root = tmp_path / "proc"
+    _process(proc_root, 41, executable="claude", cwd=project, terminal="/dev/pts/9")
+    (proc_root / "41" / "exe").unlink()
+    (proc_root / "41" / "cwd").unlink()
+    (proc_root / "41" / "fd" / "0").unlink()
+    (proc_root / "41" / "comm").write_text("claude\n", encoding="utf-8")
+
+    sessions = await LinuxLocalProcessCatalog(
+        {ProjectId("opaque-editor"): project}, proc_root=proc_root
+    ).list_external_sessions()
+
+    assert len(sessions) == 1
+    assert str(sessions[0].profile_id) == "claude"
+    assert sessions[0].project_id is None
+    assert sessions[0].state is ExternalSessionState.NOT_SAFELY_ADOPTABLE
+
+
 async def test_linux_discovery_recognizes_the_installed_claude_version_binary(
     tmp_path: Path,
 ) -> None:
