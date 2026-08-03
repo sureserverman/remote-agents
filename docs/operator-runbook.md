@@ -58,8 +58,10 @@ owner-only entry points from Telegram's command menu.
    share the resulting Remote Control URL or a pane capture outside the owner workflow.
 10. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
     provider title or resume description when supplied, never a provider ID. Open Local Sessions
-    and confirm running local Claude/Codex processes are listed as read-only evidence; only a
-    uniquely correlated Claude process may be adopted after it exits locally.
+    and confirm running local Claude/Codex processes are listed as read-only evidence. On hosts
+    where service ptrace protections hide peer `/proc` links, a bounded curated task name can
+    still be listed, but it is always not safely adoptable; only a uniquely correlated Claude
+    process may be adopted after it exits locally.
 
 For the auditable host-local profile trace, run:
 
