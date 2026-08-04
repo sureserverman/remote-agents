@@ -45,6 +45,7 @@ from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import (
     AdoptionCommand,
+    ExternalStopCommand,
     InspectQuery,
     LaunchCommand,
     RemoteControlCommand,
@@ -62,6 +63,7 @@ from remote_agents.domain.conversations import ConversationReference, Conversati
 from remote_agents.domain.external_sessions import (
     ExternalSessionReference,
     ExternalSessionState,
+    ExternalStopEligibility,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
@@ -255,6 +257,10 @@ class PrivateBotBoundary:
             return await self._resume_reply(entity_id, token)
         if action == "local.confirm":
             return await self._local_adopt_reply(entity_id, token)
+        if action == "local.terminate":
+            return await self._local_terminate_reply(entity_id, token)
+        if action == "local.terminate.selected":
+            return await self._local_terminate_selected_reply(entity_id, token)
         if action == "remote.confirm":
             return await self._remote_control_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
@@ -284,6 +290,12 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._local_detail_reply(entity_id))
         if action == "local.adopt":
             return _reply_arguments(await self._local_confirm_reply(entity_id))
+        if action == "local.terminate.offer":
+            return _reply_arguments(await self._local_terminate_confirm_reply(entity_id))
+        if action in {"local.select", "local.select.page"}:
+            return _reply_arguments(await self._local_selection_catalogue_reply(entity_id))
+        if action == "local.select.confirm":
+            return _reply_arguments(await self._local_selected_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id))
         if action == "session.attach":
@@ -407,6 +419,34 @@ class PrivateBotBoundary:
             return self._message("That local session is no longer available.")
         state = external.summary.state
         if state is ExternalSessionState.RUNNING_EXTERNALLY:
+            if external.summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
+                return self._message(
+                    "<b>Verified external session</b>\n"
+                    "Terminate and Resume can lose the current unsaved turn.",
+                    (
+                        (
+                            Button(
+                                "Terminate and Resume",
+                                self._callback("local.terminate.offer", reference_value),
+                            ),
+                        ),
+                        (Button("Back", self._callback("local.open", "local")),),
+                    ),
+                )
+            if external.summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
+                return self._message(
+                    "<b>Selection required</b>\n"
+                    "Choose a same-profile saved conversation before termination.",
+                    (
+                        (
+                            Button(
+                                "Select conversation",
+                                self._callback("local.select", reference_value),
+                            ),
+                        ),
+                        (Button("Back", self._callback("local.open", "local")),),
+                    ),
+                )
             return self._message(
                 "<b>Running externally</b>\nExit it locally, then Retry to recheck.",
                 (
@@ -438,6 +478,134 @@ class PrivateBotBoundary:
                 ),
                 (Button("Cancel", self._callback("local.open", "local")),),
             ),
+        )
+
+    async def _local_terminate_confirm_reply(self, reference_value: str) -> RenderedMessage:
+        external = await self._resolve_external(reference_value)
+        if (
+            external is None
+            or external.summary.stop_eligibility is not ExternalStopEligibility.VERIFIED_SOURCE
+        ):
+            return self._message("That local session cannot be terminated safely.")
+        return self._message(
+            "<b>Confirm termination</b>\nThis sends SIGTERM and may lose the current unsaved turn.",
+            (
+                (
+                    Button(
+                        "Confirm Terminate and Resume",
+                        self._callback("local.terminate", reference_value, mutation=True),
+                    ),
+                ),
+                (Button("Cancel", self._callback("local.detail", reference_value)),),
+            ),
+        )
+
+    async def _local_terminate_reply(self, reference_value: str, token: str) -> dict[str, object]:
+        if self.launcher is None or not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+        ):
+            return _reply_arguments(self._message("That request has expired."))
+        external = await self._resolve_external(reference_value)
+        if external is None:
+            return _reply_arguments(self._message("That local session is no longer available."))
+        try:
+            record = await self.launcher.terminate_and_resume_verified(external, token)
+        except (LookupError, RuntimeError, ValueError):
+            return _reply_arguments(
+                self._message("Termination was not completed; no resume was started.")
+            )
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        return _reply_arguments(
+            self._message(f"<b>Session resumed</b>\n{escape(record.display.rendered)}")
+        )
+
+    async def _local_selection_catalogue_reply(self, entity_id: str) -> RenderedMessage:
+        reference_value, _, page_value = entity_id.partition("|")
+        page = int(page_value) if page_value.isdecimal() else 1
+        external = await self._resolve_external(reference_value)
+        if external is None or self.conversations is None or external.summary.project_id is None:
+            return self._message("That selection is no longer available.")
+        result = await self.conversations.catalogue(
+            ConversationCatalogueQuery(
+                page, 10, external.summary.profile_id, external.summary.project_id
+            )
+        )
+        rows = tuple(
+            (
+                Button(
+                    _resume_button_text(summary.description, summary.updated_at),
+                    self._callback(
+                        "local.select.confirm", f"{reference_value}|{summary.reference}"
+                    ),
+                ),
+            )
+            for summary in result.conversations
+            if summary.state is ConversationState.RESUMABLE
+        )
+        return self._message(
+            "<b>Select saved conversation</b>",
+            rows
+            or (
+                (
+                    Button(
+                        "No resumable conversations",
+                        self._callback("local.detail", reference_value),
+                    ),
+                ),
+            ),
+        )
+
+    async def _local_selected_confirm_reply(self, entity_id: str) -> RenderedMessage:
+        reference_value, separator, conversation_value = entity_id.partition("|")
+        external = await self._resolve_external(reference_value)
+        resolved = await self._resolve_resume(conversation_value) if separator else None
+        if (
+            external is None
+            or resolved is None
+            or resolved.summary.profile_id != external.summary.profile_id
+            or resolved.summary.project_id != external.summary.project_id
+        ):
+            return self._message("That handoff selection is no longer available.")
+        return self._message(
+            "<b>Confirm termination</b>\nThis sends SIGTERM and may lose the current unsaved turn.",
+            (
+                (
+                    Button(
+                        "Confirm Terminate and Resume",
+                        self._callback("local.terminate.selected", entity_id, mutation=True),
+                    ),
+                ),
+                (Button("Cancel", self._callback("local.detail", reference_value)),),
+            ),
+        )
+
+    async def _local_terminate_selected_reply(
+        self, entity_id: str, token: str
+    ) -> dict[str, object]:
+        if self.launcher is None or not self.callbacks.claim_mutation(
+            token, owner_id=self.owner_user_id, chat_id=self.owner_chat_id,
+            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+        ):
+            return _reply_arguments(self._message("That request has expired."))
+        reference_value, separator, conversation_value = entity_id.partition("|")
+        external = await self._resolve_external(reference_value)
+        resolved = await self._resolve_resume(conversation_value) if separator else None
+        if external is None or resolved is None:
+            return _reply_arguments(self._message("That handoff selection is no longer available."))
+        try:
+            record = await self.launcher.terminate_and_resume(
+                ExternalStopCommand(external, resolved, token)
+            )
+        except (LookupError, RuntimeError, ValueError):
+            return _reply_arguments(
+                self._message("Termination was not completed; no resume was started.")
+            )
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        return _reply_arguments(
+            self._message(f"<b>Session resumed</b>\n{escape(record.display.rendered)}")
         )
 
     async def _local_adopt_reply(self, reference_value: str, token: str) -> dict[str, object]:

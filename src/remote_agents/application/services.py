@@ -166,6 +166,16 @@ class SessionService:
                 await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
                 return resumed
 
+    async def terminate_and_resume_verified(
+        self, external, idempotency_key: str
+    ) -> SessionRecord:
+        """Use only a provider source already correlated by the read-only adapter."""
+        if external.provider_conversation_id is None or external.summary.project_id is None:
+            raise ExternalSessionUnavailableError("external session lacks a verified resume source")
+        return await self.terminate_and_resume(
+            ExternalStopCommand(external, _external_conversation(external), idempotency_key)
+        )
+
     async def recover_external_handoffs(self) -> tuple[SessionRecord, ...]:
         """Recover only post-signal intents; REQUESTED is never signalled after a restart."""
         if self._process_controller is None:
