@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -25,6 +26,8 @@ from remote_agents.adapters.agents.opencode_sessions import (
 )
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
+from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
+from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
     open_database,
@@ -47,6 +50,8 @@ from remote_agents.adapters.tmux.profiles import (
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
+from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
@@ -154,6 +159,10 @@ def main(
     serve_parser.add_argument("--config", type=Path, required=True)
     telegram_audit_parser = subcommands.add_parser("telegram-ui-audit")
     telegram_audit_parser.add_argument("--json", action="store_true")
+    add_project_parser = subcommands.add_parser("add-project")
+    add_project_parser.add_argument("--config", type=Path)
+    add_project_parser.add_argument("--area", required=True)
+    add_project_parser.add_argument("--name", required=True)
     arguments = parser.parse_args(argv)
     if arguments.command == "doctor":
         if arguments.profiles:
@@ -192,6 +201,20 @@ def main(
         result = asyncio.run(audit_owner_metadata(secrets))
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
         return 0 if result["healthy"] else 1
+    if arguments.command == "add-project":
+        paths = ProductionPaths.for_home(Path.home())
+        try:
+            config = load_config(arguments.config or paths.config_path)
+            creator = ProjectCreationService(
+                FilesystemProjectWorkspace(config.dev_root),
+                RegistryProjectRecorder(config.registry_path, config.dev_root),
+            )
+            created = creator.create(CreateProjectCommand(arguments.area, arguments.name))
+        except (ConfigError, ProjectCreationError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        print(created.path)
+        return 0
     if arguments.command == "serve":
         config = load_config(arguments.config)
         paths = ProductionPaths.for_home(Path.home())
