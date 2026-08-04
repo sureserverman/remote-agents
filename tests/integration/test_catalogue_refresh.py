@@ -102,6 +102,67 @@ def test_a_terminal_built_before_creation_resolves_the_new_project(
     assert terminal._project_paths[project_id] == created.path
 
 
+class _InvariantDict(dict):
+    """Record every moment a watched key is absent immediately after a mutating call."""
+
+    def __init__(self, watched: ProjectId, misses: list[str]) -> None:
+        super().__init__()
+        self._watched = watched
+        self._misses = misses
+
+    def clear(self) -> None:
+        super().clear()
+        self._check()
+
+    def update(self, *args: object, **kwargs: object) -> None:
+        super().update(*args, **kwargs)  # type: ignore[arg-type]
+        self._check()
+
+    def __delitem__(self, key: object) -> None:
+        super().__delitem__(key)
+        self._check()
+
+    def _check(self) -> None:
+        if self._watched not in self:
+            self._misses.append("absent")
+
+
+def test_a_surviving_project_is_never_absent_during_a_refresh(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """Consumers read the shared map unlocked, so a refresh must never hide a live project."""
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    provider.refresh()
+    existing_id = ProjectId(_opaque_id(dev_root / "infra" / "existing"))
+    misses: list[str] = []
+    instrumented = _InvariantDict(existing_id, misses)
+    instrumented.update(dict(provider.paths))
+    provider._paths = instrumented
+
+    _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    provider.refresh()
+
+    assert existing_id in provider.paths
+    assert misses == []
+
+
+def test_refresh_drops_a_project_that_left_the_registry(
+    dev_root: Path, registry_path: Path
+) -> None:
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    created = _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    provider.refresh()
+    assert ProjectId(_opaque_id(created.path)) in provider.paths
+
+    created.path.rmdir()
+    registry_path.write_text(
+        _REGISTRY.format(existing=dev_root / "infra" / "existing"), encoding="utf-8"
+    )
+    provider.refresh()
+
+    assert ProjectId(_opaque_id(created.path)) not in provider.paths
+
+
 def test_the_shared_path_view_is_read_only_to_its_consumers(
     dev_root: Path, registry_path: Path
 ) -> None:

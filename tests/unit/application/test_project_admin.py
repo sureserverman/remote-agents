@@ -46,12 +46,14 @@ class FakeRegistry:
         self.error = error
         self.registered: list[tuple[ProjectIdentity, Path]] = []
         self.calls: list[str] = []
+        self.recorded_path: Path | None = None
 
-    def register(self, identity: ProjectIdentity, path: Path) -> None:
+    def register(self, identity: ProjectIdentity, path: Path) -> Path:
         self.calls.append("register")
         if self.error is not None:
             raise self.error
         self.registered.append((identity, path))
+        return self.recorded_path or path
 
 
 def _service(workspace: FakeWorkspace, registry: FakeRegistry) -> ProjectCreationService:
@@ -149,6 +151,16 @@ def test_create_never_catalogues_a_directory_it_could_not_make() -> None:
         _service(workspace, registry).create(CreateProjectCommand("infra", "new-project"))
 
     assert registry.calls == []
+
+
+def test_created_project_reports_the_path_the_registry_actually_recorded() -> None:
+    """A symlinked development root makes the recorded path differ from the one created."""
+    workspace, registry = FakeWorkspace(), FakeRegistry()
+    registry.recorded_path = Path("/canonical/infra/new-project")
+
+    created = _service(workspace, registry).create(CreateProjectCommand("infra", "new-project"))
+
+    assert created.path == Path("/canonical/infra/new-project")
 
 
 def test_available_areas_comes_from_the_workspace() -> None:

@@ -295,6 +295,40 @@ def test_append_project_rejects_a_relative_path(tmp_path: Path) -> None:
         _append(registry, tmp_path, project_path=Path("dev/infra/new-project"))
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "version: 1\nprojects: []\n",
+        "version: 1\nprojects: [{path: /tmp/a, name: a, area: infra, enabled: true, added: x}]\n",
+        "projects:\n  - path: /tmp/a\n    name: a\n    area: infra\n"
+        "    enabled: true\n    added: 2026-07-30\nversion: 1\n",
+    ],
+)
+def test_append_project_refuses_a_shape_the_appended_block_would_corrupt(
+    tmp_path: Path, body: str
+) -> None:
+    """These read cleanly but are not block-style extensible, so the append must not publish."""
+    registry = _registry(tmp_path, body)
+    project = _project_directory(tmp_path)
+    unchanged = registry.read_bytes()
+
+    with pytest.raises(RegistryWriteError):
+        _append(registry, tmp_path, project_path=project)
+
+    assert registry.read_bytes() == unchanged
+    assert load_registry(registry).error is None
+
+
+def test_append_project_returns_the_canonical_recorded_path(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    project = _project_directory(tmp_path)
+
+    recorded = _append(registry, tmp_path, project_path=project)
+
+    assert recorded == project.resolve()
+    assert f"path: {recorded}" in registry.read_text(encoding="utf-8")
+
+
 def test_append_project_refuses_to_extend_a_degraded_registry(tmp_path: Path) -> None:
     registry = _registry(tmp_path, "version: 2\nprojects: []\n")
     project = _project_directory(tmp_path)

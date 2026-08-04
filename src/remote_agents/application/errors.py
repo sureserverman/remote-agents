@@ -10,4 +10,4 @@ class SessionNotFoundError(LookupError):
 
 
 class ProjectCreationError(ValueError):
-    """A project could not be created and catalogued, leaving no partial registration."""
+    """A project was never catalogued; any directory created for it is removed, or logged."""

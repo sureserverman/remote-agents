@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import suppress
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.ports.project_admin import ProjectRegistry, ProjectWorkspace
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +41,11 @@ class ProjectCreationService:
         return self._workspace.areas()
 
     def create(self, command: CreateProjectCommand) -> CreatedProject:
-        """Create then register one project, removing the directory if cataloguing fails."""
+        """Create then register one project, removing the directory if cataloguing fails.
+
+        This performs blocking filesystem and lock work; an asyncio caller must run it off
+        the event loop.
+        """
         identity = self._identity(command)
         if identity.area not in self._workspace.areas():
             raise ProjectCreationError("area is not an existing development-root directory")
@@ -50,12 +56,18 @@ class ProjectCreationService:
         except OSError as error:
             raise ProjectCreationError("project directory could not be created") from error
         try:
-            self._registry.register(identity, path)
+            recorded = self._registry.register(identity, path)
         except Exception as error:
-            with suppress(OSError, ValueError):
-                self._workspace.remove(path)
+            self._roll_back(path)
             raise ProjectCreationError("project could not be catalogued") from error
-        return CreatedProject(identity, path)
+        return CreatedProject(identity, recorded)
+
+    def _roll_back(self, path: Path) -> None:
+        """Undo the created directory, recording the rare case where it cannot be undone."""
+        try:
+            self._workspace.remove(path)
+        except (OSError, ValueError):
+            _LOG.warning("left an uncatalogued project directory behind after a failed create")
 
     def _identity(self, command: CreateProjectCommand) -> ProjectIdentity:
         try:

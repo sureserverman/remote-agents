@@ -56,7 +56,9 @@ def append_project(
             f"    added: {added.isoformat()}\n"
         )
         separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
-        _replace_atomically(target, existing + separator + block.encode("utf-8"))
+        candidate = existing + separator + block.encode("utf-8")
+        _require_appendable(candidate, canonical)
+        _replace_atomically(target, candidate)
     return canonical
 
 
@@ -68,8 +70,9 @@ class RegistryProjectRecorder:
     dev_root: Path
     today: Callable[[], date] = field(default=date.today)
 
-    def register(self, identity: ProjectIdentity, path: Path) -> None:
-        append_project(
+    def register(self, identity: ProjectIdentity, path: Path) -> Path:
+        """Return the canonical path actually recorded, which may differ from the one given."""
+        return append_project(
             self.registry_path,
             dev_root=self.dev_root,
             project_path=path,
@@ -126,6 +129,24 @@ def _verified_bytes(target: Path) -> bytes:
     if load_registry(target).error is not None:
         raise RegistryWriteError("refusing to extend a registry that does not read cleanly")
     return target.read_bytes()
+
+
+def _require_appendable(candidate: bytes, expected: Path) -> None:
+    """Prove the extended document before publishing it.
+
+    A registry the reader accepts can still be a shape this block-style append corrupts —
+    an empty or flow-style ``projects`` list, or one declared before ``version``. Publishing
+    is atomic and durable, so the only safe place to catch that is before the rename.
+    """
+    try:
+        document = yaml.safe_load(candidate)
+    except yaml.YAMLError as error:
+        raise RegistryWriteError("appending would leave the registry unparseable") from error
+    entries = document["projects"] if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not any(
+        isinstance(entry, dict) and entry.get("path") == str(expected) for entry in entries
+    ):
+        raise RegistryWriteError("appended entry did not survive a re-read of the registry")
 
 
 def _registered_paths(existing: bytes) -> frozenset[Path]:

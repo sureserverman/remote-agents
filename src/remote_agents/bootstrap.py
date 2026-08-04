@@ -105,10 +105,20 @@ class ProjectCatalogueProvider:
         catalogue = build_catalogue(registered, found, registry_error=registry.error)
         if registry.error is not None:
             _LOG.warning("project registry is degraded: %s", registry.error)
-        self._paths.clear()
-        self._paths.update(resolved)
+        self._publish(resolved)
         self._snapshot = ProjectCatalogueSnapshot(catalogue, registry.error)
         return self._snapshot
+
+    def _publish(self, resolved: dict[ProjectId, Path]) -> None:
+        """Apply the new mapping without ever hiding a project that survives the refresh.
+
+        Consumers read the shared mapping without holding a lock, so clearing it first would
+        expose a window where a valid launch resolves to nothing. Adding before removing means
+        a surviving project is never absent; at worst a removed one lingers for an instant.
+        """
+        self._paths.update(resolved)
+        for stale in [key for key in self._paths if key not in resolved]:
+            del self._paths[stale]
 
 
 def _resolved_project_path(path: Path) -> Path | None:
