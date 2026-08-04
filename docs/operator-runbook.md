@@ -57,14 +57,9 @@ owner-only entry points from Telegram's command menu.
    Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
    share the resulting Remote Control URL or a pane capture outside the owner workflow.
 10. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
-    provider title or resume description when supplied, never a provider ID. Open Local Sessions
-    and confirm running local Claude/Codex processes are listed as read-only evidence. On hosts
-    where service ptrace protections hide peer `/proc` links, a bounded curated task name can
-    still be listed, but it is always not safely adoptable. A verified-source eligible row may use
-    Terminate and Resume after its second confirmation; it sends only SIGTERM and may lose the
-    current unsaved turn. An eligible uncorrelated row requires a same-profile saved-conversation
-    choice before that confirmation. Never use a terminal key, process group, SIGKILL, or a raw PID
-    to replace this flow.
+    provider title or resume description when supplied, never a provider ID. The bot does not
+    scan, control, or adopt arbitrary local agent processes; use only provider-catalogued
+    conversations to create a new managed session.
 
 For the auditable host-local profile trace, run:
 

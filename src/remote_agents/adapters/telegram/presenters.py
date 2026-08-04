@@ -92,7 +92,6 @@ def render_home(
     active: int,
     preserved: int,
     resume: str | None = None,
-    local_sessions: str | None = None,
 ) -> RenderedMessage:
     """Render the fixed root view."""
 
@@ -100,7 +99,6 @@ def render_home(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
         ((Button("Launch", launch),),)
         + (((Button("Resume", resume),),) if resume is not None else ())
-        + (((Button("Local Sessions", local_sessions),),) if local_sessions is not None else ())
         + ((Button("Sessions", sessions),),),
     )
 

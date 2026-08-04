@@ -16,8 +16,6 @@ class ConversationState(StrEnum):
     """Truthful states for provider conversations discovered locally."""
 
     RESUMABLE = "resumable"
-    RUNNING_EXTERNALLY = "running_externally"
-    NOT_SAFELY_ADOPTABLE = "not_safely_adoptable"
 
 
 @dataclass(frozen=True, slots=True)

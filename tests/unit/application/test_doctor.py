@@ -2,12 +2,10 @@
 
 from remote_agents.application.doctor import (
     doctor,
-    external_process_control_doctor,
     production_doctor,
     profile_doctor,
 )
 from remote_agents.domain.conversations import ProfileResumeCapability
-from remote_agents.domain.external_sessions import ExternalProcessControlCapability
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import ProfileCompatibility
 
@@ -133,18 +131,4 @@ def test_production_doctor_blocks_a_missing_agent_executable() -> None:
     assert report["components"]["profiles"] == {
         "status": "degraded",
         "reason": "profile_blocked",
-    }
-
-
-def test_external_control_doctor_reports_only_a_feature_probed_backend() -> None:
-    report = external_process_control_doctor(
-        ExternalProcessControlCapability(pidfd_available=False, psutil_available=True)
-    )
-
-    assert report == {
-        "external_process_control": {
-            "available": True,
-            "backend": "psutil",
-            "reason": None,
-        }
     }

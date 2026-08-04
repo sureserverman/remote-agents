@@ -45,7 +45,6 @@ def test_clean_database_creates_versioned_projection_and_event_tables(tmp_path: 
         "sessions",
         "session_events",
         "idempotency_claims",
-        "handoff_intents",
         "schema_version",
     } <= names
 

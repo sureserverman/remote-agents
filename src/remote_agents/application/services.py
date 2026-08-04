@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from hashlib import sha256
 
 from remote_agents.application.commands import (
-    AdoptionCommand,
     CleanupCommand,
-    ExternalStopCommand,
     ForceStopCommand,
     GracefulStopCommand,
     InspectQuery,
@@ -16,29 +13,10 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.errors import (
-    DuplicateCommandError,
-    ExternalSessionStillRunningError,
-    ExternalSessionUnavailableError,
-    SessionNotFoundError,
-)
+from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.domain.conversations import (
-    ConversationReference,
-    ConversationState,
-    ConversationSummary,
-    ProviderConversationId,
-    ResolvedConversation,
-)
-from remote_agents.domain.external_sessions import (
-    ExternalSessionReference,
-    ExternalSessionSummary,
-    ExternalStopOutcome,
-)
-from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import (
     ProfileId,
-    ProjectId,
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
@@ -46,8 +24,6 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
-from remote_agents.ports.external_process_control import ExternalProcessController
-from remote_agents.ports.local_processes import LocalProcessCatalog
 from remote_agents.ports.session_store import SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
@@ -60,14 +36,10 @@ class SessionService:
         store: SessionStore,
         terminal: TerminalPort,
         *,
-        processes: LocalProcessCatalog | None = None,
-        process_controller: ExternalProcessController | None = None,
         locks: SessionLocks | None = None,
     ) -> None:
         self._store = store
         self._terminal = terminal
-        self._processes = processes
-        self._process_controller = process_controller
         self._locks = locks or SessionLocks()
 
     async def launch(self, command: LaunchCommand) -> SessionRecord:
@@ -105,109 +77,6 @@ class SessionService:
             ):
                 return await self._resume_locked(command)
 
-    async def adopt(self, command: AdoptionCommand) -> SessionRecord:
-        """Resume only after fresh evidence proves the original process exited locally."""
-        if self._processes is None:
-            raise ExternalSessionUnavailableError("external discovery is unavailable")
-        source = command.external.provider_conversation_id
-        assert source is not None
-        profile_id = command.external.summary.profile_id
-        project_id = command.external.summary.project_id
-        assert project_id is not None
-        reference = command.external.summary.reference
-        async with self._locks.operation(), self._locks.for_conversation(profile_id, source):
-            if await self._processes.is_still_running(reference):
-                raise ExternalSessionStillRunningError(
-                    "exit the external session locally before resuming"
-                )
-            return await self._resume_locked(
-                ResumeCommand(
-                    project_id,
-                    profile_id,
-                    _external_conversation(command.external),
-                    command.idempotency_key,
-                )
-            )
-
-    async def terminate_and_resume(self, command: ExternalStopCommand) -> SessionRecord:
-        if self._processes is None or self._process_controller is None:
-            raise ExternalSessionUnavailableError("external control is unavailable")
-        external = command.external
-        identity = external.identity
-        assert identity is not None
-        async with self._locks.operation(), self._locks.for_external(external.summary.reference):
-            async with self._locks.for_conversation(
-                command.conversation.summary.profile_id,
-                command.conversation.provider_conversation_id,
-            ):
-                if not await self._store.claim_idempotency_key(command.idempotency_key):
-                    raise DuplicateCommandError("external handoff callback was already handled")
-                intent = HandoffIntent(
-                    f"h-{command.idempotency_key}",
-                    command.conversation.summary.profile_id,
-                    command.conversation.summary.project_id,
-                    command.conversation.provider_conversation_id.value,
-                    identity,
-                    HandoffState.REQUESTED,
-                )
-                await self._store.save_handoff_intent(intent)
-                result = await self._process_controller.terminate(identity)
-                if result.outcome is not ExternalStopOutcome.EXITED:
-                    raise ExternalSessionUnavailableError("external process did not exit")
-                await self._store.update_handoff_state(intent.intent_id, HandoffState.STOP_SENT)
-                resumed = await self._resume_locked(
-                    ResumeCommand(
-                        command.conversation.summary.project_id,
-                        command.conversation.summary.profile_id,
-                        command.conversation,
-                        f"resume-{command.idempotency_key}",
-                    )
-                )
-                await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
-                return resumed
-
-    async def terminate_and_resume_verified(
-        self, external, idempotency_key: str
-    ) -> SessionRecord:
-        """Use only a provider source already correlated by the read-only adapter."""
-        if external.provider_conversation_id is None or external.summary.project_id is None:
-            raise ExternalSessionUnavailableError("external session lacks a verified resume source")
-        return await self.terminate_and_resume(
-            ExternalStopCommand(external, _external_conversation(external), idempotency_key)
-        )
-
-    async def recover_external_handoffs(self) -> tuple[SessionRecord, ...]:
-        """Recover only post-signal intents; REQUESTED is never signalled after a restart."""
-        if self._process_controller is None:
-            return ()
-        recovered: list[SessionRecord] = []
-        intents = await self._store.list_handoff_intents(
-            (HandoffState.REQUESTED, HandoffState.STOP_SENT)
-        )
-        for intent in intents:
-            if intent.state is HandoffState.REQUESTED:
-                await self._store.update_handoff_state(intent.intent_id, HandoffState.FAILED)
-                continue
-            if not await self._process_controller.is_gone(intent.process):
-                continue
-            conversation = _stored_conversation(
-                intent.profile_id, intent.project_id, intent.conversation_source_id
-            )
-            async with self._locks.operation(), self._locks.for_conversation(
-                intent.profile_id, conversation.provider_conversation_id
-            ):
-                record = await self._resume_locked(
-                    ResumeCommand(
-                        intent.project_id,
-                        intent.profile_id,
-                        conversation,
-                        f"recover-{intent.intent_id}",
-                    )
-                )
-                await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
-                recovered.append(record)
-        return tuple(recovered)
-
     async def _resume_locked(self, command: ResumeCommand) -> SessionRecord:
         """Create or return a durable resume identity while its conversation lock is held."""
         source_id = command.conversation.provider_conversation_id.value
@@ -242,18 +111,6 @@ class SessionService:
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())
-
-    async def list_external_sessions(self) -> tuple[ExternalSessionSummary, ...]:
-        if self._processes is None:
-            return ()
-        return await self._processes.list_external_sessions(
-            excluded_process_roots=await self._terminal.managed_process_roots()
-        )
-
-    async def resolve_external_session(self, reference: ExternalSessionReference):
-        if self._processes is None:
-            return None
-        return await self._processes.resolve_external_session(reference)
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         """Promote only failed launches whose owned panes now show readiness evidence."""
@@ -335,41 +192,3 @@ class SessionService:
         if record is None:
             raise SessionNotFoundError(str(session_id))
         return record
-
-
-def _external_conversation(external) -> ResolvedConversation:
-    """Translate verified local evidence into a typed internal continuation selection."""
-    project_id = external.summary.project_id
-    source = external.provider_conversation_id
-    if project_id is None or source is None:
-        raise ExternalSessionUnavailableError("external session is not eligible for safe handoff")
-    digest = sha256(
-        f"{external.summary.profile_id}\0{project_id}\0{source.value}".encode()
-    ).hexdigest()
-    return ResolvedConversation(
-        ConversationSummary(
-            ConversationReference(f"c-{digest}"),
-            external.summary.profile_id,
-            project_id,
-            ConversationState.RESUMABLE,
-            datetime.now(UTC),
-        ),
-        source,
-    )
-
-
-def _stored_conversation(
-    profile_id: ProfileId, project_id: ProjectId, source_id: str
-) -> ResolvedConversation:
-    source = ProviderConversationId(source_id)
-    digest = sha256(f"{profile_id}\0{project_id}\0{source.value}".encode()).hexdigest()
-    return ResolvedConversation(
-        ConversationSummary(
-            ConversationReference(f"c-{digest}"),
-            profile_id,
-            project_id,
-            ConversationState.RESUMABLE,
-            datetime.now(UTC),
-        ),
-        source,
-    )

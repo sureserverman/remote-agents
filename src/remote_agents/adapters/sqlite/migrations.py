@@ -49,22 +49,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     ),
     (
         4,
-        """
-        CREATE TABLE handoff_intents (
-            intent_id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            conversation_source_id TEXT NOT NULL,
-            process_pid INTEGER NOT NULL,
-            process_start_ticks INTEGER NOT NULL,
-            process_euid INTEGER NOT NULL,
-            process_name TEXT NOT NULL,
-            state TEXT NOT NULL
-        );
-        CREATE UNIQUE INDEX handoff_intents_source
-        ON handoff_intents(profile_id, conversation_source_id)
-        WHERE state IN ('requested', 'stop_sent');
-        """,
+        "",
     ),
 )
 

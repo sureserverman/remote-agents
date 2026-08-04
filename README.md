@@ -4,7 +4,7 @@ Remote Agents will be a private, single-owner Telegram control plane for curated
 sessions running in isolated tmux servers on this host.
 
 Its approved scope is limited to project browsing and managed session lifecycle actions:
-launch, selected resume, local-session safe handoff, list, inspect, Copy Attach, graceful stop,
+launch, selected resume, list, inspect, Copy Attach, graceful stop,
 cleanup, confirmed force stop, and confirmed Claude Remote Control state changes. It does not
 provide remote shell access, prompt relay, raw agent arguments, arbitrary keystrokes, or registry
 mutation.
@@ -62,14 +62,9 @@ never relays arbitrary commands, agent text, shell access, or approval responses
 
 Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
-title is available); provider IDs and transcript output remain server-side. Local Sessions never
-moves an external process: exit it locally, then confirm a new managed resume after liveness is
-rechecked. A verified-source Local Session may instead offer the fixed **Terminate and Resume**
-handoff: it warns that the current unsaved turn may be lost, requires a second confirmation, sends
-only `SIGTERM` after exact same-UID identity validation, waits for exit, and resumes through managed
-tmux. An uncorrelated eligible row requires an explicit same-profile saved-conversation selection;
-Cursor and incomplete identity evidence remain read-only. There is no `SIGKILL`, process-group
-signal, terminate-only action, key injection, or raw PID/signal input.
+title is available); provider IDs and transcript output remain server-side. The bot does not scan,
+identify, terminate, or adopt arbitrary local agent processes. Only provider-catalogued
+conversations can be resumed into a new managed tmux pane.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
 available only on a live managed Claude pane, requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.

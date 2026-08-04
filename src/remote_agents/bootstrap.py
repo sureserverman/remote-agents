@@ -20,8 +20,6 @@ from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
 )
-from remote_agents.adapters.processes.linux import LinuxLocalProcessCatalog
-from remote_agents.adapters.processes.linux_control import LinuxExternalProcessController
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.sqlite.database import (
@@ -207,12 +205,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         catalogue=catalogue,
         profiles=profiles,
         project_page_size=config.project_page_size,
-        launcher=SessionService(
-            SQLiteSessionStore(connection),
-            terminal,
-            processes=LinuxLocalProcessCatalog(project_paths),
-            process_controller=LinuxExternalProcessController(),
-        ),
+        launcher=SessionService(SQLiteSessionStore(connection), terminal),
         conversations=conversations,
         capture=terminal.capture,
     )

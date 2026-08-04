@@ -44,15 +44,12 @@ from remote_agents.adapters.telegram.presenters import (
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import (
-    AdoptionCommand,
-    ExternalStopCommand,
     InspectQuery,
     LaunchCommand,
     RemoteControlCommand,
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
-from remote_agents.application.errors import ExternalSessionStillRunningError
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
@@ -60,11 +57,6 @@ from remote_agents.application.project_catalog import (
 )
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
-from remote_agents.domain.external_sessions import (
-    ExternalSessionReference,
-    ExternalSessionState,
-    ExternalStopEligibility,
-)
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
 
@@ -239,7 +231,6 @@ class PrivateBotBoundary:
                 self._navigation_callbacks(),
                 launch=self._callback("launch.open", "projects"),
                 resume=(self._callback("resume.open", "projects") if self.conversations else None),
-                local_sessions=(self._callback("local.open", "local") if self.launcher else None),
                 sessions=self._callback("sessions.open", "sessions"),
                 active=sum(record.state is SessionState.RUNNING for record in records),
                 preserved=sum(record.state is SessionState.PRESERVED for record in records),
@@ -255,12 +246,6 @@ class PrivateBotBoundary:
             return await self._launch_reply(entity_id, token)
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token)
-        if action == "local.confirm":
-            return await self._local_adopt_reply(entity_id, token)
-        if action == "local.terminate":
-            return await self._local_terminate_reply(entity_id, token)
-        if action == "local.terminate.selected":
-            return await self._local_terminate_selected_reply(entity_id, token)
         if action == "remote.confirm":
             return await self._remote_control_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
@@ -284,18 +269,6 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._resume_catalogue_reply(entity_id))
         if action == "resume.select":
             return _reply_arguments(await self._resume_confirm_reply(entity_id))
-        if action == "local.open":
-            return _reply_arguments(await self._local_sessions_reply())
-        if action == "local.detail":
-            return _reply_arguments(await self._local_detail_reply(entity_id))
-        if action == "local.adopt":
-            return _reply_arguments(await self._local_confirm_reply(entity_id))
-        if action == "local.terminate.offer":
-            return _reply_arguments(await self._local_terminate_confirm_reply(entity_id))
-        if action in {"local.select", "local.select.page"}:
-            return _reply_arguments(await self._local_selection_catalogue_reply(entity_id))
-        if action == "local.select.confirm":
-            return _reply_arguments(await self._local_selected_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id))
         if action == "session.attach":
@@ -390,255 +363,6 @@ class PrivateBotBoundary:
                 ),
             )
         )
-
-    async def _local_sessions_reply(self) -> RenderedMessage:
-        list_external = getattr(self.launcher, "list_external_sessions", None)
-        if list_external is None:
-            _LOG.warning("Local Sessions is unavailable because the launcher lacks discovery")
-            return self._message("Local session discovery is unavailable.")
-        sessions = await list_external()
-        _LOG.warning("Local Sessions rendered %d external-process rows", len(sessions))
-        project_names = {item.opaque_id: item.name for item in self.catalogue}
-        rows = tuple(
-            (
-                Button(
-                    _local_session_button_text(item, project_names),
-                    self._callback("local.detail", str(item.reference)),
-                ),
-            )
-            for item in sessions
-        )
-        return self._message(
-            f"<b>Local Sessions</b>\nFound {len(sessions)} external agent process(es). "
-            "External sessions are read-only evidence.",
-            rows or ((Button("No local sessions", self._callback("nav.home", "home")),),),
-        )
-
-    async def _local_detail_reply(self, reference_value: str) -> RenderedMessage:
-        external = await self._resolve_external(reference_value)
-        if external is None:
-            return self._message("That local session is no longer available.")
-        if external.summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
-            return self._message(
-                "<b>Verified external session</b>\n"
-                "Terminate and Resume can lose the current unsaved turn.",
-                (
-                    (
-                        Button(
-                            "Terminate and Resume",
-                            self._callback("local.terminate.offer", reference_value),
-                        ),
-                    ),
-                    (Button("Back", self._callback("local.open", "local")),),
-                ),
-            )
-        if external.summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
-            return self._message(
-                "<b>Selection required</b>\n"
-                "Choose a same-profile saved conversation before termination.",
-                (
-                    (
-                        Button(
-                            "Select conversation", self._callback("local.select", reference_value)
-                        ),
-                    ),
-                    (Button("Back", self._callback("local.open", "local")),),
-                ),
-            )
-        state = external.summary.state
-        if state is ExternalSessionState.RUNNING_EXTERNALLY:
-            return self._message(
-                "<b>Running externally</b>\nExit it locally, then Retry to recheck.",
-                (
-                    (Button("Retry", self._callback("local.detail", reference_value)),),
-                    (Button("Adopt after exit", self._callback("local.adopt", reference_value)),),
-                    (Button("Back", self._callback("local.open", "local")),),
-                ),
-            )
-        return self._message(
-            "<b>Not safely adoptable</b>\nNo verified provider conversation was found.",
-            ((Button("Back", self._callback("local.open", "local")),),),
-        )
-
-    async def _local_confirm_reply(self, reference_value: str) -> RenderedMessage:
-        external = await self._resolve_external(reference_value)
-        if (
-            external is None
-            or external.summary.state is not ExternalSessionState.RUNNING_EXTERNALLY
-        ):
-            return self._message("That local session cannot be adopted safely.")
-        return self._message(
-            "<b>Review safe handoff</b>\nExit it locally first; this starts a new managed resume.",
-            (
-                (
-                    Button(
-                        "Adopt after exit",
-                        self._callback("local.confirm", reference_value, mutation=True),
-                    ),
-                ),
-                (Button("Cancel", self._callback("local.open", "local")),),
-            ),
-        )
-
-    async def _local_terminate_confirm_reply(self, reference_value: str) -> RenderedMessage:
-        external = await self._resolve_external(reference_value)
-        if (
-            external is None
-            or external.summary.stop_eligibility is not ExternalStopEligibility.VERIFIED_SOURCE
-        ):
-            return self._message("That local session cannot be terminated safely.")
-        return self._message(
-            "<b>Confirm termination</b>\nThis sends SIGTERM and may lose the current unsaved turn.",
-            (
-                (
-                    Button(
-                        "Confirm Terminate and Resume",
-                        self._callback("local.terminate", reference_value, mutation=True),
-                    ),
-                ),
-                (Button("Cancel", self._callback("local.detail", reference_value)),),
-            ),
-        )
-
-    async def _local_terminate_reply(self, reference_value: str, token: str) -> dict[str, object]:
-        if self.launcher is None or not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
-        ):
-            return _reply_arguments(self._message("That request has expired."))
-        external = await self._resolve_external(reference_value)
-        if external is None:
-            return _reply_arguments(self._message("That local session is no longer available."))
-        try:
-            record = await self.launcher.terminate_and_resume_verified(external, token)
-        except (LookupError, RuntimeError, ValueError):
-            return _reply_arguments(
-                self._message("Termination was not completed; no resume was started.")
-            )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(
-            self._message(f"<b>Session resumed</b>\n{escape(record.display.rendered)}")
-        )
-
-    async def _local_selection_catalogue_reply(self, entity_id: str) -> RenderedMessage:
-        reference_value, _, page_value = entity_id.partition("|")
-        page = int(page_value) if page_value.isdecimal() else 1
-        external = await self._resolve_external(reference_value)
-        if external is None or self.conversations is None or external.summary.project_id is None:
-            return self._message("That selection is no longer available.")
-        result = await self.conversations.catalogue(
-            ConversationCatalogueQuery(
-                page, 10, external.summary.profile_id, external.summary.project_id
-            )
-        )
-        rows = tuple(
-            (
-                Button(
-                    _resume_button_text(summary.description, summary.updated_at),
-                    self._callback(
-                        "local.select.confirm", f"{reference_value}|{summary.reference}"
-                    ),
-                ),
-            )
-            for summary in result.conversations
-            if summary.state is ConversationState.RESUMABLE
-        )
-        return self._message(
-            "<b>Select saved conversation</b>",
-            rows
-            or (
-                (
-                    Button(
-                        "No resumable conversations",
-                        self._callback("local.detail", reference_value),
-                    ),
-                ),
-            ),
-        )
-
-    async def _local_selected_confirm_reply(self, entity_id: str) -> RenderedMessage:
-        reference_value, separator, conversation_value = entity_id.partition("|")
-        external = await self._resolve_external(reference_value)
-        resolved = await self._resolve_resume(conversation_value) if separator else None
-        if (
-            external is None
-            or resolved is None
-            or resolved.summary.profile_id != external.summary.profile_id
-            or resolved.summary.project_id != external.summary.project_id
-        ):
-            return self._message("That handoff selection is no longer available.")
-        return self._message(
-            "<b>Confirm termination</b>\nThis sends SIGTERM and may lose the current unsaved turn.",
-            (
-                (
-                    Button(
-                        "Confirm Terminate and Resume",
-                        self._callback("local.terminate.selected", entity_id, mutation=True),
-                    ),
-                ),
-                (Button("Cancel", self._callback("local.detail", reference_value)),),
-            ),
-        )
-
-    async def _local_terminate_selected_reply(
-        self, entity_id: str, token: str
-    ) -> dict[str, object]:
-        if self.launcher is None or not self.callbacks.claim_mutation(
-            token, owner_id=self.owner_user_id, chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
-        ):
-            return _reply_arguments(self._message("That request has expired."))
-        reference_value, separator, conversation_value = entity_id.partition("|")
-        external = await self._resolve_external(reference_value)
-        resolved = await self._resolve_resume(conversation_value) if separator else None
-        if external is None or resolved is None:
-            return _reply_arguments(self._message("That handoff selection is no longer available."))
-        try:
-            record = await self.launcher.terminate_and_resume(
-                ExternalStopCommand(external, resolved, token)
-            )
-        except (LookupError, RuntimeError, ValueError):
-            return _reply_arguments(
-                self._message("Termination was not completed; no resume was started.")
-            )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(
-            self._message(f"<b>Session resumed</b>\n{escape(record.display.rendered)}")
-        )
-
-    async def _local_adopt_reply(self, reference_value: str, token: str) -> dict[str, object]:
-        if self.launcher is None or not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
-        ):
-            return _reply_arguments(self._message("That request has expired."))
-        external = await self._resolve_external(reference_value)
-        if external is None:
-            return _reply_arguments(self._message("That local session is no longer available."))
-        try:
-            record = await self.launcher.adopt(AdoptionCommand(external, token))
-        except ExternalSessionStillRunningError:
-            return _reply_arguments(
-                self._message("Exit this local session first, then use Retry to recheck.")
-            )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(
-            self._message(f"<b>Session adopted</b>\n{escape(record.display.rendered)}")
-        )
-
-    async def _resolve_external(self, reference_value: str):
-        resolve = getattr(self.launcher, "resolve_external_session", None)
-        if resolve is None:
-            return None
-        try:
-            reference = ExternalSessionReference(reference_value)
-        except ValueError:
-            return None
-        return await resolve(reference)
 
     async def _sessions_reply(self) -> RenderedMessage:
         if self.launcher is not None:
@@ -1137,9 +861,6 @@ async def run_private_bot(
     _install_stop_signals(stopping)
     await application.initialize()
     try:
-        recover_handoffs = getattr(boundary.launcher, "recover_external_handoffs", None)
-        if recover_handoffs is not None:
-            await recover_handoffs()
         await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
         webhook = await application.bot.get_webhook_info()
         if webhook.url:
@@ -1256,24 +977,6 @@ def _profile_name(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }.get(profile_id, "Unavailable")
-
-
-def _local_session_label(summary, project_name: str | None) -> str:
-    started = (
-        summary.started_at.strftime("%H:%M") if summary.started_at is not None else "time unknown"
-    )
-    project = f"{project_name} · " if project_name else ""
-    if summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
-        return f"{project}{started} · terminate and resume"
-    if summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
-        return f"{project}{started} · selection required"
-    return f"{project}{started} · {summary.state.value}"
-
-
-def _local_session_button_text(summary, project_names: dict[str, str]) -> str:
-    project_name = project_names.get(str(summary.project_id)) if summary.project_id else None
-    profile_name = _profile_name(str(summary.profile_id))
-    return f"{profile_name} · {_local_session_label(summary, project_name)}"
 
 
 def _available_stops(state: SessionState) -> tuple[str, ...]:

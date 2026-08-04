@@ -6,8 +6,6 @@ import sqlite3
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
-from remote_agents.domain.external_sessions import ExternalProcessIdentity
-from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -24,62 +22,6 @@ class SQLiteSessionStore:
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
-
-    async def save_handoff_intent(self, intent: HandoffIntent) -> None:
-        with self._connection:
-            self._connection.execute(
-                """
-                INSERT INTO handoff_intents(
-                    intent_id, profile_id, project_id, conversation_source_id, process_pid,
-                    process_start_ticks, process_euid, process_name, state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    intent.intent_id,
-                    str(intent.profile_id),
-                    str(intent.project_id),
-                    intent.conversation_source_id,
-                    intent.process.pid,
-                    intent.process.start_ticks,
-                    intent.process.effective_uid,
-                    intent.process.process_name,
-                    intent.state.value,
-                ),
-            )
-
-    async def get_handoff_intent(self, intent_id: str) -> HandoffIntent | None:
-        row = self._connection.execute(
-            """SELECT intent_id, profile_id, project_id, conversation_source_id, process_pid,
-                      process_start_ticks, process_euid, process_name, state
-               FROM handoff_intents WHERE intent_id = ?""",
-            (intent_id,),
-        ).fetchone()
-        return _handoff_from_row(row) if row is not None else None
-
-    async def list_handoff_intents(
-        self, states: Collection[HandoffState]
-    ) -> Sequence[HandoffIntent]:
-        values = tuple(state.value for state in states)
-        if not values:
-            return ()
-        rows = self._connection.execute(
-            "SELECT intent_id, profile_id, project_id, conversation_source_id, process_pid, "
-            "process_start_ticks, process_euid, process_name, state FROM handoff_intents "
-            f"WHERE state IN ({', '.join('?' for _ in values)})",
-            values,
-        ).fetchall()
-        return tuple(_handoff_from_row(row) for row in rows)
-
-    async def update_handoff_state(self, intent_id: str, state: HandoffState) -> HandoffIntent:
-        with self._connection:
-            changed = self._connection.execute(
-                "UPDATE handoff_intents SET state = ? WHERE intent_id = ?", (state.value, intent_id)
-            ).rowcount
-        if changed != 1:
-            raise KeyError(f"unknown handoff intent: {intent_id}")
-        intent = await self.get_handoff_intent(intent_id)
-        assert intent is not None
-        return intent
 
     async def next_sequence(self, project_id: ProjectId, profile_id: ProfileId) -> int:
         """Allocate the next persisted display sequence for one project/profile pair."""
@@ -254,15 +196,4 @@ def _record_from_row(
         datetime.fromisoformat(row[5]),
         ProfileId(row[6]) if row[6] is not None else None,
         row[7],
-    )
-
-
-def _handoff_from_row(row: tuple[object, ...]) -> HandoffIntent:
-    return HandoffIntent(
-        str(row[0]),
-        ProfileId(str(row[1])),
-        ProjectId(str(row[2])),
-        str(row[3]),
-        ExternalProcessIdentity(int(row[4]), int(row[5]), int(row[6]), str(row[7])),
-        HandoffState(str(row[8])),
     )
