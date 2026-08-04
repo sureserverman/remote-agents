@@ -401,7 +401,7 @@ class PrivateBotBoundary:
         rows = tuple(
             (
                 Button(
-                    f"{_profile_name(str(item.profile_id))} · {item.state.value}",
+                    f"{_profile_name(str(item.profile_id))} · {_local_session_label(item)}",
                     self._callback("local.detail", str(item.reference)),
                 ),
             )
@@ -417,36 +417,35 @@ class PrivateBotBoundary:
         external = await self._resolve_external(reference_value)
         if external is None:
             return self._message("That local session is no longer available.")
+        if external.summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
+            return self._message(
+                "<b>Verified external session</b>\n"
+                "Terminate and Resume can lose the current unsaved turn.",
+                (
+                    (
+                        Button(
+                            "Terminate and Resume",
+                            self._callback("local.terminate.offer", reference_value),
+                        ),
+                    ),
+                    (Button("Back", self._callback("local.open", "local")),),
+                ),
+            )
+        if external.summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
+            return self._message(
+                "<b>Selection required</b>\n"
+                "Choose a same-profile saved conversation before termination.",
+                (
+                    (
+                        Button(
+                            "Select conversation", self._callback("local.select", reference_value)
+                        ),
+                    ),
+                    (Button("Back", self._callback("local.open", "local")),),
+                ),
+            )
         state = external.summary.state
         if state is ExternalSessionState.RUNNING_EXTERNALLY:
-            if external.summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
-                return self._message(
-                    "<b>Verified external session</b>\n"
-                    "Terminate and Resume can lose the current unsaved turn.",
-                    (
-                        (
-                            Button(
-                                "Terminate and Resume",
-                                self._callback("local.terminate.offer", reference_value),
-                            ),
-                        ),
-                        (Button("Back", self._callback("local.open", "local")),),
-                    ),
-                )
-            if external.summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
-                return self._message(
-                    "<b>Selection required</b>\n"
-                    "Choose a same-profile saved conversation before termination.",
-                    (
-                        (
-                            Button(
-                                "Select conversation",
-                                self._callback("local.select", reference_value),
-                            ),
-                        ),
-                        (Button("Back", self._callback("local.open", "local")),),
-                    ),
-                )
             return self._message(
                 "<b>Running externally</b>\nExit it locally, then Retry to recheck.",
                 (
@@ -1256,6 +1255,14 @@ def _profile_name(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }.get(profile_id, "Unavailable")
+
+
+def _local_session_label(summary) -> str:
+    if summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
+        return "terminate and resume"
+    if summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
+        return "selection required"
+    return summary.state.value
 
 
 def _available_stops(state: SessionState) -> tuple[str, ...]:
