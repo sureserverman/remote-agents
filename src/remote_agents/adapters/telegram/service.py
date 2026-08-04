@@ -398,10 +398,11 @@ class PrivateBotBoundary:
             return self._message("Local session discovery is unavailable.")
         sessions = await list_external()
         _LOG.warning("Local Sessions rendered %d external-process rows", len(sessions))
+        project_names = {item.opaque_id: item.name for item in self.catalogue}
         rows = tuple(
             (
                 Button(
-                    f"{_profile_name(str(item.profile_id))} · {_local_session_label(item)}",
+                    _local_session_button_text(item, project_names),
                     self._callback("local.detail", str(item.reference)),
                 ),
             )
@@ -1257,15 +1258,22 @@ def _profile_name(profile_id: str) -> str:
     }.get(profile_id, "Unavailable")
 
 
-def _local_session_label(summary) -> str:
+def _local_session_label(summary, project_name: str | None) -> str:
     started = (
         summary.started_at.strftime("%H:%M") if summary.started_at is not None else "time unknown"
     )
+    project = f"{project_name} · " if project_name else ""
     if summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
-        return f"{started} · terminate and resume"
+        return f"{project}{started} · terminate and resume"
     if summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
-        return f"{started} · selection required"
-    return f"{started} · {summary.state.value}"
+        return f"{project}{started} · selection required"
+    return f"{project}{started} · {summary.state.value}"
+
+
+def _local_session_button_text(summary, project_names: dict[str, str]) -> str:
+    project_name = project_names.get(str(summary.project_id)) if summary.project_id else None
+    profile_name = _profile_name(str(summary.profile_id))
+    return f"{profile_name} · {_local_session_label(summary, project_name)}"
 
 
 def _available_stops(state: SessionState) -> tuple[str, ...]:
