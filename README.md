@@ -3,11 +3,12 @@
 Remote Agents will be a private, single-owner Telegram control plane for curated agent
 sessions running in isolated tmux servers on this host.
 
-Its approved scope is limited to project browsing and managed session lifecycle actions:
-launch, selected resume, list, inspect, Copy Attach, graceful stop,
+Its approved scope is limited to project browsing, project creation, and managed session
+lifecycle actions: launch, selected resume, list, inspect, Copy Attach, graceful stop,
 cleanup, confirmed force stop, and confirmed Claude Remote Control state changes. It does not
-provide remote shell access, prompt relay, raw agent arguments, arbitrary keystrokes, or registry
-mutation.
+provide remote shell access, prompt relay, raw agent arguments, arbitrary keystrokes, or
+arbitrary paths. Its only approved registry mutation is the append-only add-project entry
+described below; no existing registry entry is ever edited or removed.
 
 ## Development
 
@@ -71,6 +72,42 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback.
 Do not put secrets in this repository.
+
+## Creating a project
+
+A project can be created from this host or from Telegram. Both surfaces run the same validated
+use case and the same append-only registry write:
+
+```bash
+uv run --locked remote-agents add-project --area infra --name new-thing
+```
+
+In Telegram, Add Project offers the area as a choice between the existing directories the server
+enumerates under the configured development root; a free-form area is never accepted. The project
+name is entered through a reply prompt and is validated before anything is created or written, and
+Review names the area and the name before the mutation happens. Cancel returns Home without a
+mutation.
+
+Area and name must each be lowercase letters, digits, and single hyphens, 1 to 64 characters. The
+project is created at exactly one area directory below the configured `dev_root`, so no other
+location can be targeted, and an existing directory is never replaced.
+
+The registry write appends one `{path, name, area, enabled, added}` entry and nothing else. The
+existing bytes of the registry named by `registry_path` are kept as an exact prefix rather than
+rewritten in bulk, which is what the portfolio tooling's drift detection expects of any writer.
+The write is serialized by an exclusive lock that covers cooperating writers only, so a concurrent
+hand edit is not protected. The extended document is re-parsed before it is published, and
+publication is atomic; a registry that does not already read cleanly is not extended, and a
+symlinked registry is written through rather than replaced. A canonical path the registry already
+holds is refused, including one held by a disabled entry. If the registry write fails, the created
+directory is removed, so the registry never holds an entry for a directory that is not there. A
+removal that itself fails is reported rather than hidden, leaving an unregistered directory behind.
+
+A project created from Telegram is selectable there immediately, because the bot re-reads the
+catalogue after the mutation. One created with the command line lands in a separate process, so a
+running bot picks it up on its next catalogue read rather than instantly. No registry field
+outside that closed schema is written, and neither surface can edit or remove an entry that
+already exists.
 
 ## Curated profiles and recovery
 

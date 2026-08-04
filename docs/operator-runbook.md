@@ -60,6 +60,13 @@ owner-only entry points from Telegram's command menu.
     provider title or resume description when supplied, never a provider ID. The bot does not
     scan, control, or adopt arbitrary local agent processes; use only provider-catalogued
     conversations to create a new managed session.
+11. Open Add Project. The area buttons must name only eligible existing directories under the
+    configured `dev_root`, excluding hidden ones, `archive`, and `archives`. Enter a rejected name
+    such as `New Thing` and confirm it is refused with no directory created, then enter a valid
+    name and confirm that Review shows the area and the name before the mutation. Cancel at Review
+    and verify nothing was created or appended. Repeat and confirm, then verify that the new
+    project is selectable from Launch without restarting the service, and that a second create
+    with the same area and name is refused.
 
 For the auditable host-local profile trace, run:
 
@@ -90,6 +97,69 @@ systemctl --user restart remote-agents.service
 systemctl --user is-active remote-agents.service
 journalctl --user -u remote-agents.service -n 100 --no-pager
 ```
+
+## Project creation and de-registration
+
+Create a project from this host with:
+
+```bash
+uv run --locked remote-agents add-project --area infra --name new-thing
+```
+
+The command reads the same private configuration as `doctor`, so omitting `--config` targets the
+production registry. The area must already exist directly under the configured `dev_root`, and it
+must be a directory the workspace offers: hidden directories, `archive`, `archives`, and any name
+outside the slug rule below are not eligible areas. The command creates `<dev_root>/<area>/<name>`
+and appends one `{path, name, area, enabled, added}` entry to the registry named by
+`paths.registry_path`, then prints the canonical path it recorded, which differs from the literal
+`<dev_root>/<area>/<name>` when the development root traverses a symlink. A refusal exits
+non-zero and prints a reason on standard error; refusals raised before the registry write name
+their cause, while a failure inside the write is reported as `project could not be catalogued`
+without its specific cause. Area and name must each be lowercase letters, digits, and single
+hyphens, 1 to 64 characters; the check runs before any filesystem effect. A canonical path the
+registry already holds is refused, including one recorded by a disabled entry.
+
+The append keeps the registry's existing bytes as an exact prefix, re-parses the extended document
+before publishing it, and publishes it atomically under an exclusive lock; a symlinked registry is
+written through rather than replaced. The lock serializes cooperating writers only, so do not hand
+edit the registry while a create is in flight. The lock leaves a `.lock` file beside the registry;
+it is created once and never removed.
+
+Confirm the result rather than trusting the reply:
+
+```bash
+tail -n 6 ~/.claude/projects-registry.yaml
+uv run --locked remote-agents doctor --json | python -m json.tool
+```
+
+The `tail` path above is the default; use whatever `paths.registry_path` names on this host. The
+appended block must be the last five lines and `healthy` must still be true, with
+`projects.registered` one higher than before.
+
+A failed registry write is normally self-cleaning: the created directory is removed and the
+failure is reported, so there is nothing to undo. The one case that needs an operator is a create
+that could not clean up after itself, which logs `left an uncatalogued project directory behind
+after a failed create`. That record is written by the `add-project` process, not by the service,
+so it appears on that command's standard error rather than in the service journal. The record
+names no path; the directory is the `--area` and `--name` that were passed. Confirm it is empty
+and remove it with `rmdir`; never use a recursive delete here. The project is absent from the
+registry in that state, so no registry change is required.
+
+Nothing in this tool removes or edits a registry entry, and hand-editing the registry is
+discouraged by the file's own header because the portfolio tooling runs drift detection over it.
+When a registration must be undone, copy the file first, then delete the five appended lines of
+that entry's block and re-run the doctor command above to confirm `projects.registered` fell by
+one. A malformed edit is not a partial failure: any schema or YAML error makes the whole registry
+read as degraded, which drops **every** registered project from the catalogue at once and causes
+further `add-project` calls to refuse to extend it. Restore the copy if the doctor check does not
+report the expected count.
+
+De-registration alone does not withdraw a project from the control plane. The catalogue merges the
+registry with bounded discovery under the development root, so a project whose directory still
+exists reappears as an unregistered entry and stays selectable for launch. The same is true of
+setting `enabled` to `false`, which additionally leaves the path permanently claimed against a
+future `add-project`. Removing the project directory is what actually withdraws it, and it should
+be done only after inspecting the contents.
 
 ## Rollback and local recovery
 
