@@ -59,9 +59,7 @@ class OpenCodeSessionCatalogue:
     def __init__(
         self, project_paths: Mapping[ProjectId, Path], runner: OpenCodeSessionRunner
     ) -> None:
-        self._project_paths = {
-            project_id: path.resolve(strict=False) for project_id, path in project_paths.items()
-        }
+        self._project_paths = project_paths
         self._runner = runner
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 
@@ -101,11 +99,14 @@ def _entries(
     rows = payload.get("sessions") if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
         raise ValueError("OpenCode session list did not return an array")
+    resolved_paths = {
+        project_id: path.resolve(strict=False) for project_id, path in project_paths.items()
+    }
     entries: list[ResolvedConversation] = []
     for row in rows[:_MAX_CATALOGUE_ITEMS]:
         if not isinstance(row, dict):
             continue
-        mapped_project = _project_for(row.get("directory"), project_paths)
+        mapped_project = _project_for(row.get("directory"), resolved_paths)
         if mapped_project is None or (project_id is not None and mapped_project != project_id):
             continue
         source_value = row.get("id")

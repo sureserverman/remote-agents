@@ -56,7 +56,7 @@ class CodexSessionCatalogue:
     """Collect at most a fixed number of content-free local Codex thread records."""
 
     def __init__(self, project_paths: Mapping[ProjectId, Path], client: CodexThreadClient) -> None:
-        self._project_paths = dict(project_paths)
+        self._project_paths = project_paths
         self._client = client
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 

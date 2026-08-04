@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,7 +67,7 @@ class TmuxTerminal:
     def __init__(
         self,
         gateway: TmuxGateway,
-        project_paths: dict[ProjectId, Path],
+        project_paths: Mapping[ProjectId, Path],
         profiles: dict[ProfileId, LaunchProfile],
         *,
         startup_timeout: float,

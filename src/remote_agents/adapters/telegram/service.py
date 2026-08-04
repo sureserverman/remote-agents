@@ -90,9 +90,21 @@ class PrivateBotBoundary:
     _labels: dict[str, str] = field(default_factory=dict)
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
+    catalogue_source: Callable[[], tuple[CatalogProject, ...]] | None = None
 
     def __post_init__(self) -> None:
         self.stops = StopController(self.callbacks)
+
+    async def refresh_catalogue(self) -> None:
+        """Re-read the projects so one created at runtime becomes selectable immediately.
+
+        The registry read and development-root walk run off the event loop, so refreshing
+        never stalls unrelated Telegram interactions or tmux polling.
+        """
+        if self.catalogue_source is None:
+            return
+        self.catalogue = await asyncio.to_thread(self.catalogue_source)
+        self._project_views.clear()
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user

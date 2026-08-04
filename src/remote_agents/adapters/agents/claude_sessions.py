@@ -31,7 +31,7 @@ class ClaudeSessionCatalogue:
         *,
         sessions_root: Path = Path.home() / ".claude" / "projects",
     ) -> None:
-        self._project_paths = dict(project_paths)
+        self._project_paths = project_paths
         self._sessions_root = sessions_root
         self._resolved: dict[ConversationReference, ResolvedConversation] = {}
 

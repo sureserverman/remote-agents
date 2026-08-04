@@ -5,12 +5,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from types import MappingProxyType
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
@@ -44,12 +47,76 @@ from remote_agents.adapters.tmux.profiles import (
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
-from remote_agents.application.project_catalog import build_catalogue
+from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
+
+_LOG = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCatalogueSnapshot:
+    """One consistent view of the projects a surface may currently offer."""
+
+    catalogue: tuple[CatalogProject, ...]
+    registry_error: str | None
+
+
+class ProjectCatalogueProvider:
+    """Re-read the registry and discovery so a new project needs no service restart.
+
+    The path mapping is mutated in place rather than replaced, so every consumer holding
+    it — the terminal and the provider conversation catalogues — observes one live view.
+    """
+
+    def __init__(self, registry_path: Path, dev_root: Path) -> None:
+        self._registry_path = registry_path
+        self._dev_root = dev_root
+        self._paths: dict[ProjectId, Path] = {}
+        self._snapshot = ProjectCatalogueSnapshot((), None)
+
+    @property
+    def paths(self) -> Mapping[ProjectId, Path]:
+        """Return a live read-only view; only refresh may change the shared routing table."""
+        return MappingProxyType(self._paths)
+
+    @property
+    def snapshot(self) -> ProjectCatalogueSnapshot:
+        return self._snapshot
+
+    def refresh(self) -> ProjectCatalogueSnapshot:
+        """Rebuild the catalogue and path mapping from the current registry and filesystem."""
+        registry = load_registry(self._registry_path)
+        discovered = discover_projects(self._dev_root)
+        resolved: dict[ProjectId, Path] = {}
+        offerable = []
+        for project in (*registry.projects, *discovered):
+            canonical = _resolved_project_path(project.path)
+            if canonical is None:
+                _LOG.warning("skipping catalogued project whose directory is unreachable")
+                continue
+            resolved[ProjectId(_opaque_id(canonical))] = canonical
+            offerable.append(project)
+        registered = [project for project in registry.projects if project in offerable]
+        found = [project for project in discovered if project in offerable]
+        catalogue = build_catalogue(registered, found, registry_error=registry.error)
+        if registry.error is not None:
+            _LOG.warning("project registry is degraded: %s", registry.error)
+        self._paths.clear()
+        self._paths.update(resolved)
+        self._snapshot = ProjectCatalogueSnapshot(catalogue, registry.error)
+        return self._snapshot
+
+
+def _resolved_project_path(path: Path) -> Path | None:
+    """Skip a catalogued directory that has since been moved or removed."""
+    try:
+        return path.resolve(strict=True)
+    except OSError:
+        return None
 
 
 def main(
@@ -87,7 +154,7 @@ def main(
         config = load_config(arguments.config or paths.config_path)
         registry = load_registry(config.registry_path)
         discovered = discover_projects(config.dev_root)
-        catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
+        catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
         profiles = probe_profiles(
             closed_profiles(),
             resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
@@ -103,7 +170,7 @@ def main(
             profiles=profiles,
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
-            catalogue_projects=len(catalogue),
+            catalogue_projects=len(catalogue.catalogue),
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -134,13 +201,9 @@ def main(
 
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotBoundary:
-    registry = load_registry(config.registry_path)
-    discovered = discover_projects(config.dev_root)
-    catalogue = build_catalogue(registry.projects, discovered, registry_error=registry.error)
-    project_paths = {
-        ProjectId(_opaque_id(project.path)): project.path.resolve(strict=True)
-        for project in (*registry.projects, *discovered)
-    }
+    projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
+    catalogue = projects.refresh().catalogue
+    project_paths = projects.paths
     definitions = closed_profiles()
     compatibility = probe_profiles(
         definitions,
@@ -208,6 +271,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
         conversations=conversations,
         capture=terminal.capture,
+        catalogue_source=lambda: projects.refresh().catalogue,
     )
 
 
