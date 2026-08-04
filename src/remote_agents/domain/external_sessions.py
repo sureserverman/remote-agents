@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from string import ascii_lowercase, digits
 
@@ -102,6 +103,7 @@ class ExternalSessionSummary:
     project_id: ProjectId | None
     state: ExternalSessionState
     stop_eligibility: ExternalStopEligibility = ExternalStopEligibility.READ_ONLY
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

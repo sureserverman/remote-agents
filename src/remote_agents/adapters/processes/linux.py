@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from uuid import UUID
@@ -119,7 +120,14 @@ class LinuxLocalProcessCatalog:
             identity = self._identity(evidence)
             eligibility = _eligibility(profile_id, source, identity)
             reference = _reference(profile_id, evidence, source)
-            summary = ExternalSessionSummary(reference, profile_id, project_id, state, eligibility)
+            summary = ExternalSessionSummary(
+                reference,
+                profile_id,
+                project_id,
+                state,
+                eligibility,
+                _started_at(evidence.start_ticks),
+            )
             summaries.append(summary)
             resolved[reference] = evidence
             external[reference] = ResolvedExternalSession(summary, evidence.pid, source, identity)
@@ -279,6 +287,23 @@ def _eligibility(
         if source is not None
         else ExternalStopEligibility.SELECTION_REQUIRED
     )
+
+
+def _started_at(start_ticks: int | None) -> datetime | None:
+    if start_ticks is None:
+        return None
+    try:
+        seconds = start_ticks / os.sysconf("SC_CLK_TCK")
+        return datetime.fromtimestamp(_boot_time_seconds() + seconds, UTC)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _boot_time_seconds() -> float:
+    for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+        if line.startswith("btime "):
+            return float(line.split()[1])
+    raise ValueError("boot time is unavailable")
 
 
 def _claude_project_directory(path: Path) -> str:

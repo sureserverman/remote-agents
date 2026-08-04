@@ -1258,11 +1258,14 @@ def _profile_name(profile_id: str) -> str:
 
 
 def _local_session_label(summary) -> str:
+    started = (
+        summary.started_at.strftime("%H:%M") if summary.started_at is not None else "time unknown"
+    )
     if summary.stop_eligibility is ExternalStopEligibility.VERIFIED_SOURCE:
-        return "terminate and resume"
+        return f"{started} · terminate and resume"
     if summary.stop_eligibility is ExternalStopEligibility.SELECTION_REQUIRED:
-        return "selection required"
-    return summary.state.value
+        return f"{started} · selection required"
+    return f"{started} · {summary.state.value}"
 
 
 def _available_stops(state: SessionState) -> tuple[str, ...]:
