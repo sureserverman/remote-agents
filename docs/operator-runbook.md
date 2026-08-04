@@ -60,8 +60,11 @@ owner-only entry points from Telegram's command menu.
     provider title or resume description when supplied, never a provider ID. Open Local Sessions
     and confirm running local Claude/Codex processes are listed as read-only evidence. On hosts
     where service ptrace protections hide peer `/proc` links, a bounded curated task name can
-    still be listed, but it is always not safely adoptable; only a uniquely correlated Claude
-    process may be adopted after it exits locally.
+    still be listed, but it is always not safely adoptable. A verified-source eligible row may use
+    Terminate and Resume after its second confirmation; it sends only SIGTERM and may lose the
+    current unsaved turn. An eligible uncorrelated row requires a same-profile saved-conversation
+    choice before that confirmation. Never use a terminal key, process group, SIGKILL, or a raw PID
+    to replace this flow.
 
 For the auditable host-local profile trace, run:
 

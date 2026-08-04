@@ -46,3 +46,12 @@ tmux -L remote-agents kill-session -t ra-<uuid>:
 If SQLite is unavailable or a profile reports `BLOCKED`, do not issue a mutation from the
 service. Preserve the database files and use only the read-only inventory/capture commands
 until the local cause is repaired.
+
+## Confirmed external handoff
+
+Local Sessions can control only a same-UID curated Claude, Codex, or qualified OpenCode process
+whose exact start identity is known and whose ancestry is outside the bot and managed tmux pane
+trees. The bot exposes neither PID nor signal. It persists the selected source first, uses fixed
+`SIGTERM`, waits for confirmed exit, then resumes using the dedicated socket. A `REQUESTED` intent
+never signals after service restart; a `STOP_SENT` intent resumes only after exact absence is
+confirmed. No SIGKILL, process group, terminal injection, or Cursor handoff is available.

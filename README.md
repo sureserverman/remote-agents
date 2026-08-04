@@ -64,7 +64,12 @@ Resume uses a server-resolved catalogue selection. It may show a bounded provide
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
 title is available); provider IDs and transcript output remain server-side. Local Sessions never
 moves an external process: exit it locally, then confirm a new managed resume after liveness is
-rechecked.
+rechecked. A verified-source Local Session may instead offer the fixed **Terminate and Resume**
+handoff: it warns that the current unsaved turn may be lost, requires a second confirmation, sends
+only `SIGTERM` after exact same-UID identity validation, waits for exit, and resumes through managed
+tmux. An uncorrelated eligible row requires an explicit same-profile saved-conversation selection;
+Cursor and incomplete identity evidence remain read-only. There is no `SIGKILL`, process-group
+signal, terminate-only action, key injection, or raw PID/signal input.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
 available only on a live managed Claude pane, requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
