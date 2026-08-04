@@ -20,7 +20,7 @@ from remote_agents.domain.external_sessions import (
     ExternalStopResult,
     ResolvedExternalSession,
 )
-from remote_agents.domain.handoff_intents import HandoffState
+from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import ProfileId, ProjectId
 
 
@@ -50,6 +50,9 @@ class Store:
             state,
         )
         return self.intents[intent_id]
+
+    async def list_handoff_intents(self, states):
+        return tuple(intent for intent in self.intents.values() if intent.state in states)
 
     async def get_by_resume_source(self, profile, source):
         return next(
@@ -83,6 +86,9 @@ class Controller:
     async def terminate(self, _identity):
         self.calls += 1
         return ExternalStopResult(ExternalStopOutcome.EXITED)
+
+    async def is_gone(self, _identity):
+        return True
 
 
 def command() -> ExternalStopCommand:
@@ -125,3 +131,36 @@ async def test_external_handoff_persists_stop_then_resumes_once() -> None:
     assert resumed.resume_source_id == "source-1"
     assert controller.calls == 1
     assert store.intents["h-handoff-1"].state is HandoffState.RESUMED
+
+
+async def test_recovery_never_signals_requested_and_resumes_only_stop_sent() -> None:
+    store = Store()
+    controller = Controller()
+    first = command()
+    requested = HandoffState.REQUESTED
+    stop_sent = HandoffState.STOP_SENT
+    for suffix, state in (("requested", requested), ("sent", stop_sent)):
+        intent = handoff_intent(first, suffix, state)
+        await store.save_handoff_intent(intent)
+    service = SessionService(
+        store, FakeTerminal(), processes=Processes(), process_controller=controller
+    )
+
+    recovered = await service.recover_external_handoffs()
+
+    assert len(recovered) == 1
+    assert controller.calls == 0
+    assert store.intents["h-requested"].state is HandoffState.FAILED
+    assert store.intents["h-sent"].state is HandoffState.RESUMED
+
+
+def handoff_intent(command: ExternalStopCommand, suffix: str, state: HandoffState) -> HandoffIntent:
+    assert command.external.identity is not None
+    return HandoffIntent(
+        f"h-{suffix}",
+        command.conversation.summary.profile_id,
+        command.conversation.summary.project_id,
+        command.conversation.provider_conversation_id.value,
+        command.external.identity,
+        state,
+    )

@@ -62,6 +62,16 @@ class LinuxExternalProcessController:
     async def terminate(self, identity: ExternalProcessIdentity) -> ExternalStopResult:
         return await asyncio.to_thread(self._terminate, identity)
 
+    async def is_gone(self, identity: ExternalProcessIdentity) -> bool:
+        """Confirm absence only by the original exact identity; a recycled PID is not absence."""
+        return not await asyncio.to_thread(self._matches_current, identity)
+
+    def _matches_current(self, identity: ExternalProcessIdentity) -> bool:
+        try:
+            return self._matches(identity, psutil.Process(identity.pid))
+        except psutil.NoSuchProcess:
+            return False
+
     def _terminate(self, identity: ExternalProcessIdentity) -> ExternalStopResult:
         try:
             process = psutil.Process(identity.pid)

@@ -27,6 +27,7 @@ from remote_agents.domain.conversations import (
     ConversationReference,
     ConversationState,
     ConversationSummary,
+    ProviderConversationId,
     ResolvedConversation,
 )
 from remote_agents.domain.external_sessions import (
@@ -37,6 +38,7 @@ from remote_agents.domain.external_sessions import (
 from remote_agents.domain.handoff_intents import HandoffIntent, HandoffState
 from remote_agents.domain.models import (
     ProfileId,
+    ProjectId,
     SessionDisplayIdentity,
     SessionId,
     SessionRecord,
@@ -163,6 +165,38 @@ class SessionService:
                 )
                 await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
                 return resumed
+
+    async def recover_external_handoffs(self) -> tuple[SessionRecord, ...]:
+        """Recover only post-signal intents; REQUESTED is never signalled after a restart."""
+        if self._process_controller is None:
+            return ()
+        recovered: list[SessionRecord] = []
+        intents = await self._store.list_handoff_intents(
+            (HandoffState.REQUESTED, HandoffState.STOP_SENT)
+        )
+        for intent in intents:
+            if intent.state is HandoffState.REQUESTED:
+                await self._store.update_handoff_state(intent.intent_id, HandoffState.FAILED)
+                continue
+            if not await self._process_controller.is_gone(intent.process):
+                continue
+            conversation = _stored_conversation(
+                intent.profile_id, intent.project_id, intent.conversation_source_id
+            )
+            async with self._locks.operation(), self._locks.for_conversation(
+                intent.profile_id, conversation.provider_conversation_id
+            ):
+                record = await self._resume_locked(
+                    ResumeCommand(
+                        intent.project_id,
+                        intent.profile_id,
+                        conversation,
+                        f"recover-{intent.intent_id}",
+                    )
+                )
+                await self._store.update_handoff_state(intent.intent_id, HandoffState.RESUMED)
+                recovered.append(record)
+        return tuple(recovered)
 
     async def _resume_locked(self, command: ResumeCommand) -> SessionRecord:
         """Create or return a durable resume identity while its conversation lock is held."""
@@ -306,6 +340,23 @@ def _external_conversation(external) -> ResolvedConversation:
         ConversationSummary(
             ConversationReference(f"c-{digest}"),
             external.summary.profile_id,
+            project_id,
+            ConversationState.RESUMABLE,
+            datetime.now(UTC),
+        ),
+        source,
+    )
+
+
+def _stored_conversation(
+    profile_id: ProfileId, project_id: ProjectId, source_id: str
+) -> ResolvedConversation:
+    source = ProviderConversationId(source_id)
+    digest = sha256(f"{profile_id}\0{project_id}\0{source.value}".encode()).hexdigest()
+    return ResolvedConversation(
+        ConversationSummary(
+            ConversationReference(f"c-{digest}"),
+            profile_id,
             project_id,
             ConversationState.RESUMABLE,
             datetime.now(UTC),

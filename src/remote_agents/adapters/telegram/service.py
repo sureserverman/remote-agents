@@ -969,6 +969,9 @@ async def run_private_bot(
     _install_stop_signals(stopping)
     await application.initialize()
     try:
+        recover_handoffs = getattr(boundary.launcher, "recover_external_handoffs", None)
+        if recover_handoffs is not None:
+            await recover_handoffs()
         await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
         webhook = await application.bot.get_webhook_info()
         if webhook.url:
