@@ -7,3 +7,7 @@ class DuplicateCommandError(ValueError):
 
 class SessionNotFoundError(LookupError):
     """The requested managed session is not known to the durable store."""
+
+
+class ProjectCreationError(ValueError):
+    """A project could not be created and catalogued, leaving no partial registration."""

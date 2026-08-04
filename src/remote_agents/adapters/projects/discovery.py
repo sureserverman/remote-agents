@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+IGNORED_DIRECTORY_NAMES = ("archive", "archives")
+
 
 @dataclass(frozen=True, slots=True)
 class DiscoveredProject:
@@ -17,7 +19,7 @@ class DiscoveredProject:
 
 
 def discover_projects(
-    dev_root: Path, *, ignored_names: Iterable[str] = ("archive", "archives")
+    dev_root: Path, *, ignored_names: Iterable[str] = IGNORED_DIRECTORY_NAMES
 ) -> tuple[DiscoveredProject, ...]:
     """Discover safe ``<area>/<project>`` directories without traversing deeper."""
     ignored = frozenset(ignored_names)

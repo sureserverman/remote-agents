@@ -7,16 +7,17 @@ import os
 import re
 import stat
 import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 import yaml
 
 from remote_agents.adapters.projects.registry import load_registry
+from remote_agents.domain.projects import ProjectIdentity
 
-_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _PLAIN_SCALAR_PATH = re.compile(r"^[A-Za-z0-9._/@+-]+$")
 
 
@@ -37,8 +38,10 @@ def append_project(
 
     Serialization covers cooperating writers only; a concurrent hand edit is not protected.
     """
-    if not _SLUG.fullmatch(name) or not _SLUG.fullmatch(area):
-        raise RegistryWriteError("project name and area must be lowercase slugs")
+    try:
+        ProjectIdentity(area=area, name=name)
+    except ValueError as error:
+        raise RegistryWriteError(str(error)) from error
     canonical = _canonical_project_path(dev_root, project_path, name, area)
     target = _writable_registry_target(registry_path)
     with _exclusive_lock(target):
@@ -55,6 +58,25 @@ def append_project(
         separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
         _replace_atomically(target, existing + separator + block.encode("utf-8"))
     return canonical
+
+
+@dataclass(frozen=True, slots=True)
+class RegistryProjectRecorder:
+    """Catalogue created projects through the closed append-only registry writer."""
+
+    registry_path: Path
+    dev_root: Path
+    today: Callable[[], date] = field(default=date.today)
+
+    def register(self, identity: ProjectIdentity, path: Path) -> None:
+        append_project(
+            self.registry_path,
+            dev_root=self.dev_root,
+            project_path=path,
+            name=identity.name,
+            area=identity.area,
+            added=self.today(),
+        )
 
 
 def _canonical_project_path(dev_root: Path, project_path: Path, name: str, area: str) -> Path:
@@ -144,9 +166,15 @@ def _replace_atomically(target: Path, content: bytes) -> None:
 
 
 def _sync_directory(directory: Path) -> None:
-    """Persist the rename itself, so a crash cannot revert a reported registration."""
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    """Persist the rename on a best-effort basis.
+
+    The replacement is already visible to every reader by this point, so reporting a
+    failure here would tell the caller nothing was written and invite it to roll back a
+    registration that in fact landed.
+    """
+    with suppress(OSError):
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
