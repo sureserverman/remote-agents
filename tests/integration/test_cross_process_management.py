@@ -8,7 +8,11 @@ import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tmux.codec import ManagedPane
 from remote_agents.adapters.tmux.fake import FakeTerminal
+from remote_agents.adapters.tmux.gateway import TmuxInventory
+from remote_agents.adapters.tmux.profiles import build_launch_profile
+from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.commands import (
     CleanupCommand,
     GracefulStopCommand,
@@ -17,7 +21,8 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
-from remote_agents.domain.models import ProfileId, ProjectId, SessionState
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
+from remote_agents.domain.profiles import closed_profiles
 
 _PROJECT = ProjectId("opaque-project")
 _PROFILE = ProfileId("claude")
@@ -118,4 +123,90 @@ async def test_a_terminal_session_is_visible_to_a_service_started_afterwards(
 
         assert [record.session_id for record in listed] == [launched.session_id]
     finally:
+        service_connection.close()
+
+
+class RecordingGateway:
+    """Model tmux ownership across two terminals without running a tmux server."""
+
+    def __init__(self, intent_directory: Path) -> None:
+        self.intent_directory = intent_directory
+        self.panes: dict[SessionId, tuple[ProjectId, ProfileId]] = {}
+        self.preserved: set[SessionId] = set()
+        self.keys: list[tuple[SessionId, tuple[str, ...]]] = []
+
+    async def launch(
+        self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId, cwd: Path
+    ) -> None:
+        del cwd
+        self.panes[session_id] = (project_id, profile_id)
+
+    async def inventory(self) -> TmuxInventory:
+        return TmuxInventory(
+            tuple(
+                ManagedPane(
+                    f"ra-{session_id}",
+                    session_id,
+                    project_id,
+                    profile_id,
+                    1234,
+                    session_id not in self.preserved,
+                    session_id in self.preserved,
+                )
+                for session_id, (project_id, profile_id) in self.panes.items()
+            ),
+            (),
+        )
+
+    async def capture(self, session_id: SessionId) -> str:
+        return "Claude Code ready"
+
+    async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
+        self.keys.append((session_id, keys))
+        self.preserved.add(session_id)
+
+
+def _terminal(gateway: RecordingGateway, executable: Path) -> TmuxTerminal:
+    """Compose a terminal exactly as the composition root does, with no static profiles."""
+    definition = next(item for item in closed_profiles() if item.profile_id == ProfileId("claude"))
+    return TmuxTerminal(
+        gateway,
+        {_PROJECT: executable.parent},
+        {},
+        startup_timeout=1,
+        profile_factories={
+            ProfileId("claude"): lambda session_id: build_launch_profile(
+                definition, executable, session_id, {"PATH": "/usr/bin"}
+            )
+        },
+    )
+
+
+async def test_a_second_terminal_can_gracefully_stop_what_the_first_launched(
+    database: Path, tmp_path: Path
+) -> None:
+    """The remembered profile is process-local, so the other surface must resolve its own."""
+    executable = tmp_path / "bin" / "claude"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+    gateway = RecordingGateway(tmp_path / "intents")
+    terminal_connection = open_database(database)
+    service_connection = open_database(database)
+    try:
+        terminal = SessionService(
+            SQLiteSessionStore(terminal_connection), _terminal(gateway, executable)
+        )
+        service = SessionService(
+            SQLiteSessionStore(service_connection), _terminal(gateway, executable)
+        )
+
+        launched = await terminal.launch(LaunchCommand(_PROJECT, _PROFILE, "tui-1"))
+        stopped = await service.graceful_stop(GracefulStopCommand(launched.session_id, _PROFILE))
+
+        assert stopped.preserved, "the other surface resolved no profile and sent no keys"
+        assert gateway.keys and gateway.keys[0][0] == launched.session_id
+        final = await service.list_sessions()
+        assert [record.state for record in final] == [SessionState.PRESERVED]
+    finally:
+        terminal_connection.close()
         service_connection.close()

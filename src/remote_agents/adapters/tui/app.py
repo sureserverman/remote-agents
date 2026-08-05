@@ -416,7 +416,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if record.state is SessionState.FAILED:
             self._show_review()
             self._set_status(
-                "The session did not become ready. Check this host, then retry.\n"
+                "The session did not become ready, but its pane may still exist. Reach it "
+                "with:\n"
+                f"{' '.join(self._services.attach_argv(str(record.session_id)))}\n"
+                "Check this host before retrying, or a second session will run alongside it.\n"
                 f"{self._selection.review()}"
             )
             return

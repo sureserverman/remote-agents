@@ -168,11 +168,28 @@ class TmuxTerminal:
             session_id, live=False, preserved=False, detail="startup_timeout"
         )
 
+    def _resolved_profile(
+        self, session_id: SessionId, profile_id: ProfileId
+    ) -> LaunchProfile | None:
+        """Resolve a profile for a session this process may not have launched itself.
+
+        The remembered profile is process-local, so a session started by the other
+        surface — or by this one before a restart — has to be resolved from the curated
+        factories, or it could never be stopped by anything but a force.
+        """
+        remembered = self._session_profiles.get(session_id) or self._profiles.get(profile_id)
+        if remembered is not None:
+            return remembered
+        try:
+            return self._profile_factories[profile_id](session_id)
+        except KeyError:
+            return None
+
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
         """Send a known profile sequence only after rechecking current trusted ownership."""
-        profile = self._session_profiles.get(session_id) or self._profiles.get(profile_id)
+        profile = self._resolved_profile(session_id, profile_id)
         observation = await self.inspect(session_id)
         if profile is None or observation is None or observation.profile_id != profile_id:
             return TerminalObservation(
@@ -193,14 +210,11 @@ class TmuxTerminal:
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
         """Recheck a failed launch against the profile's readiness evidence."""
-        profile = self._session_profiles.get(session_id) or self._profiles.get(profile_id)
+        profile = self._resolved_profile(session_id, profile_id)
         if profile is None:
-            try:
-                profile = self._profile_factories[profile_id](session_id)
-            except KeyError:
-                return TerminalObservation(
-                    session_id, live=False, preserved=False, detail="unknown_profile"
-                )
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="unknown_profile"
+            )
         observation = await self.inspect(session_id)
         if observation is None or not observation.live:
             return TerminalObservation(

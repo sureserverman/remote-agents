@@ -512,3 +512,20 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
 
     assert "was not started" in status
     assert app.return_value is None
+
+
+async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
+    """A launch that never reported ready may still have left a pane running."""
+    app = RemoteAgentsTui(_context(launcher=FakeLauncher(state=SessionState.FAILED)))
+
+    async with app.run_test() as pilot:
+        app._choose_project("opaque-existing")
+        app._choose_profile("claude")
+        app._submit_label("")
+        await app._resolve_review("launch")
+        await pilot.pause()
+        status = _status(app)
+
+    assert "attach-session" in status
+    assert "did not become ready" in status
+    assert app.return_value is None

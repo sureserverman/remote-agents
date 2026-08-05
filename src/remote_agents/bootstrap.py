@@ -231,6 +231,14 @@ def main(
         request = None
         try:
             request = run_local_terminal(local_context(config, connection, paths))
+        except Exception:
+            _LOG.exception("the local terminal surface failed")
+            print(
+                "The terminal surface failed. Any session it started is listed by:\n"
+                "tmux -L remote-agents list-sessions",
+                file=sys.stderr,
+            )
+            return 1
         finally:
             connection.close()
         return attach_to(request)

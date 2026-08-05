@@ -7,7 +7,7 @@ import pytest
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.adapters.tui.attach import attach_to
 
-_ARGV = ("tmux", "-L", "remote-agents", "attach-session", "-t", "=ra-abc")
+_ARGV = ("tmux", "-L", "remote-agents", "attach-session", "-t", "ra-abc:")
 
 
 class Recorder:
