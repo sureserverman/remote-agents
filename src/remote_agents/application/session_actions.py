@@ -14,7 +14,9 @@ record, and force is the only action that can retire it.
 
 from __future__ import annotations
 
-from remote_agents.domain.models import SessionState
+from typing import Protocol
+
+from remote_agents.domain.models import ProfileId, SessionState
 
 GRACEFUL = "graceful"
 CLEANUP = "cleanup"
@@ -45,3 +47,20 @@ def available_actions(state: SessionState) -> tuple[str, ...]:
     if state in _FORCEABLE:
         actions.append(FORCE)
     return tuple(actions)
+
+
+class _RemoteControllable(Protocol):
+    """The two fields availability turns on; any session record satisfies this."""
+
+    profile_id: ProfileId
+    state: SessionState
+
+
+def remote_control_available(record: _RemoteControllable) -> bool:
+    """Whether a surface should offer the Claude Remote Control toggle for `record`.
+
+    Only Claude implements the pane action, and only a live pane can receive it. This is
+    the presentation gate; `SessionService.set_remote_control` keeps its own independent
+    profile check so a surface that ignores this one still cannot drive a non-Claude pane.
+    """
+    return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING

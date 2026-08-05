@@ -52,12 +52,12 @@ from remote_agents.application.commands import (
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand
-from remote_agents.application.session_actions import available_actions
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
     search_catalogue,
 )
+from remote_agents.application.session_actions import available_actions, remote_control_available
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -518,7 +518,7 @@ class PrivateBotBoundary:
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
             )
-        if record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING:
+        if remote_control_available(record):
             buttons.append(
                 (
                     Button(
