@@ -144,12 +144,15 @@ refused in the other. The per-process `SessionLocks` do not hold across processe
 `SessionService` constructs its own, so they serialize concurrent mutations only inside the
 process that owns them, and the service's per-session serialization does not extend to the
 terminal. On a single-owner host this costs nothing: one person driving one surface at a time
-never produces the concurrency those locks exist to arbitrate, and the terminal's only session
-mutation is a launch, which creates a fresh identity rather than touching an existing one. If two
-people used the bot and the terminal at the same moment, only SQLite would be arbitrating between
-them, and a writer that cannot take the file lock within one second fails rather than waiting,
+never produces the concurrency those locks exist to arbitrate. What is left unserialized has
+widened, though, because the terminal is no longer launch-only: it gracefully stops, cleans up,
+force stops, and toggles Remote Control on sessions it never started, and each of those writes
+changes an existing record rather than creating a fresh identity. If two people used the bot and
+the terminal at the same moment, only SQLite would be arbitrating between them, and a writer that
+cannot take the file lock within one second fails rather than waiting,
 which surfaces as a reported error rather than a damaged record. Do not hand the bot to a second
-person while working in the terminal.
+person while working in the terminal, and do not drive one session from both surfaces at the same
+moment.
 
 Each process also holds its own catalogue and its own profile probe, both taken when it starts. A
 project created in the terminal is invisible to a running service until it re-reads — press
@@ -159,6 +162,73 @@ terminal started stays reported as unavailable there until the terminal is resta
 service's profile list is a snapshot of its own start in the same way. When the two surfaces
 disagree about which projects or agents exist, neither is wrong; refresh or restart the older
 process, and treat `doctor --profiles`, which probes when it is run, as the current answer.
+
+## Local recovery without Telegram
+
+When the service is down, its credential has been revoked, or Telegram is unreachable, every
+post-launch action still exists on this host. `remote-agents tui` reads the same private
+configuration and the same session database as `serve`, and it is the one of the two that does
+not require the Telegram environment file, so it starts where `serve` would refuse to:
+
+```bash
+uv run --locked remote-agents tui
+```
+
+1. Press Ctrl+S, which is available from any screen. Sessions lists every managed session the
+   shared store holds, including ones the bot launched and ones an earlier terminal run started.
+   ENDED records are filtered because nothing is left to reach or stop. Readiness is refreshed
+   once as the list opens, so a launch recorded as FAILED whose pane has since become ready is
+   listed as RUNNING rather than sending an operator to repair something that already works.
+   Escape returns to the project list.
+2. Select a row for its detail: the session's identity, its state, and one line explaining what
+   that state means. The record is re-read from the store every time detail opens, because the
+   store has a second writer and the session may have been stopped elsewhere while the list was
+   on screen.
+3. Copy attach prints the command that reaches the pane, or states that there is none because the
+   pane is not live or the pane found for that session belongs to a different project or agent.
+   Inspect output renders the session's captured output, sanitized and bounded, in a scrollable
+   pane; escape returns to detail. Output containing NUL is refused rather than printed, because
+   a pane emitting it is not rendering text.
+4. The stops offered are exactly the ones the shared policy allows from the session's current
+   state: graceful only from RUNNING, cleanup only from PRESERVED, and force from RUNNING,
+   STOP_REQUESTED, PRESERVED, or FAILED. Claude Remote Control is offered only for a RUNNING
+   Claude session. The record is read again and the policy re-checked at the moment the action is
+   issued, so an action that has become illegal since the list was drawn is explained rather than
+   attempted.
+5. Force stop is confirmed a second time, on a screen of its own that names the session and
+   states that the kill is immediate, cannot be undone, and loses whatever the agent has not
+   saved. Cancel is the first entry and the highlighted one, so a stray or repeated enter aborts;
+   confirming means moving to the other row on purpose. No screen rests the cursor on a
+   destructive entry, and a stop that fails leaves the cursor on Back rather than on the button
+   that just failed, so a second enter is never a blind retry of a kill.
+6. ORPHANED offers no stop at all. It does not mean the pane is gone — that ends the session — it
+   means the record and this host's panes could not be reconciled, so the session is quarantined
+   for local attention and the lifecycle permits no transition out of it. Inspect it with
+   `tmux -L remote-agents list-panes -a` and resolve it at the tmux level, only after its
+   ownership and output have been established.
+
+Ctrl+O opens Resume, which starts a new managed session continuing a saved conversation, and it
+is offered only for profiles that report themselves resume-capable on this host. When a session
+cannot be salvaged, force stopping it and resuming its conversation into a fresh session is the
+local recovery route that keeps the prior work.
+
+A stop issued from the terminal reaches a session the service launched, and one issued from
+Telegram reaches a session the terminal launched, because the profile a graceful stop needs is
+resolved from the curated launch factories rather than from the launching process's memory of it.
+Those factories hold only the profiles this host reports available. If no factory is curated here
+for that session's profile, the graceful stop fails closed: nothing is sent to the pane, and the
+session is not recorded as stopped — detail still shows it RUNNING rather than claiming a stop
+that never happened. Check `doctor --profiles` before concluding that a session refuses to stop.
+Force and cleanup resolve no profile, because they remove the managed tmux session itself, so
+force remains available when a graceful stop cannot be resolved.
+
+The two-writer caveat above still applies, and it now governs destructive actions rather than
+launches alone. `SessionLocks` serializes per-session mutations only inside the process holding
+them, so a stop from the terminal and a stop from the service are not serialized against each
+other; across the two processes the only arbitration is SQLite's one-second busy timeout and the
+durable idempotency keys. That is sound for a single owner on one host and would not be for
+concurrent operators. Drive a given session from one surface at a time, and let the other
+surface's next list read the result.
 
 ## Project creation and de-registration
 
@@ -242,9 +312,10 @@ Restore the last reviewed unit, run `systemctl --user daemon-reload`, then enabl
 again. Do not remove a managed tmux session until its ownership and output have been inspected.
 
 `remote-agents tui` keeps working while the service is disabled, because it needs neither the unit
-nor the Telegram credentials, so a curated launch remains possible during a rollback. It attaches
-only to the session it has just started and never adopts an existing one; reach a pane that
-outlived its launch with `tmux -L remote-agents attach-session -t ra-<session>:`.
+nor the Telegram credentials, so a curated launch and the local control plane described under
+[local recovery without Telegram](#local-recovery-without-telegram) both remain possible during a
+rollback. It attaches only to the session it has just started and never adopts an existing one;
+reach a pane that outlived its launch with `tmux -L remote-agents attach-session -t ra-<session>:`.
 
 Before changing bot profile metadata, retain a private rollback snapshot of the avatar,
 descriptions, owner-scoped commands, and menu behavior. Restore that snapshot through the
