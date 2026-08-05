@@ -422,3 +422,43 @@ class RecordingDrainer:
 
     async def drain(self) -> None:
         self.drained = True
+
+
+async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path) -> None:
+    """Production hands the terminal no static profiles, so the factories must carry the stop."""
+    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    database_path = tmp_path / "sessions.sqlite3"
+    store = SQLiteSessionStore(open_database(database_path))
+    service = SessionService(store, terminal)
+    command = LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "cross-process-stop")
+    record = None
+    try:
+        record = await service.launch(command)
+        assert record.state is SessionState.RUNNING
+
+        other_surface = TmuxTerminal(
+            gateway,
+            {ProjectId("opaque-editor"): tmp_path},
+            {},
+            startup_timeout=0.3,
+            profile_factories={
+                ProfileId("fake"): lambda session_id: LaunchProfile(
+                    sys.executable,
+                    (sys.executable, str(tmp_path / "fake_agent.py"), "ready"),
+                    {"PATH": os.environ["PATH"]},
+                    "READY",
+                )
+            },
+        )
+        stopped = await SessionService(
+            SQLiteSessionStore(open_database(database_path)), other_surface
+        ).graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
+
+        assert stopped.preserved
+        assert (await store.get(record.session_id)).state is SessionState.PRESERVED
+    finally:
+        if record is not None:
+            try:
+                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+            except RuntimeError:
+                pass
