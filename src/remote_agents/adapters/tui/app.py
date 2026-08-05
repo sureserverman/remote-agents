@@ -15,10 +15,21 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
-from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.commands import (
+    CleanupCommand,
+    ForceStopCommand,
+    GracefulStopCommand,
+    LaunchCommand,
+)
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
-from remote_agents.application.session_actions import explain_state
+from remote_agents.application.session_actions import (
+    CLEANUP,
+    FORCE,
+    GRACEFUL,
+    available_actions,
+    explain_state,
+)
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 
@@ -40,6 +51,7 @@ class Step(StrEnum):
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
+_ACTION_LABELS = {GRACEFUL: "Graceful stop", CLEANUP: "Clean up", FORCE: "Force stop"}
 _BACK = "\x00back"
 _CANCEL = "\x00cancel"
 
@@ -451,9 +463,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._detail_id = session_value
         self._set_status(
-            f"{record.display.rendered}\n"
-            f"State: {record.state.value}\n"
-            f"{explain_state(record.state)}"
+            f"{record.display.rendered}\nState: {record.state.value}\n{explain_state(record.state)}"
         )
         self._fill(self._detail_entries(record))
 
@@ -462,6 +472,53 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._show_sessions()
         elif key == "attach":
             await self._show_attach()
+        elif key in _ACTION_LABELS:
+            await self._stop(key)
+
+    async def _stop(self, action: str) -> None:
+        """Issue one stop, after re-reading the record and re-checking the policy.
+
+        The policy is consulted again here rather than trusted from the rendered entry: the
+        session may have moved on since the list was drawn, and an action that was legal
+        then can be illegal now. The service would refuse it anyway — this keeps the owner
+        from seeing an exception instead of an explanation.
+        """
+        if self._detail_id is None or self._busy:
+            return
+        self._busy = True
+        try:
+            record = await self._current_record(self._detail_id)
+            if record is None:
+                self._set_status("That session is no longer available.")
+                return
+            if action not in available_actions(record.state):
+                self._set_status(
+                    f"{record.display.rendered}\n"
+                    f"{_ACTION_LABELS[action]} is no longer available for this session.\n"
+                    f"{explain_state(record.state)}"
+                )
+                return
+            await self._issue_stop(action, record)
+        except Exception as error:
+            _LOG.exception("stop failed")
+            self._set_status(
+                f"{_ACTION_LABELS[action]} did not complete: {error}\n"
+                "The session was left as it is; open it again to see its current state."
+            )
+            return
+        finally:
+            self._busy = False
+        await self._show_detail(self._detail_id)
+
+    async def _issue_stop(self, action: str, record: SessionRecord) -> None:
+        """Send exactly one curated command; the commands themselves carry no arguments."""
+        launcher = self._services.launcher
+        if action == GRACEFUL:
+            await launcher.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
+        elif action == CLEANUP:
+            await launcher.cleanup(CleanupCommand(record.session_id))
+        else:
+            await launcher.force_stop(ForceStopCommand(record.session_id))
 
     async def _show_attach(self) -> None:
         """Render the command that reaches this pane, or say why there is none.
@@ -492,9 +549,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._set_status(f"{record.display.rendered}\nAttach with:\n{command}")
 
     def _detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
-        """The actions this session offers. Stage 3 adds the mutating ones."""
-        del record
-        return (("attach", "Copy attach"), (_BACK, "Back"))
+        """The actions this session offers, taken from the policy and not decided here.
+
+        The stop entries are exactly `available_actions(record.state)` in the order it
+        returns them, which puts the destructive one last. Adding, filtering, or reordering
+        here is what `tests/contract/test_session_actions_parity.py` exists to catch.
+        """
+        entries: list[tuple[str, str]] = [("attach", "Copy attach")]
+        entries.extend(
+            (action, _ACTION_LABELS[action]) for action in available_actions(record.state)
+        )
+        entries.append((_BACK, "Back"))
+        return tuple(entries)
 
     def _report_store_failure(self, error: Exception) -> None:
         """Report a failed store or terminal read without tearing the surface down.

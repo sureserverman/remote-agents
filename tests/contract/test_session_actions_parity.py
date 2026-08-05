@@ -69,9 +69,44 @@ async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     }
 
 
-# Stage 3 appends the terminal surface here; the parametrization is what makes adding a
-# surface without pinning it to the policy impossible to do quietly.
-SURFACES = (("telegram", _telegram_rendered_actions),)
+async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
+    """The stop actions the local terminal's detail view actually puts on screen."""
+    from remote_agents.adapters.tui.app import _ACTION_LABELS, RemoteAgentsTui
+    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+
+    class _Launcher:
+        async def refresh_readiness(self):
+            return (record,)
+
+        async def list_sessions(self):
+            return (record,)
+
+        async def copy_attach(self, _session_id):
+            return None
+
+    label_to_action = {label: action for action, label in _ACTION_LABELS.items()}
+    app = RemoteAgentsTui(
+        TuiContext(
+            launcher=_Launcher(),  # type: ignore[arg-type]
+            creator=object(),  # type: ignore[arg-type]
+            profiles=(ProfileChoice("claude", True),),
+            refresh_catalogue=tuple,
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        )
+    )
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        rows = [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return {label_to_action[row] for row in rows if row in label_to_action}
+
+
+# Both surfaces are pinned here. The parametrization is what makes adding a surface without
+# pinning it to the policy impossible to do quietly.
+SURFACES = (
+    ("telegram", _telegram_rendered_actions),
+    ("tui", _tui_rendered_actions),
+)
 
 
 @pytest.mark.parametrize("surface_name,render", SURFACES)
