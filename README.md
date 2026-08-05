@@ -97,7 +97,8 @@ existing bytes of the registry named by `registry_path` are kept as an exact pre
 rewritten in bulk, which is what the portfolio tooling's drift detection expects of any writer.
 The write is serialized by an exclusive lock that covers cooperating writers only, so a concurrent
 hand edit is not protected. The extended document is re-parsed before it is published, and
-publication is atomic; a registry that does not already read cleanly is not extended, and a
+publication is atomic; a registry that does not already read cleanly is not extended, nor is one
+whose shape a block append cannot extend, such as an empty flow-style `projects: []` list, and a
 symlinked registry is written through rather than replaced. A canonical path the registry already
 holds is refused, including one held by a disabled entry. If the registry write fails, the created
 directory is removed, so the registry never holds an entry for a directory that is not there. A

@@ -67,9 +67,11 @@ def _text_scalar(value: str) -> str:
     A name like ``2026`` or ``no`` is a valid project slug but an invalid registry entry,
     because the reader requires every one of these fields to be text.
     """
-    if isinstance(yaml.safe_load(value), str):
-        return value
-    return f'"{value}"'
+    try:
+        parsed = yaml.safe_load(value)
+    except (ValueError, yaml.YAMLError):
+        return f'"{value}"'
+    return value if isinstance(parsed, str) else f'"{value}"'
 
 
 @dataclass(frozen=True, slots=True)

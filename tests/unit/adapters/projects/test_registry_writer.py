@@ -296,7 +296,23 @@ def test_append_project_rejects_a_relative_path(tmp_path: Path) -> None:
         _append(registry, tmp_path, project_path=Path("dev/infra/new-project"))
 
 
-@pytest.mark.parametrize("name", ["2026", "true", "false", "no", "on", "off", "0x1f", "0755"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "2026",
+        "true",
+        "false",
+        "no",
+        "on",
+        "off",
+        "0x1f",
+        "0755",
+        "2026-08-05",
+        "2026-02-30",
+        "9999-99-99",
+        "0000-00-00",
+    ],
+)
 def test_append_project_keeps_a_numeric_or_boolean_name_readable_as_text(
     tmp_path: Path, name: str
 ) -> None:
