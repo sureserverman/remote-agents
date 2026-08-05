@@ -67,18 +67,16 @@ class StopController:
 
         if record.session_id != request.session_id or record.profile_id != request.profile_id:
             return False
-        if request.action == "graceful" and record.state is SessionState.RUNNING:
+        # The record is re-read here because it may have moved on since the token was
+        # issued, but the rule it is checked against is the shared one. A private copy is
+        # what let an offered action be silently refused at dispatch.
+        if request.action not in available_actions(record.state):
+            return False
+        if request.action == "graceful":
             await service.graceful_stop(GracefulStopCommand(request.session_id, request.profile_id))
             return True
-        if request.action == "cleanup" and record.state is SessionState.PRESERVED:
+        if request.action == "cleanup":
             await service.cleanup(CleanupCommand(request.session_id))
             return True
-        if request.action == "force" and record.state in {
-            SessionState.RUNNING,
-            SessionState.STOP_REQUESTED,
-            SessionState.PRESERVED,
-            SessionState.FAILED,
-        }:
-            await service.force_stop(ForceStopCommand(request.session_id))
-            return True
-        return False
+        await service.force_stop(ForceStopCommand(request.session_id))
+        return True

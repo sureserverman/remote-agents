@@ -49,6 +49,82 @@ def test_offer_still_refuses_an_action_the_policy_does_not_name() -> None:
         )
 
 
+class _RecordingService:
+    def __init__(self) -> None:
+        self.dispatched: list[str] = []
+
+    async def graceful_stop(self, _command) -> None:
+        self.dispatched.append("graceful")
+
+    async def cleanup(self, _command) -> None:
+        self.dispatched.append("cleanup")
+
+    async def force_stop(self, _command) -> None:
+        self.dispatched.append("force")
+
+
+class _Record:
+    def __init__(self, session_id: SessionId, profile_id: ProfileId, state: SessionState) -> None:
+        self.session_id = session_id
+        self.profile_id = profile_id
+        self.state = state
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+@pytest.mark.parametrize("action", ["graceful", "cleanup", "force"])
+async def test_execute_dispatches_exactly_what_the_policy_permits(
+    state: SessionState, action: str
+) -> None:
+    """`execute` rechecks the live record — it must recheck against the shared policy.
+
+    Offering an action the executor then refuses is the failure the ORPHANED force button
+    had: the token was issued, the owner confirmed, and the stop silently no-opped.
+    """
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    session = SessionId(UUID(int=1))
+    profile = ProfileId("claude")
+    service = _RecordingService()
+    request = StopRequest(action, session, profile)
+
+    dispatched = await _controller().execute(request, service, _Record(session, profile, state))
+
+    assert dispatched is (action in available_actions(state))
+    assert service.dispatched == ([action] if action in available_actions(state) else [])
+
+
+async def test_an_orphaned_force_actually_reaches_the_service() -> None:
+    """The offer from Task 1.2 is worthless if the executor still refuses it."""
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    session = SessionId(UUID(int=1))
+    profile = ProfileId("claude")
+    service = _RecordingService()
+
+    dispatched = await _controller().execute(
+        StopRequest("force", session, profile),
+        service,
+        _Record(session, profile, SessionState.ORPHANED),
+    )
+
+    assert dispatched is True
+    assert service.dispatched == ["force"]
+
+
+async def test_execute_still_refuses_a_record_that_is_not_the_requested_session() -> None:
+    """The identity recheck is defence in depth and must survive the policy rewire."""
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    service = _RecordingService()
+    dispatched = await _controller().execute(
+        StopRequest("force", SessionId(UUID(int=1)), ProfileId("claude")),
+        service,
+        _Record(SessionId(UUID(int=2)), ProfileId("claude"), SessionState.RUNNING),
+    )
+    assert dispatched is False
+    assert service.dispatched == []
+
+
 def test_a_starting_session_is_tokenized_for_nothing() -> None:
     """STARTING was the state the old list builder wrongly offered force from."""
     controller = _controller()
