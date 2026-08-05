@@ -98,6 +98,68 @@ systemctl --user is-active remote-agents.service
 journalctl --user -u remote-agents.service -n 100 --no-pager
 ```
 
+## Local terminal acceptance checklist
+
+`remote-agents tui` launches one curated agent on this host and then hands the terminal to its
+tmux pane. It needs no Telegram credentials and no running service, but accept it with the
+service active, because the point of the check is that both surfaces work over one store:
+
+```bash
+uv run --locked remote-agents tui
+```
+
+1. Confirm the wizard opens on the project list with the filter focused. Type to narrow it, press
+   enter to move into the list, and choose a project with the arrows and enter.
+2. Confirm the agent list names each curated profile and the blocking reason beside any that is
+   unavailable, and that selecting a blocked one is refused rather than launched.
+3. Skip the label with an empty enter, and confirm Review names the project, agent, and label with
+   Back highlighted rather than Launch. Cancel returns to the project list with no mutation; Back
+   restores the agent choice.
+4. Launch, and confirm this terminal is replaced by the attach and the pane holds the chosen
+   agent. Detach with tmux's own binding — `Ctrl-b d` on a stock tmux, or `d` under whatever
+   prefix `~/.tmux.conf` sets on this host, since this project ships no tmux configuration and
+   sets no prefix. The session must survive the detach.
+5. In Telegram, open Sessions and confirm the session started from the terminal is listed,
+   inspectable, and stoppable exactly like one the bot started. Launch one from Telegram and
+   confirm it is equally a managed session for the terminal's store; neither surface owns a
+   session the other cannot manage.
+6. Run `remote-agents tui` from inside a tmux client and launch. The launch must still happen, but
+   the attach must be refused rather than nested, printing the command that reaches the new
+   session. Nothing is launched twice.
+7. Press Ctrl+N, confirm the offered areas are the eligible existing directories under the
+   configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
+   created, then create a valid one and confirm it becomes selectable without leaving the app.
+   Escape is Back, Ctrl+R re-reads the catalogue, and Ctrl+Q quits.
+
+## Terminal and service on one database
+
+The terminal and the service are separate processes writing one SQLite file. The terminal refuses
+any `database_path` outside the private state directory exactly as `serve` does, so sharing the
+store is not a configuration accident; two consequences of it must be understood before a second
+surface is used.
+
+Duplicate-command protection is durable and does hold across processes: every launch claims an
+idempotency key with a unique insert into the database, so a key one process has claimed is
+refused in the other. The per-process `SessionLocks` do not hold across processes. Each
+`SessionService` constructs its own, so they serialize concurrent mutations only inside the
+process that owns them, and the service's per-session serialization does not extend to the
+terminal. On a single-owner host this costs nothing: one person driving one surface at a time
+never produces the concurrency those locks exist to arbitrate, and the terminal's only session
+mutation is a launch, which creates a fresh identity rather than touching an existing one. If two
+people used the bot and the terminal at the same moment, only SQLite would be arbitrating between
+them, and a writer that cannot take the file lock within one second fails rather than waiting,
+which surfaces as a reported error rather than a damaged record. Do not hand the bot to a second
+person while working in the terminal.
+
+Each process also holds its own catalogue and its own profile probe, both taken when it starts. A
+project created in the terminal is invisible to a running service until it re-reads — press
+Refresh in any paginated view — and one created from Telegram or the command line is invisible in
+a running terminal until Ctrl+R. Ctrl+R re-reads the catalogue only: an agent installed after the
+terminal started stays reported as unavailable there until the terminal is restarted, and the
+service's profile list is a snapshot of its own start in the same way. When the two surfaces
+disagree about which projects or agents exist, neither is wrong; refresh or restart the older
+process, and treat `doctor --profiles`, which probes when it is run, as the current answer.
+
 ## Project creation and de-registration
 
 Create a project from this host with:
@@ -117,7 +179,9 @@ non-zero and prints a reason on standard error; refusals raised before the regis
 their cause, while a failure inside the write is reported as `project could not be catalogued`
 without its specific cause. Area and name must each be lowercase letters, digits, and single
 hyphens, 1 to 64 characters; the check runs before any filesystem effect. A canonical path the
-registry already holds is refused, including one recorded by a disabled entry.
+registry already holds is refused, including one recorded by a disabled entry. Ctrl+N in
+`remote-agents tui` runs the same use case and the same append-only write from the terminal,
+under the same area eligibility and the same slug rule.
 
 The append keeps the registry's existing bytes as an exact prefix and publishes atomically under an
 exclusive lock; a symlinked registry is written through rather than replaced. Before the extended
@@ -176,6 +240,11 @@ tmux -L remote-agents list-panes -a
 
 Restore the last reviewed unit, run `systemctl --user daemon-reload`, then enable the service
 again. Do not remove a managed tmux session until its ownership and output have been inspected.
+
+`remote-agents tui` keeps working while the service is disabled, because it needs neither the unit
+nor the Telegram credentials, so a curated launch remains possible during a rollback. It attaches
+only to the session it has just started and never adopts an existing one; reach a pane that
+outlived its launch with `tmux -L remote-agents attach-session -t ra-<session>:`.
 
 Before changing bot profile metadata, retain a private rollback snapshot of the avatar,
 descriptions, owner-scoped commands, and menu behavior. Restore that snapshot through the

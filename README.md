@@ -73,10 +73,54 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback.
 Do not put secrets in this repository.
 
+## Local terminal surface
+
+The same curated launches are available on this host without Telegram:
+
+```bash
+uv run --locked remote-agents tui
+```
+
+`remote-agents tui` is a local surface rather than a control plane: it launches one curated agent
+here and then hands this terminal to that session's tmux pane, where the bot instead controls
+sessions it never attaches to. It reads the same private configuration the service reads,
+defaulting to `~/.config/remote-agents/config.toml`, and it opens the same SQLite store, refusing
+a `database_path` outside the private state directory exactly as `serve` does. It needs no
+Telegram credentials and does not require the user service to be running.
+
+The wizard opens on the project list with the filter focused and reports how many projects are
+available. Type to narrow the list one character at a time, press enter to move into it, then use
+the arrows and enter to choose; registered projects are listed before unregistered ones and each
+row names its group. The agent list names every curated profile and shows the blocking reason
+beside one that cannot be launched here; choosing that one is refused rather than attempted. A
+label is optional, bounded by the configured `max_label_length`, and an empty entry skips it.
+Review names the project, agent, and label before anything is created, and it opens with Back
+highlighted rather than Launch, so a stray enter mutates nothing; Back restores the agent choice
+and Cancel returns to the project list. Escape is Back, Ctrl+R re-reads the catalogue, Ctrl+N adds
+a project, and Ctrl+Q quits. A launch that raises, or one whose session never reaches readiness,
+returns to Review with the reason and attaches to nothing.
+
+Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates
+under the configured development root, further restricted to those the project identity rule also
+accepts; a free-form area is never accepted. The name is typed and validated before anything is
+created, and Review names the area and the name before the mutation. After a create the catalogue
+is re-read, so the new project is selectable without leaving the app.
+
+After a ready launch this process is replaced by the attach command for the session it just
+started, `tmux -L remote-agents attach-session -t ra-<session>:`, and the store connection is
+closed first, so the attached terminal holds no database handle. The project ships no tmux
+configuration and sets no prefix, so detaching uses tmux's own binding: `Ctrl-b d` on a stock
+tmux, or the same `d` under whatever prefix this host's `~/.tmux.conf` sets. Detaching leaves the
+session running and managed; it stays listed, inspectable, and stoppable from Telegram. Started
+from inside an existing tmux client, the launch still happens but the attach is refused rather
+than nested, and the command to reach the new session is printed instead. An exec that cannot
+happen prints the same command and exits non-zero, so a started session is never lost.
+
 ## Creating a project
 
-A project can be created from this host or from Telegram. Both surfaces run the same validated
-use case and the same append-only registry write:
+A project can be created from this host, with the command below or with Ctrl+N in the local
+terminal surface, or from Telegram. Every surface runs the same validated use case and the same
+append-only registry write:
 
 ```bash
 uv run --locked remote-agents add-project --area infra --name new-thing
@@ -105,9 +149,9 @@ directory is removed, so the registry never holds an entry for a directory that 
 removal that itself fails is reported rather than hidden, leaving an unregistered directory behind.
 
 A project created from Telegram is selectable there immediately, because the bot re-reads the
-catalogue after the mutation. One created with the command line lands in a separate process, so a
-running bot does not see it until it re-reads: press Refresh in any paginated view, which
-returns Home, then open Launch again. No registry field
+catalogue after the mutation. One created with the command line or the local terminal surface
+lands in a separate process, so a running bot does not see it until it re-reads: press Refresh in
+any paginated view, which returns Home, then open Launch again. No registry field
 outside that closed schema is written, and neither surface can edit or remove an entry that
 already exists.
 
