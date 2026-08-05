@@ -62,6 +62,30 @@ def available_actions(state: SessionState) -> tuple[str, ...]:
     return tuple(actions)
 
 
+_EXPLANATIONS = {
+    SessionState.STARTING: "The agent is starting; it is not ready to act on yet.",
+    SessionState.RUNNING: "The agent is running.",
+    SessionState.STOP_REQUESTED: "A graceful stop is in progress.",
+    SessionState.PRESERVED: "The agent exited; its output is preserved for inspection.",
+    SessionState.FAILED: "The session needs local attention before another action.",
+    SessionState.ENDED: "The session is closed; nothing is left to reach.",
+    SessionState.ORPHANED: (
+        "The evidence for this session was ambiguous, so it is held for local attention. "
+        "Resolve it on this host."
+    ),
+}
+
+
+def explain_state(state: SessionState) -> str:
+    """One line describing `state` to the owner, for any surface that renders a session.
+
+    Every member is spelled out rather than defaulted. The bot previously classified four
+    states and fell back to "This session is no longer active." for the rest, which was
+    false for STARTING — a session that is actively coming up.
+    """
+    return _EXPLANATIONS[state]
+
+
 class _RemoteControllable(Protocol):
     """The two fields availability turns on; any session record satisfies this."""
 

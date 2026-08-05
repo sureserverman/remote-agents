@@ -57,7 +57,11 @@ from remote_agents.application.project_catalog import (
     paginate_catalogue,
     search_catalogue,
 )
-from remote_agents.application.session_actions import available_actions, remote_control_available
+from remote_agents.application.session_actions import (
+    available_actions,
+    explain_state,
+    remote_control_available,
+)
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -1136,9 +1140,5 @@ def _session_row_label(record: SessionRecord) -> str:
 
 
 def _state_explanation(state: SessionState) -> str:
-    return {
-        SessionState.RUNNING: "The agent is running.",
-        SessionState.STOP_REQUESTED: "A graceful stop is in progress.",
-        SessionState.PRESERVED: "The agent exited; its output is preserved for inspection.",
-        SessionState.FAILED: "The session needs local attention before another action.",
-    }.get(state, "This session is no longer active.")
+    """Defer to the shared mapping so both surfaces describe a state identically."""
+    return explain_state(state)

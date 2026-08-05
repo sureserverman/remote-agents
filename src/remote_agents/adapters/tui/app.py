@@ -18,6 +18,7 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
+from remote_agents.application.session_actions import explain_state
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 
@@ -35,6 +36,7 @@ class Step(StrEnum):
     NAME = "name"
     PROJECT_REVIEW = "project-review"
     SESSIONS = "sessions"
+    SESSION_DETAIL = "session-detail"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
@@ -119,6 +121,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._name: str | None = None
         self._busy = False
         self._records: tuple[SessionRecord, ...] = ()
+        self._detail_id: str | None = None
         self._status = "Choose a project."
 
     def compose(self) -> ComposeResult:
@@ -275,6 +278,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._choose_area(key)
         elif self._step is Step.PROJECT_REVIEW:
             await self._resolve_project_review(key)
+        elif self._step is Step.SESSIONS:
+            await self._show_detail(key)
+        elif self._step is Step.SESSION_DETAIL:
+            await self._resolve_detail(key)
 
     def _choose_project(self, opaque_id: str) -> None:
         project = next((item for item in self._catalogue if item.opaque_id == opaque_id), None)
@@ -368,7 +375,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step in {Step.PROFILES, Step.AREAS, Step.SESSIONS}:
+        if self._step is Step.SESSION_DETAIL:
+            await self._show_sessions()
+        elif self._step in {Step.PROFILES, Step.AREAS, Step.SESSIONS}:
             self._show_projects()
         elif self._step is Step.REVIEW:
             self._show_profiles()
@@ -428,6 +437,43 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._set_status(f"{len(records)} managed session(s). Select one for detail.")
         self._fill(tuple((str(record.session_id), _session_row(record)) for record in records))
+
+    async def _show_detail(self, session_value: str) -> None:
+        """Show one session's state and what it means, re-read from the shared store.
+
+        The record is looked up again rather than trusted from the list: the store has two
+        writers, so a session can be stopped elsewhere while this list is on screen.
+        """
+        self._step = Step.SESSION_DETAIL
+        self._hide_entry()
+        record = await self._current_record(session_value)
+        if record is None:
+            self._detail_id = None
+            self._fill(((_BACK, "Back"),))
+            self._set_status("That session is no longer available.")
+            return
+        self._detail_id = session_value
+        self._set_status(
+            f"{record.display.rendered}\n"
+            f"State: {record.state.value}\n"
+            f"{explain_state(record.state)}"
+        )
+        self._fill(self._detail_entries(record))
+
+    async def _resolve_detail(self, key: str) -> None:
+        if key == _BACK:
+            await self._show_sessions()
+
+    def _detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
+        """The actions this session offers. Stage 3 adds the mutating ones."""
+        del record
+        return ((_BACK, "Back"),)
+
+    async def _current_record(self, session_value: str) -> SessionRecord | None:
+        for record in await self._load_sessions():
+            if str(record.session_id) == session_value:
+                return record
+        return None
 
     async def _load_sessions(self) -> tuple[SessionRecord, ...]:
         """Ask the shared service for the sessions worth showing, newest activity first."""
