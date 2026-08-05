@@ -327,3 +327,56 @@ async def test_a_forged_reference_is_refused(forged: str) -> None:
         await pilot.pause()
 
     assert launcher.resumed == []
+
+
+async def test_reopening_resume_mid_navigation_does_not_strand_the_owner() -> None:
+    """Double-tapping Ctrl+E while a catalogue read is in flight must not dead-end.
+
+    The Stage 3 discipline applies to the resume wizard's read navigation too: a second
+    entry point firing during an await used to reset the chosen project, after which
+    selecting a profile silently did nothing and only Escape recovered.
+    """
+    import asyncio
+
+    @dataclass(slots=True)
+    class _SlowConversations:
+        pages: dict[int, tuple[ConversationSummary, ...]] = field(default_factory=dict)
+        caps: tuple[ProfileResumeCapability, ...] = ()
+
+        async def catalogue(self, query) -> ConversationCataloguePage:
+            return ConversationCataloguePage(self.pages.get(query.page, ()), query.page, 1)
+
+        async def resolve_for_resume(self, reference):
+            return None
+
+        async def capabilities(self):
+            await asyncio.sleep(0.02)
+            return self.caps
+
+    conversations = _SlowConversations({1: (_summary(1),)}, caps=_capable("claude"))
+    app = RemoteAgentsTui(_context(conversations, _Launcher()))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await asyncio.gather(
+            app._resolve_resume_project("opaque-existing"),
+            _reenter_during(app),
+        )
+        await pilot.pause()
+
+        # Whatever screen the owner lands on, selecting the offered profile must go
+        # somewhere rather than silently doing nothing.
+        if app._step is Step.RESUME_PROFILES:
+            await app._resolve_resume_profile("claude")
+            await pilot.pause()
+            assert app._step is Step.RESUME_CONVERSATIONS, (
+                "selecting a profile did nothing: the chosen project was lost mid-navigation"
+            )
+
+
+async def _reenter_during(app) -> None:
+    import asyncio
+
+    await asyncio.sleep(0.005)
+    await app.action_resume()

@@ -34,7 +34,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.domain.conversations import ConversationReference
+from remote_agents.domain.conversations import ConversationReference, ConversationSummary
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
@@ -141,7 +141,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+n", "add_project", "Add project"),
         Binding("ctrl+s", "sessions", "Sessions"),
-        Binding("ctrl+e", "resume", "Resume"),
+        Binding("ctrl+o", "resume", "Resume"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -617,14 +617,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         )
 
     async def _resolve_resume_project(self, key: str) -> None:
-        project = next(
-            (item for item in self._catalogue if item.opaque_id == key), None
-        )
+        project = next((item for item in self._catalogue if item.opaque_id == key), None)
         if project is None:
-            self._show_projects()
+            # Stay in the resume flow, as the launch picker does for the same failure,
+            # rather than dropping the owner into a different wizard with no explanation.
+            self._set_status("That project is no longer available. Refresh and try again.")
             return
         self._resume_project = project
-        await self._show_resume_profiles()
+        # Guarded across the await for the reason Stage 3 established: a second entry point
+        # firing mid-navigation used to reset the chosen project, after which selecting a
+        # profile silently did nothing and only Escape recovered.
+        self._busy = True
+        try:
+            await self._show_resume_profiles()
+        finally:
+            self._busy = False
 
     async def _show_resume_profiles(self) -> None:
         """Offer only profiles that report themselves resume-capable (DEC-002).
@@ -662,9 +669,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if key == _BACK:
             await self.action_resume()
             return
+        if not any(profile.profile_id == key for profile in self._services.profiles):
+            # Defence in depth, matching the launch picker: the rows here are already
+            # filtered to resume-capable profiles, so a key naming another one is stale.
+            self._set_status("That agent is not available on this host.")
+            return
         self._resume_profile = key
         self._resume_page = 1
-        await self._show_resume_conversations()
+        self._busy = True
+        try:
+            await self._show_resume_conversations()
+        finally:
+            self._busy = False
 
     async def _show_resume_conversations(self) -> None:
         """One bounded page of safe metadata; provider IDs never leave the server."""
@@ -715,13 +731,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if key == _BACK:
             await self._show_resume_profiles()
             return
-        if key == _NEXT:
-            self._resume_page = min(self._resume_page + 1, self._resume_page_count)
-            await self._show_resume_conversations()
-            return
-        if key == _PREVIOUS:
-            self._resume_page = max(1, self._resume_page - 1)
-            await self._show_resume_conversations()
+        if key in {_NEXT, _PREVIOUS}:
+            step = 1 if key == _NEXT else -1
+            self._resume_page = max(
+                1, min(self._resume_page + step, self._resume_page_count)
+            )
+            self._busy = True
+            try:
+                await self._show_resume_conversations()
+            finally:
+                self._busy = False
             return
         try:
             # The reference is only ever one this surface rendered from a server-issued
@@ -1066,7 +1085,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
 
-def _conversation_row(summary) -> str:
+def _conversation_row(summary: ConversationSummary) -> str:
     """Safe selection metadata only — never a provider ID, path, or path fragment."""
     described = summary.description or "(no description)"
     return f"{described} · {summary.state.value} · {_age(summary.updated_at)}"

@@ -175,7 +175,7 @@ class _Selected:
 
 async def _open_detail(app, launcher, pilot) -> None:
     """Reach the detail the way an owner does: through the sessions list."""
-    await app.action_sessions()
+    await pilot.press("ctrl+s")
     await pilot.pause()
     await _choose(app, pilot, str(launcher.record.session_id))
 
@@ -184,7 +184,7 @@ async def _open_detail(app, launcher, pilot) -> None:
 
 
 async def _probe_sessions_list(app, launcher, pilot) -> None:
-    await app.action_sessions()
+    await pilot.press("ctrl+s")
     await pilot.pause()
     assert app._step is Step.SESSIONS
     assert any("existing" in row for row in _rows(app))
@@ -242,7 +242,7 @@ async def _probe_inspect(app, launcher, pilot) -> None:
 
 
 async def _probe_resume(app, launcher, pilot) -> None:
-    await app.action_resume()
+    await pilot.press("ctrl+o")
     await pilot.pause()
     await _choose(app, pilot, "opaque-existing")
     await _choose(app, pilot, "claude")
@@ -274,6 +274,18 @@ async def test_the_local_surface_has_every_bot_capability(capability: str) -> No
     app, launcher = _app(state)
     async with app.run_test() as pilot:
         await probe(app, launcher, pilot)
+
+
+def test_every_capability_reached_by_a_binding_has_one() -> None:
+    """Two capabilities are entered by keystroke rather than by a rendered row.
+
+    Without this, deleting a binding makes the capability unreachable while every probe
+    that called the action method directly stayed green — which is the same "a method
+    exists" mistake the probes were rewritten to avoid.
+    """
+    bound = {binding.key: binding.action for binding in RemoteAgentsTui.BINDINGS}
+    assert bound.get("ctrl+s") == "sessions"
+    assert bound.get("ctrl+o") == "resume"
 
 
 def test_the_parity_claim_names_every_capability_the_plan_enumerated() -> None:

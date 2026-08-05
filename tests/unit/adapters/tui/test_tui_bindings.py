@@ -134,3 +134,32 @@ async def test_pressing_the_key_actually_reaches_the_action() -> None:
 
     assert step is Step.SESSIONS
     assert launcher.refreshed == 1
+
+
+def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
+    """A binding a focused widget also claims never reaches the app.
+
+    Ctrl+E shipped briefly as the Resume key. Textual's Input binds it to `end`, and the
+    app starts with the filter focused, so pressing it on the opening screen did nothing —
+    invisible to any test that called the action method directly.
+    """
+    from textual.widgets import Input, ListView
+
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+
+    def keys_of(source) -> dict[str, str]:
+        found: dict[str, str] = {}
+        for binding in source.BINDINGS:
+            key = getattr(binding, "key", str(binding))
+            for part in str(key).split(","):
+                found[part.strip()] = getattr(binding, "action", "?")
+        return found
+
+    app_keys = keys_of(RemoteAgentsTui)
+    for widget in (Input, ListView):
+        clashes = {
+            key: (app_keys[key], keys_of(widget)[key])
+            for key in app_keys
+            if key in keys_of(widget)
+        }
+        assert not clashes, f"{widget.__name__} swallows {clashes}"

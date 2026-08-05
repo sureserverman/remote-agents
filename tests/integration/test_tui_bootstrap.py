@@ -145,3 +145,32 @@ def test_textual_is_pinned_exactly_like_every_other_runtime_dependency() -> None
     dependencies = (Path(__file__).parents[2] / "pyproject.toml").read_text(encoding="utf-8")
 
     assert '"textual==8.2.8"' in dependencies
+
+
+def test_the_local_context_wires_the_two_stage_four_capabilities(
+    home: Path, paths: ProductionPaths, tmp_path: Path
+) -> None:
+    """Asserted against the executed composition, not against bootstrap's source text.
+
+    A source-substring check written for this missed it entirely: the string it looked for
+    also appears in the *service* composition, so deleting both wirings from local_context
+    left the whole suite green and would have shipped a terminal with no Inspect entry and
+    no Resume flow.
+    """
+    from remote_agents.application.conversations import ConversationService
+    from remote_agents.config import load_config
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+
+        assert context.capture is not None, "the terminal cannot inspect without a capture"
+        assert callable(context.capture)
+        assert isinstance(context.conversations, ConversationService), (
+            "the terminal cannot resume without a conversation service"
+        )
+        # No configuration key sources redactions today; the bot passes none either.
+        assert context.capture_redactions == ()
+    finally:
+        connection.close()
