@@ -20,6 +20,7 @@ from remote_agents.application.commands import (
     ForceStopCommand,
     GracefulStopCommand,
     LaunchCommand,
+    RemoteControlCommand,
 )
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
@@ -29,9 +30,11 @@ from remote_agents.application.session_actions import (
     GRACEFUL,
     available_actions,
     explain_state,
+    remote_control_available,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.domain.remote_control import RemoteControlState
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,6 +52,7 @@ class Step(StrEnum):
     SESSIONS = "sessions"
     SESSION_DETAIL = "session-detail"
     FORCE_CONFIRM = "force-confirm"
+    REMOTE_CONTROL_CONFIRM = "remote-control-confirm"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
@@ -297,6 +301,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._resolve_detail(key)
         elif self._step is Step.FORCE_CONFIRM:
             await self._resolve_force_confirm(key)
+        elif self._step is Step.REMOTE_CONTROL_CONFIRM:
+            await self._resolve_remote_control(key)
 
     def _choose_project(self, opaque_id: str) -> None:
         project = next((item for item in self._catalogue if item.opaque_id == opaque_id), None)
@@ -390,7 +396,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step is Step.FORCE_CONFIRM:
+        if self._step in {Step.FORCE_CONFIRM, Step.REMOTE_CONTROL_CONFIRM}:
             if self._detail_id is not None:
                 await self._show_detail(self._detail_id)
         elif self._step is Step.SESSION_DETAIL:
@@ -478,10 +484,76 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._show_sessions()
         elif key == "attach":
             await self._show_attach()
+        elif key == "remote-control":
+            await self._confirm_remote_control()
         elif key == FORCE:
             await self._confirm_force()
         elif key in _ACTION_LABELS:
             await self._stop(key)
+
+    async def _confirm_remote_control(self) -> None:
+        """Ask before changing a live pane's control mode, re-checking the policy first."""
+        if self._detail_id is None:
+            return
+        record = await self._current_record(self._detail_id)
+        if record is None:
+            self._set_status("That session is no longer available.")
+            return
+        if not remote_control_available(record):
+            self._set_status(
+                f"{record.display.rendered}\n"
+                "Remote Control is not available for this session.\n"
+                f"{explain_state(record.state)}"
+            )
+            return
+        self._step = Step.REMOTE_CONTROL_CONFIRM
+        self._hide_entry()
+        self._set_status(
+            f"Claude Remote Control for {record.display.rendered}\n"
+            "Enabling lets this session be driven remotely; disabling returns it to local "
+            "control only."
+        )
+        self._fill(
+            (
+                (_CANCEL, "Cancel"),
+                ("remote-control-active", "Enable Remote Control"),
+                ("remote-control-inactive", "Disable Remote Control"),
+            )
+        )
+
+    async def _resolve_remote_control(self, key: str) -> None:
+        desired = {
+            "remote-control-active": RemoteControlState.ACTIVE,
+            "remote-control-inactive": RemoteControlState.INACTIVE,
+        }.get(key)
+        if desired is None or self._detail_id is None:
+            if self._detail_id is not None:
+                await self._show_detail(self._detail_id)
+            return
+        self._busy = True
+        try:
+            record = await self._current_record(self._detail_id)
+            if record is None:
+                self._set_status("That session is no longer available.")
+                return
+            if not remote_control_available(record):
+                self._set_status("Remote Control is no longer available for this session.")
+                return
+            state = await self._services.launcher.set_remote_control(
+                RemoteControlCommand(record.session_id, desired, _idempotency_key())
+            )
+        except Exception as error:
+            _LOG.exception("remote control failed")
+            self._set_status(
+                f"Remote Control was not changed: {error}\n"
+                "Open the session again to see its current state."
+            )
+            return
+        finally:
+            self._busy = False
+        self._step = Step.SESSION_DETAIL
+        self._set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
+        self._fill(self._detail_entries(record))
 
     async def _confirm_force(self) -> None:
         """Ask a second time, on its own step, with abort as the resting choice.
@@ -595,6 +667,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         here is what `tests/contract/test_session_actions_parity.py` exists to catch.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
+        if remote_control_available(record):
+            entries.append(("remote-control", "Claude Remote Control"))
         entries.extend(
             (action, _ACTION_LABELS[action]) for action in available_actions(record.state)
         )
