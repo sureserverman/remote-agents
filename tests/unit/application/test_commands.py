@@ -164,3 +164,34 @@ async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> N
 
     assert terminal.force_stop_calls == 1
     assert sum(isinstance(result, Exception) for result in results) == 1
+
+
+async def test_a_stop_the_policy_refuses_also_raises_in_the_service() -> None:
+    """Defence in depth: availability is presentation, the state machine is the authority.
+
+    Written after a policy edit offered force from ORPHANED. Every surface-level test passed,
+    because their fakes recorded the dispatch instead of transitioning; only the real service
+    shows that the terminal is never reached.
+    """
+    from remote_agents.application.session_actions import available_actions
+    from remote_agents.domain.state_machine import InvalidTransition
+
+    store = FakeStore()
+    terminal = FakeTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    store.records[record.session_id] = SessionRecord(
+        record.session_id,
+        record.project_id,
+        record.profile_id,
+        record.display,
+        SessionState.ORPHANED,
+        record.created_at,
+    )
+
+    assert "force" not in available_actions(SessionState.ORPHANED)
+    with pytest.raises(InvalidTransition):
+        await service.force_stop(ForceStopCommand(record.session_id))
+    assert terminal.force_stop_calls == 0

@@ -16,7 +16,10 @@ EXPECTED: dict[SessionState, tuple[str, ...]] = {
     SessionState.PRESERVED: ("cleanup", "force"),
     SessionState.FAILED: ("force",),
     SessionState.ENDED: (),
-    SessionState.ORPHANED: ("force",),
+    # Not forceable: the domain has no transition out of ORPHANED, so offering force here
+    # would raise InvalidTransition rather than stop anything. See
+    # tests/architecture/test_policy_matches_domain.py.
+    SessionState.ORPHANED: (),
 }
 
 
@@ -46,13 +49,16 @@ def test_cleanup_only_from_preserved(state: SessionState) -> None:
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_force_reconciles_the_two_prior_copies(state: SessionState) -> None:
-    """The prior `offer` set plus ORPHANED, which neither surface could stop."""
+    """The token issuer's set wins over the list builder's force-from-everything.
+
+    ORPHANED stays out. It is the one state the two copies never agreed on, and the domain
+    settles it: no event is legal from ORPHANED, so a force there raises rather than stops.
+    """
     forceable = {
         SessionState.RUNNING,
         SessionState.STOP_REQUESTED,
         SessionState.PRESERVED,
         SessionState.FAILED,
-        SessionState.ORPHANED,
     }
     assert ("force" in available_actions(state)) is (state in forceable)
 

@@ -29,13 +29,26 @@ def test_offer_tokenizes_exactly_the_policy_actions(state: SessionState) -> None
         )
 
 
-def test_an_orphaned_session_can_now_be_force_stopped() -> None:
-    """The reconciliation's one behavior change: ORPHANED was stoppable from neither copy."""
+def test_an_orphaned_session_is_offered_no_stop_at_all() -> None:
+    """ORPHANED is quarantined for local attention; the domain permits no event from it.
+
+    Tokenizing a force here would hand the owner a button that raises InvalidTransition
+    instead of stopping anything.
+    """
     controller = _controller()
-    token = controller.offer(
-        SessionId(UUID(int=1)), ProfileId("claude"), SessionState.ORPHANED, "force", 7, 11, 1
-    )
-    assert token is not None
+    for action in ("graceful", "cleanup", "force"):
+        assert (
+            controller.offer(
+                SessionId(UUID(int=1)),
+                ProfileId("claude"),
+                SessionState.ORPHANED,
+                action,
+                7,
+                11,
+                1,
+            )
+            is None
+        )
 
 
 def test_offer_still_refuses_an_action_the_policy_does_not_name() -> None:
@@ -93,8 +106,12 @@ async def test_execute_dispatches_exactly_what_the_policy_permits(
     assert service.dispatched == ([action] if action in available_actions(state) else [])
 
 
-async def test_an_orphaned_force_actually_reaches_the_service() -> None:
-    """The offer from Task 1.2 is worthless if the executor still refuses it."""
+async def test_an_orphaned_force_never_reaches_the_service() -> None:
+    """A forged or stale token must not drive a stop the domain would reject.
+
+    `execute` is the last gate before the terminal, so it is where a token that should
+    never have been issued has to die.
+    """
     from remote_agents.adapters.telegram.stops import StopRequest
 
     session = SessionId(UUID(int=1))
@@ -107,8 +124,8 @@ async def test_an_orphaned_force_actually_reaches_the_service() -> None:
         _Record(session, profile, SessionState.ORPHANED),
     )
 
-    assert dispatched is True
-    assert service.dispatched == ["force"]
+    assert dispatched is False
+    assert service.dispatched == []
 
 
 async def test_execute_still_refuses_a_record_that_is_not_the_requested_session() -> None:
