@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+import pytest
+
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import ForceStopCommand
@@ -233,3 +235,49 @@ async def test_force_is_not_reachable_by_one_keypress_from_the_list() -> None:
         await pilot.pause()
 
     assert launcher.issued == [], "no two keystrokes from the list may issue a stop"
+
+
+@pytest.mark.parametrize("presses", [1, 2, 3, 5, 10, 25])
+@pytest.mark.parametrize("state", list(SessionState))
+async def test_mashing_enter_from_the_sessions_list_destroys_nothing(
+    presses: int, state: SessionState
+) -> None:
+    """The gate's judgment criterion, made executable.
+
+    A destructive action must not be reachable by repeating one key. Every screen resets
+    the highlight to index 0, and index 0 is never a mutating entry — so an owner holding
+    enter walks into Copy attach and stays there, whatever the session's state.
+    """
+    launcher = _RecordingLauncher(tuple(_record(state) for _ in range(5)))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        for _ in range(presses):
+            await pilot.press("enter")
+            await pilot.pause()
+
+    assert launcher.issued == [], f"{presses} repeated enters issued {launcher.issued}"
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
+    state: SessionState,
+) -> None:
+    """Index 0 is where a stray keypress lands, so index 0 must always be harmless."""
+    record = _record(state)
+    app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
+    mutating = {"graceful", "cleanup", "force", "remote-control", "force-confirm"}
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        detail_keys = _keys(app)
+        assert detail_keys[app.query_one("#choices").index] not in mutating
+
+        if "force" in detail_keys:
+            await app._resolve_detail("force")
+            await pilot.pause()
+            confirm_keys = _keys(app)
+            assert confirm_keys[app.query_one("#choices").index] not in mutating
