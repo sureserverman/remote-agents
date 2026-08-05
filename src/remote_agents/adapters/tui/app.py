@@ -11,7 +11,7 @@ from enum import StrEnum
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -35,6 +35,7 @@ from remote_agents.application.session_actions import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
 
@@ -53,10 +54,13 @@ class Step(StrEnum):
     SESSION_DETAIL = "session-detail"
     FORCE_CONFIRM = "force-confirm"
     REMOTE_CONTROL_CONFIRM = "remote-control-confirm"
+    INSPECT = "inspect"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
 _ACTION_LABELS = {GRACEFUL: "Graceful stop", CLEANUP: "Clean up", FORCE: "Force stop"}
+_INSPECT_MAX_LINES = 2000
+_INSPECT_MAX_BYTES = 512 * 1024
 _BACK = "\x00back"
 _CANCEL = "\x00cancel"
 
@@ -120,6 +124,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     #body { height: 1fr; }
     #status { height: auto; padding: 0 1; }
     ListView { height: 1fr; }
+    #output { height: 1fr; padding: 0 1; }
     """
     BINDINGS = [
         Binding("escape", "back", "Back"),
@@ -147,9 +152,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             yield Static(self._status, id="status")
             yield Input(placeholder="Filter projects", id="filter")
             yield ListView(id="choices")
+            with VerticalScroll(id="output-pane"):
+                yield Static("", id="output")
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#output-pane").display = False
         self._show_projects()
 
     # Rendering -----------------------------------------------------------------
@@ -166,6 +174,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Refilling while the owner is typing a filter must leave the keyboard where it is, or
         every character after the first lands on the list instead of the query.
         """
+        # Restoring here rather than in each exit route: the inspect screen swaps the list
+        # for a scrollable output pane, and every other screen renders through _fill, so
+        # this is the one place that cannot be forgotten by a new navigation path.
+        self._hide_output()
         choices = self.query_one("#choices", ListView)
         choices.clear()
         for key, text in entries:
@@ -396,7 +408,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step in {Step.FORCE_CONFIRM, Step.REMOTE_CONTROL_CONFIRM}:
+        if self._step is Step.INSPECT:
+            self._hide_output()
+            if self._detail_id is not None:
+                await self._show_detail(self._detail_id)
+        elif self._step in {Step.FORCE_CONFIRM, Step.REMOTE_CONTROL_CONFIRM}:
             if self._detail_id is not None:
                 await self._show_detail(self._detail_id)
         elif self._step is Step.SESSION_DETAIL:
@@ -484,6 +500,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._show_sessions()
         elif key == "attach":
             await self._show_attach()
+        elif key == "inspect":
+            await self._show_inspect()
         elif key == "remote-control":
             await self._confirm_remote_control()
         elif key == FORCE:
@@ -495,6 +513,58 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Restructuring this chain into a dispatch table would silently remove the
             # confirmation step, and no existing test asserts the ordering itself.
             await self._stop(key)
+
+    async def _show_inspect(self) -> None:
+        """Render this session's captured output, sanitized by the shared port.
+
+        `ports/terminal_text.sanitize_terminal_text` is the shared safety transformation,
+        so nothing is re-implemented here. What is deliberately *not* reused is the
+        Telegram presentation wrapper: its 4096-UTF-16-unit inline cap and
+        session-output.txt attachment fallback exist because Telegram messages are bounded,
+        and a scrollable local pane is not.
+        """
+        capture = self._services.capture
+        if capture is None or self._detail_id is None:
+            return
+        record = await self._current_record(self._detail_id)
+        if record is None:
+            self._set_status("That session is no longer available.")
+            return
+        try:
+            captured = await capture(record.session_id)
+        except Exception as error:
+            _LOG.exception("capture failed")
+            self._set_status(
+                f"{record.display.rendered}\n"
+                f"The output could not be captured: {error}"
+            )
+            return
+        self._step = Step.INSPECT
+        self._hide_entry()
+        self._fill(())
+        raw = captured.encode()
+        if b"\x00" in raw:
+            # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
+            # rendering text, and printing it to a terminal can corrupt the display.
+            text = "This session's output is binary and cannot be displayed."
+        else:
+            text = sanitize_terminal_text(
+                raw,
+                max_lines=_INSPECT_MAX_LINES,
+                max_bytes=_INSPECT_MAX_BYTES,
+                redactions=self._services.capture_redactions,
+            )
+        self._set_status(f"{record.display.rendered}\nOutput. Press escape to go back.")
+        self._show_output(text or "This session has produced no output yet.")
+
+    def _show_output(self, text: str) -> None:
+        self.query_one("#output-pane").display = True
+        self.query_one("#choices").display = False
+        self.query_one("#output", Static).update(text)
+
+    def _hide_output(self) -> None:
+        self.query_one("#output-pane").display = False
+        self.query_one("#choices").display = True
 
     async def _confirm_remote_control(self) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first."""
@@ -689,6 +759,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         here is what `tests/contract/test_session_actions_parity.py` exists to catch.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
+        if self._services.capture is not None:
+            entries.append(("inspect", "Inspect output"))
         if remote_control_available(record):
             entries.append(("remote-control", "Claude Remote Control"))
         entries.extend(

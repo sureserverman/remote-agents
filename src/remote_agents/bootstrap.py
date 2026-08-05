@@ -443,6 +443,9 @@ def local_context(config, connection, paths: ProductionPaths):
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         max_label_length=config.max_label_length,
         catalogue=catalogue,
+        # The same capture the service hands the bot. Redactions default to the empty set
+        # the bot also uses -- no configuration key sources them today.
+        capture=runtime.terminal.capture,
     )
 
 
