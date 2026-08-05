@@ -212,3 +212,28 @@ async def test_a_non_claude_session_offers_no_toggle_even_when_running() -> None
 
     assert "remote-control" not in keys
     assert launcher.issued == []
+
+
+async def test_a_failed_toggle_does_not_leave_the_cursor_on_the_button_that_failed() -> None:
+    """Same class as the failed force stop: a repeat enter must not blindly re-issue."""
+    record = _record()
+    launcher = _RecordingLauncher((record,), error=RuntimeError("pane refused the toggle"))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        await app._resolve_detail("remote-control")
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(launcher.issued) == 1
+
+        keys = _keys(app)
+        resting = keys[app.query_one("#choices").index] if keys else None
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert resting not in {"remote-control-active", "remote-control-inactive"}
+    assert len(launcher.issued) == 1, "a repeated enter re-issued the toggle"

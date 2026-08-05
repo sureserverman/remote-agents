@@ -488,7 +488,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._confirm_remote_control()
         elif key == FORCE:
             await self._confirm_force()
-        elif key in _ACTION_LABELS:
+        elif key in _ACTION_LABELS and key != FORCE:
+            # The `key != FORCE` is redundant with the branch above and deliberately kept:
+            # FORCE is a member of _ACTION_LABELS, so without it the only thing stopping a
+            # single keypress from force-stopping is the *order* of these two branches.
+            # Restructuring this chain into a dispatch table would silently remove the
+            # confirmation step, and no existing test asserts the ordering itself.
             await self._stop(key)
 
     async def _confirm_remote_control(self) -> None:
@@ -544,16 +549,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         except Exception as error:
             _LOG.exception("remote control failed")
+            # Same reason as the failed stop: do not leave the cursor resting on the
+            # button that just failed, or a second enter re-issues it as a blind retry.
+            self._fill(((_BACK, "Back"),))
             self._set_status(
                 f"Remote Control was not changed: {error}\n"
-                "Open the session again to see its current state."
+                "Go back and open the session again to see its current state."
             )
             return
+        else:
+            # Held for the same reason as `_stop`'s refresh: nothing else may run until
+            # the result is on screen. These calls are synchronous today, so the window
+            # is empty — the guard is here so it stays empty if one of them ever awaits.
+            self._step = Step.SESSION_DETAIL
+            self._set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
+            self._fill(self._detail_entries(record))
         finally:
             self._busy = False
-        self._step = Step.SESSION_DETAIL
-        self._set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
-        self._fill(self._detail_entries(record))
 
     async def _confirm_force(self) -> None:
         """Ask a second time, on its own step, with abort as the resting choice.
@@ -612,14 +624,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._issue_stop(action, record)
         except Exception as error:
             _LOG.exception("stop failed")
+            # Move the cursor off the confirm button before reporting. A failed force
+            # leaves the owner resting on "Yes, force stop it", so without this a second
+            # enter re-issues the kill as a retry nobody deliberately chose.
+            self._fill(((_BACK, "Back"),))
             self._set_status(
                 f"{_ACTION_LABELS[action]} did not complete: {error}\n"
-                "The session was left as it is; open it again to see its current state."
+                "The session was left as it is. Go back and open it again to see its "
+                "current state, then retry if you still want to."
             )
             return
+        else:
+            # Inside the guard on purpose. `_busy` means "no other action may run until
+            # this one's result is on screen" — and `_show_detail` awaits, so releasing
+            # first leaves a window where the step has flipped but the list still holds
+            # the previous screen's entries.
+            await self._show_detail(self._detail_id)
         finally:
             self._busy = False
-        await self._show_detail(self._detail_id)
 
     async def _issue_stop(self, action: str, record: SessionRecord) -> None:
         """Send exactly one curated command; the commands themselves carry no arguments."""

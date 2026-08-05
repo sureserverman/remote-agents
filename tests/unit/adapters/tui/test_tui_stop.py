@@ -211,3 +211,87 @@ async def test_a_session_that_vanished_before_the_stop_is_not_stopped() -> None:
 
     assert launcher.issued == []
     assert "no longer available" in status.casefold()
+
+
+async def test_the_busy_guard_is_held_until_the_post_stop_refresh_completes() -> None:
+    """`_busy` must mean "no other action can run until this one's result is on screen".
+
+    Releasing it before the refresh leaves a window where the step has already flipped but
+    the list still holds the previous screen's entries, so a keypress in that window acts
+    on a screen the owner is no longer looking at.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    observed: list[bool] = []
+
+    class _Watching(RemoteAgentsTui):
+        async def _show_detail(self, session_value: str) -> None:
+            observed.append(self._busy)
+            await super()._show_detail(session_value)
+
+    app = _Watching(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        observed.clear()
+        await app._resolve_detail("graceful")
+        await pilot.pause()
+
+    assert observed, "the post-stop refresh must happen"
+    assert all(observed), "_busy was released before the refreshed screen was drawn"
+
+
+async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
+    """Drives the race directly: escape fired while a slow stop is still in flight."""
+    import asyncio
+
+    record = _record(SessionState.RUNNING)
+
+    @dataclass(slots=True)
+    class _SlowLauncher:
+        records: tuple[SessionRecord, ...] = ()
+        issued: list[object] = field(default_factory=list)
+
+        async def refresh_readiness(self):
+            return self.records
+
+        async def list_sessions(self):
+            await asyncio.sleep(0)
+            return self.records
+
+        async def copy_attach(self, _session_id):
+            return None
+
+        async def graceful_stop(self, command):
+            self.issued.append(command)
+            await asyncio.sleep(0.02)
+            return None
+
+        async def cleanup(self, command) -> None:
+            self.issued.append(command)
+
+        async def force_stop(self, command):
+            self.issued.append(command)
+            return None
+
+    launcher = _SlowLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        await asyncio.gather(
+            app._resolve_detail("graceful"),
+            _press_escape_during(pilot),
+        )
+        await pilot.pause()
+
+    assert len(launcher.issued) == 1, "the stop must be issued exactly once"
+
+
+async def _press_escape_during(pilot) -> None:
+    import asyncio
+
+    await asyncio.sleep(0.005)
+    await pilot.press("escape")

@@ -281,3 +281,60 @@ async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
             await pilot.pause()
             confirm_keys = _keys(app)
             assert confirm_keys[app.query_one("#choices").index] not in mutating
+
+
+async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() -> None:
+    """The one same-key-repeat path that could destroy: retry after a transient failure.
+
+    If a stop fails and the screen is left as it was, the cursor is still resting on
+    "Yes, force stop it" — so a second enter re-issues the kill without a fresh decision.
+    """
+
+    @dataclass(slots=True)
+    class _FailingLauncher:
+        records: tuple[SessionRecord, ...] = ()
+        issued: list[object] = field(default_factory=list)
+
+        async def refresh_readiness(self):
+            return self.records
+
+        async def list_sessions(self):
+            return self.records
+
+        async def copy_attach(self, _session_id):
+            return None
+
+        async def force_stop(self, command):
+            self.issued.append(command)
+            raise RuntimeError("tmux server is gone")
+
+        async def graceful_stop(self, command):
+            self.issued.append(command)
+            raise RuntimeError("tmux server is gone")
+
+        async def cleanup(self, command) -> None:
+            self.issued.append(command)
+
+    record = _record()
+    launcher = _FailingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        await app._resolve_detail("force")
+        await pilot.pause()
+        # Navigate the way an owner does: the cursor ends up ON the confirm button.
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(launcher.issued) == 1
+
+        keys = _keys(app)
+        resting = keys[app.query_one("#choices").index] if keys else None
+        # Whatever the owner's next enter lands on, it must not be another kill.
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert resting != "force-confirm", "the cursor must not rest on the confirm button"
+    assert len(launcher.issued) == 1, "a repeated enter re-issued the force stop"

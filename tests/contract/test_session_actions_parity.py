@@ -3,7 +3,7 @@
 This is the test that catches a surface drifting from the shared policy. It is written
 against the *rendered* buttons rather than the policy call, because a surface that asks the
 policy and then adds or filters a button afterwards is precisely the defect the two former
-Telegram copies were. Stage 3 extends the SURFACES tuple with the terminal.
+Telegram copies were. Both surfaces are now pinned; see SURFACES below.
 
 What this test does NOT check: whether the policy itself is right. Both sides of the
 assertion derive from `available_actions`, so changing it moves them together and this file
@@ -127,7 +127,12 @@ async def test_surface_adds_no_action_of_its_own(surface_name: str, render) -> N
         assert rendered <= {"graceful", "cleanup", "force"}, surface_name
 
 
-async def test_the_policy_is_actually_exercised_by_this_test() -> None:
-    """Guards the parity assertion from passing vacuously on an all-empty render."""
-    rendered = await _telegram_rendered_actions(_record(SessionState.RUNNING))
-    assert rendered, "a RUNNING session must render at least one action"
+@pytest.mark.parametrize("surface_name,render", SURFACES)
+async def test_the_policy_is_actually_exercised_by_this_test(surface_name: str, render) -> None:
+    """Guards the parity assertion from passing vacuously on an all-empty render.
+
+    Parametrized over both surfaces: a renderer that silently returned nothing would
+    satisfy the equality above for every state whose policy set is empty.
+    """
+    rendered = await render(_record(SessionState.RUNNING))
+    assert rendered, f"{surface_name}: a RUNNING session must render at least one action"
