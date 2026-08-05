@@ -49,7 +49,8 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
-from remote_agents.adapters.tui.app import AttachRequest, run_local_terminal
+from remote_agents.adapters.tui.app import run_local_terminal
+from remote_agents.adapters.tui.attach import attach_to
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
@@ -335,14 +336,6 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         capture=terminal.capture,
         catalogue_source=lambda: projects.refresh().catalogue,
     )
-
-
-def attach_to(request: AttachRequest | None) -> int:
-    """Report what the terminal started; Stage 4 replaces this with the attach handoff."""
-    if request is None:
-        return 0
-    print(request.command)
-    return 0
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):
