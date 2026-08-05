@@ -21,9 +21,20 @@ class FakeTerminal:
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
     ) -> TerminalObservation:
-        """Create a live fake session without running a process."""
-        del project_id, profile_id
-        observation = TerminalObservation(session_id, live=True, preserved=False)
+        """Create a live fake session without running a process.
+
+        Ownership is recorded because the real adapter reports it and the application
+        checks it: `SessionService.copy_attach` refuses a pane whose project or profile
+        disagrees with the record. A fake that dropped these fields modelled a terminal
+        whose panes have no owner, and made that refusal unreachable in tests.
+        """
+        observation = TerminalObservation(
+            session_id,
+            live=True,
+            preserved=False,
+            project_id=project_id,
+            profile_id=profile_id,
+        )
         self._observations[session_id] = observation
         return observation
 
