@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from textual.app import App, ComposeResult
@@ -17,7 +18,7 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
-from remote_agents.domain.models import ProfileId, ProjectId, SessionState
+from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 
 _LOG = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class Step(StrEnum):
     AREAS = "areas"
     NAME = "name"
     PROJECT_REVIEW = "project-review"
+    SESSIONS = "sessions"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
@@ -116,6 +118,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._area: str | None = None
         self._name: str | None = None
         self._busy = False
+        self._records: tuple[SessionRecord, ...] = ()
         self._status = "Choose a project."
 
     def compose(self) -> ComposeResult:
@@ -365,7 +368,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step in {Step.PROFILES, Step.AREAS}:
+        if self._step in {Step.PROFILES, Step.AREAS, Step.SESSIONS}:
             self._show_projects()
         elif self._step is Step.REVIEW:
             self._show_profiles()
@@ -389,6 +392,53 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_add_project(self) -> None:
         if not self._busy:
             await self._show_areas()
+
+    async def action_sessions(self) -> None:
+        """Show every managed session, including ones this process never launched."""
+        if self._busy:
+            return
+        await self._show_sessions()
+
+    async def _show_sessions(self) -> None:
+        """Re-read readiness, then list what the shared store actually holds.
+
+        Readiness is refreshed first for the same reason the bot does it: a launch that
+        failed here may have become ready since, and listing a stale FAILED would send the
+        owner to fix something that already works.
+        """
+        self._step = Step.SESSIONS
+        self._hide_entry()
+        try:
+            records = await self._load_sessions()
+        except Exception as error:
+            _LOG.exception("session listing failed")
+            self._records = ()
+            self._fill(())
+            self._set_status(
+                f"The managed sessions could not be read: {error}\n"
+                "Press escape to return to the project list."
+            )
+            return
+        self._records = records
+        if not records:
+            self._fill(())
+            self._set_status(
+                "There are no managed sessions. Press escape to return to the project list."
+            )
+            return
+        self._set_status(f"{len(records)} managed session(s). Select one for detail.")
+        self._fill(tuple((str(record.session_id), _session_row(record)) for record in records))
+
+    async def _load_sessions(self) -> tuple[SessionRecord, ...]:
+        """Ask the shared service for the sessions worth showing, newest activity first."""
+        launcher = self._services.launcher
+        refresh = getattr(launcher, "refresh_readiness", None)
+        if refresh is not None:
+            await refresh()
+        records = await launcher.list_sessions()
+        # ENDED is filtered exactly as the bot filters it: the record is retained for audit
+        # but there is nothing left to reach, inspect, or stop.
+        return tuple(record for record in records if record.state is not SessionState.ENDED)
 
     async def _launch(self) -> None:
         project, profile = self._selection.project, self._selection.profile
@@ -425,6 +475,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+
+
+def _age(created_at: datetime) -> str:
+    minutes = max(0, int((datetime.now(UTC) - created_at).total_seconds() // 60))
+    return f"{minutes}m ago"
+
+
+def _session_row(record: SessionRecord) -> str:
+    return f"{record.display.rendered} · {record.state.value} · {_age(record.created_at)}"
 
 
 def _idempotency_key() -> str:
