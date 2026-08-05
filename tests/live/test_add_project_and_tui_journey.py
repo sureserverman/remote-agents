@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -103,7 +104,10 @@ async def test_a_terminal_launch_attaches_and_stops_from_a_second_connection() -
 
         record = await context.launcher.launch(
             LaunchCommand(
-                ProjectId(project.opaque_id), profile, f"acceptance-{date.today()}", "acceptance"
+                ProjectId(project.opaque_id),
+                profile,
+                f"acceptance-{date.today()}-{uuid4()}",
+                "acceptance",
             )
         )
         assert record.state is SessionState.RUNNING
