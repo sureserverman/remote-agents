@@ -41,6 +41,7 @@ from remote_agents.adapters.telegram.service import (
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import (
     build_launch_profile,
@@ -48,6 +49,8 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.adapters.tui.app import run_local_terminal
+from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -55,7 +58,7 @@ from remote_agents.application.project_admin import CreateProjectCommand, Projec
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
-from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
 
@@ -163,6 +166,8 @@ def main(
     add_project_parser.add_argument("--config", type=Path)
     add_project_parser.add_argument("--area", required=True)
     add_project_parser.add_argument("--name", required=True)
+    tui_parser = subcommands.add_parser("tui")
+    tui_parser.add_argument("--config", type=Path)
     arguments = parser.parse_args(argv)
     if arguments.command == "doctor":
         if arguments.profiles:
@@ -213,14 +218,22 @@ def main(
             return 1
         print(created.path)
         return 0
-    if arguments.command == "serve":
-        config = load_config(arguments.config)
+    if arguments.command == "tui":
         paths = ProductionPaths.for_home(Path.home())
-        if config.database_path != paths.database_path:
-            raise ConfigError(
-                "production database path must be "
-                f"{paths.database_path}; refusing to write outside the private state directory"
-            )
+        try:
+            config = _private_state_config(arguments.config or paths.config_path, paths)
+        except ConfigError as error:
+            print(error, file=sys.stderr)
+            return 1
+        paths.ensure_directories()
+        connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        try:
+            return run_local_terminal(local_context(config, connection, paths))
+        finally:
+            connection.close()
+    if arguments.command == "serve":
+        paths = ProductionPaths.for_home(Path.home())
+        config = _private_state_config(arguments.config, paths)
         paths.ensure_directories()
         paths.require_private_environment()
         connection = paths.open_database(open_database, migrations=MIGRATIONS)
@@ -231,10 +244,16 @@ def main(
     return 0
 
 
-def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotBoundary:
-    projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    catalogue = projects.refresh().catalogue
-    project_paths = projects.paths
+@dataclass(frozen=True, slots=True)
+class LocalRuntime:
+    """The terminal and profile availability every local surface composes identically."""
+
+    terminal: TmuxTerminal
+    profiles: tuple[ProfileAvailability, ...]
+
+
+def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
+    """Compose the one tmux terminal and profile probe that every surface shares."""
     definitions = closed_profiles()
     compatibility = probe_profiles(
         definitions,
@@ -282,6 +301,15 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
+    return LocalRuntime(terminal, profiles)
+
+
+def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotBoundary:
+    projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
+    catalogue = projects.refresh().catalogue
+    project_paths = projects.paths
+    runtime = _local_runtime(config, paths, project_paths)
+    terminal = runtime.terminal
     conversations = ConversationService(
         ProfileConversationCatalogue(
             {
@@ -297,13 +325,43 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         secrets.owner_user_id,
         secrets.owner_chat_id,
         catalogue=catalogue,
-        profiles=profiles,
+        profiles=runtime.profiles,
         project_page_size=config.project_page_size,
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
         conversations=conversations,
         creator=_project_creator(config),
         capture=terminal.capture,
         catalogue_source=lambda: projects.refresh().catalogue,
+    )
+
+
+def _private_state_config(config_path: Path, paths: ProductionPaths):
+    """Load a configuration that may only write inside the private state directory."""
+    config = load_config(config_path)
+    if config.database_path != paths.database_path:
+        raise ConfigError(
+            "production database path must be "
+            f"{paths.database_path}; refusing to write outside the private state directory"
+        )
+    return config
+
+
+def local_context(config, connection, paths: ProductionPaths) -> TuiContext:
+    """Compose the local terminal surface over the same store the service uses."""
+    projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
+    catalogue = projects.refresh().catalogue
+    runtime = _local_runtime(config, paths, projects.paths)
+    return TuiContext(
+        launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
+        creator=_project_creator(config),
+        profiles=tuple(
+            ProfileChoice(profile.profile_id, profile.available, profile.reason)
+            for profile in runtime.profiles
+        ),
+        refresh_catalogue=lambda: projects.refresh().catalogue,
+        attach_command=lambda session_id: attach_command(SessionId.parse(session_id)),
+        max_label_length=config.max_label_length,
+        catalogue=catalogue,
     )
 
 

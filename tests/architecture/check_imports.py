@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PACKAGE_NAME = "remote_agents"
+DRIVER_ADAPTERS = frozenset({"telegram", "tui"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,7 @@ def allowed_import(path: Path, source_root: Path, layer: str, imported: str) -> 
             return True
         parts = path.relative_to(source_root).parts
         adapter_name = parts[2] if len(parts) > 2 else None
-        if adapter_name == "telegram" and imported.startswith(
+        if adapter_name in DRIVER_ADAPTERS and imported.startswith(
             (f"{PACKAGE_NAME}.application", f"{PACKAGE_NAME}.config")
         ):
             return True
