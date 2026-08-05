@@ -108,6 +108,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Binding("escape", "back", "Back"),
         Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+n", "add_project", "Add project"),
+        Binding("ctrl+s", "sessions", "Sessions"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
