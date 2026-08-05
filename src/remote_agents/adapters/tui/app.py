@@ -36,6 +36,8 @@ class Step(StrEnum):
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
+_BACK = "\x00back"
+_CANCEL = "\x00cancel"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,16 +135,22 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._status = text
         self.query_one("#status", Static).update(text)
 
-    def _fill(self, entries: tuple[tuple[str, str], ...]) -> None:
-        """Render the choices and put the keyboard where the next decision is made."""
+    def _fill(
+        self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
+    ) -> None:
+        """Render the choices, and take the keyboard only when the list is the next decision.
+
+        Refilling while the owner is typing a filter must leave the keyboard where it is, or
+        every character after the first lands on the list instead of the query.
+        """
         choices = self.query_one("#choices", ListView)
         choices.clear()
         for key, text in entries:
             item = ListItem(Label(text))
             item.entry_key = key
             choices.append(item)
-        if entries:
-            choices.index = 0
+        if entries and focus:
+            choices.index = min(highlight, len(entries) - 1)
             choices.focus()
 
     def _text_entry(self, placeholder: str) -> None:
@@ -159,7 +167,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         entry.value = ""
         entry.display = False
 
-    def _show_projects(self, query: str = "") -> None:
+    def _show_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         self._step = Step.PROJECTS
         self._area = None
         self._name = None
@@ -167,13 +175,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         entry.display = True
         entry.placeholder = "Filter projects"
         projects = search_catalogue(self._catalogue, query) if query else self._catalogue
-        self._set_status(f"Choose a project. {len(projects)} available.")
+        self._set_status(
+            f"Choose a project. {len(projects)} available. "
+            "Type to filter, then press enter for the list."
+        )
         self._fill(
             tuple(
                 (project.opaque_id, f"{project.area}/{project.name}  [{project.group}]")
                 for project in projects
-            )
+            ),
+            focus=False,
         )
+        if not keep_focus:
+            entry.value = ""
+            entry.focus()
 
     def _show_profiles(self) -> None:
         self._step = Step.PROFILES
@@ -195,41 +210,53 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._step = Step.REVIEW
         self._hide_entry()
         self._set_status(f"Review\n{self._selection.review()}")
-        self._fill((("launch", "Launch"), ("back", "Back"), ("cancel", "Cancel")))
+        self._fill((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def _show_areas(self) -> None:
         self._step = Step.AREAS
         self._hide_entry()
-        areas = tuple(
-            area
-            for area in await asyncio.to_thread(self._services.creator.available_areas)
-            if selectable_area(area)
-        )
+        try:
+            offered = await asyncio.to_thread(self._services.creator.available_areas)
+        except Exception:
+            _LOG.exception("listing areas failed")
+            self._set_status("The development root could not be read. Check this host.")
+            self._fill(((_CANCEL, "Back"),))
+            return
+        areas = tuple(area for area in offered if selectable_area(area))
         if not areas:
             self._set_status("No area is available for a new project.")
-            self._fill((("cancel", "Back"),))
+            self._fill(((_CANCEL, "Back"),))
             return
         self._set_status("Choose the area for the new project.")
-        self._fill(tuple((area, area) for area in areas) + (("cancel", "Back"),))
+        self._fill(tuple((area, area) for area in areas) + ((_CANCEL, "Back"),))
 
     def _show_project_review(self) -> None:
         """Name the project before creating it, exactly as the bot's Review does."""
         self._step = Step.PROJECT_REVIEW
         self._hide_entry()
         self._set_status(f"Review new project\nArea: {self._area}\nName: {self._name}")
-        self._fill((("create", "Create"), ("back", "Back"), ("cancel", "Cancel")))
+        self._fill((("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     # Interaction ---------------------------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if self._step is Step.PROJECTS:
-            self._show_projects(event.value)
+            self._show_projects(event.value, keep_focus=True)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if self._step is Step.NAME:
             self._submit_name(event.value)
         elif self._step is Step.LABEL:
             self._submit_label(event.value)
+        elif self._step is Step.PROJECTS:
+            self._enter_project_list()
+
+    def _enter_project_list(self) -> None:
+        """Move from the filter into the filtered list, so arrows and enter can pick."""
+        choices = self.query_one("#choices", ListView)
+        if choices.children:
+            choices.index = 0
+            choices.focus()
 
     async def on_list_view_selected(self, event: ListView.Selected) -> None:
         key = getattr(event.item, "entry_key", None)
@@ -277,16 +304,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._show_review()
 
     async def _resolve_review(self, key: str) -> None:
-        if key == "back":
+        if key == _BACK:
             self._show_profiles()
-        elif key == "cancel":
+        elif key == _CANCEL:
             self._selection = LaunchSelection()
             self._show_projects()
         elif key == "launch":
             await self._launch()
 
     async def _choose_area(self, area: str) -> None:
-        if area == "cancel":
+        if area == _CANCEL:
             self._show_projects()
             return
         self._area = area
@@ -308,8 +335,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._show_project_review()
 
     async def _resolve_project_review(self, key: str) -> None:
-        if key in {"back", "cancel"} or self._area is None or self._name is None:
-            if key == "back":
+        if key in {_BACK, _CANCEL} or self._area is None or self._name is None:
+            if key == _BACK:
                 await self._show_areas()
             else:
                 self._show_projects()
@@ -351,7 +378,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Re-read the catalogue, so a project another process created becomes selectable."""
         if self._busy:
             return
-        self._catalogue = await asyncio.to_thread(self._services.refresh_catalogue)
+        try:
+            self._catalogue = await asyncio.to_thread(self._services.refresh_catalogue)
+        except Exception:
+            _LOG.exception("catalogue refresh failed")
+            self._set_status("The project catalogue could not be re-read. Check this host.")
+            return
         self._show_projects()
 
     async def action_add_project(self) -> None:

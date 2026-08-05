@@ -64,22 +64,41 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            await app.action_add_project()
-            await app._choose_area("infra")
-            app._submit_name("brand-new")
-            await app._resolve_project_review("create")
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            app.query_one("#filter").value = "brand-new"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not (dev_root / "infra" / "brand-new").exists()
+
+            await pilot.press("up")
+            await pilot.press("enter")
             await pilot.pause()
             assert (dev_root / "infra" / "brand-new").is_dir()
 
-            created = next(project for project in app._catalogue if project.name == "brand-new")
-            app._choose_project(created.opaque_id)
-            app._choose_profile("claude")
-            app._submit_label("first run")
+            for character in "brand-new":
+                await pilot.press(character)
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            app.query_one("#filter").value = "first run"
+            await pilot.press("enter")
             await pilot.pause()
             assert "brand-new" in str(app.query_one("#status").content)
 
-            await app._resolve_review("launch")
+            await pilot.press("up")
+            await pilot.press("enter")
+            await pilot.pause()
 
+        created = next(
+            project for project in provider.refresh().catalogue if project.name == "brand-new"
+        )
         records = list(await store.list())
         assert [record.state for record in records] == [SessionState.RUNNING]
         assert str(records[0].project_id) == created.opaque_id

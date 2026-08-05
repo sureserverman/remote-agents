@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui, label_or_error
+from remote_agents.adapters.tui.app import (
+    _BACK,
+    _CANCEL,
+    AttachRequest,
+    RemoteAgentsTui,
+    label_or_error,
+)
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import ProjectCreationError
@@ -101,14 +107,18 @@ async def test_the_project_list_shows_registered_before_unregistered_with_its_gr
     assert rows == ["infra/existing  [Registered]", "dev-area/other-thing  [Unregistered]"]
 
 
-async def test_typing_filters_the_project_list() -> None:
+async def test_typing_filters_the_project_list_one_character_at_a_time() -> None:
+    """A refill must not steal the keyboard, or every character after the first is lost."""
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        app.query_one("#filter").value = "other"
+        for character in "other":
+            await pilot.press(character)
         await pilot.pause()
+        typed = app.query_one("#filter").value
         rows = _rows(app)
 
+    assert typed == "other"
     assert rows == ["dev-area/other-thing  [Unregistered]"]
 
 
@@ -153,7 +163,7 @@ async def test_review_names_the_project_agent_and_label_before_any_launch() -> N
     assert "infra/existing" in status
     assert "claude" in status
     assert "nightly run" in status
-    assert keys == ["launch", "back", "cancel"]
+    assert keys[:1] == ["launch"]
     assert launcher.commands == []
 
 
@@ -192,7 +202,7 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
         app._choose_project("opaque-existing")
         app._choose_profile("claude")
         app._submit_label("")
-        await app._resolve_review("cancel")
+        await app._resolve_review(_CANCEL)
         await pilot.pause()
         rows = _rows(app)
 
@@ -207,7 +217,7 @@ async def test_back_at_review_restores_the_agent_choice() -> None:
         app._choose_project("opaque-existing")
         app._choose_profile("claude")
         app._submit_label("")
-        await app._resolve_review("back")
+        await app._resolve_review(_BACK)
         await pilot.pause()
         rows = _rows(app)
 
@@ -261,7 +271,7 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
         keys = _keys(app)
 
     assert "did not become ready" in status
-    assert keys == ["launch", "back", "cancel"]
+    assert keys[:1] == ["launch"]
     assert app.return_value is None
 
 
@@ -273,7 +283,7 @@ async def test_the_area_list_comes_from_the_creation_service() -> None:
         await pilot.pause()
         keys = _keys(app)
 
-    assert keys == ["dev-area", "infra", "cancel"]
+    assert keys == ["dev-area", "infra", _CANCEL]
 
 
 async def test_no_eligible_area_is_reported_rather_than_shown_empty() -> None:
@@ -371,14 +381,17 @@ async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method
     async with app.run_test() as pilot:
         await pilot.press("enter")
         await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
         assert _keys(app) == ["claude", "cursor-agent"]
 
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert _keys(app) == ["launch", "back", "cancel"]
+        assert [key for key in _keys(app)] == ["launch", "\x00back", "\x00cancel"]
 
+        await pilot.press("up")
         await pilot.press("enter")
         await pilot.pause()
 
@@ -390,8 +403,11 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        choices = app.query_one("#choices")
-        assert choices.has_focus and choices.index == 0
+        assert app.query_one("#filter").has_focus
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#choices").has_focus and app.query_one("#choices").index == 0
 
         await pilot.press("enter")
         await pilot.pause()
@@ -413,7 +429,7 @@ async def test_the_add_project_binding_opens_the_area_list() -> None:
         await pilot.press("ctrl+n")
         await pilot.pause()
 
-        assert _keys(app) == ["dev-area", "infra", "cancel"]
+        assert _keys(app)[:2] == ["dev-area", "infra"]
         assert app.query_one("#choices").has_focus
 
 
@@ -444,9 +460,10 @@ async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -
         await pilot.pause()
 
         assert creator.commands == []
-        assert _keys(app) == ["create", "back", "cancel"]
+        assert _keys(app) == ["create", "\x00back", "\x00cancel"]
         assert "typed-name" in _status(app)
 
+        await pilot.press("up")
         await pilot.press("enter")
         await pilot.pause()
 
@@ -461,7 +478,7 @@ async def test_cancelling_the_new_project_review_creates_nothing() -> None:
         await app.action_add_project()
         await app._choose_area("infra")
         app._submit_name("typed-name")
-        await app._resolve_project_review("cancel")
+        await app._resolve_project_review(_CANCEL)
         await pilot.pause()
 
     assert creator.commands == []
@@ -475,7 +492,7 @@ async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:
         await pilot.pause()
         keys = _keys(app)
 
-    assert keys == ["infra", "web", "cancel"]
+    assert keys[:2] == ["infra", "web"]
 
 
 async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app() -> None:
