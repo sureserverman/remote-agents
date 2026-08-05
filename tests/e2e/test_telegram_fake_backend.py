@@ -28,7 +28,10 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
         text=True,
     )
 
-    assert "launch/resume/list/inspect/graceful/cleanup/force/navigation" in completed.stdout
+    assert (
+        "launch/resume/list/inspect/graceful/cleanup/force/create-project/navigation"
+        in completed.stdout
+    )
 
 
 @pytest.mark.asyncio

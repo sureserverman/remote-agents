@@ -205,11 +205,9 @@ def main(
         paths = ProductionPaths.for_home(Path.home())
         try:
             config = load_config(arguments.config or paths.config_path)
-            creator = ProjectCreationService(
-                FilesystemProjectWorkspace(config.dev_root),
-                RegistryProjectRecorder(config.registry_path, config.dev_root),
+            created = _project_creator(config).create(
+                CreateProjectCommand(arguments.area.strip(), arguments.name.strip())
             )
-            created = creator.create(CreateProjectCommand(arguments.area, arguments.name))
         except (ConfigError, ProjectCreationError) as error:
             print(error, file=sys.stderr)
             return 1
@@ -303,12 +301,17 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         project_page_size=config.project_page_size,
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
         conversations=conversations,
-        creator=ProjectCreationService(
-            FilesystemProjectWorkspace(config.dev_root),
-            RegistryProjectRecorder(config.registry_path, config.dev_root),
-        ),
+        creator=_project_creator(config),
         capture=terminal.capture,
         catalogue_source=lambda: projects.refresh().catalogue,
+    )
+
+
+def _project_creator(config) -> ProjectCreationService:
+    """Compose the one project-creation service every local surface shares."""
+    return ProjectCreationService(
+        FilesystemProjectWorkspace(config.dev_root),
+        RegistryProjectRecorder(config.registry_path, config.dev_root),
     )
 
 

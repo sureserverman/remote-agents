@@ -175,12 +175,9 @@ class PrivateBotBoundary:
         if action == "project.name":
             try:
                 identity = ProjectIdentity(area=entity_id, name=value.strip())
-            except ValueError:
+            except ValueError as error:
                 await update.effective_message.reply_text(
-                    **self._guided_text_reply(
-                        "project.name",
-                        "Use lowercase letters, digits, and single hyphens.",
-                    )
+                    **self._guided_text_reply("project.name", str(error))
                 )
                 return
             self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)

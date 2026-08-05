@@ -273,10 +273,7 @@ class TmuxTerminal:
         current = _remote_control_state(await self._gateway.capture(session_id))
         if current is desired_state:
             return current
-        if (
-            desired_state is RemoteControlState.INACTIVE
-            and current is RemoteControlState.UNKNOWN
-        ):
+        if desired_state is RemoteControlState.INACTIVE and current is RemoteControlState.UNKNOWN:
             return current
         if desired_state is RemoteControlState.ACTIVE:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_ENABLE_KEYS)

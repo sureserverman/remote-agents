@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from remote_agents.adapters.projects import registry_writer
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryWriteError, append_project
 
@@ -293,6 +294,46 @@ def test_append_project_rejects_a_relative_path(tmp_path: Path) -> None:
 
     with pytest.raises(RegistryWriteError):
         _append(registry, tmp_path, project_path=Path("dev/infra/new-project"))
+
+
+@pytest.mark.parametrize("name", ["2026", "true", "false", "no", "on", "off", "0x1f", "0755"])
+def test_append_project_keeps_a_numeric_or_boolean_name_readable_as_text(
+    tmp_path: Path, name: str
+) -> None:
+    """A slug the reader would parse as a number or a boolean must not degrade the registry."""
+    registry = _registry(tmp_path)
+    project = _project_directory(tmp_path, name=name)
+
+    _append(registry, tmp_path, project_path=project, name=name)
+
+    result = load_registry(registry)
+    assert result.error is None
+    assert name in {entry.name for entry in result.projects}
+
+
+def test_append_project_leaves_an_ordinary_name_unquoted(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    project = _project_directory(tmp_path)
+
+    _append(registry, tmp_path, project_path=project)
+
+    assert "    name: new-project\n" in registry.read_text(encoding="utf-8")
+
+
+def test_append_project_refuses_when_the_reader_would_reject_the_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reader's verdict on the extended document is what gates publication."""
+    registry = _registry(tmp_path)
+    project = _project_directory(tmp_path)
+    monkeypatch.setattr(registry_writer, "_text_scalar", lambda value: value)
+    unchanged = registry.read_bytes()
+
+    with pytest.raises(RegistryWriteError):
+        _append(registry, tmp_path, project_path=project, name="2026")
+
+    assert registry.read_bytes() == unchanged
+    assert load_registry(registry).error is None
 
 
 @pytest.mark.parametrize(

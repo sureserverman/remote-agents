@@ -25,6 +25,8 @@ _GRACEFUL_KEYS = {
     "opencode": ("C-c",),
     "cursor-agent": ("/quit", "Enter", "Enter"),
 }
+
+
 @dataclass(frozen=True, slots=True)
 class ProfileDefinition:
     """A reviewed agent command whose arguments never come from Telegram input."""
@@ -49,6 +51,7 @@ class ProfileDefinition:
     def version_command(self) -> tuple[str, ...]:
         """Return the fixed executable probe command, without user-controlled arguments."""
         return (self.executable, *self.version_argv)
+
 
 @dataclass(frozen=True, slots=True)
 class ProfileCompatibility:

@@ -50,16 +50,26 @@ def append_project(
             raise RegistryWriteError("registry already holds this canonical project path")
         block = (
             f"  - path: {canonical}\n"
-            f"    name: {name}\n"
-            f"    area: {area}\n"
+            f"    name: {_text_scalar(name)}\n"
+            f"    area: {_text_scalar(area)}\n"
             "    enabled: true\n"
             f"    added: {added.isoformat()}\n"
         )
         separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
         candidate = existing + separator + block.encode("utf-8")
-        _require_appendable(candidate, canonical)
-        _replace_atomically(target, candidate)
+        _replace_atomically(target, candidate, canonical)
     return canonical
+
+
+def _text_scalar(value: str) -> str:
+    """Quote a value that YAML would otherwise read back as a number, date, or boolean.
+
+    A name like ``2026`` or ``no`` is a valid project slug but an invalid registry entry,
+    because the reader requires every one of these fields to be text.
+    """
+    if isinstance(yaml.safe_load(value), str):
+        return value
+    return f'"{value}"'
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,21 +141,19 @@ def _verified_bytes(target: Path) -> bytes:
     return target.read_bytes()
 
 
-def _require_appendable(candidate: bytes, expected: Path) -> None:
-    """Prove the extended document before publishing it.
+def _require_readable(candidate: Path, expected: Path) -> None:
+    """Prove the reader accepts the extended document, before it replaces the registry.
 
-    A registry the reader accepts can still be a shape this block-style append corrupts —
-    an empty or flow-style ``projects`` list, or one declared before ``version``. Publishing
-    is atomic and durable, so the only safe place to catch that is before the rename.
+    Parsing alone is not enough. A registry the reader accepts can still be a shape this
+    block-style append corrupts, and a value the slug rule accepts can still read back as a
+    number or a boolean and take the whole document outside the schema. Publishing is atomic
+    and durable, so the reader's own verdict is the only one worth acting on, and the only
+    safe place to ask for it is before the rename.
     """
-    try:
-        document = yaml.safe_load(candidate)
-    except yaml.YAMLError as error:
-        raise RegistryWriteError("appending would leave the registry unparseable") from error
-    entries = document["projects"] if isinstance(document, dict) else None
-    if not isinstance(entries, list) or not any(
-        isinstance(entry, dict) and entry.get("path") == str(expected) for entry in entries
-    ):
+    result = load_registry(candidate)
+    if result.error is not None:
+        raise RegistryWriteError("appending would leave the registry unreadable")
+    if expected not in {project.path for project in result.projects}:
         raise RegistryWriteError("appended entry did not survive a re-read of the registry")
 
 
@@ -166,7 +174,7 @@ def _registered_paths(existing: bytes) -> frozenset[Path]:
     return frozenset(claimed)
 
 
-def _replace_atomically(target: Path, content: bytes) -> None:
+def _replace_atomically(target: Path, content: bytes, expected: Path) -> None:
     """Publish the extended registry in one durable step, preserving the original file mode."""
     mode = stat.S_IMODE(target.stat().st_mode)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -179,6 +187,7 @@ def _replace_atomically(target: Path, content: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         temporary.chmod(mode)
+        _require_readable(temporary, expected)
         os.replace(temporary, target)
     except BaseException:
         temporary.unlink(missing_ok=True)

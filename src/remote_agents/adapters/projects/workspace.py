@@ -16,8 +16,13 @@ class FilesystemProjectWorkspace:
     dev_root: Path
 
     def areas(self) -> tuple[str, ...]:
-        """List the existing area directories a new project may be created in."""
+        """List the existing area directories a new project may be created in.
+
+        An area that resolves outside the development root is not offered, so a symlink
+        placed there cannot become a route to creating a project somewhere else.
+        """
         try:
+            canonical_root = self.dev_root.resolve(strict=True)
             entries = tuple(self.dev_root.iterdir())
         except OSError:
             return ()
@@ -25,9 +30,9 @@ class FilesystemProjectWorkspace:
             sorted(
                 entry.name
                 for entry in entries
-                if entry.is_dir()
-                and not entry.name.startswith(".")
+                if not entry.name.startswith(".")
                 and entry.name not in IGNORED_DIRECTORY_NAMES
+                and _contained_directory(entry, canonical_root)
             )
         )
 
@@ -55,3 +60,11 @@ class FilesystemProjectWorkspace:
 
     def _project_path(self, identity: ProjectIdentity) -> Path:
         return self.dev_root / identity.area / identity.name
+
+
+def _contained_directory(entry: Path, canonical_root: Path) -> bool:
+    try:
+        canonical = entry.resolve(strict=True)
+    except OSError:
+        return False
+    return canonical.is_dir() and canonical.parent == canonical_root

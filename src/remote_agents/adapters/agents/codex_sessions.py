@@ -98,9 +98,7 @@ class CodexSessionCatalogue:
         for project_id, cwd in projects:
             cursor: str | None = None
             while len(entries) < _MAX_CATALOGUE_ITEMS:
-                payload = await self._client.list_threads(
-                    cwd=cwd, cursor=cursor, limit=_PAGE_LIMIT
-                )
+                payload = await self._client.list_threads(cwd=cwd, cursor=cursor, limit=_PAGE_LIMIT)
                 threads = payload.get("data")
                 if not isinstance(threads, list):
                     raise ProtocolError("Codex thread/list returned no thread list")
