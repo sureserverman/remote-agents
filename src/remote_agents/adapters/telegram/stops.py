@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.application.commands import CleanupCommand, ForceStopCommand, GracefulStopCommand
+from remote_agents.application.session_actions import available_actions
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 
 
@@ -31,18 +32,7 @@ class StopController:
         chat_id: int,
         view_revision: int,
     ) -> str | None:
-        if action not in {"graceful", "cleanup", "force"}:
-            return None
-        if action == "cleanup" and state is not SessionState.PRESERVED:
-            return None
-        if action == "graceful" and state is not SessionState.RUNNING:
-            return None
-        if action == "force" and state not in {
-            SessionState.RUNNING,
-            SessionState.STOP_REQUESTED,
-            SessionState.PRESERVED,
-            SessionState.FAILED,
-        }:
+        if action not in available_actions(state):
             return None
         return self._callbacks.create(
             action, f"{session_id}:{profile_id}", owner_id, chat_id, view_revision, mutation=True

@@ -52,6 +52,7 @@ from remote_agents.application.commands import (
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand
+from remote_agents.application.session_actions import available_actions
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
@@ -534,7 +535,7 @@ class PrivateBotBoundary:
                     ),
                 )
             )
-        for action in _available_stops(record.state):
+        for action in available_actions(record.state):
             token = self.stops.offer(
                 record.session_id,
                 record.profile_id,
@@ -1098,15 +1099,6 @@ def _profile_name(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }.get(profile_id, "Unavailable")
-
-
-def _available_stops(state: SessionState) -> tuple[str, ...]:
-    actions = ["force"]
-    if state is SessionState.RUNNING:
-        actions.insert(0, "graceful")
-    if state is SessionState.PRESERVED:
-        actions.insert(0, "cleanup")
-    return tuple(actions)
 
 
 def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
