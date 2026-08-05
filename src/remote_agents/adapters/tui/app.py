@@ -463,11 +463,37 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def _resolve_detail(self, key: str) -> None:
         if key == _BACK:
             await self._show_sessions()
+        elif key == "attach":
+            await self._show_attach()
+
+    async def _show_attach(self) -> None:
+        """Render the command that reaches this pane, or say why there is none.
+
+        The affordance is always offered and answers when chosen, rather than being hidden
+        when unavailable. Hiding it is what the bot does, and it leaves the owner unable to
+        tell a dead pane from a surface that simply forgot to draw the button.
+        """
+        if self._detail_id is None:
+            return
+        record = await self._current_record(self._detail_id)
+        if record is None:
+            self._set_status("That session is no longer available.")
+            return
+        command = await self._services.launcher.copy_attach(record.session_id)
+        if command is None:
+            self._set_status(
+                f"{record.display.rendered}\n"
+                "Attach is not available: this session's pane is not live, or the pane "
+                "found for it belongs to a different project or agent.\n"
+                f"{explain_state(record.state)}"
+            )
+            return
+        self._set_status(f"{record.display.rendered}\nAttach with:\n{command}")
 
     def _detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
         """The actions this session offers. Stage 3 adds the mutating ones."""
         del record
-        return ((_BACK, "Back"),)
+        return (("attach", "Copy attach"), (_BACK, "Back"))
 
     async def _current_record(self, session_value: str) -> SessionRecord | None:
         for record in await self._load_sessions():
