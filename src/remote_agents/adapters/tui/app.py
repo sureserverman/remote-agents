@@ -121,7 +121,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._area: str | None = None
         self._name: str | None = None
         self._busy = False
-        self._records: tuple[SessionRecord, ...] = ()
         self._detail_id: str | None = None
         self._status = "Choose a project."
 
@@ -421,15 +420,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             records = await self._load_sessions()
         except Exception as error:
-            _LOG.exception("session listing failed")
-            self._records = ()
-            self._fill(())
-            self._set_status(
-                f"The managed sessions could not be read: {error}\n"
-                "Press escape to return to the project list."
-            )
+            self._report_store_failure(error)
             return
-        self._records = records
         if not records:
             self._fill(())
             self._set_status(
@@ -447,7 +439,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         self._step = Step.SESSION_DETAIL
         self._hide_entry()
-        record = await self._current_record(session_value)
+        try:
+            record = await self._current_record(session_value)
+        except Exception as error:
+            self._report_store_failure(error)
+            return
         if record is None:
             self._detail_id = None
             self._fill(((_BACK, "Back"),))
@@ -476,11 +472,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         if self._detail_id is None:
             return
-        record = await self._current_record(self._detail_id)
-        if record is None:
-            self._set_status("That session is no longer available.")
+        try:
+            record = await self._current_record(self._detail_id)
+            if record is None:
+                self._set_status("That session is no longer available.")
+                return
+            command = await self._services.launcher.copy_attach(record.session_id)
+        except Exception as error:
+            self._report_store_failure(error)
             return
-        command = await self._services.launcher.copy_attach(record.session_id)
         if command is None:
             self._set_status(
                 f"{record.display.rendered}\n"
@@ -496,19 +496,46 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         del record
         return (("attach", "Copy attach"), (_BACK, "Back"))
 
+    def _report_store_failure(self, error: Exception) -> None:
+        """Report a failed store or terminal read without tearing the surface down.
+
+        Every read this screen makes can fail: the store has a second writer, and a
+        recovery surface is used precisely when things are already broken. Losing the app
+        to an exception is the one outcome that leaves the owner with nothing.
+        """
+        _LOG.exception("session read failed", exc_info=error)
+        self._fill(((_BACK, "Back"),))
+        self._set_status(
+            f"The managed sessions could not be read: {error}\n"
+            "Press escape to return to the project list."
+        )
+
     async def _current_record(self, session_value: str) -> SessionRecord | None:
-        for record in await self._load_sessions():
+        """Re-read one session from the store, without refreshing readiness.
+
+        The re-read is what detects a session stopped by the other writer while this list
+        was on screen. The *refresh* is deliberately not repeated: it rescans every record
+        and runs a tmux capture per FAILED session, so repeating it on each navigation
+        would make opening a detail and copying its attach command cost three full passes.
+        The bot refreshes once per list open for the same reason.
+        """
+        for record in await self._read_sessions():
             if str(record.session_id) == session_value:
                 return record
         return None
 
     async def _load_sessions(self) -> tuple[SessionRecord, ...]:
-        """Ask the shared service for the sessions worth showing, newest activity first."""
-        launcher = self._services.launcher
-        refresh = getattr(launcher, "refresh_readiness", None)
-        if refresh is not None:
-            await refresh()
-        records = await launcher.list_sessions()
+        """Refresh readiness, then return the sessions worth showing.
+
+        Order is whatever the store returns; nothing here sorts, and the row's age column
+        is what tells the owner how old a session is.
+        """
+        await self._services.launcher.refresh_readiness()
+        return await self._read_sessions()
+
+    async def _read_sessions(self) -> tuple[SessionRecord, ...]:
+        """List the store's sessions, filtering what no surface can act on."""
+        records = await self._services.launcher.list_sessions()
         # ENDED is filtered exactly as the bot filters it: the record is retained for audit
         # but there is nothing left to reach, inspect, or stop.
         return tuple(record for record in records if record.state is not SessionState.ENDED)

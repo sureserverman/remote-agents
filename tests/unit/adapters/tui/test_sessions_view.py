@@ -186,3 +186,91 @@ async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None
 
     assert step is Step.PROJECTS
     assert launcher.refreshed == 0
+
+
+@dataclass(slots=True)
+class _FlakyListing:
+    """Succeeds for the first read, then fails — a store contended by the other writer."""
+
+    records: tuple[SessionRecord, ...] = ()
+    reads: int = 0
+    fail_reads: bool = True
+    attach_error: Exception | None = None
+
+    async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
+        return self.records
+
+    async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
+        if self.fail_reads and self.reads > 1:
+            raise RuntimeError("database is locked")
+        return self.records
+
+    async def copy_attach(self, _session_id) -> str | None:
+        if self.attach_error is not None:
+            raise self.attach_error
+        return None
+
+
+async def test_a_store_error_opening_detail_is_reported_not_raised() -> None:
+    """Recovery is exactly when the store is contended; the surface must survive it."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_FlakyListing((record,))))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        status = _status(app)
+
+    assert "could not be read" in status.casefold()
+
+
+async def test_a_store_error_rendering_attach_is_reported_not_raised() -> None:
+    record = _record()
+    launcher = _FlakyListing((record,))
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        app._detail_id = str(record.session_id)
+        await app._show_attach()
+        await pilot.pause()
+        status = _status(app)
+
+    assert "could not be read" in status.casefold()
+
+
+async def test_a_failing_copy_attach_is_reported_not_raised() -> None:
+    """copy_attach re-reads the record and inspects the terminal; either can fail."""
+    record = _record()
+    launcher = _FlakyListing(
+        (record,), fail_reads=False, attach_error=RuntimeError("terminal server is gone")
+    )
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app._show_detail(str(record.session_id))
+        await pilot.pause()
+        await app._resolve_detail("attach")
+        await pilot.pause()
+        status = _status(app)
+
+    assert "could not be read" in status.casefold()
+
+
+async def test_selecting_a_row_never_escapes_as_an_exception() -> None:
+    """The keystroke path is what the owner actually uses; it must not tear down the app."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_FlakyListing((record,))))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        status = _status(app)
+
+    assert "could not be read" in status.casefold()

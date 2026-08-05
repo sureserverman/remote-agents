@@ -84,19 +84,18 @@ async def test_the_attach_command_is_rendered_byte_for_byte() -> None:
     assert expected in status
 
 
-async def test_the_rendered_command_equals_attach_argv_joined() -> None:
-    """The surface must not reformat the command it tells the owner to paste.
+async def test_the_command_is_rendered_verbatim_and_not_reformatted() -> None:
+    """The owner pastes this string, so the surface must not normalize it.
 
-    Both sources are the same function in production — `attach_command()` is
-    `" ".join(attach_argv(...))` in `adapters/tmux/codec.py`, and bootstrap hands that same
-    `attach_argv` to the context — so the fake is wired the way production is rather than
-    being free to disagree with it.
+    Deliberately awkward spacing: an implementation that split and rejoined, stripped, or
+    re-derived the command from its own `attach_argv` would silently "tidy" it and this
+    assertion would fail. That is the real invariant — the previous version of this test
+    compared two strings the test itself had made equal, and could not have caught it.
     """
     record = _record()
-    context_argv = (*_ARGV, f"={record.session_id}")
-    launcher = _Listing((record,), attach=" ".join(context_argv))
-    context = _context(launcher)
-    app = RemoteAgentsTui(context)
+    awkward = "tmux  -L remote-agents   attach-session -t  =weird-spacing"
+    launcher = _Listing((record,), attach=awkward)
+    app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
         await app._show_detail(str(record.session_id))
@@ -105,7 +104,7 @@ async def test_the_rendered_command_equals_attach_argv_joined() -> None:
         await pilot.pause()
         status = _status(app)
 
-    assert " ".join(context.attach_argv(str(record.session_id))) in status
+    assert awkward in status
 
 
 async def test_an_unavailable_attach_says_why_instead_of_hiding() -> None:

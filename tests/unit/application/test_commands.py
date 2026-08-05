@@ -2,9 +2,11 @@
 
 import asyncio
 from collections.abc import Collection, Sequence
+from dataclasses import replace
 
 import pytest
 
+from remote_agents.adapters.tmux.fake import FakeTerminal as OwnershipAwareTerminal
 from remote_agents.application.commands import ForceStopCommand, GracefulStopCommand, LaunchCommand
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
@@ -195,3 +197,42 @@ async def test_a_stop_the_policy_refuses_also_raises_in_the_service() -> None:
     with pytest.raises(InvalidTransition):
         await service.force_stop(ForceStopCommand(record.session_id))
     assert terminal.force_stop_calls == 0
+
+
+async def test_copy_attach_refuses_a_pane_that_belongs_to_another_project() -> None:
+    """The ownership half of copy_attach's guard, exercised rather than merely reachable.
+
+    FakeTerminal records project and profile on launch precisely so this branch can be
+    driven; without that, every fake observation was unowned and this refusal was dead.
+    """
+    store = FakeStore()
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+
+    assert await service.copy_attach(record.session_id) is not None
+
+    # The same pane, now reporting a different project than the record carries.
+    observation = await terminal.inspect(record.session_id)
+    terminal._observations[record.session_id] = replace(
+        observation, project_id=ProjectId("someone-elses-project")
+    )
+
+    assert await service.copy_attach(record.session_id) is None
+
+
+async def test_copy_attach_refuses_a_pane_running_another_profile() -> None:
+    store = FakeStore()
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    observation = await terminal.inspect(record.session_id)
+    terminal._observations[record.session_id] = replace(
+        observation, profile_id=ProfileId("codex")
+    )
+
+    assert await service.copy_attach(record.session_id) is None

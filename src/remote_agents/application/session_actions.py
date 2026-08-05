@@ -67,11 +67,18 @@ _EXPLANATIONS = {
     SessionState.RUNNING: "The agent is running.",
     SessionState.STOP_REQUESTED: "A graceful stop is in progress.",
     SessionState.PRESERVED: "The agent exited; its output is preserved for inspection.",
-    SessionState.FAILED: "The session needs local attention before another action.",
+    SessionState.FAILED: (
+        "The session did not become ready. Its pane may still exist; a later readiness "
+        "check can still promote it."
+    ),
     SessionState.ENDED: "The session is closed; nothing is left to reach.",
+    # Two producers, and the wording has to fit both: a record whose pane evidence was
+    # neither live nor preserved (reconcile.py "ambiguous_terminal"), and a trusted pane
+    # found with no record at all ("unknown_session"). It is quarantined either way, and
+    # nothing the owner does moves it out — there is no transition from ORPHANED.
     SessionState.ORPHANED: (
-        "The evidence for this session was ambiguous, so it is held for local attention. "
-        "Resolve it on this host."
+        "This session and the panes on this host could not be reconciled, so it is held "
+        "aside. No action is offered for it."
     ),
 }
 

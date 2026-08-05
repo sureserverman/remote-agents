@@ -1,8 +1,22 @@
 """The terminal can see and reach a session another process launched.
 
-This is the recovery hole Stage 2 closes. The session is launched through a *separate*
-composition on its own SQLite connection — the shape a running `serve` actually has — so a
-shared in-process object cannot make the test pass by accident.
+This is the recovery hole Stage 2 closes. The session is launched through a separate
+composition on its own SQLite connection — the shape a running `serve` actually has.
+
+What each half of that actually proves, because the two differ:
+
+- **Listing and detail** are genuinely cross-connection. `SessionService` holds no cache;
+  `list_sessions` is a live SELECT on connection B, so the row on screen came off disk
+  after connection A wrote it.
+- **Attach** is not. `FakeTerminal` is deliberately *shared* between the two compositions,
+  because it stands in for the tmux server — a genuinely shared out-of-process resource.
+  `copy_attach` asks it whether the pane is live and owned, so an unshared second fake
+  would return None for a session it never launched and this test would fail for a reason
+  that says nothing about the store.
+
+Do not "clean up" the shared terminal: it is load-bearing, and removing it would either
+break these assertions or make them vacuous. The process axis is covered separately by
+tests/integration/test_cross_process_management.py.
 """
 
 from __future__ import annotations
@@ -77,7 +91,9 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
             assert str(launched.display.rendered) in detail
             assert "running" in detail
 
-            await app._resolve_detail("attach")
+            # Pressing enter rather than calling _resolve_detail: the detail step's own
+            # selection wiring is otherwise never exercised by a keystroke.
+            await pilot.press("enter")
             await pilot.pause()
             attach = _status(app)
 
