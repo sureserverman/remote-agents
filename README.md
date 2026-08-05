@@ -81,12 +81,14 @@ The same curated launches are available on this host without Telegram:
 uv run --locked remote-agents tui
 ```
 
-`remote-agents tui` is a local surface rather than a control plane: it launches one curated agent
-here and then hands this terminal to that session's tmux pane, where the bot instead controls
-sessions it never attaches to. It reads the same private configuration the service reads,
-defaulting to `~/.config/remote-agents/config.toml`, and it opens the same SQLite store, refusing
-a `database_path` outside the private state directory exactly as `serve` does. It needs no
-Telegram credentials and does not require the user service to be running.
+`remote-agents tui` carries the same session actions the bot carries, driven from this host instead
+of from Telegram, and one the bot has no way to offer: it hands this terminal to a session's tmux
+pane. It reads the same private configuration the service reads, defaulting to
+`~/.config/remote-agents/config.toml`, and it opens the same SQLite store, refusing a
+`database_path` outside the private state directory exactly as `serve` does. It drives that store
+itself, so none of what follows needs Telegram credentials or a running user service: launch,
+resume, the session list, inspect, Copy Attach, all three stops, and Claude Remote Control are
+available with the service stopped.
 
 The wizard opens on the project list with the filter focused and reports how many projects are
 available. Type to narrow the list one character at a time, press enter to move into it, then use
@@ -97,8 +99,9 @@ label is optional, bounded by the configured `max_label_length`, and an empty en
 Review names the project, agent, and label before anything is created, and it opens with Back
 highlighted rather than Launch, so a stray enter mutates nothing; Back restores the agent choice
 and Cancel returns to the project list. Escape is Back, Ctrl+R re-reads the catalogue, Ctrl+N adds
-a project, and Ctrl+Q quits. A launch that raises, or one whose session never reaches readiness,
-returns to Review with the reason and attaches to nothing.
+a project, Ctrl+S opens the managed sessions, Ctrl+O resumes a saved conversation, and Ctrl+Q
+quits. A launch that raises, or one whose session never reaches readiness, returns to Review with
+the reason and attaches to nothing.
 
 Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates
 under the configured development root, further restricted to those the project identity rule also
@@ -111,10 +114,47 @@ started, `tmux -L remote-agents attach-session -t ra-<session>:`, and the store 
 closed first, so the attached terminal holds no database handle. The project ships no tmux
 configuration and sets no prefix, so detaching uses tmux's own binding: `Ctrl-b d` on a stock
 tmux, or the same `d` under whatever prefix this host's `~/.tmux.conf` sets. Detaching leaves the
-session running and managed; it stays listed, inspectable, and stoppable from Telegram. Started
-from inside an existing tmux client, the launch still happens but the attach is refused rather
-than nested, and the command to reach the new session is printed instead. An exec that cannot
-happen prints the same command and exits non-zero, so a started session is never lost.
+session running and managed; it stays listed, inspectable, and stoppable from either surface.
+Started from inside an existing tmux client, the launch still happens but the attach is refused
+rather than nested, and the command to reach the new session is printed instead. An exec that
+cannot happen prints the same command and exits non-zero, so a started session is never lost.
+
+Ctrl+S lists the managed sessions. The list is the shared store's rather than this process's, so a
+session the bot launched, or one a previous run of this app started, is there too; each row names
+the session, its state, and how long ago it started. Readiness is refreshed once as the list opens,
+for the reason the bot refreshes it: a launch that failed here may have become ready since, and a
+stale FAILED row sends the owner to fix something that already works. Ended sessions are left out,
+because the record is kept for audit but there is nothing left to reach.
+
+Selecting a row opens that session's detail, re-read from the store rather than carried over from
+the list, because the store has a second writer and a session can be stopped elsewhere while the
+list is on screen. The detail names the session and its state, and explains in one line what that
+state means. It offers exactly the stops the shared policy allows from that state: Graceful stop
+only from RUNNING, Clean up only from PRESERVED, and Force stop from RUNNING, STOP_REQUESTED,
+PRESERVED, or FAILED. A starting session offers none, because the domain has no stop transition out
+of STARTING and reconciliation is what resolves one that is stuck; an orphaned session offers none
+either, because the domain has no transition out of ORPHANED at all.
+
+Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
+project or agent does not match, is explained rather than left out, so a dead pane cannot be
+mistaken for a surface that forgot to draw the entry. Inspect output renders the captured text
+through the same sanitizer the bot uses, in a scrollable pane rather than under Telegram's message
+bound, and refuses output containing a NUL byte for the reason the bot refuses it: a pane emitting
+NUL is not rendering text, and printing it can corrupt the terminal. Claude Remote Control appears
+only on a running Claude pane. It and Force stop each move to a step of their own before anything
+is issued, with Cancel first and resting under the cursor, so going through with either means
+choosing a different row on purpose rather than repeating the keystroke that opened the detail.
+
+Ctrl+O resumes a saved conversation. It asks for the project, then the agent, offering only those
+whose provider reports itself resume-capable on this host; capability comes from the probe that
+asks each provider, never from a version allowlist. Then it pages that agent's conversations for
+that project, ten at a time. A row carries safe metadata only; the provider ID and the transcript
+stay server-side exactly as they do in Telegram, and what the row holds is an opaque reference the
+server resolves, so a stale one resolves to nothing rather than to a path. The confirmation opens
+with Cancel under the cursor, so a stray enter starts nothing. A ready resume hands this terminal
+to the new session's pane exactly as a launch does; one that never reaches readiness prints the
+command that reaches the pane instead. Resume is Ctrl+O rather than Ctrl+E because the text input
+already binds Ctrl+E to end-of-line.
 
 ## Creating a project
 
