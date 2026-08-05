@@ -48,6 +48,7 @@ class Step(StrEnum):
     PROJECT_REVIEW = "project-review"
     SESSIONS = "sessions"
     SESSION_DETAIL = "session-detail"
+    FORCE_CONFIRM = "force-confirm"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
@@ -294,6 +295,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._show_detail(key)
         elif self._step is Step.SESSION_DETAIL:
             await self._resolve_detail(key)
+        elif self._step is Step.FORCE_CONFIRM:
+            await self._resolve_force_confirm(key)
 
     def _choose_project(self, opaque_id: str) -> None:
         project = next((item for item in self._catalogue if item.opaque_id == opaque_id), None)
@@ -387,7 +390,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step is Step.SESSION_DETAIL:
+        if self._step is Step.FORCE_CONFIRM:
+            if self._detail_id is not None:
+                await self._show_detail(self._detail_id)
+        elif self._step is Step.SESSION_DETAIL:
             await self._show_sessions()
         elif self._step in {Step.PROFILES, Step.AREAS, Step.SESSIONS}:
             self._show_projects()
@@ -472,8 +478,41 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._show_sessions()
         elif key == "attach":
             await self._show_attach()
+        elif key == FORCE:
+            await self._confirm_force()
         elif key in _ACTION_LABELS:
             await self._stop(key)
+
+    async def _confirm_force(self) -> None:
+        """Ask a second time, on its own step, with abort as the resting choice.
+
+        Force kills a running agent and cannot be undone, so it is deliberately not
+        reachable by repeating whatever keystroke opened the detail: the abort entry is
+        first and highlighted, and confirming means moving to a different row on purpose.
+        """
+        if self._detail_id is None:
+            return
+        record = await self._current_record(self._detail_id)
+        if record is None:
+            self._set_status("That session is no longer available.")
+            return
+        self._step = Step.FORCE_CONFIRM
+        self._hide_entry()
+        self._set_status(
+            f"Force stop {record.display.rendered}?\n"
+            "This kills the agent immediately and cannot be undone. Any work it has not "
+            "saved is lost.\n"
+            f"{explain_state(record.state)}"
+        )
+        self._fill(((_CANCEL, "Cancel"), ("force-confirm", "Yes, force stop it")))
+
+    async def _resolve_force_confirm(self, key: str) -> None:
+        if key == "force-confirm":
+            await self._stop(FORCE)
+            return
+        # Anything else -- cancel, back, or an unrecognized key -- aborts without issuing.
+        if self._detail_id is not None:
+            await self._show_detail(self._detail_id)
 
     async def _stop(self, action: str) -> None:
         """Issue one stop, after re-reading the record and re-checking the policy.
