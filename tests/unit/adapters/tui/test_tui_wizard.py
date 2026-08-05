@@ -66,8 +66,13 @@ def _context(**overrides: object) -> TuiContext:
             ProfileChoice("cursor-agent", False, "executable_missing"),
         ),
         "refresh_catalogue": lambda: (_EXISTING, _OTHER),
-        "attach_command": lambda session_id: (
-            f"tmux -L remote-agents attach-session -t ={session_id}"
+        "attach_argv": lambda session_id: (
+            "tmux",
+            "-L",
+            "remote-agents",
+            "attach-session",
+            "-t",
+            f"={session_id}",
         ),
         "catalogue": (_EXISTING, _OTHER),
     }
@@ -264,7 +269,7 @@ async def test_the_area_list_comes_from_the_creation_service() -> None:
     app = RemoteAgentsTui(_context(creator=FakeCreator(areas=("dev-area", "infra"))))
 
     async with app.run_test() as pilot:
-        app.action_add_project()
+        await app.action_add_project()
         await pilot.pause()
         keys = _keys(app)
 
@@ -275,7 +280,7 @@ async def test_no_eligible_area_is_reported_rather_than_shown_empty() -> None:
     app = RemoteAgentsTui(_context(creator=FakeCreator(areas=())))
 
     async with app.run_test() as pilot:
-        app.action_add_project()
+        await app.action_add_project()
         await pilot.pause()
         status = _status(app)
 
@@ -288,9 +293,9 @@ async def test_a_new_project_name_outside_the_slug_rule_creates_nothing(name: st
     app = RemoteAgentsTui(_context(creator=creator))
 
     async with app.run_test() as pilot:
-        app.action_add_project()
-        app._choose_area("infra")
-        await app._submit_name(name)
+        await app.action_add_project()
+        await app._choose_area("infra")
+        app._submit_name(name)
         await pilot.pause()
 
     assert creator.commands == []
@@ -302,9 +307,10 @@ async def test_a_created_project_is_selectable_without_leaving_the_app() -> None
     app = RemoteAgentsTui(_context(creator=creator, refresh_catalogue=lambda: (created,)))
 
     async with app.run_test() as pilot:
-        app.action_add_project()
-        app._choose_area("infra")
-        await app._submit_name("brand-new")
+        await app.action_add_project()
+        await app._choose_area("infra")
+        app._submit_name("brand-new")
+        await app._resolve_project_review("create")
         await pilot.pause()
         rows = _rows(app)
 
@@ -317,9 +323,10 @@ async def test_a_refused_creation_is_reported_and_leaves_the_catalogue_alone() -
     app = RemoteAgentsTui(_context(creator=creator))
 
     async with app.run_test() as pilot:
-        app.action_add_project()
-        app._choose_area("infra")
-        await app._submit_name("brand-new")
+        await app.action_add_project()
+        await app._choose_area("infra")
+        app._submit_name("brand-new")
+        await app._resolve_project_review("create")
         await pilot.pause()
         status = _status(app)
 
@@ -332,7 +339,7 @@ async def test_refresh_re_reads_a_project_another_process_created() -> None:
     app = RemoteAgentsTui(_context(refresh_catalogue=lambda: (_EXISTING, later)))
 
     async with app.run_test() as pilot:
-        app.action_refresh()
+        await app.action_refresh()
         await pilot.pause()
         rows = _rows(app)
 
@@ -346,8 +353,145 @@ def test_label_normalisation_collapses_whitespace_and_bounds_length() -> None:
         label_or_error("x" * 41, 40)
 
 
-def test_an_attach_request_carries_the_session_and_its_command() -> None:
-    request = AttachRequest("abc", "tmux -L remote-agents attach-session -t =ra-abc")
+def test_an_attach_request_carries_the_session_and_its_argument_vector() -> None:
+    request = AttachRequest(
+        "abc", ("tmux", "-L", "remote-agents", "attach-session", "-t", "=ra-abc")
+    )
 
     assert request.session_id == "abc"
     assert "attach-session" in request.command
+    assert request.argv[0] == "tmux"
+
+
+async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method() -> None:
+    """Private-method tests cannot see focus; only real keys prove the surface is usable."""
+    launcher = FakeLauncher()
+    app = RemoteAgentsTui(_context(launcher=launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _keys(app) == ["claude", "cursor-agent"]
+
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _keys(app) == ["launch", "back", "cancel"]
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert len(launcher.commands) == 1
+    assert str(launcher.commands[0].project_id) == "opaque-existing"
+
+
+async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        choices = app.query_one("#choices")
+        assert choices.has_focus and choices.index == 0
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#choices").has_focus
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#filter").has_focus
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#choices").has_focus
+
+
+async def test_the_add_project_binding_opens_the_area_list() -> None:
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+
+        assert _keys(app) == ["dev-area", "infra", "cancel"]
+        assert app.query_one("#choices").has_focus
+
+
+async def test_the_refresh_binding_re_reads_the_catalogue() -> None:
+    later = CatalogProject("opaque-cli", "cli-made", "infra", "Registered")
+    app = RemoteAgentsTui(_context(refresh_catalogue=lambda: (later,)))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        assert _rows(app) == ["infra/cli-made  [Registered]"]
+
+
+async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -> None:
+    creator = FakeCreator()
+    app = RemoteAgentsTui(_context(creator=creator))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#filter").has_focus
+
+        app.query_one("#filter").value = "typed-name"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert creator.commands == []
+        assert _keys(app) == ["create", "back", "cancel"]
+        assert "typed-name" in _status(app)
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert creator.commands == [CreateProjectCommand("dev-area", "typed-name")]
+
+
+async def test_cancelling_the_new_project_review_creates_nothing() -> None:
+    creator = FakeCreator()
+    app = RemoteAgentsTui(_context(creator=creator))
+
+    async with app.run_test() as pilot:
+        await app.action_add_project()
+        await app._choose_area("infra")
+        app._submit_name("typed-name")
+        await app._resolve_project_review("cancel")
+        await pilot.pause()
+
+    assert creator.commands == []
+
+
+async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:
+    app = RemoteAgentsTui(_context(creator=FakeCreator(areas=("infra", "Not_A_Slug", "web"))))
+
+    async with app.run_test() as pilot:
+        await app.action_add_project()
+        await pilot.pause()
+        keys = _keys(app)
+
+    assert keys == ["infra", "web", "cancel"]
+
+
+async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app() -> None:
+    class Exploding(FakeLauncher):
+        async def launch(self, command: LaunchCommand) -> FakeRecord:
+            raise RuntimeError("the terminal port broke its contract")
+
+    app = RemoteAgentsTui(_context(launcher=Exploding()))
+
+    async with app.run_test() as pilot:
+        app._choose_project("opaque-existing")
+        app._choose_profile("claude")
+        app._submit_label("")
+        await app._resolve_review("launch")
+        await pilot.pause()
+        status = _status(app)
+
+    assert "was not started" in status
+    assert app.return_value is None

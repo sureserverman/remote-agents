@@ -33,7 +33,7 @@ class TuiContext:
     creator: ProjectCreationService
     profiles: tuple[ProfileChoice, ...]
     refresh_catalogue: Callable[[], tuple[CatalogProject, ...]]
-    attach_command: Callable[[str], str]
+    attach_argv: Callable[[str], tuple[str, ...]]
     max_label_length: int = 40
     catalogue: tuple[CatalogProject, ...] = field(default_factory=tuple)
 

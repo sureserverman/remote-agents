@@ -58,15 +58,16 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             ),
             profiles=(ProfileChoice("claude", True),),
             refresh_catalogue=lambda: provider.refresh().catalogue,
-            attach_command=lambda session_id: f"tmux -L remote-agents attach -t ={session_id}",
+            attach_argv=lambda session_id: ("tmux", "attach", "-t", f"={session_id}"),
             catalogue=provider.refresh().catalogue,
         )
         app = RemoteAgentsTui(context)
 
         async with app.run_test() as pilot:
-            app.action_add_project()
-            app._choose_area("infra")
-            await app._submit_name("brand-new")
+            await app.action_add_project()
+            await app._choose_area("infra")
+            app._submit_name("brand-new")
+            await app._resolve_project_review("create")
             await pilot.pause()
             assert (dev_root / "infra" / "brand-new").is_dir()
 

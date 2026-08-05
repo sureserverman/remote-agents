@@ -41,7 +41,7 @@ from remote_agents.adapters.telegram.service import (
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
-from remote_agents.adapters.tmux.codec import attach_command
+from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import (
     build_launch_profile,
@@ -49,7 +49,7 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
-from remote_agents.adapters.tui.app import run_local_terminal
+from remote_agents.adapters.tui.app import AttachRequest, run_local_terminal
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
@@ -227,10 +227,12 @@ def main(
             return 1
         paths.ensure_directories()
         connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        request = None
         try:
-            return run_local_terminal(local_context(config, connection, paths))
+            request = run_local_terminal(local_context(config, connection, paths))
         finally:
             connection.close()
+        return attach_to(request)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -335,6 +337,14 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
     )
 
 
+def attach_to(request: AttachRequest | None) -> int:
+    """Report what the terminal started; Stage 4 replaces this with the attach handoff."""
+    if request is None:
+        return 0
+    print(request.command)
+    return 0
+
+
 def _private_state_config(config_path: Path, paths: ProductionPaths):
     """Load a configuration that may only write inside the private state directory."""
     config = load_config(config_path)
@@ -359,7 +369,7 @@ def local_context(config, connection, paths: ProductionPaths) -> TuiContext:
             for profile in runtime.profiles
         ),
         refresh_catalogue=lambda: projects.refresh().catalogue,
-        attach_command=lambda session_id: attach_command(SessionId.parse(session_id)),
+        attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         max_label_length=config.max_label_length,
         catalogue=catalogue,
     )
