@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
@@ -63,13 +64,21 @@ def reconcile(
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
 
-    def __init__(self, store: SessionStore) -> None:
+    def __init__(
+        self,
+        store: SessionStore,
+        *,
+        settle_after: timedelta = timedelta(minutes=2),
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self._store = store
+        self._settle_after = settle_after
+        self._now = now
 
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
     ) -> tuple[ReconciliationResult, ...]:
-        records = tuple(await self._store.list())
+        records = tuple(record for record in await self._store.list() if self._has_settled(record))
         results = reconcile(records, observations)
         by_id = {record.session_id: record for record in records}
         for result in results:
@@ -81,6 +90,18 @@ class ReconciliationService:
             if event is not None:
                 await self._store.record_event(record.session_id, event)
         return results
+
+    def _has_settled(self, record: SessionRecord) -> bool:
+        """Leave a launch or stop that is still running to the call that started it.
+
+        A pane exists as soon as tmux creates it, well before its agent reports ready, and
+        the same holds while a graceful stop waits for the pane to exit. Reconciling either
+        window would overwrite a state its own caller is about to record, and that caller's
+        event is then an illegal transition from the state written underneath it.
+        """
+        if record.state not in {SessionState.STARTING, SessionState.STOP_REQUESTED}:
+            return True
+        return self._now() - record.created_at >= self._settle_after
 
     async def _save_trusted_orphan(
         self,

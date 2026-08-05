@@ -18,7 +18,7 @@ from remote_agents.adapters.telegram.service import (
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.bootstrap import _resolve_profile_executable, main
+from remote_agents.bootstrap import ServiceComposition, _resolve_profile_executable, main
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
@@ -378,6 +378,18 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
     ]
 
 
+class _SilentTerminal:
+    """The serve wiring reconciles before polling; this test cares only about the poll."""
+
+    async def managed_observations(self) -> tuple[object, ...]:
+        return ()
+
+
+class _SilentReconciler:
+    async def reconcile(self, observations: tuple[object, ...]) -> tuple[object, ...]:
+        return ()
+
+
 def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     tmp_path, monkeypatch
 ) -> None:
@@ -404,7 +416,9 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
-        lambda _config, _connection, _paths: PrivateBotBoundary(7, 11),
+        lambda _config, _connection, _paths: ServiceComposition(
+            PrivateBotBoundary(7, 11), _SilentTerminal(), _SilentReconciler()
+        ),
     )
 
     assert main(["serve", "--config", str(config)], serve_runner=serve) == 0

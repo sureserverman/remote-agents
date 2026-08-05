@@ -54,6 +54,7 @@ from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
+from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -61,6 +62,7 @@ from remote_agents.domain.profiles import closed_profiles
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
+_RECONCILE_INTERVAL_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +127,56 @@ class ProjectCatalogueProvider:
         self._paths.update(resolved)
         for stale in [key for key in self._paths if key not in resolved]:
             del self._paths[stale]
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceComposition:
+    """The bot boundary plus what the service needs to keep records honest beside it."""
+
+    boundary: PrivateBotBoundary
+    terminal: TmuxTerminal
+    reconciler: ReconciliationService
+
+
+async def _serve_with_reconciliation(
+    secrets: TelegramSecrets,
+    composition: ServiceComposition,
+    serve_runner: Callable[[TelegramSecrets, PrivateBotBoundary], Awaitable[None]],
+    interval: float,
+) -> None:
+    """Poll Telegram while keeping durable records agreeing with observed panes.
+
+    A launch that raises after its record is saved leaves that record STARTING, which no
+    owner action can resolve, so reconciliation runs once before polling and periodically
+    beside it. It never interrupts the service: a reconciliation that fails is logged and
+    the pass is skipped, because a service that stops polling is worse than one whose
+    records are briefly stale.
+
+    RuntimeCoordinator composes the same three parts, but it treats polling returning as a
+    failure; run_private_bot returns normally on SIGTERM, so adopting it would mean moving
+    signal handling out of the polling boundary. That is a larger change to the shutdown
+    path than this repair warrants.
+    """
+    await _reconcile_quietly(composition)
+    periodic = asyncio.create_task(_reconcile_periodically(composition, interval))
+    try:
+        await serve_runner(secrets, composition.boundary)
+    finally:
+        periodic.cancel()
+        await asyncio.gather(periodic, return_exceptions=True)
+
+
+async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        await _reconcile_quietly(composition)
+
+
+async def _reconcile_quietly(composition: ServiceComposition) -> None:
+    try:
+        await composition.reconciler.reconcile(await composition.terminal.managed_observations())
+    except Exception:
+        _LOG.exception("reconciliation pass failed")
 
 
 def _resolved_project_path(path: Path) -> Path | None:
@@ -249,7 +301,14 @@ def main(
         paths.require_private_environment()
         connection = paths.open_database(open_database, migrations=MIGRATIONS)
         try:
-            asyncio.run(serve_runner(load_secrets(), _private_boundary(config, connection, paths)))
+            asyncio.run(
+                _serve_with_reconciliation(
+                    load_secrets(),
+                    _private_boundary(config, connection, paths),
+                    serve_runner,
+                    _RECONCILE_INTERVAL_SECONDS,
+                )
+            )
         finally:
             connection.close()
     return 0
@@ -315,7 +374,7 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
     return LocalRuntime(terminal, profiles)
 
 
-def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotBoundary:
+def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     project_paths = projects.paths
@@ -332,17 +391,22 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         )
     )
     secrets = load_secrets()
-    return PrivateBotBoundary(
-        secrets.owner_user_id,
-        secrets.owner_chat_id,
-        catalogue=catalogue,
-        profiles=runtime.profiles,
-        project_page_size=config.project_page_size,
-        launcher=SessionService(SQLiteSessionStore(connection), terminal),
-        conversations=conversations,
-        creator=_project_creator(config),
-        capture=terminal.capture,
-        catalogue_source=lambda: projects.refresh().catalogue,
+    store = SQLiteSessionStore(connection)
+    return ServiceComposition(
+        PrivateBotBoundary(
+            secrets.owner_user_id,
+            secrets.owner_chat_id,
+            catalogue=catalogue,
+            profiles=runtime.profiles,
+            project_page_size=config.project_page_size,
+            launcher=SessionService(store, terminal),
+            conversations=conversations,
+            creator=_project_creator(config),
+            capture=terminal.capture,
+            catalogue_source=lambda: projects.refresh().catalogue,
+        ),
+        terminal,
+        ReconciliationService(store),
     )
 
 

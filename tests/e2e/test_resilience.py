@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -128,7 +128,9 @@ async def test_restart_reconciles_launch_running_stop_requested_and_preserved_st
             await store.save(_record(session_id, state, sequence))
 
         restarted_store = SQLiteSessionStore(open_database(database_path))
-        results = await ReconciliationService(restarted_store).reconcile(
+        results = await ReconciliationService(
+            restarted_store, settle_after=timedelta(0)
+        ).reconcile(
             await terminal.managed_observations()
         )
 

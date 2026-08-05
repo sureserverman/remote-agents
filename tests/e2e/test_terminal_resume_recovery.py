@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -77,7 +77,7 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
         restarted = TmuxTerminal(
             gateway, {project_id: tmp_path}, {}, startup_timeout=0.3
         )
-        recovered = await ReconciliationService(store).reconcile(
+        recovered = await ReconciliationService(store, settle_after=timedelta(0)).reconcile(
             await restarted.managed_observations()
         )
 

@@ -34,9 +34,11 @@ class AsyncTmuxRunner(TmuxRunner):
         process = await asyncio.create_subprocess_exec(
             *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        stdout, _stderr = await process.communicate()
+        stdout, stderr = await process.communicate()
         if process.returncode:
-            raise RuntimeError("tmux command failed")
+            raise RuntimeError(
+                f"tmux command failed: {stderr.decode('utf-8', errors='replace').strip()}"
+            )
         return stdout.decode("utf-8", errors="replace")
 
 
@@ -300,11 +302,14 @@ class TmuxTerminal:
         return _remote_control_state(await self._gateway.capture(session_id))
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
-        """Return trusted dedicated-server evidence for read-only reconciliation."""
-        try:
-            inventory = await self._gateway.inventory()
-        except RuntimeError:
-            return ()
+        """Return trusted dedicated-server evidence for read-only reconciliation.
+
+        A failed query is raised, never reported as an empty server. Reconciliation reads
+        an empty result as proof that every recorded session is gone, so swallowing the
+        failure here would end every live session's record on one unlucky tmux call. An
+        absent server is not a failure: it is the one way to observe zero managed panes.
+        """
+        inventory = await self._gateway.inventory()
         return tuple(
             TerminalObservation(
                 pane.session_id,

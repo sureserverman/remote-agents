@@ -1,6 +1,6 @@
 """Restart reconciliation against an isolated tmux server and real SQLite projection."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from test_terminal_launch import make_terminal
 
@@ -31,7 +31,7 @@ def starting_record(session_id: SessionId) -> SessionRecord:
 async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_path):
     terminal, gateway = make_terminal(tmp_path, timeout=0.3)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
-    reconciler = ReconciliationService(store)
+    reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
     try:
         await store.save(starting_record(session_id))
@@ -64,7 +64,7 @@ async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_
 async def test_reconciliation_quarantines_a_trusted_live_session_without_a_database_row(tmp_path):
     terminal, gateway = make_terminal(tmp_path, timeout=0.3)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
-    reconciler = ReconciliationService(store)
+    reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
     try:
         assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
@@ -87,7 +87,7 @@ async def test_reconciliation_quarantines_a_trusted_live_session_without_a_datab
 
 async def test_reconciliation_marks_a_crash_before_launch_commit_as_failed(tmp_path):
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
-    reconciler = ReconciliationService(store)
+    reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
     await store.save(starting_record(session_id))
 

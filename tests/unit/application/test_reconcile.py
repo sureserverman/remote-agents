@@ -1,7 +1,7 @@
 """Reconciliation tests: terminal evidence wins and ambiguity is read-only."""
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -96,7 +96,7 @@ def test_reconcile_quarantines_unknown_terminal_session() -> None:
 async def test_reconciliation_persists_each_deterministic_change_once() -> None:
     starting, running, unknown = record(SessionState.STARTING), record(), SessionId.new()
     store = InMemoryStore((starting, running))
-    service = ReconciliationService(store)
+    service = ReconciliationService(store, settle_after=timedelta(0))
     observations = (
         TerminalObservation(starting.session_id, live=True, preserved=False),
         TerminalObservation(
@@ -129,7 +129,7 @@ async def test_reconciliation_persists_each_deterministic_change_once() -> None:
 
 async def test_reconciliation_never_creates_an_orphan_without_trusted_identity() -> None:
     store = InMemoryStore(())
-    service = ReconciliationService(store)
+    service = ReconciliationService(store, settle_after=timedelta(0))
 
     results = await service.reconcile(
         (TerminalObservation(SessionId.new(), live=True, preserved=False),)

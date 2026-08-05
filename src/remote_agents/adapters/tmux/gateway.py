@@ -31,6 +31,14 @@ class OrphanEvidence:
     reason: str
 
 
+_ABSENT_SERVER_SIGNATURES = ("no server running on", "error connecting to")
+
+
+def _reports_absent_server(message: str) -> bool:
+    """Recognize the dedicated server simply not being up, which means zero panes."""
+    return any(signature in message for signature in _ABSENT_SERVER_SIGNATURES)
+
+
 @dataclass(frozen=True, slots=True)
 class TmuxInventory:
     """Trusted managed panes and quarantined evidence from one dedicated server."""
@@ -56,8 +64,20 @@ class TmuxGateway:
         self._intent_directory = intent_directory
 
     async def inventory(self) -> TmuxInventory:
-        """List panes only on the dedicated socket and quarantine malformed tags."""
-        output = await self._runner.run(*self._base_argv(), "list-panes", "-a", "-F", PANE_FORMAT)
+        """List panes only on the dedicated socket and quarantine malformed tags.
+
+        A dedicated server that is not running holds no managed panes, which is an answer.
+        Any other failure is raised rather than reported as an empty server, because a
+        caller cannot tell the two apart and one of them means every session has ended.
+        """
+        try:
+            output = await self._runner.run(
+                *self._base_argv(), "list-panes", "-a", "-F", PANE_FORMAT
+            )
+        except RuntimeError as error:
+            if _reports_absent_server(str(error)):
+                return TmuxInventory((), ())
+            raise
         managed: list[ManagedPane] = []
         orphans: list[OrphanEvidence] = []
         for line in output.splitlines():
