@@ -50,6 +50,8 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
+from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
@@ -58,6 +60,7 @@ from remote_agents.application.project_catalog import (
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
@@ -69,6 +72,20 @@ _OWNER_COMMANDS = (
     BotCommand("sessions", "View managed sessions"),
     BotCommand("help", "Show available actions"),
 )
+_GUIDED_TEXT_ENTRY = {
+    "launch.search": (
+        "Reply with a project name. Send Cancel or Back to leave this step.",
+        "Project name",
+    ),
+    "project.name": (
+        "Reply with the new project name. Send Cancel or Back to leave this step.",
+        "New project name",
+    ),
+}
+_ENTRY_INSTRUCTIONS = {
+    "launch.search": "Reply below with a project name.",
+    "project.name": "Reply below with the new project name.",
+}
 
 
 @dataclass(slots=True)
@@ -81,6 +98,7 @@ class PrivateBotBoundary:
     profiles: tuple[ProfileAvailability, ...] = ()
     launcher: object | None = None
     conversations: ConversationService | None = None
+    creator: object | None = None
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     callbacks: CallbackStateStore = field(default_factory=CallbackStateStore)
     stops: StopController = field(init=False)
@@ -154,6 +172,23 @@ class PrivateBotBoundary:
                 **_reply_arguments(self._projects_reply(projects, view_id="search"))
             )
             return
+        if action == "project.name":
+            try:
+                identity = ProjectIdentity(area=entity_id, name=value.strip())
+            except ValueError:
+                await update.effective_message.reply_text(
+                    **self._guided_text_reply(
+                        "project.name",
+                        "Use lowercase letters, digits, and single hyphens.",
+                    )
+                )
+                return
+            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            await update.effective_message.reply_text(
+                **_reply_arguments(self._project_review_reply(identity))
+            )
+            return
         if value.casefold() == "skip":
             self._labels.pop(entity_id, None)
             self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
@@ -225,7 +260,7 @@ class PrivateBotBoundary:
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
-            if state.action in {"launch.search", "launch.label"}:
+            if state.action in {"launch.search", "launch.label", "project.area"}:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
             await query.edit_message_text(
@@ -235,7 +270,9 @@ class PrivateBotBoundary:
             if "Message is not modified" not in str(error):
                 raise
 
-    async def _home_reply(self) -> dict[str, object]:
+    async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
+        if refresh:
+            await self.refresh_catalogue()
         self._next_revision(self.owner_user_id, self.owner_chat_id)
         records = await self._records()
         return _reply_arguments(
@@ -244,6 +281,7 @@ class PrivateBotBoundary:
                 launch=self._callback("launch.open", "projects"),
                 resume=(self._callback("resume.open", "projects") if self.conversations else None),
                 sessions=self._callback("sessions.open", "sessions"),
+                add_project=(self._callback("project.open", "areas") if self.creator else None),
                 active=sum(record.state is SessionState.RUNNING for record in records),
                 preserved=sum(record.state is SessionState.PRESERVED for record in records),
             )
@@ -253,16 +291,20 @@ class PrivateBotBoundary:
         self, action: str, entity_id: str, *, token: str = ""
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
-            return await self._home_reply()
+            return await self._home_reply(refresh=action == "nav.refresh")
         if action == "launch.confirm":
             return await self._launch_reply(entity_id, token)
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token)
         if action == "remote.confirm":
             return await self._remote_control_reply(entity_id, token)
+        if action == "project.confirm":
+            return await self._project_reply(entity_id, token)
         if action in {"graceful", "cleanup", "force"}:
             return await self._stop_reply(action, token)
         self._next_revision(self.owner_user_id, self.owner_chat_id)
+        if action == "project.open":
+            return _reply_arguments(await self._project_areas_reply())
         if action == "launch.open":
             return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
         if action == "launch.page":
@@ -341,11 +383,15 @@ class PrivateBotBoundary:
         )
 
     async def _resume_reply(self, reference_value: str, token: str) -> dict[str, object]:
-        if self.launcher is None or self.conversations is None or not self.callbacks.claim_mutation(
-            token,
-            owner_id=self.owner_user_id,
-            chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+        if (
+            self.launcher is None
+            or self.conversations is None
+            or not self.callbacks.claim_mutation(
+                token,
+                owner_id=self.owner_user_id,
+                chat_id=self.owner_chat_id,
+                view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+            )
         ):
             return _reply_arguments(self._message("That request has expired."))
         resolved = await self._resolve_resume(reference_value)
@@ -373,6 +419,77 @@ class PrivateBotBoundary:
                     (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
                     (Button("Sessions", self._callback("sessions.open", "sessions")),),
                 ),
+            )
+        )
+
+    async def _project_areas_reply(self) -> RenderedMessage:
+        """Offer only the server-enumerated areas; a typed area never reaches the filesystem."""
+        if self.creator is None:
+            return self._message("Adding a project is unavailable.")
+        areas = tuple(
+            area
+            for area in await asyncio.to_thread(self.creator.available_areas)
+            if _selectable_area(area)
+        )
+        if not areas:
+            return self._message("No area is available for a new project.")
+        return self._message(
+            "<b>Add project</b>\nSelect the area for the new project.",
+            _button_rows(
+                tuple(Button(area, self._callback("project.area", area)) for area in areas)
+            )
+            + ((Button("Cancel", self._callback("nav.home", "home")),),),
+        )
+
+    def _project_review_reply(self, identity: ProjectIdentity) -> RenderedMessage:
+        return self._message(
+            f"<b>Review new project</b>\nArea: {escape(identity.area)}\n"
+            f"Name: {escape(identity.name)}",
+            (
+                (
+                    Button(
+                        "Create",
+                        self._callback(
+                            "project.confirm",
+                            f"{identity.area}|{identity.name}",
+                            mutation=True,
+                        ),
+                    ),
+                ),
+                (Button("Back", self._callback("project.open", "areas")),),
+                (Button("Cancel", self._callback("nav.home", "home")),),
+            ),
+        )
+
+    async def _project_reply(self, entity_id: str, token: str) -> dict[str, object]:
+        """Create at most once per confirmation, then re-read the catalogue off the loop."""
+        if self.creator is None or not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            view_revision=self._view_revisions.get((self.owner_user_id, self.owner_chat_id), 0),
+        ):
+            return _reply_arguments(self._message("That request has expired."))
+        area, separator, name = entity_id.partition("|")
+        if not separator:
+            return _reply_arguments(self._message("That request has expired."))
+        try:
+            created = await asyncio.to_thread(self.creator.create, CreateProjectCommand(area, name))
+        except ProjectCreationError as error:
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            return _reply_arguments(
+                self._message(f"<b>Project not created</b>\n{escape(str(error))}")
+            )
+        except Exception:
+            _LOG.exception("project creation failed outside the application's error contract")
+            self._next_revision(self.owner_user_id, self.owner_chat_id)
+            return _reply_arguments(self._message("<b>Project not created</b>\nCheck this host."))
+        await self.refresh_catalogue()
+        self._next_revision(self.owner_user_id, self.owner_chat_id)
+        return _reply_arguments(
+            self._message(
+                f"<b>Project created</b>\n{escape(str(created.identity))}",
+                ((Button("Launch", self._callback("launch.open", "projects")),),),
             )
         )
 
@@ -446,10 +563,7 @@ class PrivateBotBoundary:
         command = await copy(record.session_id) if copy is not None else None
         if command is None:
             return self._message("Copy Attach is unavailable until this managed pane is live.")
-        return self._message(
-            "<b>Copy attach command</b>\n"
-            f"<code>{escape(command)}</code>"
-        )
+        return self._message(f"<b>Copy attach command</b>\n<code>{escape(command)}</code>")
 
     async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
         session_value, separator, state_value = entity_id.partition("|")
@@ -533,14 +647,10 @@ class PrivateBotBoundary:
 
     async def _begin_guided_text_entry(self, query, action: str, entity_id: str) -> None:
         self._next_revision(self.owner_user_id, self.owner_chat_id)
-        self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (action, entity_id)
-        text = (
-            "Reply below with a project name."
-            if action == "launch.search"
-            else "Reply below with an optional session label."
-        )
-        await query.edit_message_text(**_reply_arguments(self._message(text)))
-        await query.message.reply_text(**self._guided_text_reply(action))
+        entry = "project.name" if action == "project.area" else action
+        self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (entry, entity_id)
+        await query.edit_message_text(**_reply_arguments(self._message(_entry_instruction(entry))))
+        await query.message.reply_text(**self._guided_text_reply(entry))
 
     async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
         revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
@@ -628,9 +738,7 @@ class PrivateBotBoundary:
 
     def _resume_projects_reply(self) -> RenderedMessage:
         buttons = tuple(
-            (
-                Button(project.name, self._callback("resume.project", project.opaque_id)),
-            )
+            (Button(project.name, self._callback("resume.project", project.opaque_id)),)
             for project in self.catalogue
         )
         return self._message(
@@ -663,9 +771,8 @@ class PrivateBotBoundary:
                     )
                 )
             else:
-                reason = (
-                    profile.reason
-                    or (capability.reason if capability is not None else "catalogue_unavailable")
+                reason = profile.reason or (
+                    capability.reason if capability is not None else "catalogue_unavailable"
                 )
                 unavailable.append(f"{_profile_name(profile.profile_id)} ({reason})")
         text = "<b>Select a resumable agent</b>"
@@ -707,18 +814,14 @@ class PrivateBotBoundary:
             navigation.append(
                 Button(
                     "Previous",
-                    self._callback(
-                        "resume.page", f"{project_id}|{profile_id}|{result.page - 1}"
-                    ),
+                    self._callback("resume.page", f"{project_id}|{profile_id}|{result.page - 1}"),
                 )
             )
         if result.page < result.page_count:
             navigation.append(
                 Button(
                     "Next",
-                    self._callback(
-                        "resume.page", f"{project_id}|{profile_id}|{result.page + 1}"
-                    ),
+                    self._callback("resume.page", f"{project_id}|{profile_id}|{result.page + 1}"),
                 )
             )
         rows = list(buttons)
@@ -739,6 +842,7 @@ class PrivateBotBoundary:
                 ),
             ),
         )
+
     async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
@@ -837,17 +941,12 @@ class PrivateBotBoundary:
         )
 
     def _guided_text_reply(self, action: str, text: str | None = None) -> dict[str, object]:
-        is_search = action == "launch.search"
+        instruction, placeholder = _GUIDED_TEXT_ENTRY.get(
+            action, ("Reply with a label, or send Skip, Cancel, or Back.", "Optional session label")
+        )
         return {
-            "text": text
-            or (
-                "Reply with a project name. Send Cancel or Back to leave this step."
-                if is_search
-                else "Reply with a label, or send Skip, Cancel, or Back."
-            ),
-            "reply_markup": ForceReply(
-                input_field_placeholder="Project name" if is_search else "Optional session label"
-            ),
+            "text": text or instruction,
+            "reply_markup": ForceReply(input_field_placeholder=placeholder),
         }
 
     def _next_revision(self, owner_id: int, chat_id: int) -> int:
@@ -961,6 +1060,19 @@ def _split_launch(value: str) -> tuple[str, str]:
     if not separator:
         raise ValueError("launch callback is invalid")
     return project_id, profile_id
+
+
+def _entry_instruction(action: str) -> str:
+    return _ENTRY_INSTRUCTIONS.get(action, "Reply below with an optional session label.")
+
+
+def _selectable_area(value: str) -> bool:
+    """Offer an existing directory only when the project identity rule also accepts it."""
+    try:
+        ProjectIdentity(area=value, name=value)
+    except ValueError:
+        return False
+    return True
 
 
 def _split_resume_page(value: str) -> tuple[str, str, int] | None:

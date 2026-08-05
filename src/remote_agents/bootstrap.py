@@ -303,6 +303,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> PrivateBotB
         project_page_size=config.project_page_size,
         launcher=SessionService(SQLiteSessionStore(connection), terminal),
         conversations=conversations,
+        creator=ProjectCreationService(
+            FilesystemProjectWorkspace(config.dev_root),
+            RegistryProjectRecorder(config.registry_path, config.dev_root),
+        ),
         capture=terminal.capture,
         catalogue_source=lambda: projects.refresh().catalogue,
     )
