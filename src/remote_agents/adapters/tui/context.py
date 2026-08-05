@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
@@ -42,6 +43,7 @@ class TuiContext:
     # simply offers neither affordance rather than failing to start.
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
+    conversations: ConversationService | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

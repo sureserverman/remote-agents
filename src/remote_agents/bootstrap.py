@@ -380,16 +380,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     project_paths = projects.paths
     runtime = _local_runtime(config, paths, project_paths)
     terminal = runtime.terminal
-    conversations = ConversationService(
-        ProfileConversationCatalogue(
-            {
-                ProfileId("claude"): ClaudeSessionCatalogue(project_paths),
-                ProfileId("codex"): CodexSessionCatalogue(project_paths, CodexAppServerClient()),
-                ProfileId("opencode"): OpenCodeSessionCatalogue(project_paths, OpenCodeCliRunner()),
-                ProfileId("cursor-agent"): CursorSessionCatalogue(),
-            }
-        )
-    )
+    conversations = _conversation_service(project_paths)
     secrets = load_secrets()
     store = SQLiteSessionStore(connection)
     return ServiceComposition(
@@ -421,6 +412,24 @@ def _private_state_config(config_path: Path, paths: ProductionPaths):
     return config
 
 
+def _conversation_service(project_paths) -> ConversationService:
+    """The one conversation composition both surfaces use.
+
+    Kept in a single function so the terminal cannot drift onto a different catalogue set
+    than the service, which would let a conversation be resumable from one surface only.
+    """
+    return ConversationService(
+        ProfileConversationCatalogue(
+            {
+                ProfileId("claude"): ClaudeSessionCatalogue(project_paths),
+                ProfileId("codex"): CodexSessionCatalogue(project_paths, CodexAppServerClient()),
+                ProfileId("opencode"): OpenCodeSessionCatalogue(project_paths, OpenCodeCliRunner()),
+                ProfileId("cursor-agent"): CursorSessionCatalogue(),
+            }
+        )
+    )
+
+
 def local_context(config, connection, paths: ProductionPaths):
     """Compose the local terminal surface over the same store the service uses.
 
@@ -446,6 +455,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # The same capture the service hands the bot. Redactions default to the empty set
         # the bot also uses -- no configuration key sources them today.
         capture=runtime.terminal.capture,
+        conversations=_conversation_service(projects.paths),
     )
 
 
