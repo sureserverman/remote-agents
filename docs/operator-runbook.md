@@ -119,9 +119,12 @@ without its specific cause. Area and name must each be lowercase letters, digits
 hyphens, 1 to 64 characters; the check runs before any filesystem effect. A canonical path the
 registry already holds is refused, including one recorded by a disabled entry.
 
-The append keeps the registry's existing bytes as an exact prefix, re-parses the extended document
-before publishing it, and publishes it atomically under an exclusive lock; a symlinked registry is
-written through rather than replaced. The lock serializes cooperating writers only, so do not hand
+The append keeps the registry's existing bytes as an exact prefix and publishes atomically under an
+exclusive lock; a symlinked registry is written through rather than replaced. Before the extended
+document replaces the registry it is loaded back through the ordinary reader and must both read
+cleanly and contain the new entry, so a create either lands a readable registry or changes nothing.
+A name or area that YAML would otherwise read back as a number, date, or boolean — `2026`, `no`,
+`on` — is quoted for that reason; ordinary names stay unquoted. The lock serializes cooperating writers only, so do not hand
 edit the registry while a create is in flight. The lock leaves a `.lock` file beside the registry;
 it is created once and never removed.
 
@@ -139,9 +142,10 @@ appended block must be the last five lines and `healthy` must still be true, wit
 A failed registry write is normally self-cleaning: the created directory is removed and the
 failure is reported, so there is nothing to undo. The one case that needs an operator is a create
 that could not clean up after itself, which logs `left an uncatalogued project directory behind
-after a failed create`. That record is written by the `add-project` process, not by the service,
-so it appears on that command's standard error rather than in the service journal. The record
-names no path; the directory is the `--area` and `--name` that were passed. Confirm it is empty
+after a failed create`. That record goes wherever the process that
+created the project logs: the `add-project` command writes it to standard error, while a create
+started from Telegram writes it to the service journal. The record names no path; the directory
+is the area and name that were chosen. Confirm it is empty
 and remove it with `rmdir`; never use a recursive delete here. The project is absent from the
 registry in that state, so no registry change is required.
 

@@ -105,7 +105,8 @@ removal that itself fails is reported rather than hidden, leaving an unregistere
 
 A project created from Telegram is selectable there immediately, because the bot re-reads the
 catalogue after the mutation. One created with the command line lands in a separate process, so a
-running bot picks it up on its next catalogue read rather than instantly. No registry field
+running bot does not see it until it re-reads: press Refresh in any paginated view, which
+returns Home, then open Launch again. No registry field
 outside that closed schema is written, and neither surface can edit or remove an entry that
 already exists.
 
