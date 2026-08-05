@@ -21,7 +21,9 @@ from remote_agents.application.commands import (
     GracefulStopCommand,
     LaunchCommand,
     RemoteControlCommand,
+    ResumeCommand,
 )
+from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
 from remote_agents.application.session_actions import (
@@ -32,6 +34,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
+from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
@@ -55,12 +58,19 @@ class Step(StrEnum):
     FORCE_CONFIRM = "force-confirm"
     REMOTE_CONTROL_CONFIRM = "remote-control-confirm"
     INSPECT = "inspect"
+    RESUME_PROJECTS = "resume-projects"
+    RESUME_PROFILES = "resume-profiles"
+    RESUME_CONVERSATIONS = "resume-conversations"
+    RESUME_CONFIRM = "resume-confirm"
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
 _ACTION_LABELS = {GRACEFUL: "Graceful stop", CLEANUP: "Clean up", FORCE: "Force stop"}
+_RESUME_PAGE_SIZE = 10
 _INSPECT_MAX_LINES = 2000
 _INSPECT_MAX_BYTES = 512 * 1024
+_NEXT = "\x00next"
+_PREVIOUS = "\x00previous"
 _BACK = "\x00back"
 _CANCEL = "\x00cancel"
 
@@ -131,6 +141,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+n", "add_project", "Add project"),
         Binding("ctrl+s", "sessions", "Sessions"),
+        Binding("ctrl+e", "resume", "Resume"),
         Binding("ctrl+q", "quit", "Quit"),
     ]
 
@@ -144,6 +155,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._name: str | None = None
         self._busy = False
         self._detail_id: str | None = None
+        self._resume_project: CatalogProject | None = None
+        self._resume_profile: str | None = None
+        self._resume_page = 1
+        self._resume_page_count = 1
+        self._resume_choice: object | None = None
         self._status = "Choose a project."
 
     def compose(self) -> ComposeResult:
@@ -315,6 +331,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await self._resolve_force_confirm(key)
         elif self._step is Step.REMOTE_CONTROL_CONFIRM:
             await self._resolve_remote_control(key)
+        elif self._step is Step.RESUME_PROJECTS:
+            await self._resolve_resume_project(key)
+        elif self._step is Step.RESUME_PROFILES:
+            await self._resolve_resume_profile(key)
+        elif self._step is Step.RESUME_CONVERSATIONS:
+            await self._resolve_resume_conversation(key)
+        elif self._step is Step.RESUME_CONFIRM:
+            await self._resolve_resume_confirm(key)
 
     def _choose_project(self, opaque_id: str) -> None:
         project = next((item for item in self._catalogue if item.opaque_id == opaque_id), None)
@@ -408,7 +432,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         if self._busy:
             return
-        if self._step is Step.INSPECT:
+        if self._step in {Step.RESUME_PROJECTS, Step.RESUME_PROFILES}:
+            self._show_projects()
+        elif self._step is Step.RESUME_CONVERSATIONS:
+            await self._show_resume_profiles()
+        elif self._step is Step.RESUME_CONFIRM:
+            await self._show_resume_conversations()
+        elif self._step is Step.INSPECT:
             self._hide_output()
             if self._detail_id is not None:
                 await self._show_detail(self._detail_id)
@@ -565,6 +595,192 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def _hide_output(self) -> None:
         self.query_one("#output-pane").display = False
         self.query_one("#choices").display = True
+
+    # Resume ---------------------------------------------------------------------
+
+    async def action_resume(self) -> None:
+        """Open the resume flow, if this host wired a conversation service at all."""
+        if self._busy or self._services.conversations is None:
+            return
+        self._resume_project = None
+        self._resume_profile = None
+        self._resume_choice = None
+        self._step = Step.RESUME_PROJECTS
+        self._hide_entry()
+        self._set_status("Resume a conversation. Choose its project.")
+        self._fill(
+            tuple(
+                (project.opaque_id, f"{project.area}/{project.name}")
+                for project in self._catalogue
+            )
+            or ((_CANCEL, "No projects available"),)
+        )
+
+    async def _resolve_resume_project(self, key: str) -> None:
+        project = next(
+            (item for item in self._catalogue if item.opaque_id == key), None
+        )
+        if project is None:
+            self._show_projects()
+            return
+        self._resume_project = project
+        await self._show_resume_profiles()
+
+    async def _show_resume_profiles(self) -> None:
+        """Offer only profiles that report themselves resume-capable (DEC-002).
+
+        Capability comes from `capabilities()`, which reports what each provider can
+        actually do on this host — never from a version allowlist.
+        """
+        conversations = self._services.conversations
+        if conversations is None:
+            return
+        try:
+            capabilities = await conversations.capabilities()
+        except Exception as error:
+            _LOG.exception("resume capabilities failed")
+            self._set_status(f"Resume is unavailable: {error}")
+            self._fill(((_BACK, "Back"),))
+            return
+        capable = tuple(
+            capability
+            for capability in capabilities
+            if capability.catalogue_available and capability.selected_resume_available
+        )
+        self._step = Step.RESUME_PROFILES
+        if not capable:
+            self._set_status("No agent on this host can resume a saved conversation.")
+            self._fill(((_BACK, "Back"),))
+            return
+        self._set_status("Choose the agent whose conversation you want to resume.")
+        self._fill(
+            tuple((str(item.profile_id), str(item.profile_id)) for item in capable)
+            + ((_BACK, "Back"),)
+        )
+
+    async def _resolve_resume_profile(self, key: str) -> None:
+        if key == _BACK:
+            await self.action_resume()
+            return
+        self._resume_profile = key
+        self._resume_page = 1
+        await self._show_resume_conversations()
+
+    async def _show_resume_conversations(self) -> None:
+        """One bounded page of safe metadata; provider IDs never leave the server."""
+        conversations = self._services.conversations
+        if conversations is None or self._resume_profile is None or self._resume_project is None:
+            return
+        try:
+            page = await conversations.catalogue(
+                ConversationCatalogueQuery(
+                    profile_id=ProfileId(self._resume_profile),
+                    project_id=ProjectId(self._resume_project.opaque_id),
+                    page=self._resume_page,
+                    page_size=_RESUME_PAGE_SIZE,
+                )
+            )
+        except Exception as error:
+            _LOG.exception("conversation catalogue failed")
+            self._set_status(f"The conversations could not be listed: {error}")
+            self._fill(((_BACK, "Back"),))
+            return
+        self._step = Step.RESUME_CONVERSATIONS
+        self._resume_page_count = page.page_count
+        if page.unavailable_reason is not None:
+            self._set_status(f"Conversations are unavailable: {page.unavailable_reason}")
+            self._fill(((_BACK, "Back"),))
+            return
+        if not page.conversations:
+            self._set_status("There are no saved conversations for that agent and project.")
+            self._fill(((_BACK, "Back"),))
+            return
+        entries = [
+            (str(item.reference), _conversation_row(item)) for item in page.conversations
+        ]
+        if page.page > 1:
+            entries.append((_PREVIOUS, "Previous page"))
+        if page.page < page.page_count:
+            entries.append((_NEXT, "Next page"))
+        entries.append((_BACK, "Back"))
+        self._set_status(
+            f"Choose a conversation. Page {page.page} of {page.page_count}."
+        )
+        self._fill(tuple(entries))
+
+    async def _resolve_resume_conversation(self, key: str) -> None:
+        conversations = self._services.conversations
+        if conversations is None:
+            return
+        if key == _BACK:
+            await self._show_resume_profiles()
+            return
+        if key == _NEXT:
+            self._resume_page = min(self._resume_page + 1, self._resume_page_count)
+            await self._show_resume_conversations()
+            return
+        if key == _PREVIOUS:
+            self._resume_page = max(1, self._resume_page - 1)
+            await self._show_resume_conversations()
+            return
+        try:
+            # The reference is only ever one this surface rendered from a server-issued
+            # page; constructing it here re-validates its opaque shape, and resolution is
+            # server-side, so a forged or stale value resolves to nothing rather than a path.
+            resolved = await conversations.resolve_for_resume(ConversationReference(key))
+        except ValueError:
+            self._set_status("That conversation selection is not valid.")
+            return
+        except Exception as error:
+            _LOG.exception("conversation resolve failed")
+            self._set_status(f"That conversation could not be resolved: {error}")
+            return
+        if resolved is None:
+            self._set_status("That conversation is no longer available.")
+            return
+        self._resume_choice = resolved
+        self._step = Step.RESUME_CONFIRM
+        self._set_status(
+            f"Resume {_conversation_row(resolved.summary)}\n"
+            f"Agent: {self._resume_profile}\n"
+            "This starts a new managed session continuing that conversation."
+        )
+        self._fill(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
+
+    async def _resolve_resume_confirm(self, key: str) -> None:
+        if key != "resume-confirm" or self._resume_choice is None:
+            await self.action_resume()
+            return
+        if self._resume_project is None or self._resume_profile is None:
+            await self.action_resume()
+            return
+        self._busy = True
+        try:
+            record = await self._services.launcher.resume(
+                ResumeCommand(
+                    ProjectId(self._resume_project.opaque_id),
+                    ProfileId(self._resume_profile),
+                    self._resume_choice,
+                    _idempotency_key(),
+                )
+            )
+        except Exception as error:
+            _LOG.exception("resume failed")
+            self._fill(((_BACK, "Back"),))
+            self._set_status(f"The conversation was not resumed: {error}")
+            return
+        finally:
+            self._busy = False
+        if record.state is SessionState.FAILED:
+            self._fill(((_BACK, "Back"),))
+            self._set_status(
+                "The resumed session did not become ready, but its pane may still exist. "
+                "Reach it with:\n"
+                f"{' '.join(self._services.attach_argv(str(record.session_id)))}"
+            )
+            return
+        session_id = str(record.session_id)
+        self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
     async def _confirm_remote_control(self) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first."""
@@ -848,6 +1064,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+
+
+def _conversation_row(summary) -> str:
+    """Safe selection metadata only — never a provider ID, path, or path fragment."""
+    described = summary.description or "(no description)"
+    return f"{described} · {summary.state.value} · {_age(summary.updated_at)}"
 
 
 def _age(created_at: datetime) -> str:
