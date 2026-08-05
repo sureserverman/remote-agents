@@ -49,9 +49,6 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
-from remote_agents.adapters.tui.app import run_local_terminal
-from remote_agents.adapters.tui.attach import attach_to
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -220,6 +217,9 @@ def main(
         print(created.path)
         return 0
     if arguments.command == "tui":
+        from remote_agents.adapters.tui.app import run_local_terminal
+        from remote_agents.adapters.tui.attach import attach_to
+
         paths = ProductionPaths.for_home(Path.home())
         try:
             config = _private_state_config(arguments.config or paths.config_path, paths)
@@ -357,8 +357,14 @@ def _private_state_config(config_path: Path, paths: ProductionPaths):
     return config
 
 
-def local_context(config, connection, paths: ProductionPaths) -> TuiContext:
-    """Compose the local terminal surface over the same store the service uses."""
+def local_context(config, connection, paths: ProductionPaths):
+    """Compose the local terminal surface over the same store the service uses.
+
+    The terminal's own modules are imported here rather than at module scope, so the
+    service never loads the terminal library and a failure in it cannot reach serve.
+    """
+    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     runtime = _local_runtime(config, paths, projects.paths)

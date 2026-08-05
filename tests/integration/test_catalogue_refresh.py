@@ -197,6 +197,7 @@ def test_refresh_skips_a_catalogued_directory_that_no_longer_exists(
 
     assert snapshot.registry_error is None
     assert ProjectId(_opaque_id(dev_root / "infra" / "existing")) not in provider.paths
+    assert "existing" not in {project.name for project in snapshot.catalogue}
 
 
 def test_refresh_reports_a_degraded_registry_without_raising(
