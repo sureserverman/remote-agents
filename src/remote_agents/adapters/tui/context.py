@@ -38,9 +38,12 @@ class TuiContext:
     attach_argv: Callable[[str], tuple[str, ...]]
     max_label_length: int = 40
     catalogue: tuple[CatalogProject, ...] = field(default_factory=tuple)
-    # Widened deliberately, by exactly two fields, for the two capabilities that need a
-    # dependency the launch wizard never did. Both are optional: a host that wires neither
-    # simply offers neither affordance rather than failing to start.
+    # Widened deliberately for the two capabilities that need a dependency the launch wizard
+    # never did: `capture` (inspect) and `conversations` (resume). Both are optional, so a
+    # host that wires neither simply offers neither affordance rather than failing to start.
+    # `capture_redactions` is a third field but not a third capability: it parameterizes
+    # `capture`, can only remove text from what is rendered, and is inert when capture is
+    # None. Nothing sources it today; the bot passes no redactions either.
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
     conversations: ConversationService | None = None
