@@ -139,7 +139,12 @@ def _event_for_reconciliation(
     if result.reason == "startup_missing" and record.state is SessionState.STARTING:
         return LifecycleEvent.STARTUP_ERROR
     if result.reason == "terminal_live":
-        if record.state is SessionState.STARTING:
+        # FAILED belongs here as much as STARTING does. Readiness is judged from a pane's
+        # output within a bounded window, so an agent that is slow or quiet is recorded as
+        # having failed while its pane keeps working; the matrix has always allowed
+        # FAILED -> RUNNING for exactly this repair, and nothing else ever issued it. A
+        # live pane means a live process, because an agent that exits kills its pane.
+        if record.state in {SessionState.STARTING, SessionState.FAILED}:
             return LifecycleEvent.READY
         if record.state is SessionState.STOP_REQUESTED:
             return LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
