@@ -145,7 +145,10 @@ def build_resume_profile(
         str(executable),
         argv,
         environment,
-        _READINESS_MARKERS[str(definition.profile_id)],
+        # A resumed agent never reprints the banner in _READINESS_MARKERS, so requiring one
+        # here marked every resumed session failed once its startup window elapsed, while
+        # its pane carried on working. Blockers still apply: those are drawn on resume too.
+        None,
         definition.graceful_keys,
         _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
     )

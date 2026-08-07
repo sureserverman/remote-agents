@@ -49,7 +49,15 @@ class LaunchProfile:
     executable: str
     argv: tuple[str, ...]
     environment: dict[str, str]
-    readiness_marker: str
+    readiness_marker: str | None
+    """Text proving the agent finished starting, or None when its pane must prove it.
+
+    A marker is a banner the agent prints once on a fresh start. A resumed agent redraws
+    a restored conversation into the alternate screen buffer instead, so the banner is in
+    neither the viewport nor the scrollback and no marker can ever match. Those profiles
+    pass None and are judged by the pane, which is honest evidence here: an agent that
+    fails to start exits, and an exited agent leaves a dead pane.
+    """
     graceful_keys: tuple[str, ...] = ("C-c",)
     readiness_blockers: tuple[str, ...] = ()
 
@@ -58,7 +66,7 @@ class LaunchProfile:
             not Path(self.executable).is_absolute()
             or not self.argv
             or self.argv[0] != self.executable
-            or not self.readiness_marker
+            or self.readiness_marker == ""
         ):
             raise ValueError("profile executable and argv must be fixed and absolute")
 
@@ -161,7 +169,7 @@ class TmuxTerminal:
             if (
                 observation is not None
                 and observation.live
-                and profile.readiness_marker in capture
+                and (profile.readiness_marker is None or profile.readiness_marker in capture)
                 and not any(blocker in capture for blocker in profile.readiness_blockers)
             ):
                 return observation
@@ -223,9 +231,9 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="terminal_not_live"
             )
         capture = await self._gateway.capture(session_id)
-        if profile.readiness_marker not in capture or any(
-            blocker in capture for blocker in profile.readiness_blockers
-        ):
+        if (
+            profile.readiness_marker is not None and profile.readiness_marker not in capture
+        ) or any(blocker in capture for blocker in profile.readiness_blockers):
             return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
         return observation
 
