@@ -65,6 +65,12 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
 }
 
 
+TERMINAL_STATES: frozenset[SessionState] = frozenset(
+    state for state in SessionState if not any(origin is state for origin, _ in _TRANSITIONS)
+)
+"""States the matrix offers no way out of, derived so the two cannot drift apart."""
+
+
 def transition(from_state: SessionState, event: LifecycleEvent) -> Transition:
     """Return the only legal transition for ``from_state`` and ``event``.
 

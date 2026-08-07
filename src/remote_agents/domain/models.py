@@ -138,6 +138,12 @@ class SessionRecord:
     created_at: datetime
     resume_profile_id: ProfileId | None = None
     resume_source_id: str | None = None
+    terminal_reason: str | None = None
+    """The lifecycle event that ended this session, once it has reached a terminal state.
+
+    Without it a session killed out from under the service is indistinguishable from one
+    the owner stopped deliberately, because both simply read ENDED.
+    """
 
     def __post_init__(self) -> None:
         if (self.resume_profile_id is None) != (self.resume_source_id is None):

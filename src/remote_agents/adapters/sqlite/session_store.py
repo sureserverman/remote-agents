@@ -14,7 +14,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.state_machine import LifecycleEvent, transition
+from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
 
 
 class SQLiteSessionStore:
@@ -38,9 +38,9 @@ class SQLiteSessionStore:
                 """
                 INSERT INTO sessions(
                     session_id, project_id, profile_id, display_identity, state, created_at,
-                    resume_profile_id, resume_source_id
+                    resume_profile_id, resume_source_id, terminal_reason
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.session_id),
@@ -51,6 +51,7 @@ class SQLiteSessionStore:
                     record.created_at.astimezone(UTC).isoformat(),
                     str(record.resume_profile_id) if record.resume_profile_id else None,
                     record.resume_source_id,
+                    record.terminal_reason,
                 ),
             )
 
@@ -59,7 +60,7 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id
+                   resume_profile_id, resume_source_id, terminal_reason
             FROM sessions WHERE session_id = ?
             """,
             (str(session_id),),
@@ -72,7 +73,7 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id
+                   resume_profile_id, resume_source_id, terminal_reason
             FROM sessions WHERE resume_profile_id = ? AND resume_source_id = ?
             """,
             (str(profile_id), source_id),
@@ -83,7 +84,7 @@ class SQLiteSessionStore:
         """Return durable projections, optionally filtered by approved lifecycle states."""
         query = (
             "SELECT session_id, project_id, profile_id, display_identity, state, created_at, "
-            "resume_profile_id, resume_source_id "
+            "resume_profile_id, resume_source_id, terminal_reason "
             "FROM sessions"
         )
         values: tuple[str, ...] = ()
@@ -98,19 +99,27 @@ class SQLiteSessionStore:
         current = await self.get(session_id)
         if current is None:
             raise KeyError(f"unknown session: {session_id}")
+        to_state = transition(current.state, event).to_state
+        # Only a terminal state gets a reason, and only the first one: the matrix offers no
+        # way out of ENDED or ORPHANED, so the event that landed there is the whole answer
+        # to why the session stopped.
+        terminal_reason = event.value if to_state in TERMINAL_STATES else current.terminal_reason
         updated = SessionRecord(
             current.session_id,
             current.project_id,
             current.profile_id,
             current.display,
-            transition(current.state, event).to_state,
+            to_state,
             current.created_at,
+            current.resume_profile_id,
+            current.resume_source_id,
+            terminal_reason,
         )
         with self._connection:
             self._append_event(str(session_id), event)
             self._connection.execute(
-                "UPDATE sessions SET state = ? WHERE session_id = ?",
-                (updated.state.value, str(session_id)),
+                "UPDATE sessions SET state = ?, terminal_reason = ? WHERE session_id = ?",
+                (updated.state.value, updated.terminal_reason, str(session_id)),
             )
         return updated
 
@@ -174,7 +183,7 @@ class SQLiteSessionStore:
 
 
 def _record_from_row(
-    row: tuple[str, str, str, str, str, str, str | None, str | None],
+    row: tuple[str, str, str, str, str, str, str | None, str | None, str | None],
 ) -> SessionRecord:
     """Rebuild a validated domain record from one trusted SQLite projection row."""
     display_parts = row[3].split(" · ", 4)
@@ -196,4 +205,5 @@ def _record_from_row(
         datetime.fromisoformat(row[5]),
         ProfileId(row[6]) if row[6] is not None else None,
         row[7],
+        row[8],
     )
