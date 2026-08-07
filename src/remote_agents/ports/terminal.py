@@ -10,6 +10,17 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 
 
+class TerminalTargetMissing(RuntimeError):
+    """Raised when a managed target no longer exists on the terminal.
+
+    A session killed out from under the service — by an OOM kill, or by a terminal
+    crash that took every pane with it — leaves a durable record pointing at a target
+    that is simply gone. That is ordinary evidence of an ended session, not a fault, so
+    it is a distinct type callers can answer rather than an opaque failure they can only
+    propagate. It subclasses RuntimeError so existing handlers keep their behaviour.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalObservation:
     session_id: SessionId

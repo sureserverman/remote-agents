@@ -15,6 +15,7 @@ from remote_agents.adapters.tmux.codec import (
     parse_pane,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.ports.terminal import TerminalTargetMissing
 
 
 class TmuxRunner(Protocol):
@@ -32,11 +33,37 @@ class OrphanEvidence:
 
 
 _ABSENT_SERVER_SIGNATURES = ("no server running on", "error connecting to")
+_ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session not found")
 
 
 def _reports_absent_server(message: str) -> bool:
     """Recognize the dedicated server simply not being up, which means zero panes."""
     return any(signature in message for signature in _ABSENT_SERVER_SIGNATURES)
+
+
+def _reports_absent_target(message: str) -> bool:
+    """Recognize one named target being gone while the dedicated server still runs.
+
+    A pane killed on its own — an OOM kill of its scope, say — leaves the server up and
+    every other pane intact, so this is narrower than an absent server and has to be
+    told apart from it: the server answering "that session is gone" is trustworthy
+    evidence, whereas a server that cannot be reached says nothing about one target.
+    """
+    return any(signature in message for signature in _ABSENT_TARGET_SIGNATURES)
+
+
+def _target_missing_or(error: RuntimeError, target: str) -> RuntimeError:
+    """Retype a single-target failure that only means the target is already gone.
+
+    Both an absent target and an absent server answer a single-target call the same way,
+    because the dedicated server holds every managed pane: if it is not running, the pane
+    it would have held is not either. Anything else is a real failure and keeps its type,
+    so a broken tmux is never mistaken for an ended session.
+    """
+    message = str(error)
+    if _reports_absent_target(message) or _reports_absent_server(message):
+        return TerminalTargetMissing(f"managed target is gone: {target}")
+    return error
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,15 +120,25 @@ class TmuxGateway:
         """Run the one supported destructive operation against an exact managed target."""
         if operation != "kill-session":
             raise ValueError("forbidden tmux operation")
-        return await self._runner.run(
-            *self._base_argv(), operation, "-t", exact_session_target(session_name)
-        )
+        try:
+            return await self._runner.run(
+                *self._base_argv(), operation, "-t", exact_session_target(session_name)
+            )
+        except RuntimeError as error:
+            raise _target_missing_or(error, session_name) from error
 
     async def capture(self, session_id: SessionId) -> str:
         """Capture only one exact managed pane without tmux escape-sequence output."""
-        return await self._runner.run(
-            *self._base_argv(), "capture-pane", "-p", "-t", exact_session_target(f"ra-{session_id}")
-        )
+        try:
+            return await self._runner.run(
+                *self._base_argv(),
+                "capture-pane",
+                "-p",
+                "-t",
+                exact_session_target(f"ra-{session_id}"),
+            )
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
 
     async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
         """Send a profile-owned fixed key sequence to one exact managed target."""

@@ -28,6 +28,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.terminal import TerminalTargetMissing
 
 
 def test_private_bot_boundary_accepts_only_the_exact_configured_private_chat() -> None:
@@ -320,6 +321,37 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     assert callback.message.documents == [
         {"document": b"x" * 5000, "filename": "session-output.txt"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_press() -> None:
+    """A session killed between drawing and pressing must not raise into the handler.
+
+    This is the OOM-kill case: the record still says RUNNING because reconciliation has
+    not run yet, so Inspect is on screen for a pane that no longer exists.
+    """
+    session = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+
+    async def capture(session_id):
+        raise TerminalTargetMissing(f"managed target is gone: ra-{session_id}")
+
+    launcher = _Launcher()
+    launcher.records = [session]
+    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    detail = await boundary._detail_reply(str(session.session_id))
+    inspect = next(
+        button.callback_data
+        for row in detail.keyboard
+        for button in row
+        if button.text == "Inspect"
+    )
+    callback = _Callback(inspect)
+
+    await boundary.callback(_trusted_update(callback=callback), None)
+
+    assert callback.edits[0]["text"] == "Inspection is unavailable."
+    assert callback.message.documents == []
 
 
 @pytest.mark.asyncio

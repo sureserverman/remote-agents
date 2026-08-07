@@ -20,7 +20,7 @@ from remote_agents.adapters.tmux.remote_control import (
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.ports.terminal import TerminalObservation
+from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
@@ -230,8 +230,17 @@ class TmuxTerminal:
         return observation
 
     async def cleanup(self, session_id: SessionId) -> None:
-        """Remove only the exact managed session after preserved-output inspection."""
-        await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        """Remove only the exact managed session after preserved-output inspection.
+
+        A pane that is already gone leaves nothing to kill but still leaves this process
+        holding its profile and its intent file, so the removal is treated as done rather
+        than raised. Cleaning up after a session the terminal destroyed on its own is the
+        case that most needs to succeed.
+        """
+        try:
+            await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        except TerminalTargetMissing:
+            pass
         self._session_profiles.pop(session_id, None)
         (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
 

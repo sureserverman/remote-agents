@@ -67,6 +67,7 @@ from remote_agents.domain.conversations import ConversationReference, Conversati
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.terminal import TerminalTargetMissing
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
@@ -644,7 +645,13 @@ class PrivateBotBoundary:
     async def _inspection_result(self, session_value: str):
         if self.capture is None:
             return None
-        captured = await self.capture(SessionId.parse(session_value))
+        try:
+            captured = await self.capture(SessionId.parse(session_value))
+        except TerminalTargetMissing:
+            # The pane died between this view being drawn and the button being pressed —
+            # an OOM kill, or a terminal crash. Reconciliation ends the record on its next
+            # pass, so this only has to answer the press rather than raise into the handler.
+            return None
         return inspect_capture(captured.encode())
 
     async def _begin_guided_text_entry(self, query, action: str, entity_id: str) -> None:
