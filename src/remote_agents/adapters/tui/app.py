@@ -163,6 +163,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._resume_page_count = 1
         self._resume_choice: object | None = None
         self._status = "Choose a project."
+        # Bumped by every `_fill`; a deferred cursor placement carries the value it was
+        # scheduled with and stands down if a later fill has superseded it.
+        self._resting_generation = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -196,6 +199,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # for a scrollable output pane, and every other screen renders through _fill, so
         # this is the one place that cannot be forgotten by a new navigation path.
         self._hide_output()
+        self._resting_generation += 1
         choices = self.query_one("#choices", ListView)
         choices.clear()
         for key, text in entries:
@@ -203,8 +207,40 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             item.entry_key = key
             choices.append(item)
         if entries and focus:
-            choices.index = min(highlight, len(entries) - 1)
+            resting = min(highlight, len(entries) - 1)
+            # Set twice, deliberately. Here, so the index is correct the instant `_fill`
+            # returns — a keypress arriving before the next refresh must still land on the
+            # resting row, which is what keeps a stray enter harmless.
+            choices.index = resting
             choices.focus()
+            # And again after the refresh, because `append` mounts on the message pump: at
+            # this point the rows do not exist yet, and `ListView.watch_index` marks a row
+            # `highlighted` only when it can reach a mounted child. Setting the index alone
+            # left it correct while nothing was ever *drawn* as the cursor, so a destructive
+            # confirm rested on its abort and looked like it rested on nothing.
+            self.call_after_refresh(self._rest_cursor, choices, resting, self._resting_generation)
+
+    def _rest_cursor(self, choices: ListView, index: int, generation: int) -> None:
+        """Draw the cursor on `index` once the rows it refers to are mounted.
+
+        `generation` is what makes this safe to defer. The index was computed against the
+        entries of one particular fill, and `ListView.validate_index` *clamps* rather than
+        rejects, so a callback that outlived its screen would silently rest the cursor on
+        some unrelated row of whatever list is showing now — on a destructive confirm, that
+        is the DEC-007 mitigation this method exists to restore, quietly undone. No path
+        reaches that today, because every `_fill` caller awaits fully between fills; Stage 2
+        moves these handlers onto workers, which is exactly what would make it reachable.
+
+        The index is cleared first because `_fill` has usually already assigned this exact
+        value, and a reactive assigned its current value notifies nothing — so without the
+        clear the highlight would never be applied at all. The clear also posts a
+        `ListView.Highlighted(None)`; nothing subscribes to it today, but a future
+        `on_list_view_highlighted` will see None-then-real from every programmatic fill.
+        """
+        if generation != self._resting_generation or not choices.children:
+            return
+        choices.index = None
+        choices.index = index
 
     def _text_entry(self, placeholder: str) -> None:
         """Hand the keyboard to the input, which only the text steps ever use."""
