@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -139,16 +140,20 @@ def _app(state: SessionState = SessionState.RUNNING) -> tuple[RemoteAgentsTui, _
     )
 
 
+def _choices(app: RemoteAgentsTui) -> OptionList:
+    return app.query_one("#choices", OptionList)
+
+
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in _choices(app).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
     return str(app.query_one("#status").content)
 
 
-def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [getattr(item, "entry_key", None) for item in app.query("ListView > ListItem")]
+def _keys(app: RemoteAgentsTui) -> list[str | None]:
+    return [option.id for option in _choices(app).options]
 
 
 async def _choose(app, pilot, key: str) -> None:
@@ -156,21 +161,19 @@ async def _choose(app, pilot, key: str) -> None:
 
     Calling the handler directly would prove only that a method exists. A capability the
     owner cannot reach is not a capability, so every probe goes through this.
+
+    The event is built from the widget's own option rather than from a stand-in: `OptionList`
+    carries row identity as `Option.id`, so the message this constructs is the one the widget
+    would post, and a key the surface never rendered cannot be smuggled past the assertion by
+    fabricating an item to carry it.
     """
     assert key in _keys(app), f"the surface offers no {key!r} entry to select"
-    await app.on_list_view_selected(_Selected(app, key))
+    choices = _choices(app)
+    index = choices.get_option_index(key)
+    await app.on_option_list_option_selected(
+        OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
+    )
     await pilot.pause()
-
-
-class _Selected:
-    """The event shape on_list_view_selected reads, carrying a real rendered item."""
-
-    def __init__(self, app: RemoteAgentsTui, key: str) -> None:
-        self.item = next(
-            item
-            for item in app.query("ListView > ListItem")
-            if getattr(item, "entry_key", None) == key
-        )
 
 
 async def _open_detail(app, launcher, pilot) -> None:

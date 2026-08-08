@@ -15,9 +15,11 @@ being asked to confirm an irreversible kill.
 So these assert the rendered highlight, never the index. The index was correct throughout
 the defect's life, which is exactly why asserting it would have proved nothing.
 
-That distinction survives the move from `ListView` to `OptionList` and is why `_highlighted`
-below reads rendered strips rather than the widget's state. `OptionList` keeps one reactive,
-`highlighted`, and `render_line` styles a row by comparing it against that reactive — so
+That distinction survives the move to `OptionList` and is why `_highlighted`
+below reads rendered strips rather than the widget's state. (The widget it replaced is not
+named here on purpose: that name is swept for across `src/` and `tests/` as migration residue,
+and a sweep that has to carve out prose exceptions stops being run.) `OptionList` keeps one
+reactive, `highlighted`, and `render_line` styles a row by comparing it against that reactive — so
 reading `highlighted` back is reading the index again, under a new name. The two-variable
 disagreement this file was written for cannot happen in this widget, but the assertion that
 would have caught it is the one worth keeping, because it is the only one that fails if the
