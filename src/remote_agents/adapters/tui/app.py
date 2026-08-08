@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -13,7 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
-from textual.worker import WorkerFailed
+from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import (
@@ -200,23 +201,32 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def _in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
         """Run one blocking call on a worker thread and return what it returned.
 
-        This is the threaded offload these calls used to do inline, with the two properties
-        a surface needs and a bare task does not have. The worker is owned by this app, so quitting mid-call cancels it
-        instead of leaving a thread writing into a torn-down screen; and it belongs to a
-        named group, so a second entry into the same flow supersedes the first rather than
-        racing it.
+        The worker is owned by this app, so it is cancelled when the app goes away rather
+        than being left to write into a torn-down screen. The `group` is a **label only**:
+        `run_worker`'s `exclusive` defaults to `False` and is deliberately not passed here
+        (DEC-008), so nothing supersedes anything — it exists to make a flow identifiable in
+        worker introspection. The cancellation is of the *worker*, not of the OS thread: a
+        blocking call already in progress runs to completion and only its result is dropped.
 
         `exit_on_error=False` because these calls read a development root and a registry on
         a host that may be misconfigured — that is an error each caller already reports and
         recovers from, not a reason to take the app down. `WorkerFailed` is unwrapped for
         the same reason: callers put the failure on screen, and "Worker raised exception:
         OSError(...)" is not what the owner needs to read.
+
+        `WorkerCancelled` becomes `CancelledError` instead of being unwrapped. It means the
+        app is shutting down, not that the read failed, and the callers' `except Exception`
+        would otherwise catch it and try to render an error into a screen being torn down.
+        `CancelledError` is a `BaseException`, so it passes through those handlers untouched
+        — which is what the plain `await` these calls replaced already did.
         """
         worker = self.run_worker(work, thread=True, group=group, exit_on_error=False)
         try:
             return await worker.wait()
         except WorkerFailed as failure:
             raise failure.error from None
+        except WorkerCancelled as cancelled:
+            raise asyncio.CancelledError(str(cancelled)) from None
 
     def _fill(
         self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0

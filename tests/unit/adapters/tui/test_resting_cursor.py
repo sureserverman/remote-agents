@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from test_tui_snapshots import settle
 from textual.widgets import ListItem, ListView
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
@@ -124,7 +125,7 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await drive(app)
-        await pilot.pause()
+        await settle(app, pilot)
         assert app._step is step
         marked, rows = _highlighted(app)
         assert marked is not None, (
@@ -142,7 +143,7 @@ async def test_a_list_with_no_resting_preference_still_draws_a_cursor() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app._show_sessions()
-        await pilot.pause()
+        await settle(app, pilot)
         marked, rows = _highlighted(app)
         assert marked is not None, f"the sessions list drew no cursor; rows were {rows}"
         assert marked == rows[0]
@@ -158,7 +159,7 @@ async def test_the_index_and_the_drawn_cursor_agree() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await _drive_to_force_confirm(app)
-        await pilot.pause()
+        await settle(app, pilot)
         choices = app.query_one("#choices", ListView)
         marked, rows = _highlighted(app)
         assert choices.index is not None

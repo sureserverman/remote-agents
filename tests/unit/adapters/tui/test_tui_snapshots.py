@@ -91,6 +91,34 @@ _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered
 _SESSION_ID = SessionId.new()
 
 
+async def settle(app, pilot, *, tries: int = 20) -> None:
+    """Pump until the deferred cursor placement has landed, then let the caller capture.
+
+    `_fill` schedules the highlight via `call_after_refresh`, so it lands a pump cycle after
+    the rows mount. On most screens one `pause()` covers both. On AREAS and PROJECT_REVIEW it
+    does not reliably: those two are the only screens whose entry path crosses a worker
+    thread (`available_areas`, `creator.create`), and that extra hop changes how much work a
+    single pause drains — which showed up as roughly 1 failure in 6 full-directory runs, on
+    those two screens and no others.
+
+    Waiting on the condition rather than adding another `pause()` or a sleep: the thing being
+    waited for is "the highlight has been applied", so that is what this asks about. Nothing
+    here is wall-clock dependent.
+    """
+    from textual.widgets import ListItem, ListView
+
+    for _ in range(tries):
+        await pilot.pause()
+        rows = list(app.query(ListItem))
+        if not rows:
+            return
+        if any(row.highlighted for row in rows):
+            return
+        choices = app.query_one("#choices", ListView)
+        if not choices.has_focus:
+            return
+
+
 def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     """A session stamped now, so `_age()` renders a stable `0m ago` in the baseline."""
     return SessionRecord(
@@ -292,7 +320,7 @@ async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
         app.theme = _THEME
         await pilot.pause()
         await _drive(app, step)
-        await pilot.pause()
+        await settle(app, pilot)
         assert app._step is step, f"drove to {app._step}, expected {step}"
         _assert_snapshot(app, step.name)
 

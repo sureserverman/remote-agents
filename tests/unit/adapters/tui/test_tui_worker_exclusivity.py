@@ -21,17 +21,27 @@ this file covers the *concurrency* half.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
-import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
+from test_tui_snapshots import settle
+from textual.widgets import ListItem, ListView
+from textual.worker import WorkerState
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import _CANCEL, RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_admin import CreatedProject
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.domain.conversations import (
+    ConversationReference,
+    ConversationState,
+    ConversationSummary,
+    ProviderConversationId,
+    ResolvedConversation,
+)
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -111,6 +121,19 @@ class _SlowLauncher:
 
 
 @dataclass(slots=True)
+class _SlowCatalogue:
+    """A blocking catalogue read, held open so a worker is RUNNING when the app exits."""
+
+    started: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def __call__(self):
+        self.started.set()
+        self.release.wait(timeout=5)
+        return (_PROJECT,)
+
+
+@dataclass(slots=True)
 class _SlowCreator:
     issued: list[str] = field(default_factory=list)
     started: threading.Event = field(default_factory=threading.Event)
@@ -187,11 +210,11 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
             await app._confirm_force()
             await pilot.pause()
             first = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
-            await launcher.started.wait()
+            await asyncio.wait_for(launcher.started.wait(), timeout=5)
             second = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
         else:
             first = asyncio.create_task(app._resolve_detail(resolve))
-            await launcher.started.wait()
+            await asyncio.wait_for(launcher.started.wait(), timeout=5)
             second = asyncio.create_task(app._resolve_detail(resolve))
         await asyncio.sleep(0)
         launcher.release.set()
@@ -213,7 +236,7 @@ async def test_a_repeated_keypress_issues_exactly_one_launch() -> None:
         app._submit_label("")
         await pilot.pause()
         first = asyncio.create_task(_select(app, "launch"))
-        await launcher.started.wait()
+        await asyncio.wait_for(launcher.started.wait(), timeout=5)
         second = asyncio.create_task(_select(app, "launch"))
         await asyncio.sleep(0)
         launcher.release.set()
@@ -234,7 +257,7 @@ async def test_a_repeated_keypress_creates_exactly_one_project() -> None:
         app._submit_name("new-project")
         await pilot.pause()
         first = asyncio.create_task(_select(app, "create"))
-        await asyncio.to_thread(creator.started.wait, 5)
+        assert await asyncio.to_thread(creator.started.wait, 5), "the create never started"
         second = asyncio.create_task(_select(app, "create"))
         await asyncio.sleep(0)
         creator.release.set()
@@ -281,20 +304,87 @@ async def test_the_guard_is_the_reason_and_not_a_coincidence() -> None:
         )
 
 
-async def test_quitting_mid_launch_leaves_no_worker_running() -> None:
-    """Task 2.1's property: an app-owned worker is cancelled when the app goes away."""
+async def test_a_worker_does_not_outlive_the_app() -> None:
+    """Task 2.1's property: an app-owned worker is cancelled when the app goes away.
+
+    The first version of this test asserted the same thing and proved nothing. It awaited
+    `action_refresh()` to completion against an instant fake, so `app.workers` was already
+    empty when `exit()` was called and the assertion iterated an empty collection — it passed
+    with `_in_thread` reverted to `asyncio.to_thread`, i.e. with the feature entirely absent.
+    Two independent reviewers caught it; it was written immediately after another test in
+    this directory whose whole purpose is to stop a suite being green while proving nothing.
+
+    Writing it properly also corrected what the guarantee actually is. `exit()` is not
+    synchronous: the worker is still RUNNING immediately after it returns, and is cancelled
+    during teardown. So the reference is captured while the worker is in flight and its final
+    state is asserted after the app has gone — which is the real claim, "a worker does not
+    outlive the app", rather than "exit cancels it".
+    """
+    catalogue = _SlowCatalogue()
     launcher = _SlowLauncher()
-    app = RemoteAgentsTui(_context(launcher))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", RuntimeWarning)
+    launcher.release.set()
+    app = RemoteAgentsTui(replace(_context(launcher), refresh_catalogue=catalogue))
+    in_flight: list = []
+    try:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            await app.action_refresh()
-            await pilot.pause()
+            refreshing = asyncio.create_task(app.action_refresh())
+            assert await asyncio.to_thread(catalogue.started.wait, 5), "the read never started"
+
+            in_flight = [w for w in app.workers if w.state is WorkerState.RUNNING]
+            assert in_flight, (
+                "no worker was RUNNING when the app was told to quit, so this test would pass "
+                "with no workers at all — which is exactly how its first version was vacuous"
+            )
             app.exit(None)
-        assert not [worker for worker in app.workers if worker.is_running], (
-            f"workers still running after exit: {list(app.workers)}"
-        )
+            catalogue.release.set()
+            with contextlib.suppress(BaseException):
+                await refreshing
+    finally:
+        catalogue.release.set()
+
+    assert app.workers._workers == set() or not list(app.workers), (
+        f"the app still tracks workers after shutdown: {list(app.workers)}"
+    )
+    assert all(w.state is WorkerState.CANCELLED for w in in_flight), (
+        f"a worker outlived the app rather than being cancelled: "
+        f"{[(w.group, w.state.name) for w in in_flight]}"
+    )
+
+
+async def test_a_cancelled_read_does_not_render_an_error_into_a_dying_screen() -> None:
+    """A cancelled worker means the app is quitting, not that the read failed.
+
+    `Worker.wait()` raises `WorkerCancelled`, which is an ordinary `Exception` — so before
+    `_in_thread` translated it, the callers' `except Exception` caught it and tried to draw
+    an error into a screen being torn down, raising `MountError` out of the recovery path.
+    `CancelledError` is a `BaseException` and passes through untouched, which is what the
+    plain await these calls replaced already did.
+    """
+    creator = _SlowCreator()
+    app = RemoteAgentsTui(_context(_SlowLauncher(), creator))
+    raised: list[str] = []
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await app._show_areas()
+            await app._choose_area("infra")
+            app._submit_name("new-project")
+            await settle(app, pilot)
+            creating = asyncio.create_task(_select(app, "create"))
+            assert await asyncio.to_thread(creator.started.wait, 5), "the create never started"
+            app.exit(None)
+            creator.release.set()
+            try:
+                await creating
+            except BaseException as error:  # noqa: BLE001 - the type is the assertion
+                raised.append(type(error).__name__)
+    finally:
+        creator.release.set()
+    assert raised == ["CancelledError"], (
+        f"a cancelled create surfaced as {raised}; MountError here means the error path tried "
+        f"to draw into a torn-down screen"
+    )
 
 
 async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
@@ -306,9 +396,160 @@ async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
         await _drive_to_force_confirm(app)
         await pilot.pause()
         first = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
-        await launcher.started.wait()
+        await asyncio.wait_for(launcher.started.wait(), timeout=5)
         assert app._step is Step.FORCE_CONFIRM
         await app._resolve_force_confirm("force-confirm")
         launcher.release.set()
         await first
         assert launcher.issued == ["force"]
+
+
+@dataclass(slots=True)
+class _AdvancingLauncher:
+    """A store whose record advances state, the way the real one does after a stop.
+
+    `_SlowLauncher` returns a frozen RUNNING record, which makes `_busy` look like the thing
+    protecting a repeated keypress. It is not. `_stop` re-reads the record and re-checks the
+    policy at issue time — DEC-007's actual stated mitigation — and against a store that
+    moves, that is what refuses the second stop.
+    """
+
+    issued: list[str] = field(default_factory=list)
+    state: SessionState = SessionState.RUNNING
+
+    async def refresh_readiness(self):
+        return (_record(self.state),)
+
+    async def list_sessions(self):
+        return (_record(self.state),)
+
+    async def copy_attach(self, _session_id):
+        return None
+
+    async def graceful_stop(self, _command):
+        self.issued.append("graceful")
+        # PRESERVED, not ENDED, and the distinction is the whole point: ENDED is filtered
+        # out of the list entirely, so the second enter would be refused merely because the
+        # record could not be found. PRESERVED stays listed and still offers actions — just
+        # not `graceful` — so what refuses the second enter is the policy re-check itself.
+        self.state = SessionState.PRESERVED
+
+    async def cleanup(self, _command):
+        self.issued.append("cleanup")
+        self.state = SessionState.ENDED
+
+    async def force_stop(self, _command):
+        self.issued.append("force")
+        self.state = SessionState.ENDED
+
+
+async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path() -> None:
+    """The delivery model the other tests do not exercise, against a store that moves.
+
+    A real repeated keypress is not two concurrent coroutines: `ListView` *posts* `Selected`,
+    and Textual serialises handlers on the app's message pump, so the second is dispatched
+    only after the first handler has returned and `_busy` has already been cleared. The
+    concurrent-task tests above therefore pin a shape the framework never produces.
+
+    Posted this way against a frozen-record fake, two Enters really do issue two gracefuls.
+    Against a store whose state advances — which is what the real one does — exactly one is
+    issued, refused by `_stop`'s record re-read and policy re-check. That is the guarantee
+    DEC-007 actually rests on, so this is the test that pins it.
+
+    Verified by mutation rather than assumed: disabling the policy re-check in `_stop` makes
+    this fail. An earlier version advanced the record to ENDED instead, which is filtered out
+    of the list altogether — so the second enter was refused for merely not finding the
+    record, and the test passed with the re-check removed, attributing the protection to a
+    mechanism it was not exercising.
+    """
+    launcher = _AdvancingLauncher()
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app._show_sessions()
+        await app._show_detail(str(_SESSION_ID))
+        await settle(app, pilot)
+
+        rows = list(app.query(ListItem))
+        index = next(
+            i for i, row in enumerate(rows) if getattr(row, "entry_key", None) == "graceful"
+        )
+        choices = app.query_one("#choices", ListView)
+        # Posted twice with nothing awaited between them: two fast enters, exactly.
+        app.post_message(ListView.Selected(choices, rows[index], index))
+        app.post_message(ListView.Selected(choices, rows[index], index))
+        await settle(app, pilot)
+        await pilot.pause()
+
+        assert launcher.issued == ["graceful"], (
+            f"two queued enters issued {launcher.issued}; the record re-read should have "
+            f"refused the second once the session left RUNNING"
+        )
+
+
+async def test_two_queued_enters_change_remote_control_once() -> None:
+    """One of the two flows Task 2.3 scoped and the first version never exercised.
+
+    Routed through `_select` rather than the resolver, because `_resolve_remote_control` —
+    like `_launch` and `_resolve_project_review` — only *sets* `_busy` and never reads it.
+    An earlier attempt asserted against the resolver directly and failed for exactly that
+    reason, which is the same lesson `_select`'s own docstring records.
+    """
+    launcher = _SlowLauncher()
+    app = RemoteAgentsTui(_context(launcher))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app._show_sessions()
+        await app._show_detail(str(_SESSION_ID))
+        await app._confirm_remote_control()
+        await settle(app, pilot)
+
+        first = asyncio.create_task(_select(app, "remote-control-active"))
+        await asyncio.wait_for(launcher.started.wait(), timeout=5)
+        second = asyncio.create_task(_select(app, "remote-control-active"))
+        await asyncio.sleep(0)
+        launcher.release.set()
+        await asyncio.gather(first, second)
+
+        assert launcher.issued == ["remote-control"], (
+            f"two enters issued {launcher.issued}; exactly one change was required"
+        )
+
+
+async def test_two_queued_enters_resume_once() -> None:
+    """The other flow Task 2.3 scoped.
+
+    The conversation is a real `ResolvedConversation`, not a stand-in. An earlier version
+    passed a bare `object()`, which made `ResumeCommand.__post_init__` raise before the
+    service was ever reached — so it recorded "no command issued" and would have passed with
+    the guard removed entirely. Vacuous in the same way the cancellation test was.
+    """
+    summary = ConversationSummary(
+        ConversationReference("c-" + "0" * 14 + "01"),
+        ProfileId("claude"),
+        ProjectId("opaque-existing"),
+        ConversationState.RESUMABLE,
+        datetime.now(UTC),
+        description="a saved conversation",
+    )
+    launcher = _SlowLauncher()
+    app = RemoteAgentsTui(_context(launcher))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        app._resume_project = _PROJECT
+        app._resume_profile = "claude"
+        app._resume_choice = ResolvedConversation(summary, ProviderConversationId("abc123"))
+        app._step = Step.RESUME_CONFIRM
+        app._fill(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
+        await settle(app, pilot)
+
+        first = asyncio.create_task(_select(app, "resume-confirm"))
+        await asyncio.wait_for(launcher.started.wait(), timeout=5)
+        second = asyncio.create_task(_select(app, "resume-confirm"))
+        await asyncio.sleep(0)
+        launcher.release.set()
+        await asyncio.gather(first, second)
+
+        assert launcher.issued == ["resume"], (
+            f"two enters issued {launcher.issued}; exactly one resume was required"
+        )
