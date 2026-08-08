@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.screen import Screen
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
 from textual.worker import WorkerCancelled, WorkerFailed
 
@@ -227,6 +229,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             raise failure.error from None
         except WorkerCancelled as cancelled:
             raise asyncio.CancelledError(str(cancelled)) from None
+
+    @work
+    async def _ask(self, screen: Screen[_T]) -> _T:
+        """Push a screen and wait for the answer it is dismissed with.
+
+        This exists to be a **worker context**, which is the one thing the surface did not
+        have. `push_screen_wait` calls `get_current_worker()` and raises `NoActiveWorker`
+        unless it is already running in a worker (`textual/app.py:2958-2964`), and every
+        handler here runs on the message pump, which is not one. `_in_thread` does not help:
+        its worker runs the blocking call, while its *caller* still awaits from the pump.
+
+        `exclusive` is not passed, and must not be (DEC-008): a confirmation that cancelled
+        the one in flight would dismiss an unanswered modal and start a second, which is the
+        cancel-on-re-entry the master gate sweeps for.
+
+        Callers take the result with `await self._ask(screen).wait()` — the decorator returns
+        a `Worker`, and it is the body that runs inside the context, so awaiting it from a
+        handler is correct.
+        """
+        return await self.push_screen_wait(screen)
 
     def _fill(
         self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
