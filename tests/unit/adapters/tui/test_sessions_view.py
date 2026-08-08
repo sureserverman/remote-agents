@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from textual.widgets import OptionList
+
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
@@ -74,7 +76,7 @@ def _context(launcher: _Listing) -> TuiContext:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:

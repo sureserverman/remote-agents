@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -116,11 +117,11 @@ def _capable(*profiles: str) -> tuple[ProfileResumeCapability, ...]:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [getattr(item, "entry_key", None) for item in app.query("ListView > ListItem")]
+    return [option.id for option in app.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:

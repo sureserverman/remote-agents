@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -72,11 +73,11 @@ def _context(launcher: _RecordingLauncher) -> TuiContext:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [getattr(item, "entry_key", None) for item in app.query("ListView > ListItem")]
+    return [option.id for option in app.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
@@ -111,7 +112,7 @@ async def test_the_confirm_step_opens_with_abort_highlighted() -> None:
         await pilot.pause()
         await app._resolve_detail("force")
         await pilot.pause()
-        highlighted = app.query_one("#choices").index
+        highlighted = app.query_one("#choices").highlighted
         keys = _keys(app)
 
     assert keys[highlighted] != "force-confirm", "the destructive option must not be preselected"
@@ -274,13 +275,13 @@ async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
         await app._show_detail(str(record.session_id))
         await pilot.pause()
         detail_keys = _keys(app)
-        assert detail_keys[app.query_one("#choices").index] not in mutating
+        assert detail_keys[app.query_one("#choices").highlighted] not in mutating
 
         if "force" in detail_keys:
             await app._resolve_detail("force")
             await pilot.pause()
             confirm_keys = _keys(app)
-            assert confirm_keys[app.query_one("#choices").index] not in mutating
+            assert confirm_keys[app.query_one("#choices").highlighted] not in mutating
 
 
 async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() -> None:
@@ -331,7 +332,7 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
         assert len(launcher.issued) == 1
 
         keys = _keys(app)
-        resting = keys[app.query_one("#choices").index] if keys else None
+        resting = keys[app.query_one("#choices").highlighted] if keys else None
         # Whatever the owner's next enter lands on, it must not be another kill.
         await pilot.press("enter")
         await pilot.pause()

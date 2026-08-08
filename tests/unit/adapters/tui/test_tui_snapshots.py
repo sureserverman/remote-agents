@@ -92,29 +92,34 @@ _SESSION_ID = SessionId.new()
 
 
 async def settle(app, pilot, *, tries: int = 20) -> None:
-    """Pump until the deferred cursor placement has landed, then let the caller capture.
+    """Pump until the cursor has been drawn on a row, then let the caller capture.
 
-    `_fill` schedules the highlight via `call_after_refresh`, so it lands a pump cycle after
-    the rows mount. On most screens one `pause()` covers both. On AREAS and PROJECT_REVIEW it
-    does not reliably: those two are the only screens whose entry path crosses a worker
-    thread (`available_areas`, `creator.create`), and that extra hop changes how much work a
-    single pause drains — which showed up as roughly 1 failure in 6 full-directory runs, on
-    those two screens and no others.
+    `_fill` schedules a second cursor pass via `call_after_refresh`, so the screen is not
+    final the instant the driving coroutine returns. On most screens one `pause()` covers it.
+    On AREAS and PROJECT_REVIEW it did not reliably: those two are the only screens whose
+    entry path crosses a worker thread (`available_areas`, `creator.create`), and that extra
+    hop changes how much work a single pause drains — which showed up as roughly 1 failure in
+    6 full-directory runs, on those two screens and no others.
 
     Waiting on the condition rather than adding another `pause()` or a sleep: the thing being
-    waited for is "the highlight has been applied", so that is what this asks about. Nothing
-    here is wall-clock dependent.
+    waited for is "the highlight has been applied", so that is what this asks about. With
+    `OptionList` that is a single reactive on the widget rather than a flag on a mounted row
+    per option — `_fill` sets it synchronously now, so this usually returns on the first
+    pause, but it still waits on the real condition and nothing here is wall-clock dependent.
+
+    The two early returns are the screens that legitimately never highlight: a list with no
+    rows, and a `_fill(..., focus=False)` one such as PROJECTS, where the keyboard stays in
+    the filter and the list is deliberately left without a cursor.
     """
-    from textual.widgets import ListItem, ListView
+    from textual.widgets import OptionList
 
     for _ in range(tries):
         await pilot.pause()
-        rows = list(app.query(ListItem))
-        if not rows:
+        choices = app.query_one("#choices", OptionList)
+        if not choices.options:
             return
-        if any(row.highlighted for row in rows):
+        if choices.highlighted is not None:
             return
-        choices = app.query_one("#choices", ListView)
         if not choices.has_focus:
             return
 

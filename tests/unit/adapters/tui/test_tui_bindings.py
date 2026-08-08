@@ -143,7 +143,7 @@ def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
     app starts with the filter focused, so pressing it on the opening screen did nothing —
     invisible to any test that called the action method directly.
     """
-    from textual.widgets import Input, ListView
+    from textual.widgets import Input, OptionList
 
     from remote_agents.adapters.tui.app import RemoteAgentsTui
 
@@ -156,7 +156,7 @@ def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
         return found
 
     app_keys = keys_of(RemoteAgentsTui)
-    for widget in (Input, ListView):
+    for widget in (Input, OptionList):
         clashes = {
             key: (app_keys[key], keys_of(widget)[key]) for key in app_keys if key in keys_of(widget)
         }

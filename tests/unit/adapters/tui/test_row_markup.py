@@ -67,10 +67,11 @@ _MARKUP_DESCRIPTION = "check [link=file:///etc/passwd]this[/link]"
 def _rendered(app: RemoteAgentsTui) -> str:
     """What is actually on screen, not what was handed to the widget.
 
-    `Label.content` returns the string as supplied, markup and all, so asserting against it
-    passes while the screen shows something else entirely — which is exactly how this defect
-    survived. The screenshot is the same artifact the snapshot baselines compare, so this
-    reads the rendered result rather than the input to it.
+    A row hands back the string as supplied, markup and all — it was `Label.content` then and
+    it is `Option.prompt` now — so asserting against it passes while the screen shows
+    something else entirely, which is exactly how this defect survived. The screenshot is the
+    same artifact the snapshot baselines compare, so this reads the rendered result rather
+    than the input to it.
     """
     svg = app.export_screenshot(title="rows")
     text = html.unescape("".join(re.findall(r"<text[^>]*>(.*?)</text>", svg, re.S)))
@@ -259,12 +260,24 @@ def test_no_markup_parsing_widget_is_constructed_without_the_flag() -> None:
     # walk keyed on class names alone cannot see it, and the planned status work introduces
     # precisely the call this catches — `self.notify(f"...{record.display.rendered}...")`.
     #
+    # `OptionList` is in the set because it is the *row* sink, and it is the one whose flag
+    # is easiest to leave off: `Option` has no `markup` argument, so there is nothing on a
+    # row to forget — the widget renders each option with
+    # `visualize(self, option.prompt, markup=self._markup)`, and `OptionList.__init__`
+    # defaults that to `True`. An `OptionList(id="choices")` with no flag therefore reopens
+    # exactly the defect this module's docstring describes, silently, on the sink that
+    # receives all three untrusted strings. Adding it here is what makes this sweep cover the
+    # rows again after they stopped being `Label`s.
+    #
+    # `Label` stays although `_fill` no longer builds one: nothing stops the next screen from
+    # reaching for it, and a name in this set costs nothing until it is used.
+    #
     # Stated limits, so the guarantee is not overstated: this catches direct, unaliased
     # calls. An aliased import (`Static as St`), an attribute construction
     # (`widgets.Static(...)`), a factory, or a subclass would evade it; none of those shapes
-    # exist here. `markup` is keyword-only on all three, so inspecting only keywords is
+    # exist here. `markup` is keyword-only on all four, so inspecting only keywords is
     # correct rather than a gap.
-    parses_markup = {"Static", "Label"}
+    parses_markup = {"Static", "Label", "OptionList"}
     unguarded: list[str] = []
     for module in sorted(surface.rglob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))

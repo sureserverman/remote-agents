@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import (
     _BACK,
@@ -87,11 +88,11 @@ def _context(**overrides: object) -> TuiContext:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [getattr(item, "entry_key", None) for item in app.query("ListView > ListItem")]
+    return [option.id for option in app.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
@@ -407,7 +408,7 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#choices").has_focus and app.query_one("#choices").index == 0
+        assert app.query_one("#choices").has_focus and app.query_one("#choices").highlighted == 0
 
         await pilot.press("enter")
         await pilot.pause()

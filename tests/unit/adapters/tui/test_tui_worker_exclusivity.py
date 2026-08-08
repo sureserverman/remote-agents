@@ -38,7 +38,7 @@ from datetime import UTC, datetime
 
 import pytest
 from test_tui_snapshots import settle
-from textual.widgets import ListItem, ListView
+from textual.widgets import OptionList
 from textual.worker import WorkerState
 
 from remote_agents.adapters.tui.app import _CANCEL, RemoteAgentsTui, Step
@@ -177,19 +177,20 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
     This matters, and getting it wrong is how the first draft of this file reported a bug
     that does not exist. The guard is **not** uniformly placed: `_stop` checks `_busy`
     itself, but `_launch` and `_resolve_project_review` only *set* it and rely
-    on `on_list_view_selected` to have refused the second event. Calling those
+    on `on_option_list_option_selected` to have refused the second event. Calling those
     resolvers directly therefore walks straight past the protection and issues two commands.
 
     So these tests go through the handler. The uneven placement is worth knowing about on its
     own: the screen rewrite replaces that dispatch, and a version that forgets the caller-side
     check would leave launch and create unguarded while the stops stayed safe.
     """
-    from textual.widgets import ListItem, ListView
+    from textual.widgets import OptionList
 
-    choices = app.query_one("#choices", ListView)
-    rows = list(app.query(ListItem))
-    index = next(i for i, row in enumerate(rows) if getattr(row, "entry_key", None) == key)
-    await app.on_list_view_selected(ListView.Selected(choices, rows[index], index))
+    choices = app.query_one("#choices", OptionList)
+    index = choices.get_option_index(key)
+    await app.on_option_list_option_selected(
+        OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
+    )
 
 
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
@@ -466,7 +467,8 @@ class _AdvancingLauncher:
 async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path() -> None:
     """The delivery model the other tests do not exercise, against a store that moves.
 
-    A real repeated keypress is not two concurrent coroutines: `ListView` *posts* `Selected`,
+    A real repeated keypress is not two concurrent coroutines: `OptionList` *posts*
+    `OptionSelected`,
     and Textual serialises handlers on the app's message pump, so the second is dispatched
     only after the first handler has returned and `_busy` has already been cleared. The
     concurrent-task tests above therefore pin a shape the framework never produces.
@@ -490,14 +492,12 @@ async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path()
         await app._show_detail(str(_SESSION_ID))
         await settle(app, pilot)
 
-        rows = list(app.query(ListItem))
-        index = next(
-            i for i, row in enumerate(rows) if getattr(row, "entry_key", None) == "graceful"
-        )
-        choices = app.query_one("#choices", ListView)
+        choices = app.query_one("#choices", OptionList)
+        index = choices.get_option_index("graceful")
+        chosen = choices.get_option_at_index(index)
         # Posted twice with nothing awaited between them: two fast enters, exactly.
-        app.post_message(ListView.Selected(choices, rows[index], index))
-        app.post_message(ListView.Selected(choices, rows[index], index))
+        app.post_message(OptionList.OptionSelected(choices, chosen, index))
+        app.post_message(OptionList.OptionSelected(choices, chosen, index))
         await settle(app, pilot)
         await pilot.pause()
 

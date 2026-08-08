@@ -5,7 +5,7 @@ names is that a destructive confirm opens with the abort under the cursor: "the 
 is first and highlighted, and confirming means moving to a different row on purpose"
 (`adapters/tui/app.py`, `_confirm_force`).
 
-Only the first half of that was true. `_fill` set `ListView.index` in the same synchronous
+Only the first half of that was true. `_fill` set the cursor index in the same synchronous
 pass that appended the rows, so the highlight was never applied to a mounted child — the
 index was right, but no row was ever marked `highlighted` and no cursor was drawn. The
 functional safety held (a stray enter still activated the abort, because the index decides
@@ -14,6 +14,14 @@ being asked to confirm an irreversible kill.
 
 So these assert the rendered highlight, never the index. The index was correct throughout
 the defect's life, which is exactly why asserting it would have proved nothing.
+
+That distinction survives the move from `ListView` to `OptionList` and is why `_highlighted`
+below reads rendered strips rather than the widget's state. `OptionList` keeps one reactive,
+`highlighted`, and `render_line` styles a row by comparing it against that reactive — so
+reading `highlighted` back is reading the index again, under a new name. The two-variable
+disagreement this file was written for cannot happen in this widget, but the assertion that
+would have caught it is the one worth keeping, because it is the only one that fails if the
+cursor stops being *painted* for some other reason.
 """
 
 from __future__ import annotations
@@ -23,7 +31,7 @@ from datetime import UTC, datetime
 
 import pytest
 from test_tui_snapshots import settle
-from textual.widgets import ListItem, ListView
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -84,13 +92,34 @@ def _context() -> TuiContext:
 
 
 def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
-    """The label of the row drawn as the cursor, and every label on screen."""
-    rows = [
-        (str(item.query_one("Label").content), item.highlighted) for item in app.query(ListItem)
-    ]
-    marked = [text for text, is_highlighted in rows if is_highlighted]
-    assert len(marked) <= 1, f"more than one row is highlighted: {marked}"
-    return (marked[0] if marked else None), [text for text, _ in rows]
+    """The text of the row drawn as the cursor, and every row's text.
+
+    Read off the rendered strips, for the reason in this module's docstring: the cursor is
+    what `render_line` paints, and painting it is the half of DEC-007's mitigation that was
+    missing. `option-list--option-highlighted` is the component class `render_line` reaches
+    for when the row it is drawing is the highlighted one, so resolving that style and looking
+    for it in the output asks the widget what it drew rather than what it intended to draw.
+
+    `clear_meta_and_links` before comparing, because the segments that come back carry the
+    row's mouse-hit metadata (`meta={'option': 1, ...}`) and rich's `Style.__eq__` compares
+    that too — so an unstripped comparison is never equal, and this helper would report that
+    no cursor was drawn on every screen rather than failing on its own bug.
+    """
+    choices = app.query_one("#choices", OptionList)
+    rows = [str(option.prompt) for option in choices.options]
+    cursor = choices.get_visual_style(
+        "option-list--option", "option-list--option-highlighted"
+    ).rich_style.clear_meta_and_links()
+    marked: list[str] = []
+    for line in range(choices.scrollable_content_region.height):
+        strip = choices.render_line(line)
+        painted = [segment for segment in strip if segment.text.strip()]
+        if not painted:
+            continue
+        if all(segment.style.clear_meta_and_links() == cursor for segment in painted):
+            marked.append("".join(segment.text for segment in strip).strip())
+    assert len(marked) <= 1, f"more than one row is drawn as the cursor: {marked}"
+    return (marked[0] if marked else None), rows
 
 
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
@@ -153,25 +182,28 @@ async def test_the_index_and_the_drawn_cursor_agree() -> None:
     """The two halves cannot drift apart again without this failing.
 
     The defect this file was written for was precisely a disagreement between them: the
-    index said row 0, and no row was drawn as row 0.
+    index said row 0, and no row was drawn as row 0. `OptionList` closes that structurally
+    by keeping one reactive instead of an index plus a per-row class, so what this now pins
+    is that the row an enter would activate — `highlighted`, which `action_select` reads — is
+    the row the owner can see, taken from the rendered output and not from that reactive.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await _drive_to_force_confirm(app)
         await settle(app, pilot)
-        choices = app.query_one("#choices", ListView)
+        choices = app.query_one("#choices", OptionList)
         marked, rows = _highlighted(app)
-        assert choices.index is not None
-        assert rows[choices.index] == marked
+        assert choices.highlighted is not None
+        assert rows[choices.highlighted] == marked
 
 
 async def test_a_superseded_cursor_placement_stands_down() -> None:
     """A deferred placement declines to act once a later fill has replaced the rows.
 
     The placement is scheduled after a refresh, so its index was computed against entries
-    that may no longer be on screen. `ListView.validate_index` clamps rather than rejects,
-    so a stale callback would not error — it would silently rest the cursor on some
+    that may no longer be on screen. `OptionList.validate_highlighted` clamps rather than
+    rejects, so a stale callback would not error — it would silently rest the cursor on some
     unrelated row of the current list. On a destructive confirm that is exactly the DEC-007
     mitigation being undone with no symptom to notice.
 
@@ -199,7 +231,7 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         current = app._resting_generation
         assert current != superseded, "each fill must take its own generation"
 
-        choices = app.query_one("#choices", ListView)
+        choices = app.query_one("#choices", OptionList)
         marked_before, rows = _highlighted(app)
         assert rows == ["one", "two"]
 

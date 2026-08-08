@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from textual.widgets import OptionList
+
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
@@ -65,7 +67,7 @@ def _status(app: RemoteAgentsTui) -> str:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
 
 
 async def test_the_attach_command_is_rendered_byte_for_byte() -> None:

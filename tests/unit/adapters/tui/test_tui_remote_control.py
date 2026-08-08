@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -71,7 +72,7 @@ def _context(launcher: _RecordingLauncher) -> TuiContext:
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [getattr(item, "entry_key", None) for item in app.query("ListView > ListItem")]
+    return [option.id for option in app.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
@@ -229,7 +230,7 @@ async def test_a_failed_toggle_does_not_leave_the_cursor_on_the_button_that_fail
         assert len(launcher.issued) == 1
 
         keys = _keys(app)
-        resting = keys[app.query_one("#choices").index] if keys else None
+        resting = keys[app.query_one("#choices").highlighted] if keys else None
         await pilot.press("enter")
         await pilot.pause()
 

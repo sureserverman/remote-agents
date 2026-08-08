@@ -15,7 +15,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Input, OptionList, Static
+from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -140,7 +141,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     Screen { layout: vertical; }
     #body { height: 1fr; }
     #status { height: auto; padding: 0 1; }
-    ListView { height: 1fr; }
+    OptionList { height: 1fr; }
     #output { height: 1fr; padding: 0 1; }
     """
     BINDINGS = [
@@ -175,8 +176,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="body"):
-            # `markup=False` on both Statics for the reason given at the `Label` in `_fill`,
-            # and it is the same defect: these two sinks receive the same untrusted strings by
+            # `markup=False` on both Statics for the reason given at `#choices` below, and it
+            # is the same defect: these two sinks receive the same untrusted strings by
             # a different route. `#status` is handed the conversation description
             # (`_resolve_resume_conversation`) and `record.display.rendered`, which
             # interpolates the owner's custom label; `#output` is handed the session's raw
@@ -185,7 +186,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # unbalanced bracket — an agent's own output could take down the screen showing it.
             yield Static(self._status, id="status", markup=False)
             yield Input(placeholder="Filter projects", id="filter")
-            yield ListView(id="choices")
+            # `markup=False` because row text is displayed, never interpreted. Three sources
+            # reach the rows that console markup would otherwise consume or act on: the
+            # project list's `[Registered]` tag, which vanished outright; the owner's own
+            # session label; and the conversation description, which is echoed from the
+            # agent's own output — where `[link=…]` is a live hyperlink directive and an
+            # unbalanced bracket raises `MarkupError`, taking the screen down rather than
+            # mangling it. Set once here rather than escaped at each call site so a fourth
+            # source cannot arrive unescaped, which is how all three of these went unnoticed.
+            #
+            # It has to be *here* and not on the rows: `OptionList` renders each `Option`
+            # with `visualize(self, option.prompt, markup=self._markup)`, so the flag lives
+            # on the widget and `Option` has no `markup` argument at all. Passing it to
+            # `Option` would be a `TypeError`; forgetting it here is silent.
+            yield OptionList(id="choices", markup=False)
             with VerticalScroll(id="output-pane"):
                 yield Static("", id="output", markup=False)
         yield Footer()
@@ -263,40 +277,36 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # this is the one place that cannot be forgotten by a new navigation path.
         self._hide_output()
         self._resting_generation += 1
-        choices = self.query_one("#choices", ListView)
-        choices.clear()
-        for key, text in entries:
-            # `markup=False` because row text is displayed, never interpreted. Three sources
-            # reach here that console markup would otherwise consume or act on: the project
-            # list's `[Registered]` tag, which vanished outright; the owner's own session
-            # label; and the conversation description, which is echoed from the agent's own
-            # output — where `[link=…]` is a live hyperlink directive and an unbalanced
-            # bracket raises `MarkupError`, taking the screen down rather than mangling it.
-            # Set here rather than escaped at each call site so a fourth source cannot arrive
-            # unescaped, which is how all three of these went unnoticed.
-            item = ListItem(Label(text, markup=False))
-            item.entry_key = key
-            choices.append(item)
+        choices = self.query_one("#choices", OptionList)
+        choices.clear_options()
+        # The key is the `Option`'s own `id`, which is what the selection message carries
+        # back as `option_id`. It replaces the attribute this used to bolt onto each mounted
+        # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and
+        # row identity is first-class rather than monkey-patched.
+        choices.add_options(Option(text, id=key) for key, text in entries)
         if entries and focus:
             resting = min(highlight, len(entries) - 1)
-            # Set twice, deliberately. Here, so the index is correct the instant `_fill`
+            # Set twice, deliberately. Here, so the cursor is correct the instant `_fill`
             # returns — a keypress arriving before the next refresh must still land on the
-            # resting row, which is what keeps a stray enter harmless.
-            choices.index = resting
+            # resting row, which is what keeps a stray enter harmless. Unlike the mounted
+            # rows this replaced, `add_options` populates the option list synchronously, so
+            # this assignment alone already both decides the enter and draws the cursor:
+            # `render_line` compares `self.highlighted` against the row it is painting.
+            choices.highlighted = resting
             choices.focus()
-            # And again after the refresh, because `append` mounts on the message pump: at
-            # this point the rows do not exist yet, and `ListView.watch_index` marks a row
-            # `highlighted` only when it can reach a mounted child. Setting the index alone
-            # left it correct while nothing was ever *drawn* as the cursor, so a destructive
-            # confirm rested on its abort and looked like it rested on nothing.
+            # And again after the refresh, for what this assignment cannot do yet: the widget
+            # may still have no `scrollable_content_region` (it is un-hidden a few lines above,
+            # and a fresh screen has not laid out), so `watch_highlighted`'s
+            # `scroll_to_highlight` finds no line for the index and returns without scrolling.
+            # A resting row below the fold would therefore be highlighted but off screen.
             self.call_after_refresh(self._rest_cursor, choices, resting, self._resting_generation)
 
-    def _rest_cursor(self, choices: ListView, index: int, generation: int) -> None:
-        """Draw the cursor on `index` once the rows it refers to are mounted.
+    def _rest_cursor(self, choices: OptionList, index: int, generation: int) -> None:
+        """Re-assert the cursor on `index` once the list has a laid-out region to scroll in.
 
         `generation` is what makes this safe to defer. The index was computed against the
-        entries of one particular fill, and `ListView.validate_index` *clamps* rather than
-        rejects, so a callback that outlived its screen would silently rest the cursor on
+        entries of one particular fill, and `OptionList.validate_highlighted` *clamps* rather
+        than rejects, so a callback that outlived its screen would silently rest the cursor on
         some unrelated row of whatever list is showing now — on a destructive confirm, that
         is the DEC-007 mitigation this method exists to restore, quietly undone.
 
@@ -313,16 +323,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         synchronously when the worker resolves and can still repaint a screen the owner has
         since navigated away from — BL-016, which the screen rewrite closes structurally.
 
-        The index is cleared first because `_fill` has usually already assigned this exact
+        The highlight is cleared first because `_fill` has usually already assigned this exact
         value, and a reactive assigned its current value notifies nothing — so without the
-        clear the highlight would never be applied at all. The clear also posts a
-        `ListView.Highlighted(None)`; nothing subscribes to it today, but a future
-        `on_list_view_highlighted` will see None-then-real from every programmatic fill.
+        clear `watch_highlighted` would not run a second time and the deferred pass would
+        achieve nothing at all. What that second run is *for* has changed with the widget:
+        the drawn cursor no longer depends on it (`render_line` reads `highlighted` directly,
+        so the value `_fill` set is already on screen), but `scroll_to_highlight` does, and
+        that is the part `_fill` is too early to complete.
+
+        `watch_highlighted` returns immediately on `None`, so the clear posts nothing —
+        subscribers see one `OptionHighlighted` per fill, not a None-then-real pair.
         """
-        if generation != self._resting_generation or not choices.children:
+        if generation != self._resting_generation or not choices.options:
             return
-        choices.index = None
-        choices.index = index
+        choices.highlighted = None
+        choices.highlighted = index
 
     def _text_entry(self, placeholder: str) -> None:
         """Hand the keyboard to the input, which only the text steps ever use."""
@@ -424,13 +439,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     def _enter_project_list(self) -> None:
         """Move from the filter into the filtered list, so arrows and enter can pick."""
-        choices = self.query_one("#choices", ListView)
-        if choices.children:
-            choices.index = 0
+        choices = self.query_one("#choices", OptionList)
+        if choices.options:
+            choices.highlighted = 0
             choices.focus()
 
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        key = getattr(event.item, "entry_key", None)
+    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Every row `_fill` builds carries its key as the option's id, so a `None` here means
+        # a row this app did not construct — refuse it rather than dispatch on it.
+        key = event.option_id
         if key is None or self._busy:
             return
         if self._step is Step.PROJECTS:
