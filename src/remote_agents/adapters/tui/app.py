@@ -276,9 +276,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         entries of one particular fill, and `ListView.validate_index` *clamps* rather than
         rejects, so a callback that outlived its screen would silently rest the cursor on
         some unrelated row of whatever list is showing now — on a destructive confirm, that
-        is the DEC-007 mitigation this method exists to restore, quietly undone. No path
-        reaches that today, because every `_fill` caller awaits fully between fills; Stage 2
-        moves these handlers onto workers, which is exactly what would make it reachable.
+        is the DEC-007 mitigation this method exists to restore, quietly undone.
+
+        **Corrected after review:** an earlier version of this paragraph claimed no path
+        reached that "because every `_fill` caller awaits fully between fills", and that
+        Stage 2's move to workers was what would make it reachable. That was wrong when it
+        was written, not merely overtaken. `_show_areas` and the catalogue refresh already
+        awaited off the event loop through the raw thread offload these workers replaced,
+        and an `await` yields to the pump identically either way — so a second fill could
+        already interleave. Stage 2 changed the mechanism, not the reachability.
+
+        Note what this guard does and does not cover: it protects the *deferred cursor
+        placement* only. The `_fill` call in `_show_areas` and `action_refresh` runs
+        synchronously when the worker resolves and can still repaint a screen the owner has
+        since navigated away from — BL-016, which the screen rewrite closes structurally.
 
         The index is cleared first because `_fill` has usually already assigned this exact
         value, and a reactive assigned its current value notifies nothing — so without the

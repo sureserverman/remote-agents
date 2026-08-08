@@ -176,8 +176,8 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
 
     This matters, and getting it wrong is how the first draft of this file reported a bug
     that does not exist. The guard is **not** uniformly placed: `_stop` checks `_busy`
-    itself (app.py:986), but `_launch` and `_resolve_project_review` only *set* it and rely
-    on `on_list_view_selected` (app.py:391) to have refused the second event. Calling those
+    itself, but `_launch` and `_resolve_project_review` only *set* it and rely
+    on `on_list_view_selected` to have refused the second event. Calling those
     resolvers directly therefore walks straight past the protection and issues two commands.
 
     So these tests go through the handler. The uneven placement is worth knowing about on its
@@ -415,7 +415,10 @@ async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
         first = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
         assert app._step is Step.FORCE_CONFIRM
-        await app._resolve_force_confirm("force-confirm")
+        # Bounded on purpose. This await is the *dropped* second press, so it must return
+        # promptly; if a regression lets it through to the launcher it would block on
+        # `release` instead, and an unbounded await would hang the run rather than fail it.
+        await asyncio.wait_for(app._resolve_force_confirm("force-confirm"), timeout=5)
         launcher.release.set()
         await first
         assert launcher.issued == ["force"]

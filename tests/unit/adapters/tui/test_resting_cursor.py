@@ -175,9 +175,12 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
     unrelated row of the current list. On a destructive confirm that is exactly the DEC-007
     mitigation being undone with no symptom to notice.
 
-    No production path reaches this today, because every `_fill` caller awaits fully between
-    fills. It is pinned now because the next stage moves these handlers onto workers, which
-    is what would make it reachable.
+    **Corrected after review:** this paragraph used to say no production path reached it,
+    "because every `_fill` caller awaits fully between fills", and that the next stage's move
+    to workers is what would make it reachable. That was wrong when written. `_show_areas`
+    and the catalogue refresh already awaited off the event loop through `asyncio.to_thread`,
+    and an `await` yields to the pump the same way a worker await does — the interleaving
+    hazard predates the worker migration rather than being created by it.
 
     `_rest_cursor` is invoked directly rather than by racing two fills through the message
     pump: the guard's contract is "act only for the newest fill", and driving that through

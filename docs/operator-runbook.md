@@ -134,10 +134,13 @@ python3 -c "import re,html,sys;print(html.unescape(''.join(re.findall(r'<text[^>
 ```
 
 A missing baseline fails rather than being written silently, so a newly added position must be
-generated deliberately and looked at once. Three things are pinned to keep the captures
-reproducible — the terminal size (an environment dependency), and the age column and the input
-cursor's blink timer (both wall-clock ones, and so the two that would flake on a merely busy
-machine). See the test module's docstring for the full rationale rather than duplicating it
+generated deliberately and looked at once. Five things are pinned to keep the captures
+reproducible — three environment dependencies (the terminal size, the theme, and colour via
+`NO_COLOR` / `FORCE_COLOR`) and two wall-clock ones (the age column and the input cursor's
+blink timer, the two that would flake on a merely busy machine). The count matters when you
+are diagnosing a failure: an unpinned theme or colour setting fails *all sixteen* baselines at
+once, so a mass failure points at the environment rather than at your change. See the test
+module's docstring for the full rationale rather than duplicating it
 here; it is the copy that sits next to the code and will be updated with it.
 
 ## Local terminal acceptance checklist
