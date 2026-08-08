@@ -648,6 +648,65 @@ class _MetadataBot:
         return SimpleNamespace(short_description=self.short_description)
 
 
+def _catalogue(count: int) -> tuple[CatalogProject, ...]:
+    return tuple(
+        CatalogProject(f"{index:024d}", f"project-{index}", "tests", "Registered")
+        for index in range(count)
+    )
+
+
+def test_resume_picks_a_project_the_same_way_launch_does() -> None:
+    """Resume rendered the whole catalogue as one button per project, unpaged.
+
+    At 94 projects that was 95 keyboard rows against launch's 14, and Telegram refuses a
+    keyboard past 100 buttons, so the screen was a few projects away from not rendering.
+    Both flows now share one renderer; only the action each button carries differs.
+    """
+    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(94))
+    boundary._view_revisions[(7, 11)] = 1
+
+    resume = boundary._resume_projects_reply()
+    launch = boundary._projects_reply(boundary.catalogue, view_id="all")
+
+    assert len(resume.keyboard) == len(launch.keyboard)
+    assert resume.text.startswith("<b>Resume 1/10</b>")
+    assert [[button.text for button in row] for row in resume.keyboard[-3:]] == [
+        ["Next"],
+        ["Search"],
+        ["Back", "Home"],
+    ]
+
+
+def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
+    """A project chosen after paging or searching must still resume, never launch."""
+    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary._view_revisions[(7, 11)] = 1
+    boundary._resume_projects_reply()
+
+    second = boundary._project_page_reply("all|2", flow="resume")
+
+    def _action(token: str) -> str | None:
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=1)
+        return None if state is None else state.action
+
+    assert second.text.startswith("<b>Resume 2/3</b>")
+    assert _action(second.keyboard[0][0].callback_data) == "resume.project"
+    assert _action(second.keyboard[-2][0].callback_data) == "resume.search"
+
+
+def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
+    """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
+    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary._view_revisions[(7, 11)] = 1
+    boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
+
+    # Resume never stored a "search" view, so paging into one is refused rather than
+    # silently answered with the launch flow's results.
+    assert boundary._project_page_reply("search|2", flow="resume").text == (
+        "That project view has expired."
+    )
+
+
 def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:
     """A boundary holding `records`, with its view revision pinned for token minting."""
     launcher = _Launcher()

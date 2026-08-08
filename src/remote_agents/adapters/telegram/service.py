@@ -87,6 +87,10 @@ _GUIDED_TEXT_ENTRY = {
         "Reply with a project name. Send Cancel or Back to leave this step.",
         "Project name",
     ),
+    "resume.search": (
+        "Reply with a project name. Send Cancel or Back to leave this step.",
+        "Project name",
+    ),
     "project.name": (
         "Reply with the new project name. Send Cancel or Back to leave this step.",
         "New project name",
@@ -94,7 +98,45 @@ _GUIDED_TEXT_ENTRY = {
 }
 _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
+    "resume.search": "Reply below with a project name.",
     "project.name": "Reply below with the new project name.",
+}
+_SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectPicker:
+    """The callbacks and wording one project list needs, so both flows share a renderer.
+
+    Launch and resume both begin by choosing a project from the same catalogue, and only
+    the action each button carries differs. Resume had its own renderer that emitted one
+    button per project for the whole catalogue with no paging and no search: 95 rows
+    against launch's 14 on this host, and Telegram refuses a keyboard past 100 buttons, so
+    it would have stopped rendering entirely a few projects later.
+    """
+
+    select: str
+    page: str
+    search: str
+    title: str
+    instruction: str
+
+
+_PROJECT_PICKERS = {
+    "launch": _ProjectPicker(
+        select="launch.project",
+        page="launch.page",
+        search="launch.search",
+        title="Projects",
+        instruction="Select a project to launch.",
+    ),
+    "resume": _ProjectPicker(
+        select="resume.project",
+        page="resume.projects",
+        search="resume.search",
+        title="Resume",
+        instruction="Select the project for the prior conversation.",
+    ),
 }
 _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
@@ -183,19 +225,21 @@ class PrivateBotBoundary:
             self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
             await update.effective_message.reply_text(**(await self._home_reply()))
             return
-        if action == "launch.search":
+        if action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
             if not projects:
                 await update.effective_message.reply_text(
-                    **self._guided_text_reply(
-                        "launch.search", "No projects found. Try another name."
-                    )
+                    **self._guided_text_reply(action, "No projects found. Try another name.")
                 )
                 return
             self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
             self._next_revision(self.owner_user_id, self.owner_chat_id)
+            # The search returns to the flow it was opened from, so a project picked here
+            # resumes a conversation rather than silently starting a fresh session.
             await update.effective_message.reply_text(
-                **_reply_arguments(self._projects_reply(projects, view_id="search"))
+                **_reply_arguments(
+                    self._projects_reply(projects, view_id="search", flow=_SEARCH_ACTIONS[action])
+                )
             )
             return
         if action == "project.name":
@@ -316,7 +360,7 @@ class PrivateBotBoundary:
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
-            if state.action in {"launch.search", "launch.label", "project.area"}:
+            if state.action in {"launch.search", "resume.search", "launch.label", "project.area"}:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
             if pending is not None:
@@ -396,6 +440,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._sessions_reply(_page_number(entity_id)))
         if action == "resume.open":
             return _reply_arguments(self._resume_projects_reply())
+        if action == "resume.projects":
+            return _reply_arguments(self._project_page_reply(entity_id, flow="resume"))
         if action == "resume.project":
             return _reply_arguments(await self._resume_profiles_reply(entity_id))
         if action in {"resume.profile", "resume.page"}:
@@ -901,9 +947,20 @@ class PrivateBotBoundary:
         )
 
     def _projects_reply(
-        self, projects: tuple[CatalogProject, ...], *, view_id: str, page: int = 1
+        self,
+        projects: tuple[CatalogProject, ...],
+        *,
+        view_id: str,
+        page: int = 1,
+        flow: str = "launch",
     ) -> RenderedMessage:
-        self._project_views[view_id] = projects
+        """Render one page of the project catalogue for whichever flow asked for it.
+
+        The stored view is keyed by flow as well as view id, so a search inside Resume
+        cannot be paged into by Launch and vice versa.
+        """
+        picker = _PROJECT_PICKERS[flow]
+        self._project_views[f"{flow}:{view_id}"] = projects
         try:
             rendered = paginate_catalogue(projects, page, self.project_page_size)
         except ValueError:
@@ -912,7 +969,7 @@ class PrivateBotBoundary:
             (
                 Button(
                     project.name,
-                    self._callback("launch.project", project.opaque_id),
+                    self._callback(picker.select, project.opaque_id),
                 ),
             )
             for project in rendered.projects
@@ -920,22 +977,22 @@ class PrivateBotBoundary:
         navigation = []
         if rendered.page > 1:
             navigation.append(
-                Button("Previous", self._callback("launch.page", f"{view_id}|{rendered.page - 1}"))
+                Button("Previous", self._callback(picker.page, f"{view_id}|{rendered.page - 1}"))
             )
         if rendered.page < rendered.page_count:
             navigation.append(
-                Button("Next", self._callback("launch.page", f"{view_id}|{rendered.page + 1}"))
+                Button("Next", self._callback(picker.page, f"{view_id}|{rendered.page + 1}"))
             )
         if navigation:
             buttons.append(tuple(navigation))
-        buttons.append((Button("Search", self._callback("launch.search", "search")),))
-        buttons.append((Button("Back", self._callback("nav.home", "home")),))
+        buttons.append((Button("Search", self._callback(picker.search, "search")),))
         return self._message(
-            f"<b>Projects {rendered.page}/{rendered.page_count}</b>\nSelect a project to launch.",
+            f"<b>{picker.title} {rendered.page}/{rendered.page_count}</b>\n{picker.instruction}",
             tuple(buttons),
+            back=self._callback("nav.home", "home"),
         )
 
-    def _project_page_reply(self, entity_id: str) -> RenderedMessage:
+    def _project_page_reply(self, entity_id: str, flow: str = "launch") -> RenderedMessage:
         view_id, separator, page_value = entity_id.partition("|")
         if not separator or view_id not in {"all", "search"}:
             return self._message("That project view has expired.")
@@ -943,20 +1000,13 @@ class PrivateBotBoundary:
             page = int(page_value)
         except ValueError:
             return self._message("That project view has expired.")
-        projects = self._project_views.get(view_id)
+        projects = self._project_views.get(f"{flow}:{view_id}")
         if projects is None:
             return self._message("That project view has expired.")
-        return self._projects_reply(projects, view_id=view_id, page=page)
+        return self._projects_reply(projects, view_id=view_id, page=page, flow=flow)
 
     def _resume_projects_reply(self) -> RenderedMessage:
-        buttons = tuple(
-            (Button(project.name, self._callback("resume.project", project.opaque_id)),)
-            for project in self.catalogue
-        )
-        return self._message(
-            "<b>Resume</b>\nSelect the project for the prior conversation.",
-            buttons or ((Button("No projects available", self._callback("nav.home", "home")),),),
-        )
+        return self._projects_reply(self.catalogue, view_id="all", flow="resume")
 
     async def _resume_profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
@@ -1036,23 +1086,24 @@ class PrivateBotBoundary:
                     self._callback("resume.page", f"{project_id}|{profile_id}|{result.page + 1}"),
                 )
             )
+        # Back belongs in the navigation row with Home, like every other screen, rather
+        # than as a body button — and the empty case needs it most, since it used to offer
+        # nothing but a row restating that there was nothing.
+        back = self._callback("resume.project", project_id)
+        if not buttons:
+            return self._message(
+                "<b>Prior conversations</b>\nThis agent has no resumable conversation "
+                "for this project.",
+                back=back,
+            )
         rows = list(buttons)
         if navigation:
             rows.append(tuple(navigation))
-        rows.append((Button("Back", self._callback("resume.project", project_id)),))
         return self._message(
             f"<b>Prior conversations {result.page}/{result.page_count}</b>\n"
             "Select a resumable conversation.",
-            tuple(rows)
-            if buttons
-            else (
-                (
-                    Button(
-                        "No resumable conversations",
-                        self._callback("resume.project", project_id),
-                    ),
-                ),
-            ),
+            tuple(rows),
+            back=back,
         )
 
     async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
