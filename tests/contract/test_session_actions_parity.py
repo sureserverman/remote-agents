@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
@@ -101,7 +102,13 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
     async with app.run_test() as pilot:
         await app._show_detail(str(record.session_id))
         await pilot.pause()
-        rows = [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
+        # Still the *rendered* rows, which is this file's whole premise (see the module
+        # docstring). The widget changed from a list of mounted `Label`s to an `OptionList`,
+        # so the read is `Option.prompt` off `.options` rather than a DOM query — but it is
+        # the same question asked of the same artifact: what the detail view actually put on
+        # screen. Reading `_detail_entries` or `available_actions` here instead would satisfy
+        # every assertion below vacuously, for every state, while catching nothing.
+        rows = [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
     return {_LABEL_TO_ACTION[row] for row in rows if row in _LABEL_TO_ACTION}
 
 
