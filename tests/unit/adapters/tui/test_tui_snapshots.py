@@ -15,15 +15,23 @@ hash of the rendered segments and the title rather than from a random value
 (`rich/console.py:2475`), so identical content at an identical size yields a byte-identical
 file.
 
-Three things must be pinned for that determinism to hold, and all three are done below.
-One is an *environment* dependency and two are *wall-clock* ones; the distinction matters
-because only the latter two flake on a machine that is merely busy:
+Five things must be pinned for that determinism to hold, and all five are done below.
+Three are *environment* dependencies and two are *wall-clock* ones; the distinction matters
+because only the latter two flake on a machine that is merely busy, while the former three
+flake on a machine that is merely configured differently:
 
 1. **Terminal size** (`_SIZE`), because the SVG encodes pixel geometry — an environment
    dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
-2. **The age column.** `_age()` renders `datetime.now(UTC) - created_at` in whole minutes,
+2. **The theme** (`_THEME`). `TEXTUAL_THEME` is read into `constants.DEFAULT_THEME` at import
+   time, so a developer who exports it renders every colour differently. Unpinned,
+   `TEXTUAL_THEME=textual-light` fails all 16 at once — and the documented remedy for a mass
+   failure is to regenerate, which would silently replace the whole net with one person's
+   theme.
+3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
+   that variable alone also fails all 16.
+4. **The age column.** `_age()` renders `datetime.now(UTC) - created_at` in whole minutes,
    so every fixture record is stamped at capture time to render a stable `0m ago`.
-3. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
+5. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
    False` on every input first, which pauses that timer and forces the cursor visible
@@ -72,6 +80,11 @@ _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # Pinned because the SVG encodes pixel geometry: a different terminal size is a different
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
 _SIZE = (100, 30)
+# Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
+# `NO_COLOR` in the environment re-renders every colour in the document, failing all 16
+# baselines at once and inviting a regeneration that would bake one person's terminal
+# configuration into the net.
+_THEME = "textual-dark"
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered")
@@ -262,11 +275,22 @@ async def _drive(app: RemoteAgentsTui, step: Step) -> None:
     await app._resolve_resume_conversation(str(_REFERENCE))
 
 
+@pytest.fixture(autouse=True)
+def _neutral_colour_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Render as if no colour-forcing variable were set, whatever the developer exports."""
+    for name in ("NO_COLOR", "FORCE_COLOR"):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.mark.parametrize("step", list(Step), ids=lambda s: s.name)
 async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
     """Each of the 16 positions renders exactly what its committed baseline shows."""
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=_SIZE) as pilot:
+        # Before driving, not at capture time: the theme drives a style recompute, so it has
+        # to be set early enough for the pump to have applied it by the time we export.
+        app.theme = _THEME
+        await pilot.pause()
         await _drive(app, step)
         await pilot.pause()
         assert app._step is step, f"drove to {app._step}, expected {step}"
@@ -281,6 +305,7 @@ async def test_a_missing_baseline_fails_rather_than_being_written() -> None:
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=_SIZE) as pilot:
+        app.theme = _THEME
         await pilot.pause()
         if _UPDATE:
             pytest.skip("update mode writes baselines by design")
