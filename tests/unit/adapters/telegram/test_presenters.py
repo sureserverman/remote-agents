@@ -36,6 +36,9 @@ def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
     assert [(button.text, button.callback_data) for row in first.keyboard for button in row] == [
         ("Launch", "c1_launch"),
         ("Sessions", "c1_sessions"),
+        # Home's counts move without the owner touching anything, so it closes with the
+        # refresh that re-reads them. This is the only button that reaches nav.refresh.
+        ("Refresh", "c1_refresh"),
     ]
 
 

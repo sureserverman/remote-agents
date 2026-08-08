@@ -94,14 +94,23 @@ def render_home(
     resume: str | None = None,
     add_project: str | None = None,
 ) -> RenderedMessage:
-    """Render the fixed root view."""
+    """Render the fixed root view, closed by the refresh its counts need.
 
+    The counts here are the one number on the dashboard that moves without the owner
+    touching anything — a session can end, or a launch can become ready, while this screen
+    sits on their phone. `callbacks.refresh` used to be minted and then dropped on the floor
+    by this function, which left the bot with a live `nav.refresh` handler that no button in
+    the interface could reach, and an error message elsewhere telling the owner to refresh.
+    """
+
+    _validate_callbacks(callbacks)
     return _message(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
         ((Button("Launch", launch),),)
         + (((Button("Resume", resume),),) if resume is not None else ())
         + ((Button("Sessions", sessions),),)
-        + (((Button("Add Project", add_project),),) if add_project is not None else ()),
+        + (((Button("Add Project", add_project),),) if add_project is not None else ())
+        + ((Button("Refresh", callbacks.refresh),),),
     )
 
 

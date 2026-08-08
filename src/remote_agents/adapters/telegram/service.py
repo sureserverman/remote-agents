@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
+from math import ceil
 
 from telegram import (
     Bot,
@@ -58,6 +59,9 @@ from remote_agents.application.project_catalog import (
     search_catalogue,
 )
 from remote_agents.application.session_actions import (
+    ACTION_LABELS,
+    FORCE,
+    GRACEFUL,
     available_actions,
     explain_state,
     remote_control_available,
@@ -92,6 +96,21 @@ _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
     "project.name": "Reply below with the new project name.",
 }
+_PENDING_NOTICES = {
+    "graceful": "Stopping the session — waiting for the agent to exit…",
+    "cleanup": "Cleaning up the session…",
+    "force": "Force stopping the session…",
+    "launch.confirm": "Launching — waiting for the agent to become ready…",
+    "resume.confirm": "Resuming — waiting for the agent to become ready…",
+}
+"""The actions that make the owner wait, and what to show them while they do.
+
+Each of these reaches a terminal and then polls it: a launch waits for its profile's
+readiness marker, a graceful stop waits for the pane to exit, and both are bounded by the
+same startup timeout — twenty seconds in the deployed composition. Everything absent from
+this table answers from the store or from one tmux call, fast enough that a notice would
+flash and be gone.
+"""
 
 
 @dataclass(slots=True)
@@ -114,6 +133,7 @@ class PrivateBotBoundary:
     _labels: dict[str, str] = field(default_factory=dict)
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
+    session_page_size: int = 8
     catalogue_source: Callable[[], tuple[CatalogProject, ...]] | None = None
 
     def __post_init__(self) -> None:
@@ -231,12 +251,40 @@ class PrivateBotBoundary:
             )
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Explain the actions this deployment actually offers, and leave a way on.
+
+        Help used to answer with two lines of plain text and no keyboard, which made it the
+        one screen in the bot that went nowhere, and it named only two of the four things
+        Home can offer. What is listed here is what this composition was wired with, so a
+        bot without resume or project creation does not advertise them.
+        """
         del context
-        if self.permits(update) and update.effective_message is not None:
-            await update.effective_message.reply_text(
-                "Use Launch to start a curated agent, or Sessions to inspect and stop "
-                "managed sessions."
-            )
+        if not self.permits(update) or update.effective_message is None:
+            return
+        lines = [
+            "<b>Remote agents</b>",
+            "",
+            "<b>Launch</b> starts a curated agent in a project.",
+        ]
+        if self.conversations is not None:
+            lines.append("<b>Resume</b> continues a saved conversation in a new session.")
+        lines.append(
+            "<b>Sessions</b> lists what is running. Open one to read its output, copy an "
+            "attach command, or stop it."
+        )
+        if self.creator is not None:
+            lines.append("<b>Add Project</b> registers a new project to launch into.")
+        lines += [
+            "",
+            f"<b>{ACTION_LABELS[GRACEFUL]}</b> asks the agent to exit on its own terms and "
+            "then removes its pane, ending the session in one step — read the output first "
+            "if you want it.",
+            f"<b>{ACTION_LABELS[FORCE]}</b> kills a session that cannot exit, and asks for "
+            "confirmation before it does.",
+        ]
+        await update.effective_message.reply_text(
+            **_reply_arguments(self._message("\n".join(lines)))
+        )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Acknowledge and refresh only callbacks issued to this exact private chat."""
@@ -251,14 +299,19 @@ class PrivateBotBoundary:
             query.data or "", owner_id=owner_id, chat_id=chat_id, view_revision=revision
         )
         if state is None:
-            await query.answer("This view has expired.")
+            # An alert rather than a toast: the press did nothing, and the screen is about
+            # to be replaced by Home. A silent jump back to the dashboard reads like the bot
+            # misfired, and this is an error rather than one of the routine presses that
+            # would make a modal into noise.
+            await query.answer("This view has expired.", show_alert=True)
             try:
                 await query.edit_message_text(**(await self._home_reply()))
             except BadRequest as error:
                 if "Message is not modified" not in str(error):
                     raise
             return
-        await query.answer()
+        pending = self._pending_notice(state.action, query.data or "")
+        await query.answer(pending)
         try:
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
@@ -266,12 +319,33 @@ class PrivateBotBoundary:
             if state.action in {"launch.search", "launch.label", "project.area"}:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
+            if pending is not None:
+                # Telegram clears the button spinner as soon as the query is answered, which
+                # has to happen immediately — so a stop that polls a pane for its whole
+                # timeout would otherwise leave the previous screen sitting there, unchanged
+                # and unexplained, for up to twenty seconds. Show the wait, and drop the
+                # keyboard while it runs so the same button cannot be pressed twice.
+                await query.edit_message_text(**_reply_arguments(render_message(pending)))
             await query.edit_message_text(
                 **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
             )
-        except BadRequest as error:
-            if "Message is not modified" not in str(error):
+        except Exception as error:
+            if isinstance(error, BadRequest) and "Message is not modified" in str(error):
+                return
+            if pending is None:
                 raise
+            # The pending screen carries no buttons, so failing after it is drawn would
+            # strand the owner on a dead message. Put them back on something they can act on.
+            _LOG.exception("callback action failed while its pending notice was on screen")
+            await query.edit_message_text(
+                **_reply_arguments(
+                    self._message(
+                        "That action did not complete, and the session was left as it is.\n"
+                        "Open it again to see where it is now.",
+                        back=self._callback("sessions.open", "sessions"),
+                    )
+                )
+            )
 
     async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
         if refresh:
@@ -318,6 +392,8 @@ class PrivateBotBoundary:
             return _reply_arguments(self._confirm_reply(entity_id))
         if action == "sessions.open":
             return _reply_arguments(await self._sessions_reply())
+        if action == "sessions.page":
+            return _reply_arguments(await self._sessions_reply(_page_number(entity_id)))
         if action == "resume.open":
             return _reply_arguments(self._resume_projects_reply())
         if action == "resume.project":
@@ -496,28 +572,57 @@ class PrivateBotBoundary:
             )
         )
 
-    async def _sessions_reply(self) -> RenderedMessage:
+    async def _sessions_reply(self, page: int = 1) -> RenderedMessage:
+        """Render one page of managed sessions, newest page navigation last.
+
+        This list is unbounded in a way the project list is not — every launch adds a row
+        and only reconciliation takes one away — so it pages for the same reason: a keyboard
+        tall enough to push the message off the screen is unusable on a phone, and Telegram
+        caps the buttons one keyboard may carry.
+        """
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
-        return self._message(
-            "<b>Sessions</b>",
-            tuple(
-                (
-                    Button(
-                        _session_row_label(record),
-                        self._callback("session.detail", str(record.session_id)),
-                    ),
-                )
-                for record in records
+        if not records:
+            return self._message(
+                "<b>Sessions</b>\nNothing is running.",
+                ((Button("Launch", self._callback("launch.open", "projects")),),),
+                refresh=self._callback("sessions.page", "1"),
             )
-            or ((Button("No managed sessions", self._callback("nav.home", "home")),),),
+        page_count = max(1, ceil(len(records) / self.session_page_size))
+        index = min(max(page, 1), page_count)
+        start = (index - 1) * self.session_page_size
+        buttons = [
+            (
+                Button(
+                    _session_row_label(record),
+                    self._callback("session.detail", str(record.session_id)),
+                ),
+            )
+            for record in records[start : start + self.session_page_size]
+        ]
+        navigation = []
+        if index > 1:
+            navigation.append(Button("Previous", self._callback("sessions.page", str(index - 1))))
+        if index < page_count:
+            navigation.append(Button("Next", self._callback("sessions.page", str(index + 1))))
+        if navigation:
+            buttons.append(tuple(navigation))
+        return self._message(
+            f"<b>Sessions {index}/{page_count}</b>",
+            tuple(buttons),
+            refresh=self._callback("sessions.page", str(index)),
         )
 
     async def _detail_reply(self, session_value: str) -> RenderedMessage:
         record = await self._record(session_value)
         if record is None:
-            return self._message("That session is no longer available.")
+            # Reached by opening a row that ended under the owner, so the list they came
+            # from is exactly where they need to go — not Home.
+            return self._message(
+                "That session is no longer available.",
+                back=self._callback("sessions.open", "sessions"),
+            )
         buttons = [(Button("Inspect", self._callback("session.inspect", session_value)),)]
         if await self._can_copy_attach(record):
             buttons.append(
@@ -540,6 +645,12 @@ class PrivateBotBoundary:
                     ),
                 )
             )
+        # The stops share one row while every read-only action above gets a full-width row
+        # of its own. Telegram has no separator, so shape is the only signal available, and
+        # the actions that end a session should not look like the ones that read it — a
+        # graceful stop is one tap from discarding the pane's output. No state offers more
+        # than two stops, so the row stays legible.
+        stops: list[Button] = []
         for action in available_actions(record.state):
             token = self.stops.offer(
                 record.session_id,
@@ -551,22 +662,32 @@ class PrivateBotBoundary:
                 self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
             )
             if token is not None:
-                buttons.append((Button(action.title(), token),))
+                stops.append(Button(ACTION_LABELS[action], token))
+        if stops:
+            buttons.append(tuple(stops))
         return self._message(
             f"<b>{escape(record.display.rendered)}</b>\n"
             f"State: {record.state.value}\n{_state_explanation(record.state)}",
             tuple(buttons),
+            back=self._callback("sessions.open", "sessions"),
         )
 
     async def _attach_reply(self, session_value: str) -> RenderedMessage:
         record = await self._record(session_value)
+        back = self._callback("session.detail", session_value)
         if record is None or not await self._can_copy_attach(record):
-            return self._message("Copy Attach is unavailable until this managed pane is live.")
+            return self._message(
+                "Copy Attach is unavailable until this managed pane is live.", back=back
+            )
         copy = getattr(self.launcher, "copy_attach", None)
         command = await copy(record.session_id) if copy is not None else None
         if command is None:
-            return self._message("Copy Attach is unavailable until this managed pane is live.")
-        return self._message(f"<b>Copy attach command</b>\n<code>{escape(command)}</code>")
+            return self._message(
+                "Copy Attach is unavailable until this managed pane is live.", back=back
+            )
+        return self._message(
+            f"<b>Copy attach command</b>\n<code>{escape(command)}</code>", back=back
+        )
 
     async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
         session_value, separator, state_value = entity_id.partition("|")
@@ -622,24 +743,39 @@ class PrivateBotBoundary:
         )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:
+        """Render captured output over a way back to the session that produced it.
+
+        Inspecting used to replace the detail view with the capture and a lone Home button,
+        so reading a pane cost the owner every action they had just been offered for it.
+        That is the wrong trade in general and the wrong one in particular: a graceful stop
+        discards the pane's output, so reading before stopping is the only order that works,
+        and it was the most expensive path in the bot.
+        """
+        back = self._callback("session.detail", session_value)
         result = await self._inspection_result(session_value)
         if result is None:
-            return self._message("Inspection is unavailable.")
-        return self._message(f"<pre>{escape(result.text)}</pre>")
+            return self._message("Inspection is unavailable.", back=back)
+        return self._message(f"<pre>{escape(result.text)}</pre>", back=back)
 
     async def _send_inspection(self, query, session_value: str) -> None:
         result = await self._inspection_result(session_value)
+        back = self._callback("session.detail", session_value)
         if result is None:
             await query.edit_message_text(
-                **_reply_arguments(self._message("Inspection is unavailable."))
+                **_reply_arguments(self._message("Inspection is unavailable.", back=back))
             )
             return
         await query.edit_message_text(
-            **_reply_arguments(self._message(f"<pre>{escape(result.text)}</pre>"))
+            **_reply_arguments(self._message(f"<pre>{escape(result.text)}</pre>", back=back))
         )
         if result.attachment is not None and result.filename is not None:
+            # Captured panes carry whatever the agent printed — credentials, paths, whole
+            # conversations — so the document is marked unforwardable rather than left
+            # saveable from every other client the owner is signed into.
             await query.message.reply_document(
-                document=io.BytesIO(result.attachment), filename=result.filename
+                document=io.BytesIO(result.attachment),
+                filename=result.filename,
+                protect_content=True,
             )
 
     async def _inspection_result(self, session_value: str):
@@ -661,25 +797,92 @@ class PrivateBotBoundary:
         await query.edit_message_text(**_reply_arguments(self._message(_entry_instruction(entry))))
         await query.message.reply_text(**self._guided_text_reply(entry))
 
+    def _pending_notice(self, action: str, token: str) -> str | None:
+        """What to show while `action` runs, or None when it answers fast enough not to."""
+        if action == "force" and token not in self._force_confirmed:
+            # The first press only opens the confirmation; nothing is killed yet.
+            return None
+        return _PENDING_NOTICES.get(action)
+
     async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
         revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
         if action == "force" and token not in self._force_confirmed:
-            if not self.stops.confirm_force(
-                token, self.owner_user_id, self.owner_chat_id, revision
-            ):
-                return _reply_arguments(self._message("That request has expired."))
-            self._force_confirmed.add(token)
-            return _reply_arguments(
-                self._message("Confirm force stop.", ((Button("Force stop", token),),))
-            )
+            return _reply_arguments(await self._force_confirm_reply(token, revision))
         request = self.stops.claim(token, self.owner_user_id, self.owner_chat_id, revision)
         if request is None or self.launcher is None:
             return _reply_arguments(self._message("That request has expired."))
         record = await self._record(str(request.session_id))
         if record is None or not await self.stops.execute(request, self.launcher, record):
-            return _reply_arguments(self._message("That session changed; refresh it first."))
+            return _reply_arguments(
+                self._message(
+                    "That session moved on before this could run, so nothing was done.\n"
+                    "Open the list again to see where it is now.",
+                    back=self._callback("sessions.open", "sessions"),
+                )
+            )
         self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(self._message(f"{action.title()} completed for this session."))
+        return _reply_arguments(await self._stop_outcome_reply(action, record))
+
+    async def _force_confirm_reply(self, token: str, revision: int) -> RenderedMessage:
+        """Name the session and the cost before offering the only irreversible button.
+
+        Cancel comes first and on its own row. Home is not a cancel — it is a way out of
+        the whole screen — and the destructive button should not be the one the thumb is
+        already resting near.
+        """
+        state = self.callbacks.resolve(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            view_revision=revision,
+        )
+        if state is None or not self.stops.confirm_force(
+            token, self.owner_user_id, self.owner_chat_id, revision
+        ):
+            return self._message("That request has expired.")
+        self._force_confirmed.add(token)
+        session_value = state.entity_id.split(":", maxsplit=1)[0]
+        record = await self._record(session_value)
+        subject = escape(record.display.rendered) if record is not None else "this session"
+        return self._message(
+            f"<b>Force stop {subject}?</b>\n"
+            "This kills the agent immediately and cannot be undone. Anything it has not "
+            "saved is lost.",
+            (
+                (Button("Cancel", self._callback("session.detail", session_value)),),
+                (Button(ACTION_LABELS[FORCE], token),),
+            ),
+        )
+
+    async def _stop_outcome_reply(self, action: str, record: SessionRecord) -> RenderedMessage:
+        """Report what the session actually did, named, rather than that a command ran.
+
+        A graceful stop that times out leaves the session RUNNING and removes nothing, so
+        "completed" would have been false for the one outcome the owner most needs to act
+        on. The record is re-read instead of assumed: `_records()` omits ended sessions, so
+        a session that has left the list is one that ended.
+        """
+        subject = escape(record.display.rendered)
+        session_value = str(record.session_id)
+        current = await self._record(session_value)
+        if current is not None:
+            return self._message(
+                f"<b>{subject} is still running</b>\n"
+                "It did not exit in time, so nothing was removed and it was left as it is.\n"
+                "Open it again to force stop it if it cannot exit on its own.",
+                ((Button("Open session", self._callback("session.detail", session_value)),),),
+                back=self._callback("sessions.open", "sessions"),
+            )
+        endings = {
+            "graceful": (
+                f"<b>Stopped {subject}</b>\n"
+                "The session has ended. Its pane is gone, so its output is no longer there "
+                "to inspect."
+            ),
+            "cleanup": f"<b>Cleaned up {subject}</b>\nThe session has ended and its pane is gone.",
+            "force": f"<b>Force stopped {subject}</b>\nThe session has ended.",
+        }
+        return self._message(endings[action], back=self._callback("sessions.open", "sessions"))
 
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:
@@ -925,9 +1128,31 @@ class PrivateBotBoundary:
             ),
         )
 
-    def _message(self, text: str, keyboard: tuple[tuple[Button, ...], ...] = ()) -> RenderedMessage:
-        home = Button("Home", self._callback("nav.home", "home"))
-        return render_message(text, keyboard + ((home,),))
+    def _message(
+        self,
+        text: str,
+        keyboard: tuple[tuple[Button, ...], ...] = (),
+        *,
+        back: str | None = None,
+        refresh: str | None = None,
+    ) -> RenderedMessage:
+        """Render one screen and close it with the navigation row it is entitled to.
+
+        Home used to be the only way out of every screen, which made returning to the list
+        a session came from cost two taps and a second search for the row. `back` takes the
+        callback of the screen that owns this one; pass it wherever there is a real parent.
+
+        `refresh` takes the callback that re-renders *this* screen, so it is offered only
+        where the answer can go stale under the owner — the dashboard counts and the
+        sessions list. Everything else would be a button that redraws what it already shows.
+        """
+        navigation = []
+        if back is not None:
+            navigation.append(Button("Back", back))
+        if refresh is not None:
+            navigation.append(Button("Refresh", refresh))
+        navigation.append(Button("Home", self._callback("nav.home", "home")))
+        return render_message(text, keyboard + (tuple(navigation),))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
         revision = self._view_revisions.get((self.owner_user_id, self.owner_chat_id), 0)
@@ -1062,6 +1287,14 @@ def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
             ]
         ),
     }
+
+
+def _page_number(value: str) -> int:
+    """Read a page from a token this bot minted, falling back to the first page."""
+    try:
+        return int(value)
+    except ValueError:
+        return 1
 
 
 def _split_launch(value: str) -> tuple[str, str]:

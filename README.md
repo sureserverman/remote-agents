@@ -47,19 +47,30 @@ uv run --locked remote-agents doctor --json | python -m json.tool
 
 The configured owner sees only `/start`, `/launch`, `/sessions`, and `/help` in Telegram's
 command menu. `/start` opens a compact Home dashboard with active and preserved counts;
-`/launch` opens the paginated project list and `/sessions` opens current managed sessions.
-Search and optional-label entry use Telegram reply prompts: send `Skip`, `Cancel`, or `Back`
-instead of leaving an input step stranded. Review shows the project, agent, and label before
-creating a session. Back restores the preceding choice and Cancel returns Home without a
-mutation. Ended records remain in local SQLite history but do not clutter the Telegram list.
+`/launch` opens the paginated project list and `/sessions` opens the paginated list of current
+managed sessions. `/help` names the actions this deployment actually offers. Search and
+optional-label entry use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
+leaving an input step stranded. Review shows the project, agent, and label before creating a
+session. Ended records remain in local SQLite history but do not clutter the Telegram list.
 After a service restart or an expired button, Telegram replaces the old view with a fresh Home.
 
-Inspect shows safely escaped terminal text inline when it fits. Oversized output is sent as a
-UTF-8 `session-output.txt` attachment; it is read-only captured output, never an input channel.
+Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
+`Refresh` on the two views whose answer goes stale on its own — Home's counts and the sessions
+list — and `Home`. An action that makes you wait, such as a launch or a stop that polls a pane,
+replaces the screen with what it is waiting for and drops the keyboard until it finishes, so a
+press cannot be repeated into a second launch.
 
-For safe stop behavior, choose Graceful, inspect preserved output, then Cleanup. Force stop
-requires a second confirmation and is for a live session that cannot exit gracefully. The bot
-never relays arbitrary commands, agent text, shell access, or approval responses.
+Inspect shows safely escaped terminal text inline when it fits, over a `Back` to the session it
+came from. Oversized output is sent as an unforwardable UTF-8 `session-output.txt` attachment; it
+is read-only captured output, never an input channel.
+
+For safe stop behavior, choose Stop and close: the agent exits on its own terms and its pane is
+removed in the same action, so the session ends in one step and its output is not kept. Clean up
+remains for a session whose pane died on its own, which is preserved for inspection until you
+close it. Force stop names the session and what will be lost, offers Cancel first, and is for a
+live session that cannot exit gracefully. Each of them reports what the session actually did —
+including a graceful stop that timed out and left the agent running. The bot never relays
+arbitrary commands, agent text, shell access, or approval responses.
 
 Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
@@ -129,11 +140,17 @@ because the record is kept for audit but there is nothing left to reach.
 Selecting a row opens that session's detail, re-read from the store rather than carried over from
 the list, because the store has a second writer and a session can be stopped elsewhere while the
 list is on screen. The detail names the session and its state, and explains in one line what that
-state means. It offers exactly the stops the shared policy allows from that state: Graceful stop
-only from RUNNING, Clean up only from PRESERVED, and Force stop from RUNNING, STOP_REQUESTED,
-PRESERVED, or FAILED. A starting session offers none, because the domain has no stop transition out
-of STARTING and reconciliation is what resolves one that is stuck; an orphaned session offers none
-either, because the domain has no transition out of ORPHANED at all.
+state means. It offers exactly the stops the shared policy allows from that state: Stop and close
+only from RUNNING (which ends the session outright, cleaning up the pane it exited), Clean up only
+from PRESERVED — now reached only by a pane that died on its own — and Force stop from RUNNING,
+STOP_REQUESTED, PRESERVED, or FAILED. A starting session offers none, because the domain has no
+stop transition out of STARTING and reconciliation is what resolves one that is stuck; an orphaned
+session offers none either, because the domain has no transition out of ORPHANED at all.
+
+Both surfaces spell those actions the same way, from one map beside the policy that decides which
+of them to offer. The stops share a single row under the read-only actions, which each get a row
+of their own: Telegram has no separator, so shape is the only thing distinguishing an action that
+ends a session from one that reads it.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
 project or agent does not match, is explained rather than left out, so a dead pane cannot be

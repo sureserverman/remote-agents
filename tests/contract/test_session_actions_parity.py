@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 import pytest
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
-from remote_agents.application.session_actions import available_actions
+from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -31,7 +31,12 @@ from remote_agents.domain.models import (
     SessionState,
 )
 
-_ACTION_LABELS = {"Graceful": "graceful", "Cleanup": "cleanup", "Force": "force"}
+# One decoder for both surfaces. This used to be a hand-written table mapping the bot's
+# title-cased spellings back to action ids, which existed only because the two surfaces
+# named the same buttons differently — the drift this file is meant to catch, sitting
+# unremarked in its own fixtures. Both now render `ACTION_LABELS`, so decoding is its
+# inverse and a surface inventing a label of its own falls out of the sets below.
+_LABEL_TO_ACTION = {label: action for action, label in ACTION_LABELS.items()}
 
 
 def _record(state: SessionState) -> SessionRecord:
@@ -62,16 +67,16 @@ async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     await boundary._home_reply()
     detail = await boundary._detail_reply(str(record.session_id))
     return {
-        _ACTION_LABELS[button.text]
+        _LABEL_TO_ACTION[button.text]
         for row in detail.keyboard
         for button in row
-        if button.text in _ACTION_LABELS
+        if button.text in _LABEL_TO_ACTION
     }
 
 
 async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the local terminal's detail view actually puts on screen."""
-    from remote_agents.adapters.tui.app import _ACTION_LABELS, RemoteAgentsTui
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 
     class _Launcher:
@@ -84,7 +89,6 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
         async def copy_attach(self, _session_id):
             return None
 
-    label_to_action = {label: action for action, label in _ACTION_LABELS.items()}
     app = RemoteAgentsTui(
         TuiContext(
             launcher=_Launcher(),  # type: ignore[arg-type]
@@ -98,7 +102,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
         await app._show_detail(str(record.session_id))
         await pilot.pause()
         rows = [str(item.query_one("Label").content) for item in app.query("ListView > ListItem")]
-    return {label_to_action[row] for row in rows if row in label_to_action}
+    return {_LABEL_TO_ACTION[row] for row in rows if row in _LABEL_TO_ACTION}
 
 
 # Both surfaces are pinned here. The parametrization is what makes adding a surface without

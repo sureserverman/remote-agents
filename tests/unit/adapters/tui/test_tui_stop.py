@@ -26,7 +26,7 @@ from remote_agents.domain.models import (
 )
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
-_LABELS = {"Graceful stop": "graceful", "Clean up": "cleanup", "Force stop": "force"}
+_LABELS = {"Stop and close": "graceful", "Clean up": "cleanup", "Force stop": "force"}
 
 
 def _record(state: SessionState) -> SessionRecord:

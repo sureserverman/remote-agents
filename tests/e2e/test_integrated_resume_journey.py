@@ -17,6 +17,7 @@ from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, 
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_actions import ACTION_LABELS, GRACEFUL
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -121,14 +122,16 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
             button.callback_data
             for row in detail.keyboard
             for button in row
-            if button.text == "Graceful"
+            if button.text == ACTION_LABELS[GRACEFUL]
         )
-        await boundary._stop_reply("graceful", graceful)
+        outcome = await boundary._stop_reply("graceful", graceful)
         assert (await service.list_sessions())[0].state is SessionState.ENDED
+        # The result names the session it acted on and says what became of its output.
+        assert "The session has ended" in outcome["text"]
 
         # The one button did the whole stop: the reopened detail has no second step left.
         detail = await boundary._detail_reply(str(record.session_id))
-        assert [button.text for row in detail.keyboard for button in row] == ["Home"]
+        assert [button.text for row in detail.keyboard for button in row] == ["Back", "Home"]
     finally:
         for record in await service.list_sessions():
             try:

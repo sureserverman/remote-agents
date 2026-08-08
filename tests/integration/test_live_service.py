@@ -216,7 +216,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
     labels = tuple(button.text for row in reply.keyboard for button in row)
     assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
-    assert labels[1:] == ("Home",)
+    assert labels[1:] == ("Refresh", "Home")
     assert "ended" not in labels
 
 
@@ -290,9 +290,13 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     await boundary.help_command(_trusted_update(message=help_message), None)
 
     assert launch.replies[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
-    assert sessions.replies[0]["text"] == "<b>Sessions</b>"
-    assert sessions.replies[0]["reply_markup"].inline_keyboard[0][0].text == "No managed sessions"
-    assert help_message.replies[0]["text"].startswith("Use Launch")
+    assert sessions.replies[0]["text"] == "<b>Sessions</b>\nNothing is running."
+    # The empty list offers the action that fills it rather than a disabled-looking row.
+    assert sessions.replies[0]["reply_markup"].inline_keyboard[0][0].text == "Launch"
+    # Help is a screen like any other now: it carries a keyboard and names the real actions.
+    assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
+    assert "Stop and close" in help_message.replies[0]["text"]
+    assert help_message.replies[0]["reply_markup"].inline_keyboard[-1][-1].text == "Home"
 
 
 @pytest.mark.asyncio
@@ -318,8 +322,10 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     await boundary.callback(_trusted_update(callback=callback), None)
 
     assert callback.edits[0]["text"] == "<pre>Output is attached as UTF-8 text.</pre>"
+    # Marked unforwardable: a pane's transcript is exactly the thing that should not be one
+    # tap from leaving this private chat.
     assert callback.message.documents == [
-        {"document": b"x" * 5000, "filename": "session-output.txt"}
+        {"document": b"x" * 5000, "filename": "session-output.txt", "protect_content": True}
     ]
 
 
@@ -529,6 +535,8 @@ class _Launcher:
         self.commands = []
         self.records = []
         self.launch_result = None
+        self.stopped: list[str] = []
+        self.leave_running = False
 
     async def launch(self, command):
         self.commands.append(command)
@@ -538,6 +546,26 @@ class _Launcher:
         return self.records
 
     async def refresh_readiness(self) -> None:
+        return None
+
+    async def graceful_stop(self, command):
+        """Model a stop that ends the session, or one whose agent never exits.
+
+        `leave_running` is the graceful-stop timeout: the service restores RUNNING and
+        removes nothing, which is the outcome the bot most needs to report honestly.
+        """
+        self.stopped.append("graceful")
+        if not self.leave_running:
+            self.records = [
+                record for record in self.records if record.session_id != command.session_id
+            ]
+        return None
+
+    async def force_stop(self, command):
+        self.stopped.append("force")
+        self.records = [
+            record for record in self.records if record.session_id != command.session_id
+        ]
         return None
 
 
@@ -554,7 +582,13 @@ class _Message:
 
     async def reply_document(self, **kwargs: object) -> None:
         document = kwargs["document"]
-        self.documents.append({"document": document.read(), "filename": kwargs["filename"]})
+        self.documents.append(
+            {
+                "document": document.read(),
+                "filename": kwargs["filename"],
+                "protect_content": kwargs.get("protect_content", False),
+            }
+        )
 
 
 class _Callback:
@@ -562,11 +596,13 @@ class _Callback:
         self.data = data
         self.edit_error = edit_error
         self.answers: list[str | None] = []
+        self.alerts: list[bool] = []
         self.edits: list[dict[str, object]] = []
         self.message = _Message()
 
-    async def answer(self, text: str | None = None) -> None:
+    async def answer(self, text: str | None = None, *, show_alert: bool = False) -> None:
         self.answers.append(text)
+        self.alerts.append(show_alert)
 
     async def edit_message_text(self, **kwargs: object) -> None:
         if self.edit_error is not None:
@@ -610,6 +646,185 @@ class _MetadataBot:
 
     async def get_my_short_description(self):
         return SimpleNamespace(short_description=self.short_description)
+
+
+def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:
+    """A boundary holding `records`, with its view revision pinned for token minting."""
+    launcher = _Launcher()
+    launcher.records = list(records)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    boundary._view_revisions[(7, 11)] = 1
+    return boundary, launcher
+
+
+@pytest.mark.asyncio
+async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own_row() -> None:
+    """Shape is the only separator Telegram gives, so the stops must not look like reads."""
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, _ = _stop_boundary(running)
+
+    detail = await boundary._detail_reply(str(running.session_id))
+
+    rows = [[button.text for button in row] for row in detail.keyboard]
+    assert rows[0] == ["Inspect"]
+    assert rows[-2] == ["Stop and close", "Force stop"]
+    assert rows[-1] == ["Back", "Home"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_is_reachable_from_the_two_screens_whose_answer_goes_stale() -> None:
+    """`nav.refresh` had a live handler and no button anywhere that could reach it."""
+    boundary, _ = _stop_boundary(_record(SessionState.RUNNING, "active", ProjectId("a" * 24)))
+
+    home = await boundary._home_reply()
+    sessions = await boundary._sessions_reply()
+    revision = boundary._view_revisions[(7, 11)]
+
+    def _resolved_action(token: str) -> str | None:
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=revision)
+        return None if state is None else state.action
+
+    home_refresh = next(
+        button.callback_data
+        for row in home["reply_markup"].inline_keyboard
+        for button in row
+        if button.text == "Refresh"
+    )
+    sessions_refresh = next(
+        button.callback_data
+        for row in sessions.keyboard
+        for button in row
+        if button.text == "Refresh"
+    )
+    assert _resolved_action(home_refresh) == "nav.refresh"
+    # Sessions refreshes itself rather than bouncing the owner to the dashboard.
+    assert _resolved_action(sessions_refresh) == "sessions.page"
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> None:
+    records = [
+        _record(SessionState.RUNNING, f"active-{index}", ProjectId("a" * 24)) for index in range(9)
+    ]
+    boundary, _ = _stop_boundary(*records)
+    boundary.session_page_size = 4
+
+    first = await boundary._sessions_reply()
+    last = await boundary._sessions_reply(3)
+    beyond = await boundary._sessions_reply(99)
+
+    assert first.text == "<b>Sessions 1/3</b>"
+    assert [button.text for button in first.keyboard[-2]] == ["Next"]
+    assert len(first.keyboard) == 4 + 2
+    assert last.text == "<b>Sessions 3/3</b>"
+    assert [button.text for button in last.keyboard[-2]] == ["Previous"]
+    # A page number past the end clamps rather than rendering an empty list.
+    assert beyond.text == last.text
+
+
+@pytest.mark.asyncio
+async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_kill() -> None:
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, _ = _stop_boundary(running)
+    # The name the bot shows carries the catalogue's project name, not the opaque slug.
+    subject = (await boundary._record(str(running.session_id))).display.rendered
+    token = boundary.stops.offer(
+        running.session_id, running.profile_id, running.state, "force", 7, 11, 1
+    )
+
+    reply = await boundary._stop_reply("force", token)
+
+    rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
+    assert subject in reply["text"]
+    assert "cannot be undone" in reply["text"]
+    assert rows[0] == ["Cancel"]
+    assert rows[1] == ["Force stop"]
+
+
+@pytest.mark.asyncio
+async def test_a_completed_stop_names_the_session_and_what_became_of_its_output() -> None:
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    subject = (await boundary._record(str(running.session_id))).display.rendered
+    token = boundary.stops.offer(
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+    )
+
+    reply = await boundary._stop_reply("graceful", token)
+
+    assert launcher.stopped == ["graceful"]
+    assert subject in reply["text"]
+    assert "The session has ended" in reply["text"]
+    assert "no longer there to inspect" in reply["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_running() -> None:
+    """The one outcome the owner has to act on, and the one "completed" used to hide."""
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    launcher.leave_running = True
+    token = boundary.stops.offer(
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+    )
+
+    reply = await boundary._stop_reply("graceful", token)
+
+    assert "is still running" in reply["text"]
+    assert "did not exit in time" in reply["text"]
+    assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
+        "Open session",
+        "Back",
+        "Home",
+    ]
+
+
+def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
+    boundary = PrivateBotBoundary(7, 11)
+
+    assert boundary._pending_notice("graceful", "c1_token") is not None
+    assert boundary._pending_notice("launch.confirm", "c1_token") is not None
+    assert boundary._pending_notice("session.detail", "c1_token") is None
+    # A first press on force only opens the confirmation, so nothing is running yet.
+    assert boundary._pending_notice("force", "c1_token") is None
+    boundary._force_confirmed.add("c1_token")
+    assert boundary._pending_notice("force", "c1_token") is not None
+
+
+@pytest.mark.asyncio
+async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_result() -> None:
+    """Telegram clears the spinner the moment the query is answered, which must be at once."""
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, _ = _stop_boundary(running)
+    token = boundary.stops.offer(
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+    )
+    callback = _Callback(token)
+
+    await boundary.callback(_trusted_update(callback=callback), None)
+
+    assert callback.answers == ["Stopping the session — waiting for the agent to exit…"]
+    assert len(callback.edits) == 2
+    assert callback.edits[0]["text"] == "Stopping the session — waiting for the agent to exit…"
+    # No keyboard while it runs: the button that started this cannot be pressed again.
+    assert callback.edits[0]["reply_markup"].inline_keyboard == ()
+    assert "The session has ended" in callback.edits[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_an_expired_view_alerts_rather_than_silently_jumping_home() -> None:
+    boundary, _ = _stop_boundary()
+    callback = _Callback("c1_never_issued")
+
+    await boundary.callback(_trusted_update(callback=callback), None)
+
+    assert callback.answers == ["This view has expired."]
+    assert callback.alerts == [True]
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):

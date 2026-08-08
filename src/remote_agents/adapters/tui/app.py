@@ -27,6 +27,9 @@ from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject, search_catalogue
 from remote_agents.application.session_actions import (
+    ACTION_LABELS as _ACTION_LABELS,
+)
+from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
@@ -65,7 +68,6 @@ class Step(StrEnum):
 
 
 _TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
-_ACTION_LABELS = {GRACEFUL: "Graceful stop", CLEANUP: "Clean up", FORCE: "Force stop"}
 _RESUME_PAGE_SIZE = 10
 _INSPECT_MAX_LINES = 2000
 _INSPECT_MAX_BYTES = 512 * 1024
@@ -565,8 +567,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except Exception as error:
             _LOG.exception("capture failed")
             self._set_status(
-                f"{record.display.rendered}\n"
-                f"The output could not be captured: {error}"
+                f"{record.display.rendered}\nThe output could not be captured: {error}"
             )
             return
         self._step = Step.INSPECT
@@ -610,8 +611,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._set_status("Resume a conversation. Choose its project.")
         self._fill(
             tuple(
-                (project.opaque_id, f"{project.area}/{project.name}")
-                for project in self._catalogue
+                (project.opaque_id, f"{project.area}/{project.name}") for project in self._catalogue
             )
             or ((_CANCEL, "No projects available"),)
         )
@@ -711,17 +711,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self._set_status("There are no saved conversations for that agent and project.")
             self._fill(((_BACK, "Back"),))
             return
-        entries = [
-            (str(item.reference), _conversation_row(item)) for item in page.conversations
-        ]
+        entries = [(str(item.reference), _conversation_row(item)) for item in page.conversations]
         if page.page > 1:
             entries.append((_PREVIOUS, "Previous page"))
         if page.page < page.page_count:
             entries.append((_NEXT, "Next page"))
         entries.append((_BACK, "Back"))
-        self._set_status(
-            f"Choose a conversation. Page {page.page} of {page.page_count}."
-        )
+        self._set_status(f"Choose a conversation. Page {page.page} of {page.page_count}.")
         self._fill(tuple(entries))
 
     async def _resolve_resume_conversation(self, key: str) -> None:
@@ -733,9 +729,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         if key in {_NEXT, _PREVIOUS}:
             step = 1 if key == _NEXT else -1
-            self._resume_page = max(
-                1, min(self._resume_page + step, self._resume_page_count)
-            )
+            self._resume_page = max(1, min(self._resume_page + step, self._resume_page_count))
             self._busy = True
             try:
                 await self._show_resume_conversations()

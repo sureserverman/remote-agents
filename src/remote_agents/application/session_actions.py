@@ -35,6 +35,25 @@ GRACEFUL = "graceful"
 CLEANUP = "cleanup"
 FORCE = "force"
 
+ACTION_LABELS: dict[str, str] = {
+    GRACEFUL: "Stop and close",
+    CLEANUP: "Clean up",
+    FORCE: "Force stop",
+}
+"""What each action is called on screen, for every surface that offers one.
+
+An action's name is part of the policy for the same reason its availability is: the owner
+learns one vocabulary and meets it everywhere. The bot used to title-case the action id into
+"Graceful" while the terminal said "Graceful stop", so the two surfaces disagreed about what
+the same button did, and `tests/contract/test_session_actions_parity.py` had to carry a
+translation table between them to compare surfaces at all.
+
+`graceful` is labelled by its effect rather than its mechanism. It is a destructive action —
+it ends the session and discards the pane's output — sitting next to read-only ones, and
+"Graceful" described how the agent exits rather than what the owner is about to lose. The
+lifecycle keeps calling the action `graceful`; only its name on screen changed.
+"""
+
 _FORCEABLE = frozenset(
     {
         SessionState.RUNNING,

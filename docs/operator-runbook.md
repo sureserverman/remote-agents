@@ -35,8 +35,8 @@ commands; the bot description and short description are checked against the revi
 ## Telegram acceptance checklist
 
 Begin with `/start`. Use only the configured private chat. The Home dashboard shows Active and
-Preserved counts, then Launch and Sessions. `/launch`, `/sessions`, and `/help` offer the same
-owner-only entry points from Telegram's command menu.
+Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, `/sessions`, and
+`/help` offer the same owner-only entry points from Telegram's command menu.
 
 1. Open Launch and use Search to find a project by name. The reply prompt names the expected
    input; use Cancel or Back to leave it, and retry an empty or unmatched search.
@@ -45,22 +45,29 @@ owner-only entry points from Telegram's command menu.
 3. Launch two sessions for the same project/profile, applying an optional label to one. Their
    project, agent, mode, and sequence remain distinguishable.
 4. Open Sessions, inspect one active session, and verify that inline output is bounded, escaped,
-   and clean. For oversized output, verify the separate UTF-8 `session-output.txt` attachment.
-5. Gracefully stop one session, inspect its preserved output, then choose Cleanup.
-6. For a separate active session, use Force and confirm the second Force stop button.
-7. Restart `remote-agents.service`, press an expired pre-restart button, and verify that it
-   acknowledges expiry and replaces the view with a fresh Home. Verify the remaining managed
+   and clean, and that Back returns to that session with its actions intact. For oversized
+   output, verify the separate UTF-8 `session-output.txt` attachment and that Telegram refuses
+   to forward it.
+5. Stop and close one session. Verify the screen shows what it is waiting for while the agent
+   exits, then names the session, says its output is gone, and that it reaches ENDED in that
+   single action with its pane gone from `tmux -L remote-agents list-panes -a`.
+6. For a separate active session, use Force stop and verify the confirmation names the session
+   and offers Cancel before the kill. Cancel it once, then confirm it.
+7. With more sessions than one page holds, page through Sessions with Previous and Next, and
+   verify Refresh redraws the page you are on rather than returning Home.
+8. Restart `remote-agents.service`, press an expired pre-restart button, and verify that it
+   alerts that the view expired and replaces it with a fresh Home. Verify the remaining managed
    session has the same identity.
-8. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
+9. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
-9. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
-   Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
-   share the resulting Remote Control URL or a pane capture outside the owner workflow.
-10. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
+10. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
+    Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
+    share the resulting Remote Control URL or a pane capture outside the owner workflow.
+11. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
     provider title or resume description when supplied, never a provider ID. The bot does not
     scan, control, or adopt arbitrary local agent processes; use only provider-catalogued
     conversations to create a new managed session.
-11. Open Add Project. The area buttons must name only eligible existing directories under the
+12. Open Add Project. The area buttons must name only eligible existing directories under the
     configured `dev_root`, excluding hidden ones, `archive`, and `archives`. Enter a rejected name
     such as `New Thing` and confirm it is refused with no directory created, then enter a valid
     name and confirm that Review shows the area and the name before the mutation. Cancel at Review
@@ -191,7 +198,12 @@ uv run --locked remote-agents tui
    a pane emitting it is not rendering text.
 4. The stops offered are exactly the ones the shared policy allows from the session's current
    state: graceful only from RUNNING, cleanup only from PRESERVED, and force from RUNNING,
-   STOP_REQUESTED, PRESERVED, or FAILED. Claude Remote Control is offered only for a RUNNING
+   STOP_REQUESTED, PRESERVED, or FAILED. Both surfaces label them from one map beside that
+   policy — "Stop and close", "Clean up", "Force stop" — so an action is named the same wherever
+   it is offered. Stop and close is the whole stop: once the pane exits it is cleaned up in the
+   same action and the session reaches ENDED, so its output is not left to read. Clean up is
+   therefore the answer to a pane that died on its own, which reconciliation preserves for
+   inspection until the owner closes it. Claude Remote Control is offered only for a RUNNING
    Claude session. The record is read again and the policy re-checked at the moment the action is
    issued, so an action that has become illegal since the list was drawn is explained rather than
    attempted.
