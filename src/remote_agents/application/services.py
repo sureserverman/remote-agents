@@ -157,6 +157,24 @@ class SessionService:
             return await self._terminal.remote_control(command.session_id, command.desired_state)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
+        """Stop the agent on its own terms and remove its pane in the same operation.
+
+        A stop the owner asked for ends the session: PRESERVED is passed through so the
+        recorded history still says the pane exited before it was removed, but the owner
+        is not asked to close it in a second confirmed step. The cost is deliberate — the
+        pane's output stops being capturable here, so nothing can be inspected after a
+        graceful stop. A pane that dies on its own still lands in PRESERVED and stays
+        there (RECONCILED_PANE_DEAD), which is the path that keeps output to read.
+
+        The returned observation describes the *stop*, not what survives it: `preserved`
+        means the profile's own exit sequence worked, and remains the way a caller tells
+        a clean exit from `graceful_timeout`. On timeout nothing is removed and the
+        session returns to RUNNING, so force stop stays a separately chosen action.
+
+        A cleanup that fails raises with the session left in PRESERVED, where Clean up is
+        still offered — a stop reported as complete over a pane still holding a terminal
+        would be the worse answer.
+        """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
             transition(record.state, LifecycleEvent.GRACEFUL_STOP_REQUESTED)
@@ -164,12 +182,14 @@ class SessionService:
                 command.session_id, LifecycleEvent.GRACEFUL_STOP_REQUESTED
             )
             observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
-            if observation.preserved:
-                await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
-            else:
+            if not observation.preserved:
                 await self._store.record_event(
                     command.session_id, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
                 )
+                return observation
+            await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
+            await self._terminal.cleanup(command.session_id)
+            await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
             return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:

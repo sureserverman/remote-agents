@@ -181,7 +181,7 @@ async def test_restart_can_gracefully_stop_a_running_managed_session(tmp_path: P
         ).graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
 
         assert stopped.preserved
-        assert (await store.get(record.session_id)).state is SessionState.PRESERVED
+        assert (await store.get(record.session_id)).state is SessionState.ENDED
     finally:
         if record is not None:
             try:
@@ -258,7 +258,7 @@ async def test_concurrent_inspect_and_graceful_stop_preserve_one_session(tmp_pat
 
         assert inspected is None or inspected.session_id == record.session_id
         assert stopped.preserved
-        assert (await store.get(record.session_id)).state is SessionState.PRESERVED
+        assert (await store.get(record.session_id)).state is SessionState.ENDED
     finally:
         for record in await service.list_sessions():
             try:
@@ -457,7 +457,7 @@ async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path
         ).graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
 
         assert stopped.preserved
-        assert (await store.get(record.session_id)).state is SessionState.PRESERVED
+        assert (await store.get(record.session_id)).state is SessionState.ENDED
     finally:
         if record is not None:
             try:

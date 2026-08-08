@@ -22,7 +22,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.codec import attach_argv
-from remote_agents.application.commands import CleanupCommand, GracefulStopCommand, LaunchCommand
+from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import ProjectCatalogueProvider, _local_runtime, local_context
@@ -122,7 +122,6 @@ async def test_a_terminal_launch_attaches_and_stops_from_a_second_connection() -
 
         stopped = await service.graceful_stop(GracefulStopCommand(record.session_id, profile))
         assert stopped.preserved, "the service could not gracefully stop a terminal launch"
-        await service.cleanup(CleanupCommand(record.session_id))
 
         final = await context.launcher.list_sessions()
         ended = next(item.state for item in final if item.session_id == record.session_id)

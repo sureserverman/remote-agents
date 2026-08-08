@@ -169,8 +169,9 @@ async def test_the_terminal_gracefully_stops_a_session_the_service_launched(
 
         assert gateway.keys, "the terminal resolved no profile and sent no keys"
         assert gateway.keys[0][0] == launched.session_id
+        assert gateway.mutations == [("kill-session", f"ra-{launched.session_id}")]
         final = await service.list_sessions()
-        assert [record.state for record in final] == [SessionState.PRESERVED]
+        assert [record.state for record in final] == [SessionState.ENDED]
     finally:
         service_connection.close()
         tui_connection.close()

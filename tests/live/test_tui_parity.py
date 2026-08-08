@@ -31,7 +31,6 @@ from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.application.commands import (
-    CleanupCommand,
     ForceStopCommand,
     GracefulStopCommand,
     LaunchCommand,
@@ -136,14 +135,13 @@ async def test_the_terminal_manages_a_session_the_service_started(tmp_path: Path
         )
         assert stopped.preserved, "the terminal could not gracefully stop a service launch"
 
-        # 6. Cleanup is what PRESERVED offers, and it retires the session.
-        preserved = next(
+        # 6. That one action retired the session: it is ENDED, with nothing left to offer.
+        retired = next(
             item.state
             for item in await context.launcher.list_sessions()
             if item.session_id == record.session_id
         )
-        assert "cleanup" in available_actions(preserved)
-        await context.launcher.cleanup(CleanupCommand(record.session_id))
+        assert available_actions(retired) == ()
 
         final = next(
             item.state

@@ -9,7 +9,6 @@ from remote_agents.adapters.projects.discovery import DiscoveredProject
 from remote_agents.adapters.projects.registry import RegisteredProject
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.application.commands import (
-    CleanupCommand,
     GracefulStopCommand,
     InspectQuery,
     LaunchCommand,
@@ -75,7 +74,7 @@ class InMemorySessionStore:
 
 @pytest.mark.asyncio
 async def test_core_fake_lifecycle(tmp_path: Path) -> None:
-    """Drive catalogue through preserved inspection and explicit cleanup."""
+    """Drive catalogue through launch and a graceful stop that ends the session itself."""
     project_path = tmp_path / "writing" / "opaque-editor"
     project_path.mkdir(parents=True)
     catalogue = build_catalogue(
@@ -97,11 +96,7 @@ async def test_core_fake_lifecycle(tmp_path: Path) -> None:
     assert await service.list_sessions() == (launched,)
     assert (await service.inspect(InspectQuery(launched.session_id))).live is True
 
-    preserved = await service.graceful_stop(GracefulStopCommand(launched.session_id, profile_id))
-    assert preserved.preserved is True
-    assert (await store.get(launched.session_id)).state is SessionState.PRESERVED
-    assert (await service.inspect(InspectQuery(launched.session_id))).preserved is True
-
-    await service.cleanup(CleanupCommand(launched.session_id))
+    stopped = await service.graceful_stop(GracefulStopCommand(launched.session_id, profile_id))
+    assert stopped.preserved is True, "the observation still reports how the pane exited"
     assert (await store.get(launched.session_id)).state is SessionState.ENDED
     assert await service.inspect(InspectQuery(launched.session_id)) is None

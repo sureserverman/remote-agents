@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from remote_agents.adapters.projects.registry import RegisteredProject
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -18,7 +20,9 @@ from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, 
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_actions import available_actions
 from remote_agents.domain.models import ProfileId, ProjectId, SessionState
+from remote_agents.ports.terminal import TerminalTargetMissing
 
 
 async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_path: Path) -> None:
@@ -48,18 +52,13 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         request = stop.claim(token, 7, 11, 2)
         assert request is not None
         assert await stop.execute(request, service, record)
-        preserved = (await service.list_sessions())[0]
-        assert preserved.state is SessionState.PRESERVED
-        assert inspect_capture(await _capture(gateway, record.session_id)).text
-
-        cleanup = StopController(callbacks)
-        token = cleanup.offer(
-            record.session_id, record.profile_id, preserved.state, "cleanup", 7, 11, 3
-        )
-        assert token is not None
-        request = cleanup.claim(token, 7, 11, 3)
-        assert request is not None
-        assert await cleanup.execute(request, service, preserved)
+        stopped = (await service.list_sessions())[0]
+        # One button ended it: the graceful stop removed the tmux session it exited, so
+        # there is no pane left to capture and no second step for the owner to confirm.
+        assert stopped.state is SessionState.ENDED
+        assert available_actions(stopped.state) == ()
+        with pytest.raises(TerminalTargetMissing):
+            await _capture(gateway, record.session_id)
 
         command = await service.launch(
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "force-path")
