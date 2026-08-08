@@ -2,20 +2,30 @@
 
 Two guarantees this project relied on and had never tested.
 
-The first is DEC-007's: a second enter arriving while a mutation is in flight must be
-**dropped**, not queued and not allowed to cancel and restart the one already running. On a
-force stop the difference is not academic — cancel-and-restart means the profile's exit
-sequence has already reached the pane, the operation is abandoned mid-kill, and a second kill
-is issued. That is exactly what DEC-008 records, and it is why the guard is a flag rather than
-Textual's `exclusive=True`, which measurably does the cancelling thing.
+The first is DEC-007's: a repeated enter must not destroy anything twice. **Which mechanism
+delivers that depends on how the second enter arrives, and the two are not the same test.**
+Concurrently — two coroutines in flight at once — the `_busy` flag refuses the second at
+`on_list_view_selected`. Queued, which is what two fast keypresses actually produce because
+Textual serialises handlers on the pump, `_busy` has already been cleared by the first
+handler's `finally`, and what refuses the second stop is `_stop` re-reading the record and
+re-checking the policy. Both are covered below, and they are labelled for which is which.
+
+Neither mechanism protects **launch or resume** under queued delivery: both end in
+`self.exit(...)` without changing `_step`, so the second enter finds the same screen and a
+cleared flag and issues again. Two fast enters on Review start two managed sessions. That is
+a live defect, pre-existing and outside this plan's blast radius — BL-015.
+
+Whatever the mechanism, cancel-and-restart is wrong for a destructive action: it would mean
+the profile's exit sequence has already reached the pane, the kill abandoned midway, and a
+second issued. That is what DEC-008 records.
 
 The second is the property Task 2.1 bought by moving the blocking calls onto app-owned
 workers: quitting while one is in flight must leave no thread running and no coroutine
 unawaited, rather than a thread writing into a torn-down screen.
 
-Neither is asserted anywhere else, so a refactor could quietly remove either. `test_tui_force_stop.py`
-covers the *cursor* half of DEC-007's mitigation — that no screen rests on a mutating row — and
-this file covers the *concurrency* half.
+Neither is asserted anywhere else, so a refactor could quietly remove either.
+`test_tui_force_stop.py` covers the *cursor* half of DEC-007's mitigation — that no screen
+rests on a mutating row — and this file covers the *concurrency* half.
 """
 
 from __future__ import annotations
@@ -225,8 +235,15 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
         )
 
 
-async def test_a_repeated_keypress_issues_exactly_one_launch() -> None:
-    """The same guarantee on the flow that creates work rather than destroying it."""
+async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> None:
+    """The `_busy` guard at `on_list_view_selected`, exercised by concurrent delivery.
+
+    Named for the mechanism, not for a guarantee the surface does not give. Under **queued**
+    delivery — what two fast enters actually produce — this flow issues twice: `_launch`
+    clears `_busy` in a `finally` that runs before `self.exit(...)`, and it never changes
+    `_step`, so the second enter finds the same screen and an open guard. Verified, and
+    recorded as BL-015. This test pins the concurrent path only.
+    """
     launcher = _SlowLauncher()
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
@@ -343,7 +360,7 @@ async def test_a_worker_does_not_outlive_the_app() -> None:
     finally:
         catalogue.release.set()
 
-    assert app.workers._workers == set() or not list(app.workers), (
+    assert not list(app.workers), (
         f"the app still tracks workers after shutdown: {list(app.workers)}"
     )
     assert all(w.state is WorkerState.CANCELLED for w in in_flight), (
@@ -487,8 +504,13 @@ async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path()
         )
 
 
-async def test_two_queued_enters_change_remote_control_once() -> None:
+async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
     """One of the two flows Task 2.3 scoped and the first version never exercised.
+
+    Remote control also survives *queued* delivery, unlike launch and resume, because
+    `_resolve_remote_control` moves `_step` back to SESSION_DETAIL before returning — so the
+    second enter lands on a screen where that key means nothing. This test covers the
+    concurrent path; the step change covers the other.
 
     Routed through `_select` rather than the resolver, because `_resolve_remote_control` —
     like `_launch` and `_resolve_project_review` — only *sets* `_busy` and never reads it.
@@ -516,8 +538,12 @@ async def test_two_queued_enters_change_remote_control_once() -> None:
         )
 
 
-async def test_two_queued_enters_resume_once() -> None:
-    """The other flow Task 2.3 scoped.
+async def test_a_concurrent_second_resume_is_refused_by_the_handler_guard() -> None:
+    """The other flow Task 2.3 scoped, on the concurrent path only.
+
+    Same caveat as launch, and for the same structural reason: resume ends in `self.exit(...)`
+    without changing `_step`, so queued delivery issues twice (BL-015). An earlier version of
+    this test was additionally *named* for the queued model while using concurrent tasks.
 
     The conversation is a real `ResolvedConversation`, not a stand-in. An earlier version
     passed a bare `object()`, which made `ResumeCommand.__post_init__` raise before the
