@@ -105,6 +105,41 @@ systemctl --user is-active remote-agents.service
 journalctl --user -u remote-agents.service -n 100 --no-pager
 ```
 
+## Local terminal visual baselines
+
+Every position the terminal wizard can be in has a committed SVG baseline under
+`tests/unit/adapters/tui/snapshots/`, captured through Textual's own `App.export_screenshot()`
+and compared byte-for-byte by `tests/unit/adapters/tui/test_tui_snapshots.py`. The rest of that
+directory asserts behaviour — that a key issues a command, that a rendered row decodes to an
+action — so the baselines are the only thing asserting what the owner actually *sees*. A change
+that drops a state explanation, reorders a confirm so the destructive row rests under the cursor,
+or renders into a pane nobody displays passes every other test in the suite and fails here.
+
+When a change to the surface is meant to alter what is on screen, regenerate it and then
+**review the SVG diff** before committing:
+
+```bash
+REMOTE_AGENTS_SNAPSHOT_UPDATE=1 uv run --locked pytest tests/unit/adapters/tui/test_tui_snapshots.py -q
+git diff -- tests/unit/adapters/tui/snapshots/
+```
+
+Read the diff rather than accepting it. An unreviewed regeneration turns the baselines from a net
+into a rubber stamp, and it is most tempting precisely when a change was *expected* to move
+them — which is when a second, unintended change rides along unnoticed. To read one as rendered
+text rather than as markup, strip the SVG's text nodes:
+
+```bash
+python3 -c "import re,html,sys;print(html.unescape(''.join(re.findall(r'<text[^>]*>(.*?)</text>',open(sys.argv[1]).read(),re.S))))" \
+  tests/unit/adapters/tui/snapshots/SESSION_DETAIL.svg
+```
+
+A missing baseline fails rather than being written silently, so a newly added position must be
+generated deliberately and looked at once. Three things are pinned to keep the captures
+reproducible — the terminal size (an environment dependency), and the age column and the input
+cursor's blink timer (both wall-clock ones, and so the two that would flake on a merely busy
+machine). See the test module's docstring for the full rationale rather than duplicating it
+here; it is the copy that sits next to the code and will be updated with it.
+
 ## Local terminal acceptance checklist
 
 `remote-agents tui` launches one curated agent on this host and then hands the terminal to its

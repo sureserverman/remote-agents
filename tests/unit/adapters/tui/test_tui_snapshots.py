@@ -15,11 +15,12 @@ hash of the rendered segments and the title rather than from a random value
 (`rich/console.py:2475`), so identical content at an identical size yields a byte-identical
 file.
 
-Three things must be pinned for that determinism to hold, and all three are done below —
-each one is a real-time dependency that would otherwise flake under CI load rather than
-fail honestly:
+Three things must be pinned for that determinism to hold, and all three are done below.
+One is an *environment* dependency and two are *wall-clock* ones; the distinction matters
+because only the latter two flake on a machine that is merely busy:
 
-1. **Terminal size** (`_SIZE`), because the SVG encodes pixel geometry.
+1. **Terminal size** (`_SIZE`), because the SVG encodes pixel geometry — an environment
+   dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
 2. **The age column.** `_age()` renders `datetime.now(UTC) - created_at` in whole minutes,
    so every fixture record is stamped at capture time to render a stable `0m ago`.
 3. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
