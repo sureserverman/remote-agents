@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TypeVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static
+from textual.worker import WorkerFailed
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import (
@@ -44,6 +45,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class Step(StrEnum):
@@ -195,6 +197,27 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._status = text
         self.query_one("#status", Static).update(text)
 
+    async def _in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
+        """Run one blocking call on a worker thread and return what it returned.
+
+        This is the threaded offload these calls used to do inline, with the two properties
+        a surface needs and a bare task does not have. The worker is owned by this app, so quitting mid-call cancels it
+        instead of leaving a thread writing into a torn-down screen; and it belongs to a
+        named group, so a second entry into the same flow supersedes the first rather than
+        racing it.
+
+        `exit_on_error=False` because these calls read a development root and a registry on
+        a host that may be misconfigured — that is an error each caller already reports and
+        recovers from, not a reason to take the app down. `WorkerFailed` is unwrapped for
+        the same reason: callers put the failure on screen, and "Worker raised exception:
+        OSError(...)" is not what the owner needs to read.
+        """
+        worker = self.run_worker(work, thread=True, group=group, exit_on_error=False)
+        try:
+            return await worker.wait()
+        except WorkerFailed as failure:
+            raise failure.error from None
+
     def _fill(
         self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
     ) -> None:
@@ -321,7 +344,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._step = Step.AREAS
         self._hide_entry()
         try:
-            offered = await asyncio.to_thread(self._services.creator.available_areas)
+            offered = await self._in_thread(self._services.creator.available_areas, group="areas")
         except Exception:
             _LOG.exception("listing areas failed")
             self._set_status("The development root could not be read. Check this host.")
@@ -466,8 +489,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._busy = True
         try:
-            created = await asyncio.to_thread(
-                self._services.creator.create, CreateProjectCommand(self._area, self._name)
+            command = CreateProjectCommand(self._area, self._name)
+            created = await self._in_thread(
+                lambda: self._services.creator.create(command), group="create-project"
             )
         except Exception as error:
             _LOG.exception("project creation failed")
@@ -515,7 +539,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if self._busy:
             return
         try:
-            self._catalogue = await asyncio.to_thread(self._services.refresh_catalogue)
+            self._catalogue = await self._in_thread(
+                self._services.refresh_catalogue, group="catalogue"
+            )
         except Exception:
             _LOG.exception("catalogue refresh failed")
             self._set_status("The project catalogue could not be re-read. Check this host.")
