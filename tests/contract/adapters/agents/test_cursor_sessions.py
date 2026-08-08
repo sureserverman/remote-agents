@@ -5,8 +5,9 @@ from remote_agents.domain.models import ProfileId
 
 
 @pytest.mark.asyncio
-async def test_cursor_reports_resume_as_unavailable_without_scraping_its_interactive_picker(
-) -> None:
+async def test_cursor_reports_resume_as_unavailable_without_scraping_its_interactive_picker() -> (
+    None
+):
     catalogue = CursorSessionCatalogue()
 
     page = await catalogue.list_conversations(

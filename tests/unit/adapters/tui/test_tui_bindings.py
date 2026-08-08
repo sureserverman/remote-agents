@@ -158,8 +158,6 @@ def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
     app_keys = keys_of(RemoteAgentsTui)
     for widget in (Input, ListView):
         clashes = {
-            key: (app_keys[key], keys_of(widget)[key])
-            for key in app_keys
-            if key in keys_of(widget)
+            key: (app_keys[key], keys_of(widget)[key]) for key in app_keys if key in keys_of(widget)
         }
         assert not clashes, f"{widget.__name__} swallows {clashes}"

@@ -25,9 +25,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
 
-def _record(
-    state: SessionState = SessionState.RUNNING, profile: str = "claude"
-) -> SessionRecord:
+def _record(state: SessionState = SessionState.RUNNING, profile: str = "claude") -> SessionRecord:
     return SessionRecord(
         SessionId.new(),
         ProjectId("opaque-existing"),

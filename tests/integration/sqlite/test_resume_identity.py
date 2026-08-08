@@ -15,9 +15,14 @@ from remote_agents.domain.models import (
 async def test_resume_identity_is_durable_and_unique(tmp_path) -> None:
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     record = SessionRecord(
-        SessionId.new(), ProjectId("opaque-editor"), ProfileId("claude"),
-        SessionDisplayIdentity("opaque-editor", "claude", "resumed", 1), SessionState.STARTING,
-        datetime.now(UTC), ProfileId("claude"), "source-123",
+        SessionId.new(),
+        ProjectId("opaque-editor"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("opaque-editor", "claude", "resumed", 1),
+        SessionState.STARTING,
+        datetime.now(UTC),
+        ProfileId("claude"),
+        "source-123",
     )
     await store.save(record)
 

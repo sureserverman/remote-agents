@@ -231,8 +231,6 @@ async def test_copy_attach_refuses_a_pane_running_another_profile() -> None:
         LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
     )
     observation = await terminal.inspect(record.session_id)
-    terminal._observations[record.session_id] = replace(
-        observation, profile_id=ProfileId("codex")
-    )
+    terminal._observations[record.session_id] = replace(observation, profile_id=ProfileId("codex"))
 
     assert await service.copy_attach(record.session_id) is None

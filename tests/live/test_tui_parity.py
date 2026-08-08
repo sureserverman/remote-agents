@@ -105,9 +105,7 @@ async def test_the_terminal_manages_a_session_the_service_started(tmp_path: Path
 
         service = _service(config, paths, service_connection)
         record = await service.launch(
-            LaunchCommand(
-                ProjectId(project.opaque_id), profile, _key("parity"), "tui-parity"
-            )
+            LaunchCommand(ProjectId(project.opaque_id), profile, _key("parity"), "tui-parity")
         )
         assert record.state is SessionState.RUNNING
 
@@ -177,9 +175,7 @@ async def test_the_terminal_force_stops_a_second_session_it_started() -> None:
 
         service = _service(config, paths, service_connection)
         record = await service.launch(
-            LaunchCommand(
-                ProjectId(project.opaque_id), profile, _key("force"), "tui-force"
-            )
+            LaunchCommand(ProjectId(project.opaque_id), profile, _key("force"), "tui-force")
         )
         assert record.state is SessionState.RUNNING
         assert "force" in available_actions(record.state)

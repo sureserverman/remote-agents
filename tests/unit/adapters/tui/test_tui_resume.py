@@ -112,9 +112,7 @@ def _context(conversations: _Conversations, launcher: _Launcher) -> TuiContext:
 
 
 def _capable(*profiles: str) -> tuple[ProfileResumeCapability, ...]:
-    return tuple(
-        ProfileResumeCapability(ProfileId(profile), True, True) for profile in profiles
-    )
+    return tuple(ProfileResumeCapability(ProfileId(profile), True, True) for profile in profiles)
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:

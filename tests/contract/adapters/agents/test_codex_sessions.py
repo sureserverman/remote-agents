@@ -14,9 +14,7 @@ class FakeThreadClient:
         self.calls.append((cwd, cursor, limit))
         if cursor is None:
             return {
-                "data": [
-                    {"id": "thread-one", "updatedAt": 1_754_127_200, "name": "private"}
-                ],
+                "data": [{"id": "thread-one", "updatedAt": 1_754_127_200, "name": "private"}],
                 "nextCursor": "second-page",
             }
         return {

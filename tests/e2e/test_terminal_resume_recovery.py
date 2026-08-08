@@ -74,9 +74,7 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
         intent = (tmp_path / "intents" / f"{session_id}.json").read_text(encoding="utf-8")
         assert '"--resume", "provider-opaque-id"' in intent
 
-        restarted = TmuxTerminal(
-            gateway, {project_id: tmp_path}, {}, startup_timeout=0.3
-        )
+        restarted = TmuxTerminal(gateway, {project_id: tmp_path}, {}, startup_timeout=0.3)
         recovered = await ReconciliationService(store, settle_after=timedelta(0)).reconcile(
             await restarted.managed_observations()
         )
