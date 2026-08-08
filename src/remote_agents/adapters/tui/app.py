@@ -170,11 +170,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="body"):
-            yield Static(self._status, id="status")
+            # `markup=False` on both Statics for the reason given at the `Label` in `_fill`,
+            # and it is the same defect: these two sinks receive the same untrusted strings by
+            # a different route. `#status` is handed the conversation description
+            # (`_resolve_resume_conversation`) and `record.display.rendered`, which
+            # interpolates the owner's custom label; `#output` is handed the session's raw
+            # captured pane output, which `sanitize_terminal_text` filters for control
+            # sequences and NUL but not for brackets. Both raised `MarkupError` on an
+            # unbalanced bracket — an agent's own output could take down the screen showing it.
+            yield Static(self._status, id="status", markup=False)
             yield Input(placeholder="Filter projects", id="filter")
             yield ListView(id="choices")
             with VerticalScroll(id="output-pane"):
-                yield Static("", id="output")
+                yield Static("", id="output", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -203,7 +211,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         choices = self.query_one("#choices", ListView)
         choices.clear()
         for key, text in entries:
-            item = ListItem(Label(text))
+            # `markup=False` because row text is displayed, never interpreted. Three sources
+            # reach here that console markup would otherwise consume or act on: the project
+            # list's `[Registered]` tag, which vanished outright; the owner's own session
+            # label; and the conversation description, which is echoed from the agent's own
+            # output — where `[link=…]` is a live hyperlink directive and an unbalanced
+            # bracket raises `MarkupError`, taking the screen down rather than mangling it.
+            # Set here rather than escaped at each call site so a fourth source cannot arrive
+            # unescaped, which is how all three of these went unnoticed.
+            item = ListItem(Label(text, markup=False))
             item.entry_key = key
             choices.append(item)
         if entries and focus:
