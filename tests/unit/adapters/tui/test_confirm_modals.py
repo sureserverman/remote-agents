@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_clean_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
 from tui_feedback import announcements
@@ -119,8 +120,9 @@ class _Launcher:
     async def force_stop(self, command: ForceStopCommand) -> None:
         self.issued.append(command)
 
-    async def graceful_stop(self, command) -> None:
+    async def graceful_stop(self, command):
         self.issued.append(command)
+        return a_clean_stop()
 
     async def cleanup(self, command) -> None:
         self.issued.append(command)

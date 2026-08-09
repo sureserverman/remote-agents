@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from stop_results import a_clean_stop, a_stop_that_did_not_take
 from telegram.error import BadRequest
 
 from remote_agents.adapters.telegram.service import (
@@ -18,6 +19,7 @@ from remote_agents.adapters.telegram.service import (
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_actions import GRACEFUL_TIMEOUT
 from remote_agents.bootstrap import ServiceComposition, _resolve_profile_executable, main
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
@@ -559,7 +561,11 @@ class _Launcher:
             self.records = [
                 record for record in self.records if record.session_id != command.session_id
             ]
-        return None
+            return a_clean_stop(command.session_id)
+        # The timeout, reported the way the real runtime reports it. It used to answer `None`,
+        # which the surfaces discarded — so this double modelled the *records* faithfully and
+        # the *observation* not at all, which is exactly the half BL-008 was about.
+        return a_stop_that_did_not_take(GRACEFUL_TIMEOUT, command.session_id)
 
     async def force_stop(self, command):
         self.stopped.append("force")

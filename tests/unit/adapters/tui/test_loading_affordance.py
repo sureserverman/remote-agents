@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from stop_results import a_clean_stop
 from textual.widgets import OptionList
 from tui_feedback import working
 
@@ -57,6 +58,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.terminal import TerminalObservation
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION_ID = SessionId.new()
@@ -145,8 +147,9 @@ class _Launcher:
         await self._gated()
         return _record(self.state)
 
-    async def graceful_stop(self, _command) -> None:
+    async def graceful_stop(self, _command) -> TerminalObservation:
         await self._gated()
+        return a_clean_stop()
 
     async def cleanup(self, _command) -> None:
         await self._gated()

@@ -18,7 +18,11 @@ from remote_agents.application.commands import (
     GracefulStopCommand,
 )
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.session_actions import available_actions
+from remote_agents.application.session_actions import (
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    available_actions,
+)
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -27,9 +31,20 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.terminal import TerminalObservation
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _LABELS = {"Stop and close": "graceful", "Clean up": "cleanup", "Force stop": "force"}
+
+
+def _preserved() -> TerminalObservation:
+    """A graceful stop that worked: the profile's own exit sequence ran and the pane exited."""
+    return TerminalObservation(SessionId.new(), live=False, preserved=True)
+
+
+def _not_preserved(detail: str) -> TerminalObservation:
+    """A graceful stop that did not take effect, for the reason `detail` names."""
+    return TerminalObservation(SessionId.new(), live=True, preserved=False, detail=detail)
 
 
 def _record(state: SessionState) -> SessionRecord:
@@ -50,6 +65,9 @@ class _RecordingLauncher:
     records: tuple[SessionRecord, ...] = ()
     issued: list[object] = field(default_factory=list)
     error: Exception | None = None
+    #: What `graceful_stop` reports back. Defaults to a clean exit, which is what every case
+    #: written before BL-008 assumes — the surface discarded this value entirely.
+    observation: TerminalObservation | None = None
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
@@ -64,7 +82,7 @@ class _RecordingLauncher:
         self.issued.append(command)
         if self.error is not None:
             raise self.error
-        return None
+        return self.observation or _preserved()
 
     async def cleanup(self, command: CleanupCommand) -> None:
         self.issued.append(command)
@@ -273,7 +291,7 @@ async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
         async def graceful_stop(self, command):
             self.issued.append(command)
             await asyncio.sleep(0.02)
-            return None
+            return _preserved()
 
         async def cleanup(self, command) -> None:
             self.issued.append(command)
@@ -302,3 +320,89 @@ async def _press_escape_during(pilot) -> None:
 
     await asyncio.sleep(0.005)
     await pilot.press("escape")
+
+
+# BL-008 — a graceful stop that did not take effect says which of the two causes it was ----
+#
+# Both surfaces discarded `graceful_stop`'s return value, so a stop that never sent an exit
+# sequence and a stop whose agent ignored one were reported identically to a stop that worked:
+# the session simply stayed on screen, still running, with nothing said. The two causes are a
+# configuration problem and an agent-behaviour problem, and an owner who is told only that
+# "the stop did not work" cannot tell which of two completely different next steps applies.
+
+
+@pytest.mark.parametrize(
+    "detail,names",
+    [
+        (UNKNOWN_SESSION, "The stop was never sent."),
+        (GRACEFUL_TIMEOUT, "The agent did not exit in time."),
+    ],
+)
+async def test_a_graceful_stop_that_did_not_take_effect_names_its_cause(
+    detail: str, names: str
+) -> None:
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,), observation=_not_preserved(detail))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("graceful")
+        await pilot.pause()
+        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
+
+    assert launcher.issued, "the stop was never issued, so this asserts nothing about its result"
+    assert names in status, status
+    assert names in reported, reported
+    assert "did not take effect" in status, (
+        f"the status line reads {status!r}, which describes a session that is merely still "
+        "running — the exact silence BL-008 recorded"
+    )
+
+
+async def test_the_two_causes_do_not_read_alike() -> None:
+    """The half of BL-008 a per-cause test cannot check, because each only sees its own.
+
+    Reporting both failures in the same words would satisfy every assertion above while
+    leaving the owner exactly where the backlog entry found them. Compared as whole rendered
+    messages rather than by looking for a marker string, so it fails on wording that has
+    converged rather than only on wording that was never written.
+    """
+    said = {}
+    for detail in (UNKNOWN_SESSION, GRACEFUL_TIMEOUT):
+        record = _record(SessionState.RUNNING)
+        launcher = _RecordingLauncher((record,), observation=_not_preserved(detail))
+        app = RemoteAgentsTui(_context(launcher))
+        async with app.run_test() as pilot:
+            await app.show_detail(str(record.session_id))
+            await pilot.pause()
+            await app.screen.choose("graceful")
+            await pilot.pause()
+            said[detail] = (_status(app), " ".join(announcements(app, severity="error")))
+
+    assert said[UNKNOWN_SESSION] != said[GRACEFUL_TIMEOUT]
+
+
+async def test_a_graceful_stop_that_worked_says_nothing_about_a_failure() -> None:
+    """The other direction, and the one a fail-open default would break.
+
+    `preserved` is what tells a clean exit from a timeout, and a surface that reported every
+    stop as suspect would be worse than one that reported none — the owner would learn to
+    ignore it, which is where this started.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,), observation=_preserved())
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("graceful")
+        await pilot.pause()
+        status = _status(app)
+        reported = announcements(app, severity="error")
+
+    assert reported == []
+    assert "did not take effect" not in status

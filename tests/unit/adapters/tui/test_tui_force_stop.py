@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_clean_stop
 from textual.widgets import OptionList
 from tui_feedback import status as _status
 from tui_positions import position
@@ -70,7 +71,7 @@ class _RecordingLauncher:
 
     async def graceful_stop(self, command):
         self.issued.append(command)
-        return None
+        return a_clean_stop()
 
     async def cleanup(self, command) -> None:
         self.issued.append(command)

@@ -53,9 +53,11 @@ from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
+    StopFailure,
     available_actions,
     explain_state,
     remote_control_available,
+    stop_failure,
 )
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
@@ -616,7 +618,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 await screen.after_command()
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
-                await self._issue_stop(action, record)
+                failure = await self._issue_stop(action, record)
         except Exception as error:
             _LOG.exception("stop failed")
             # Move the cursor off the confirm button before reporting. A failed force
@@ -635,27 +637,57 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # first would leave a window where the command has landed but the rows still
             # describe the session as it was.
             await screen.after_command()
+            if failure is not None:
+                # After the re-read, not before it, for the reason `set_remote_control` gives:
+                # `after_command` rewrites the status from the store, so a result painted
+                # first is immediately overwritten by it.
+                #
+                # And the re-read is what makes this necessary rather than merely useful. A
+                # graceful stop that did not take effect leaves the session RUNNING, so the
+                # refreshed detail says "State: running. The agent is running." — true, and
+                # indistinguishable from the same screen before the stop was ever asked for.
+                # That sentence *is* BL-008: the surface had no way to say that something was
+                # attempted and did not happen.
+                screen.set_status(
+                    f"{_ACTION_LABELS[action]} did not take effect. {failure.summary}"
+                )
+                # The summary opens the notification too, rather than the remedy alone. A
+                # toast is read on its own and gone a few seconds later, so one that starts
+                # mid-explanation asks the owner to have been looking at the status line at
+                # the right moment. The overlap between the two is the point, not an oversight.
+                screen.announce(f"{failure.summary} {failure.remedy}")
         finally:
             self._busy = False
 
-    async def _issue_stop(self, action: str, record: SessionRecord) -> None:
-        """Send exactly one curated command; the commands themselves carry no arguments.
+    async def _issue_stop(self, action: str, record: SessionRecord) -> StopFailure | None:
+        """Send exactly one curated command, and answer why it did not take effect.
 
         Force is its own named branch and an unrecognized action raises, rather than the kill
         being the trailing `else`. It was, and nothing could reach it — `stop` only calls this
         for an action `available_actions` returned. But "anything I do not recognize is a
         kill" is a fail-dangerous default in the one method that kills, and the cost of it
         being right is that every future caller stays correct by accident.
+
+        **Only `graceful_stop` answers anything, and that is the whole of BL-008's scope.**
+        Its `TerminalObservation` has always distinguished a clean exit from a timeout — the
+        service's own docstring says `preserved` "remains the way a caller tells a clean exit
+        from `graceful_timeout`" — and both surfaces threw the value away. `cleanup` returns
+        nothing at all, and `force_stop`'s observation describes a kill that the state machine
+        has already recorded; neither has the two-causes-that-read-alike problem this fixes.
         """
         launcher = self._services.launcher
         if action == GRACEFUL:
-            await launcher.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
-        elif action == CLEANUP:
+            observation = await launcher.graceful_stop(
+                GracefulStopCommand(record.session_id, record.profile_id)
+            )
+            return stop_failure(observation)
+        if action == CLEANUP:
             await launcher.cleanup(CleanupCommand(record.session_id))
-        elif action == FORCE:
+            return None
+        if action == FORCE:
             await launcher.force_stop(ForceStopCommand(record.session_id))
-        else:
-            raise ValueError(f"no command is curated for the action {action!r}")
+            return None
+        raise ValueError(f"no command is curated for the action {action!r}")
 
     # Store reads screens share ---------------------------------------------------
 

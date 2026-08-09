@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from stop_results import a_clean_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
@@ -13,8 +14,9 @@ class FakeService:
     def __init__(self) -> None:
         self.actions: list[str] = []
 
-    async def graceful_stop(self, _command) -> None:
+    async def graceful_stop(self, _command):
         self.actions.append("graceful")
+        return a_clean_stop()
 
     async def cleanup(self, _command) -> None:
         self.actions.append("cleanup")

@@ -5,11 +5,13 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
+from stop_results import a_clean_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.session_actions import available_actions
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.ports.terminal import TerminalObservation
 
 
 def _controller() -> StopController:
@@ -66,8 +68,9 @@ class _RecordingService:
     def __init__(self) -> None:
         self.dispatched: list[str] = []
 
-    async def graceful_stop(self, _command) -> None:
+    async def graceful_stop(self, _command) -> TerminalObservation:
         self.dispatched.append("graceful")
+        return a_clean_stop()
 
     async def cleanup(self, _command) -> None:
         self.dispatched.append("cleanup")

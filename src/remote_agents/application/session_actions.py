@@ -27,6 +27,7 @@ transition and a recorded decision, not a policy edit.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, SessionState
@@ -132,3 +133,89 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     offering the toggle; do not treat the service as a backstop for the state half.
     """
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
+
+
+UNKNOWN_SESSION = "unknown_session"
+GRACEFUL_TIMEOUT = "graceful_timeout"
+
+
+@dataclass(frozen=True, slots=True)
+class StopFailure:
+    """Why a graceful stop did not take effect, in the one vocabulary both surfaces use.
+
+    Two fields rather than one string because the two halves are read in different places and
+    at different lengths. `summary` is one short sentence, so it fits a one-line region — the
+    local surface's status line is literally one line high — and `remedy` is what the owner
+    does about it, which is longer than any of them and belongs wherever that surface puts an
+    explanation. A single blob would have forced one of the two surfaces to cut it.
+
+    Both are whole sentences rather than fragments, so a surface can put either one first
+    without case surgery. The first version made `summary` a fragment ("the stop was never
+    sent"), which read correctly in the middle of the status line and needed capitalising to
+    open a notification — a transformation each surface would have written for itself, which
+    is the first step back towards two vocabularies.
+    """
+
+    detail: str
+    summary: str
+    remedy: str
+
+
+class _StopObservation(Protocol):
+    """The two fields a stop's outcome turns on; any terminal observation satisfies this."""
+
+    preserved: bool
+    detail: str
+
+
+#: The causes a graceful stop can report without preserving the pane, and what each one means
+#: to the owner. Keyed by the `detail` the terminal adapter sets, which is the only place the
+#: two are distinguished — the observation is otherwise identical.
+_STOP_FAILURES: dict[str, tuple[str, str]] = {
+    UNKNOWN_SESSION: (
+        "The stop was never sent.",
+        "This host could not match the session to a known agent profile, so no exit sequence "
+        "was sent and nothing was stopped. That is a configuration problem on this host, not "
+        "something the agent did. Check that this host is set up for that agent and try "
+        "again, or force stop the session to end it now.",
+    ),
+    GRACEFUL_TIMEOUT: (
+        "The agent did not exit in time.",
+        "The exit sequence was sent and the agent was still running when the wait ran out, so "
+        "nothing was stopped and nothing was removed. That is the agent's own behaviour, not "
+        "a problem with this host. Try again if it may still be finishing, or force stop it.",
+    ),
+}
+"""Deliberately worded so the two cannot be mistaken for each other.
+
+They are a *configuration* problem and an *agent-behaviour* problem, and the owner's next
+step differs completely: one is fixed on this host, the other is waited out or forced. BL-008
+was that neither was reported at all — both surfaces discarded `graceful_stop`'s return value
+— and reporting them in words that read alike would close the entry without answering it.
+
+`unknown_session` exists because of DEC-006: a stop fails closed on an unresolved profile
+rather than guessing at one. This makes that refusal legible; it does not soften it.
+"""
+
+
+def stop_failure(observation: _StopObservation) -> StopFailure | None:
+    """Why the stop did not take effect, or `None` when it did.
+
+    **An unrecognised `detail` is a failure, not an unknown.** `preserved` is false means the
+    profile's exit sequence did not work, whatever the terminal called the reason, so falling
+    through to `None` there would report a stop that did nothing as a stop that succeeded —
+    the same fail-dangerous default `_issue_stop` removed from its own dispatch. The generic
+    wording names the raw detail so a cause nobody has a sentence for is still traceable.
+    """
+    if observation.preserved:
+        return None
+    known = _STOP_FAILURES.get(observation.detail)
+    if known is None:
+        return StopFailure(
+            observation.detail,
+            "The stop did not take effect.",
+            f"The terminal reported {observation.detail!r} and the session was left as it is. "
+            "Force stop it if you need it ended now.",
+        )
+    summary, remedy = known
+    return StopFailure(observation.detail, summary, remedy)

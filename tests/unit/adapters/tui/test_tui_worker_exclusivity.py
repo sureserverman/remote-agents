@@ -37,9 +37,11 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_clean_stop
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from textual.worker import WorkerState
+from tui_feedback import announcements
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -120,6 +122,7 @@ class _SlowLauncher:
 
     async def graceful_stop(self, _command):
         await self._record_and_wait("graceful")
+        return a_clean_stop()
 
     async def cleanup(self, _command):
         await self._record_and_wait("cleanup")
@@ -259,8 +262,17 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
         await asyncio.sleep(0)
         launcher.release.set()
         await asyncio.gather(first, second)
+        await pilot.pause()
+        # The stop must also have *succeeded*. Without this the test passes identically when
+        # the double hands back something `stop_failure` cannot read: the surface takes its
+        # generic `except Exception` branch, reports a failure, and still issues exactly one
+        # command — so the count assertion below holds while the path under test is not the
+        # one the name describes. That is not hypothetical; it is what these two tests were
+        # quietly doing until a review noticed.
+        reported = announcements(app, severity="error")
 
-        assert launcher.issued == [expected], (
+    assert reported == [], reported
+    assert launcher.issued == [expected], (
             f"two keypresses issued {launcher.issued}; exactly one {expected!r} was required"
         )
 
@@ -489,6 +501,7 @@ class _AdvancingLauncher:
         # record could not be found. PRESERVED stays listed and still offers actions — just
         # not `graceful` — so what refuses the second enter is the policy re-check itself.
         self.state = SessionState.PRESERVED
+        return a_clean_stop()
 
     async def cleanup(self, _command):
         self.issued.append("cleanup")
@@ -538,8 +551,16 @@ async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path()
         app.screen.post_message(OptionList.OptionSelected(choices, chosen, index))
         await settle(app, pilot)
         await pilot.pause()
+        # The stop must also have *succeeded*. Without this the test passes identically when
+        # the double hands back something `stop_failure` cannot read: the surface takes its
+        # generic `except Exception` branch, reports a failure, and still issues exactly one
+        # command — so the count assertion below holds while the path under test is not the
+        # one the name describes. That is not hypothetical; it is what these two tests were
+        # quietly doing until a review noticed.
+        reported = announcements(app, severity="error")
 
-        assert launcher.issued == ["graceful"], (
+    assert reported == [], reported
+    assert launcher.issued == ["graceful"], (
             f"two queued enters issued {launcher.issued}; the record re-read should have "
             f"refused the second once the session left RUNNING"
         )

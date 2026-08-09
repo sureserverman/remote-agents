@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from stop_results import a_clean_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
@@ -76,8 +77,9 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
         def __init__(self) -> None:
             self.called = False
 
-        async def graceful_stop(self, _command) -> None:
+        async def graceful_stop(self, _command):
             self.called = True
+            return a_clean_stop()
 
     stops = StopController(CallbackStateStore())
     token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11, 1)
