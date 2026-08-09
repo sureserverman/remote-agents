@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, cast
 
 from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
+from textual.validation import ValidationResult, Validator
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
@@ -114,6 +115,9 @@ class ChoiceScreen(Screen[None]):
         # Bumped by every fill; a deferred cursor placement carries the value it was
         # scheduled with and stands down if a later fill has superseded it.
         self._resting_generation = 0
+        #: The last validation failure announced from this screen's entry, so the same one is
+        #: not repeated on every subsequent keystroke that keeps breaking the same rule.
+        self._last_rejection: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -698,8 +702,23 @@ class ChoiceScreen(Screen[None]):
         choices.highlighted = None
         choices.highlighted = index
 
-    def text_entry(self, placeholder: str) -> None:
-        """Hand the keyboard to the input, which only the text screens ever use."""
+    def text_entry(
+        self,
+        placeholder: str,
+        *,
+        validators: Sequence[Validator] = (),
+        valid_empty: bool = True,
+    ) -> None:
+        """Hand the keyboard to the input, which only the text screens ever use.
+
+        `validators` are Textual's, run on every change, and both of this surface's are
+        wrappers that call the one function already holding the rule (`screens/validation.py`).
+        Passing none leaves the entry unvalidated, which is right for the project filter: a
+        query that matches nothing is a legitimate thing to have typed, not an error.
+
+        `valid_empty` defaults to true because the entry it is most often shown for is the
+        *optional* label, where empty means "skip" — the screen that requires a value says so.
+        """
         if not self.showing:
             return
         self.show_choices(())
@@ -707,7 +726,36 @@ class ChoiceScreen(Screen[None]):
         entry.display = True
         entry.value = ""
         entry.placeholder = placeholder
+        entry.validators = list(validators)
+        entry.valid_empty = valid_empty
+        # An entry the owner has not typed into yet is neither valid nor invalid, and it must
+        # not open wearing the red border a previous screen's rejection left on the class list.
+        entry.remove_class("-invalid", "-valid")
+        self._last_rejection = None
         entry.focus()
+
+    def announce_rejection(self, result: ValidationResult | None) -> None:
+        """Say why the entry is refusing this value, once per distinct reason.
+
+        Called from a screen's `on_input_changed`, so the owner is told at the keystroke that
+        broke the rule rather than at the enter that submits it. The message is whatever the
+        shared rule raised, so what is said while typing is word-for-word what used to be said
+        on submit.
+
+        **Deduplicated, and the dedup is the difference between telling and nagging.** Typing
+        five characters past the label bound breaks the same rule five times; five identical
+        toasts would bury the instruction the owner is still following under a stack of copies
+        of one sentence. A new message is always announced, and the same one again is not —
+        so correcting the value and breaking a *different* rule still speaks up.
+        """
+        if result is None or result.is_valid:
+            self._last_rejection = None
+            return
+        message = "; ".join(result.failure_descriptions)
+        if message == self._last_rejection:
+            return
+        self._last_rejection = message
+        self.announce(message, severity="warning")
 
     def hide_entry(self) -> None:
         if not self.showing:

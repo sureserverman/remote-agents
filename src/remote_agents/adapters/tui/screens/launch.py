@@ -21,6 +21,7 @@ from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.project_catalog import search_catalogue
 
 #: How long the filter waits for the typing to stop before it re-searches the catalogue.
@@ -253,13 +254,27 @@ class LabelScreen(ChoiceScreen):
         return profile.profile_id if profile is not None else "Label"
 
     async def populate(self) -> None:
-        self.text_entry("Optional label")
+        # `valid_empty` left at its default: an empty label is the documented way to skip this
+        # step, so the entry must not open refusing the value it is about to be given.
+        self.text_entry(
+            "Optional label",
+            validators=[LabelWithinBound(self.services.max_label_length)],
+        )
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Say the bound is broken at the keystroke that broke it, not at the enter after it."""
+        event.stop()
+        self.announce_rejection(event.validation_result)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
         self.submit(event.value)
 
     def submit(self, value: str) -> None:
+        # Still validated here, and deliberately not replaced by the entry's own result: this
+        # is the call that *produces the normalized label*, and a submit that trusted a
+        # validation performed on an earlier keystroke would be trusting a value it did not
+        # read. The typed-time check tells the owner sooner; it does not become the gate.
         try:
             label = label_or_error(value, self.services.max_label_length)
         except ValueError as error:

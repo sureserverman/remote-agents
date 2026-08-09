@@ -816,3 +816,147 @@ async def test_leaving_the_filter_with_enter_also_applies_a_pending_search() -> 
 
     assert rows == ["dev-area/other-thing  [Unregistered]"]
     assert focused_rows
+
+
+async def test_an_over_long_label_is_rejected_while_it_is_being_typed() -> None:
+    """The bound used to be learned at the enter after the last character, not before it."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.has_focus, "expected the label entry"
+
+        entry.value = "x" * (app.services.max_label_length + 1)
+        await pilot.pause()
+
+        rejected = announcements(app, severity="warning")
+        invalid = entry.has_class("-invalid")
+
+    assert invalid, "the entry did not mark itself invalid"
+    assert any("visible label of up to" in message for message in rejected), rejected
+
+
+async def test_the_label_rejection_is_said_once_not_once_per_keystroke() -> None:
+    """Five characters past the bound break one rule; five identical toasts bury the task."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        entry = app.screen.query_one("#filter", Input)
+        over = app.services.max_label_length + 1
+        for extra in range(5):
+            entry.value = "x" * (over + extra)
+            await pilot.pause()
+
+        rejected = announcements(app, severity="warning")
+
+    assert len(rejected) == 1, f"expected one rejection for one broken rule, got {rejected}"
+
+
+async def test_a_label_corrected_back_under_the_bound_stops_being_refused() -> None:
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        entry = app.screen.query_one("#filter", Input)
+        entry.value = "x" * (app.services.max_label_length + 1)
+        await pilot.pause()
+        entry.value = "nightly"
+        await pilot.pause()
+
+        invalid = entry.has_class("-invalid")
+
+    assert not invalid, "the entry stayed marked invalid after the value was corrected"
+
+
+async def test_an_empty_label_is_valid_because_the_step_is_optional() -> None:
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        entry = app.screen.query_one("#filter", Input)
+        entry.value = "n"
+        await pilot.pause()
+        entry.value = ""
+        await pilot.pause()
+
+        invalid = entry.has_class("-invalid")
+        rejected = announcements(app, severity="warning")
+
+    assert not invalid, "an empty optional label was refused"
+    assert rejected == [], rejected
+
+
+async def test_an_invalid_project_name_is_rejected_while_it_is_being_typed() -> None:
+    """`ProjectIdentity`'s own words, at the keystroke rather than at the submit."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        await _choose(app, pilot, "infra")
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.has_focus, "expected the name entry"
+
+        entry.value = "Not A Slug"
+        await pilot.pause()
+
+        rejected = announcements(app, severity="warning")
+        invalid = entry.has_class("-invalid")
+
+    assert invalid, "the entry did not mark itself invalid"
+    assert any("lowercase letters, digits" in message for message in rejected), rejected
+
+
+async def test_the_typed_time_validators_delegate_rather_than_restate_the_rules() -> None:
+    """Both validators must produce the message the shared rule raises, character for character.
+
+    This is what stops a validator drifting into a second copy of a rule: it does not compare
+    against a string written here, it compares against what the shared function itself says.
+    """
+    from remote_agents.adapters.tui.screens.validation import (
+        LabelWithinBound,
+        NameIsAProjectIdentity,
+    )
+
+    try:
+        label_or_error("x" * 500, 40)
+    except ValueError as error:
+        expected_label = str(error)
+    else:  # pragma: no cover - the bound is what this test is about
+        raise AssertionError("label_or_error accepted a 500-character label under a bound of 40")
+
+    try:
+        ProjectIdentity(area="infra", name="Not A Slug")
+    except ValueError as error:
+        expected_name = str(error)
+    else:  # pragma: no cover
+        raise AssertionError("ProjectIdentity accepted a name that is not a slug")
+
+    label_result = LabelWithinBound(40).validate("x" * 500)
+    name_result = NameIsAProjectIdentity("infra").validate("Not A Slug")
+
+    assert label_result.failure_descriptions == [expected_label]
+    assert name_result.failure_descriptions == [expected_name]
+
+
+async def test_the_project_filter_is_not_validated() -> None:
+    """A query matching nothing is a thing the owner typed, not a value being refused."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        entry = app.screen.query_one("#filter", Input)
+        entry.value = "no-such-project"
+        await settle_filter(pilot)
+
+        invalid = entry.has_class("-invalid")
+        rejected = announcements(app, severity="warning")
+
+    assert entry.validators == []
+    assert not invalid
+    assert rejected == []

@@ -23,6 +23,7 @@ from textual.widgets import Input
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, selectable_area
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.validation import NameIsAProjectIdentity
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.domain.projects import ProjectIdentity
 
@@ -79,7 +80,18 @@ class NameScreen(ChoiceScreen):
 
     async def populate(self) -> None:
         self.set_status("Enter the new project name, then press enter.")
-        self.text_entry("New project name")
+        # `valid_empty=False` unlike the label: a project has to be called something, so an
+        # empty entry here is a value that will be refused rather than a step being skipped.
+        self.text_entry(
+            "New project name",
+            validators=[NameIsAProjectIdentity(self.area)],
+            valid_empty=False,
+        )
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Reject an unusable name while it is being typed, in the domain's own words."""
+        event.stop()
+        self.announce_rejection(event.validation_result)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
