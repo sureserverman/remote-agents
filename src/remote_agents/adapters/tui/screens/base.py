@@ -143,6 +143,49 @@ class ChoiceScreen(Screen[None]):
         `can_refresh` false alongside it.
         """
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Whether an app-level binding applies here — `False` hides it from the footer.
+
+        **Every rule below mirrors an early return that already exists in the action it
+        governs.** That is the whole design, and it is what keeps this from becoming a second
+        opinion that can drift from the first: the footer stops advertising keys that already
+        did nothing, rather than a separate list of what is legal where. If an action grows a
+        new early return, the honest change is to mirror it here — and if a rule here has no
+        counterpart in the action, one of the two is lying.
+
+        `False` rather than `None` throughout, and the two are easy to swap: `DOMNode.check_action`
+        documents `False` as **disabled and hidden** and `None` as **disabled but still drawn,
+        greyed** — and `Screen.active_bindings` implements exactly that, dropping the entry only
+        on `is False`. This sub-plan's own research summary states the opposite, which is how the
+        first version of this method hid nothing at all while every test that asked the framework
+        said so. A key the owner can see and cannot use is the same complaint as a key that does
+        nothing, one step quieter, so hiding is what these want.
+
+        Quit and the two flow jumps that always work are deliberately absent from the checks:
+        an unconditional `True` for them would read as a rule and is not one.
+
+        **`_busy` is the one early return deliberately not mirrored, and the claim above is
+        false without saying so.** It gates all five of these actions, so while a command is in
+        flight every key here is advertised and does nothing — which is the same complaint,
+        during a window measured in the length of a store read. It is left alone because the
+        honest fix is not a hidden key: a footer whose entries vanish and reappear as the
+        surface works would be worse than one that is briefly optimistic. Task 1.3 is where
+        in-flight input is dealt with, and this is its problem rather than this task's.
+        """
+        if action == "back":
+            # `go_back` refuses to pop the last screen, so at the resting position escape is
+            # inert by construction — see `RemoteAgentsTui.go_back`.
+            return False if len(self.app.screen_stack) <= 1 else True
+        if action == "refresh":
+            # Mirrors `action_refresh`, which now delegates to `refresh_contents`.
+            return True if self.can_refresh else False
+        if action == "resume":
+            # Mirrors `action_resume`'s `self._services.conversations is None` early return: a
+            # host that wired no conversation service has no resume flow to open, and the
+            # binding has been advertised on those hosts all along.
+            return True if self.services.conversations is not None else False
+        return True
+
     # Rendering -----------------------------------------------------------------
 
     @property

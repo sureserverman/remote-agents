@@ -10,12 +10,19 @@ away from.
 (`textual/screen.py`), so while one of these is on top the app's own `BINDINGS` — `ctrl+s`,
 `ctrl+n`, `ctrl+o`, `ctrl+r`, `escape` — are not in the chain at all.
 
-**That truncation covers ordinary bindings only, and two things escape it.**
+**That truncation covers ordinary bindings only, and two things escaped it.**
 `App._check_bindings(key, priority=True)` walks the *untruncated* chain, so Textual's own
-command palette (`ctrl+p`) still opens over a confirmation — harmlessly: the question stays
-open beneath it, escape returns to it, and quitting from it resolves the answer to no.
-`ctrl+q` is the second, and it does not quit under a confirmation for a reason worth writing
-down, because it is not this one: `App.BINDINGS` declares `ctrl+q` with `priority=True`, and
+command palette (`ctrl+p`) did open over a confirmation — harmlessly, since the question
+stayed open beneath it and quitting from it resolved the answer to no. **It no longer opens
+at all**, and not by design: Sub-plan 3 made `RemoteAgentsTui.check_action` delegate to the
+active screen so the footer could stop advertising keys that do nothing, and `run_action`
+consults `check_action` before dispatching — so the palette now asks this class, which answers
+`False` to everything but its own abort. A paragraph describing the old escape route survived
+the change that closed it; re-verified by driving `run_action("command_palette")` against an
+open modal and watching it refuse.
+
+`ctrl+q` is the second, and it does not quit under a confirmation for a reason worth
+writing down, because it is not this one: `App.BINDINGS` declares `ctrl+q` with `priority=True`, and
 `DOMNode._merge_bindings` **replaces** a key's bindings per most-derived class rather than
 extending them — so `RemoteAgentsTui.BINDINGS`' own non-priority `ctrl+q` strips the priority
 off it and it falls inside the truncated chain. Deleting that line as redundant with Textual's
@@ -159,6 +166,21 @@ class ConfirmScreen(ModalScreen[bool]):
         choices = self.query_one("#choices", OptionList)
         choices.highlighted = self.resting_index
         choices.focus()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Hide every app-level binding, which is what is already true here.
+
+        Answered explicitly rather than inherited, and it changes nothing at runtime: a modal
+        truncates the binding chain, so none of the app's actions can reach this screen to be
+        checked in the first place. What it buys is that the stage gate's sweep — "no screen
+        inherits the permissive default" — gets a real answer from these two rather than
+        passing them over, and that a reader of this class does not have to reconstruct the
+        truncation argument to know what the footer shows.
+
+        The modal's *own* bindings are unaffected: `check_action` is consulted for the
+        namespace an action resolves in, and `abort` is this screen's.
+        """
+        return True if action == "abort" else False
 
     def _answer(self, confirmed: bool) -> None:
         """Deliver the answer, and refuse to deliver a second one.

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import TypeVar
 
 from textual import work
-from textual.app import App
+from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.screen import Screen
 from textual.worker import WorkerCancelled, WorkerFailed
@@ -98,13 +98,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     ChoiceScreen OptionList { height: 1fr; }
     ChoiceScreen #output { height: 1fr; padding: 0 1; }
     """
+    # Every one of these is answered per screen by `ChoiceScreen.check_action`, which hides
+    # the ones that would do nothing here. The tooltips say what the key does *to the thing
+    # the owner is looking at*, because the labels alone were ambiguous in the one way that
+    # mattered: "Refresh" gave no hint that it used to abandon the position it was pressed on.
     BINDINGS = [
-        Binding("escape", "back", "Back"),
-        Binding("ctrl+r", "refresh", "Refresh"),
-        Binding("ctrl+n", "add_project", "Add project"),
-        Binding("ctrl+s", "sessions", "Sessions"),
-        Binding("ctrl+o", "resume", "Resume"),
-        Binding("ctrl+q", "quit", "Quit"),
+        Binding("escape", "back", "Back", tooltip="Return to the position you came from"),
+        Binding(
+            "ctrl+r",
+            "refresh",
+            "Refresh",
+            tooltip="Re-read what this screen shows, without leaving it",
+        ),
+        Binding(
+            "ctrl+n", "add_project", "Add project", tooltip="Register a new project directory"
+        ),
+        Binding("ctrl+s", "sessions", "Sessions", tooltip="Every managed session on this host"),
+        Binding(
+            "ctrl+o", "resume", "Resume", tooltip="Reopen a saved conversation as a new session"
+        ),
+        Binding("ctrl+q", "quit", "Quit", tooltip="Leave the terminal surface"),
     ]
 
     def __init__(self, context: TuiContext) -> None:
@@ -113,6 +126,35 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._catalogue = context.catalogue
         self.selection = LaunchSelection()
         self._busy = False
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Ask the position on screen whether one of *these* bindings applies to it.
+
+        **This delegation is required, and the reason is a framework detail worth stating.**
+        `Screen.active_bindings` — what `Footer` renders from — resolves each binding through
+        `App._check_action_state(binding.action, namespace)`, and the namespace is where the
+        binding was *declared*. These six are declared on the app, so Textual asks the **app**
+        about them and never the screen. A `check_action` written only on `ChoiceScreen` is
+        therefore consulted for screen-declared bindings and silently ignored for every one of
+        these, which is the whole set the footer was over-advertising.
+
+        The per-screen answer is still where the knowledge lives — `ChoiceScreen.check_action`
+        mirrors each action's own early return, and `ConfirmScreen` hides the lot — so this is
+        a router, not a second rule set. Screens that answer for themselves are asked; anything
+        else gets the permissive default, which is the honest answer for a screen this app did
+        not write.
+        """
+        try:
+            screen = self.screen
+        except ScreenStackError:
+            # `App.screen` raises on an empty stack. Nothing here can empty it — `go_back` and
+            # `return_to_projects` both stop at depth 1, and `switch_flow` pops to 1 before it
+            # pushes — but this runs from a footer redraw, and an exception out of that path is
+            # the class that already killed this app once. Textual's own `App.refresh` guards
+            # the identical dereference; the first version of this guard checked two conditions
+            # that could never be false and left this one open.
+            return True
+        return screen.check_action(action, parameters)
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.
