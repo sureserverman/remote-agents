@@ -146,7 +146,15 @@ class ProjectReviewScreen(ChoiceScreen):
         if key != "create":
             return
         tui = self.tui
-        async with self.holding_the_guard():
+        # Both awaited calls are inside both windows, and the catalogue re-read was outside
+        # both. It runs a development-root scan on a worker thread, so it yields to the pump —
+        # and between the guard's release and this line the review screen was fully interactive
+        # again with its Create row still drawn, so a second enter re-issued a creation for a
+        # project that had just been made. Nothing was destroyed by it (the second create
+        # raises "already exists" and is reported), but it is the same await-then-render window
+        # the rest of this surface closes everywhere else. Found by the Task 2.2 review while
+        # sweeping for awaited calls with no affordance; it predates this task.
+        async with self.holding_the_guard(), self.awaiting("Creating the project…"):
             try:
                 command = CreateProjectCommand(self.area, self.project_name)
                 created = await tui.in_thread(
@@ -157,25 +165,28 @@ class ProjectReviewScreen(ChoiceScreen):
                 # Re-render before reporting, so the cursor leaves "Create" and a second enter
                 # cannot re-issue a creation nobody deliberately chose. Re-rendering restores
                 # this screen's own status, which is what the owner needs left behind — the
-                # failure itself is the toast.
+                # failure itself is the toast. It runs inside `awaiting`, whose exit puts the
+                # pre-command line back over it, so the order is: render, then report, then
+                # restore — and the restore writes the same line the render just did.
                 self.render_review()
                 self.announce(f"Project not created: {error}")
                 return
-        # Spelled out rather than delegated to `action_refresh`, which used to do exactly this
-        # pair and no longer does: refresh is the active screen's own re-read now and does not
-        # navigate, whereas creating a project genuinely does end at the project list. This is
-        # the only caller that wanted the navigation, so it is the one that keeps it.
-        if not await tui.reload_catalogue():
-            self.render_review()
-            # `warning`, not `error`: the project exists. Reporting a partial success in the
-            # same red as a creation that failed is how an owner learns to retry something
-            # that already worked.
-            self.announce(
-                f"Created {created.identity}, but the project catalogue could not be re-read. "
-                "Check this host, then refresh the project list.",
-                severity="warning",
-            )
-            return
+            # Spelled out rather than delegated to `action_refresh`, which used to do exactly
+            # this pair and no longer does: refresh is the active screen's own re-read now and
+            # does not navigate, whereas creating a project genuinely does end at the project
+            # list. This is the only caller that wanted the navigation, so it is the one that
+            # keeps it.
+            if not await tui.reload_catalogue():
+                self.render_review()
+                # `warning`, not `error`: the project exists. Reporting a partial success in
+                # the same red as a creation that failed is how an owner learns to retry
+                # something that already worked.
+                self.announce(
+                    f"Created {created.identity}, but the project catalogue could not be "
+                    "re-read. Check this host, then refresh the project list.",
+                    severity="warning",
+                )
+                return
         tui.return_to_projects()
         # Announced rather than written onto the project list's status line, which is that
         # screen's own instruction and is rewritten by its next render anyway — so the

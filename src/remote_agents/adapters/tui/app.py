@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from typing import TypeVar
@@ -460,14 +461,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         self._busy = True
         try:
-            record = await self._services.launcher.resume(
-                ResumeCommand(
-                    ProjectId(project.opaque_id),
-                    ProfileId(profile),
-                    resolved,
-                    _idempotency_key(),
+            async with screen.awaiting("Resuming the conversation…"):
+                record = await self._services.launcher.resume(
+                    ResumeCommand(
+                        ProjectId(project.opaque_id),
+                        ProfileId(profile),
+                        resolved,
+                        _idempotency_key(),
+                    )
                 )
-            )
         except Exception as error:
             _LOG.exception("resume failed")
             screen.show_choices(((_BACK, "Back"),))
@@ -544,9 +546,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 )
                 await screen.after_command()
                 return
-            state = await self._services.launcher.set_remote_control(
-                RemoteControlCommand(record.session_id, desired, _idempotency_key())
-            )
+            async with screen.awaiting(f"Setting Remote Control to {desired.value}…"):
+                state = await self._services.launcher.set_remote_control(
+                    RemoteControlCommand(record.session_id, desired, _idempotency_key())
+                )
         except Exception as error:
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
@@ -612,7 +615,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 )
                 await screen.after_command()
                 return
-            await self._issue_stop(action, record)
+            async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
+                await self._issue_stop(action, record)
         except Exception as error:
             _LOG.exception("stop failed")
             # Move the cursor off the confirm button before reporting. A failed force
@@ -729,17 +733,31 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.return_to_projects()
             return None
         self._busy = True
-        if (body := self.body) is not None:
-            body.set_status("Launching…")
+        # `body.set_status("Launching…")` used to stand here on its own, and it was the only
+        # sign any of the five awaited flows gave that it was working — a static string in a
+        # region the owner has no reason to be watching, while the rows under the cursor stayed
+        # live and stale. It is now what `awaiting` puts there for the duration and takes back
+        # afterwards, which is the same message with the two things it was missing: the rows are
+        # covered while it shows, and the other four flows say their own version of it.
+        body = self.body
         try:
-            record = await self._services.launcher.launch(
-                LaunchCommand(
-                    ProjectId(project.opaque_id),
-                    ProfileId(profile.profile_id),
-                    _idempotency_key(),
-                    self.selection.label,
+            # `nullcontext` when there is no body to cover. **Not reachable today**, and worth
+            # saying so rather than inventing a scenario: the only caller is
+            # `ReviewScreen.choose`, reached from a row selection on that very screen, and
+            # `self.body` is read synchronously before any await. Kept because `self.body`
+            # answers `None` for reasons that have nothing to do with this call site — it is the
+            # unchecked `cast` BL-021 recorded — so a second caller would get the honest answer
+            # rather than an `AttributeError`.
+            covered = body.awaiting("Launching…") if body is not None else contextlib.nullcontext()
+            async with covered:
+                record = await self._services.launcher.launch(
+                    LaunchCommand(
+                        ProjectId(project.opaque_id),
+                        ProfileId(profile.profile_id),
+                        _idempotency_key(),
+                        self.selection.label,
+                    )
                 )
-            )
         except Exception as error:
             _LOG.exception("launch failed")
             return LaunchFailure(

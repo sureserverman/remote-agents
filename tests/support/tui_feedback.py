@@ -14,6 +14,8 @@ seconds elapsed during a slow test is gone from the surface too.
 
 from __future__ import annotations
 
+from textual.widgets import OptionList
+
 
 def status(app) -> str:
     """The one-line status of the position on screen."""
@@ -37,3 +39,12 @@ def announcements(app, *, severity: str | None = None) -> list[str]:
         for notification in app._notifications
         if severity is None or notification.severity == severity
     ]
+
+
+def working(app) -> bool:
+    """Whether the position on screen is showing itself as busy with a command.
+
+    The affordance is on `#choices` rather than on the screen — the rows are what must not be
+    acted on while a command is in flight, and the status line underneath says what it is.
+    """
+    return bool(app.screen.query_one("#choices", OptionList).loading)

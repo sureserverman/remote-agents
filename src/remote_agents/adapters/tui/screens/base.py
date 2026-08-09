@@ -335,6 +335,69 @@ class ChoiceScreen(Screen[None]):
         finally:
             self.tui.set_busy(False)
 
+    @contextlib.asynccontextmanager
+    async def awaiting(self, doing: str) -> AsyncIterator[None]:
+        """Cover the rows and say what is happening, while a command is in flight.
+
+        Deliberately **not** the same window as `holding_the_guard`, and the two are easy to
+        conflate because four of the five flows hold both. The guard means "no other action
+        may start", which includes the whole time a confirmation modal is open — the owner may
+        deliberate for as long as they like — and a surface that spins while it waits for a
+        person to answer a question is lying about what it is doing. This covers only the part
+        where something outside this process has been asked and has not replied.
+
+        `#choices` rather than the screen, because the rows are the thing that must not be
+        acted on and the status line is the thing that has to keep saying something true.
+        Textual's `set_loading` *covers* the widget rather than replacing it, so a re-render
+        arriving while this is held still writes to the real `OptionList` and is revealed
+        intact — and `Widget._check_disabled` already reads `self.loading`, so the covered rows
+        stop accepting input from Textual's own dispatch and not only from the busy guard.
+
+        **`doing` is required rather than optional, and that is the whole of the second
+        half.** The first version covered the rows and left the status line alone, on the
+        argument that it stayed readable underneath. A review pointed out what it was left
+        saying: `ReviewScreen`'s own line reads "Label: none. Launch, or go back." — an
+        instruction to press a button that is at that moment covered and refusing input. A
+        line that was true a moment ago and is false now is worse than the spinner alone,
+        because the owner has no reason to doubt it. So the flow names what it is doing, and
+        the previous line is put back on the way out, before the caller writes its own result
+        over it. Every one of the five happens to re-render afterwards, so the restore is
+        belt and braces — but relying on all five continuing to is how the next one leaves
+        "Stopping…" on screen after the stop has landed.
+
+        Both edges are guarded by `showing`, not just the first. A screen popped mid-command —
+        which is the whole reason `showing` exists in this file — leaves an unmounted widget
+        behind, and `query_one` raises `NoMatches` on it. **No driven sequence reaches the
+        asymmetric case**: every route that changes `app.screen` is refused while the busy
+        guard is held, and all five flows hold it across the whole of this window. Guarded
+        anyway, on the same grounds as `work_in_flight`'s own guard — an exception out of a
+        `finally` is the class that has already cost this app once, and clearing a position
+        that was never covered is a no-op (`_uncover` returns early on `_cover_widget is
+        None`), so the guard costs nothing to keep honest.
+        """
+        previous = self._status_text()
+        self._set_working(True, doing)
+        try:
+            yield
+        finally:
+            self._set_working(False, previous)
+
+    def _status_text(self) -> str:
+        """What the status line currently reads, so `awaiting` can put it back.
+
+        `str(...)` rather than `.plain`, because `Static.content` is a `str` on a widget built
+        with `markup=False` and a `Content` on one built without it — and `#status` is the
+        former. Reading it as though it were always a `Content` is an `AttributeError` on the
+        one configuration this app actually uses.
+        """
+        return str(self.query_one("#status", Static).content) if self.showing else ""
+
+    def _set_working(self, working: bool, text: str) -> None:
+        if not self.showing:
+            return
+        self.query_one("#choices", OptionList).loading = working
+        self.set_status(text)
+
     async def advance_to(self, screen: Screen[None]) -> None:
         """Push `screen`, unless this one has been left while a read was in flight.
 
