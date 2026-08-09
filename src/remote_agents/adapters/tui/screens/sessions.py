@@ -55,6 +55,7 @@ class SessionsScreen(ChoiceScreen):
     """Every managed session, including ones this process never launched."""
 
     position = "SESSIONS"
+    can_refresh = True
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -62,6 +63,16 @@ class SessionsScreen(ChoiceScreen):
 
     async def on_reveal(self) -> None:
         """Re-read on the way back from a detail, as the hand-rolled chain did."""
+        await self.reload()
+
+    async def refresh_contents(self) -> None:
+        """Re-run readiness and the listing, which is what Refresh means on this screen.
+
+        The same work as `on_reveal`, and this is the position where the key earns its place:
+        the store has a second writer, so this list can go stale with the owner sitting on it
+        and no navigation to trigger a re-read. Until this task, Ctrl+R here re-read the
+        project catalogue and unwound to the project picker.
+        """
         await self.reload()
 
     async def reload(self) -> None:

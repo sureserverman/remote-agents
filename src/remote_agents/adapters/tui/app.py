@@ -295,19 +295,47 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         await self.go_back()
 
     async def action_refresh(self) -> None:
-        """Re-read the catalogue, so a project another process created becomes selectable."""
+        """Re-run the active screen's own load, and leave the owner where they are.
+
+        This used to re-read the catalogue and then `return_to_projects()` unconditionally,
+        which made Refresh a *navigation*: pressed on the sessions list — the one position
+        whose answer goes stale on its own, because a second process writes the same store —
+        it abandoned that list and dropped the owner on the project picker. What each
+        position has to re-read is the position's own question, so it is asked here and
+        answered by `ChoiceScreen.refresh_contents`, whose default is to do nothing.
+
+        The stack is deliberately untouched. Nothing about "re-read what I am looking at"
+        implies moving, and the catalogue re-read the projects list still wants is now its
+        own `refresh_contents` rather than something every other screen inherits.
+        """
         if self._busy:
             return
+        screen = self.body
+        if screen is None:
+            return
+        await screen.refresh_contents()
+
+    async def reload_catalogue(self) -> bool:
+        """Re-read the project catalogue into app state, and say whether that took.
+
+        On the app because the catalogue is app state — `self._catalogue` is what every
+        screen reads through `catalogue` — while the two callers are screens: the project
+        list refreshing itself, and the add-project review pulling in the project it just
+        created before unwinding to that list.
+
+        Reporting is the caller's, which is why this answers a bool rather than rendering.
+        The two failures want different words in different places: one is "the list you are
+        looking at is stale", the other is "the project was created but the list may not show
+        it yet", and only the screen that asked knows which of those it is about to say.
+        """
         try:
             self._catalogue = await self.in_thread(
                 self._services.refresh_catalogue, group="catalogue"
             )
         except Exception:
             _LOG.exception("catalogue refresh failed")
-            if (body := self.body) is not None:
-                body.set_status("The project catalogue could not be re-read. Check this host.")
-            return
-        self.return_to_projects()
+            return False
+        return True
 
     async def action_add_project(self) -> None:
         if not self._busy:

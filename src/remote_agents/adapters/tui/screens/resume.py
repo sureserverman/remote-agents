@@ -53,6 +53,20 @@ class ResumeProjectsScreen(ChoiceScreen):
 
     position = "RESUME_PROJECTS"
     status = "Resume a conversation. Choose its project."
+    #: This screen renders the catalogue, so Refresh means something here — and its own
+    #: failure text below tells the owner to press it. Task 1.1's scope line reads "every
+    #: screen that can be refreshed" and then names two in parentheses; this is a third, and
+    #: the naming is illustrative rather than exhaustive. Left out, the next task disables the
+    #: binding on `can_refresh = False` screens and the advice below would point at a key the
+    #: footer no longer offers. Found by the Task 1.1 review.
+    can_refresh = True
+
+    async def refresh_contents(self) -> None:
+        """Re-read the catalogue and redraw, as the launch picker does for the same rows."""
+        if await self.tui.reload_catalogue():
+            await self.populate()
+            return
+        self.set_status("The project catalogue could not be re-read. Check this host.")
 
     async def populate(self) -> None:
         self.hide_entry()

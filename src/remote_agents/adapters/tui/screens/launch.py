@@ -32,6 +32,7 @@ class ProjectsScreen(ChoiceScreen):
 
     position = "PROJECTS"
     filter_placeholder = "Filter projects"
+    can_refresh = True
 
     async def populate(self) -> None:
         self.render_projects()
@@ -45,6 +46,19 @@ class ProjectsScreen(ChoiceScreen):
         rows — where typing is swallowed rather than filtering — which is a worse position to
         be dropped into than the one they left.
         """
+        self.render_projects()
+
+    async def refresh_contents(self) -> None:
+        """Re-read the catalogue, so a project another process created becomes selectable.
+
+        This is what Ctrl+R has always done, and it belongs here because here is the only
+        place it was ever *for*: the catalogue is what this screen renders. On a failed read
+        the rows are deliberately left alone — the catalogue already drawn is stale, not
+        wrong, and blanking it would take away projects the owner can still launch.
+        """
+        if not await self.tui.reload_catalogue():
+            self.set_status("The project catalogue could not be re-read. Check this host.")
+            return
         self.render_projects()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:

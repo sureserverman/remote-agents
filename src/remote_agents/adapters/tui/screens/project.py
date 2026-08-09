@@ -136,5 +136,17 @@ class ProjectReviewScreen(ChoiceScreen):
                     f"Project not created: {error}\nArea: {self.area}\nName: {self.project_name}"
                 )
                 return
-        await tui.action_refresh()
-        tui.body.set_status(f"Created {created.identity}. Choose a project.")
+        # Spelled out rather than delegated to `action_refresh`, which used to do exactly this
+        # pair and no longer does: refresh is the active screen's own re-read now and does not
+        # navigate, whereas creating a project genuinely does end at the project list. This is
+        # the only caller that wanted the navigation, so it is the one that keeps it.
+        if not await tui.reload_catalogue():
+            self.render_review()
+            self.set_status(
+                f"Created {created.identity}, but the project catalogue could not be re-read. "
+                "Check this host, then refresh the project list."
+            )
+            return
+        tui.return_to_projects()
+        if (body := tui.body) is not None:
+            body.set_status(f"Created {created.identity}. Choose a project.")

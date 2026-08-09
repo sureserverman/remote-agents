@@ -137,6 +137,52 @@ async def test_pressing_the_key_actually_reaches_the_action() -> None:
     assert launcher.refreshed == 1
 
 
+async def test_ctrl_r_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
+    """The one view whose answer goes stale on its own is the one Refresh used to abandon.
+
+    A second process writes the same store, so the sessions list is the position where the
+    owner has an actual reason to press Refresh. It re-read the *catalogue* and unwound to
+    the project picker instead, which is neither of the two things the key promises here.
+    """
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+        assert position(app) == "SESSIONS"
+        listed, depth = launcher.refreshed, len(app.screen_stack)
+
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        assert launcher.refreshed == listed + 1, "refresh did not re-run the sessions load"
+        assert position(app) == "SESSIONS"
+        assert len(app.screen_stack) == depth, "refresh moved the owner off the sessions list"
+
+
+async def test_ctrl_r_where_there_is_nothing_to_re_read_does_not_navigate() -> None:
+    """A screen with nothing to refresh stays where it is, rather than unwinding the stack.
+
+    Task 1.2 turns this into a disabled binding the footer stops advertising; until then the
+    property that matters is that the key cannot move the owner.
+    """
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        assert position(app) == "PROFILES"
+        depth = len(app.screen_stack)
+
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        assert position(app) == "PROFILES"
+        assert len(app.screen_stack) == depth
+
+
 def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
     """A binding a focused widget also claims never reaches the app.
 
@@ -162,3 +208,33 @@ def test_no_app_binding_is_swallowed_by_a_focusable_widget() -> None:
             key: (app_keys[key], keys_of(widget)[key]) for key in app_keys if key in keys_of(widget)
         }
         assert not clashes, f"{widget.__name__} swallows {clashes}"
+
+
+def test_every_screen_that_advertises_refresh_actually_implements_it() -> None:
+    """`can_refresh` and `refresh_contents` are two declarations of one fact.
+
+    The flag exists because the next task drives `check_action` off it, and asking "did this
+    class replace a method" is not a question a binding check should be answering at runtime.
+    That is a fair call, and it leaves the two free to disagree — with the footer taking the
+    flag's word for it.
+
+    Both directions are defects, and they are the *same* defect this task exists to fix, moved
+    up a level: a screen that advertises Refresh without implementing it lies to the owner
+    exactly as the old unconditional catalogue re-read did, and one that implements it without
+    advertising it has working behaviour the next task will make unreachable.
+    """
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+    from remote_agents.adapters.tui.screens.base import ChoiceScreen
+
+    def implements(screen) -> bool:
+        return screen.refresh_contents is not ChoiceScreen.refresh_contents
+
+    disagreeing = {
+        screen.__name__: (screen.can_refresh, implements(screen))
+        for screen in ALL_SCREENS
+        if issubclass(screen, ChoiceScreen) and screen.can_refresh != implements(screen)
+    }
+    assert not disagreeing, (
+        "these screens declare `can_refresh` and override `refresh_contents` inconsistently "
+        f"— (can_refresh, overrides) per screen: {disagreeing}"
+    )

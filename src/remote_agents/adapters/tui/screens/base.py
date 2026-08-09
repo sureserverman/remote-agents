@@ -48,6 +48,12 @@ class ChoiceScreen(Screen[None]):
     #: screen rather than mapped in the test so that adding a screen and forgetting its
     #: baseline is a missing name here, not a silently uncovered position there.
     position = ""
+    #: Whether this position has anything to re-read, i.e. whether Refresh means something
+    #: here. Declared beside `refresh_contents` rather than inferred from whether the hook is
+    #: overridden, because Task 1.2 has to ask this question from `check_action` — before any
+    #: refresh runs, to decide whether the footer advertises the key at all — and "did this
+    #: class replace a method" is not a question a binding check should be asking.
+    can_refresh = False
 
     def __init__(self) -> None:
         super().__init__()
@@ -116,6 +122,25 @@ class ChoiceScreen(Screen[None]):
         the re-read outside the busy guard a stop is still holding — the window in which a
         keypress acts on a screen the owner is no longer looking at. Screens with nothing to
         re-read leave it as this no-op.
+        """
+
+    async def refresh_contents(self) -> None:
+        """Re-read whatever this screen shows, because the owner asked for it directly.
+
+        What Ctrl+R does. A per-screen capability rather than an app-level action, because
+        the app-level one re-read the *project catalogue* and then unwound to the project list
+        unconditionally — so the key the footer calls Refresh, pressed on the sessions list,
+        abandoned the one position in this surface whose answer goes stale on its own: a
+        second process writes the same store, and that list is where the owner would notice.
+
+        Separate from `on_reveal` despite both meaning "re-read", and the catalogue is the
+        distinction. `on_reveal` fires on every back path, where re-reading the development
+        root would put a disk scan on the way out of every flow; this fires only when the
+        owner asked for it, which is when that cost is the whole point. A screen wanting the
+        same work for both says so by calling one from the other.
+
+        A screen with nothing to re-read leaves this as the no-op it is, and leaves
+        `can_refresh` false alongside it.
         """
 
     # Rendering -----------------------------------------------------------------
