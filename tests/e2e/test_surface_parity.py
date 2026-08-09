@@ -11,6 +11,7 @@ screen, or a command that reached the launcher. None of them can pass by falling
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -229,8 +230,6 @@ async def _probe_force(app, launcher, pilot) -> None:
     probe has not given yet. The keys below are that answer — down onto the confirm row, then
     enter — which is also the only way the owner can reach it.
     """
-    import asyncio
-
     await _open_detail(app, launcher, pilot)
     asking = asyncio.create_task(_choose(app, pilot, "force"))
     await pilot.pause()
@@ -244,9 +243,12 @@ async def _probe_force(app, launcher, pilot) -> None:
 
 async def _probe_remote_control(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
-    await _choose(app, pilot, "remote-control")
-    assert position(app) == "REMOTE_CONTROL_CONFIRM"
-    await _choose(app, pilot, "remote-control-active")
+    asking = asyncio.create_task(_choose(app, pilot, "remote-control-active"))
+    await pilot.pause()
+    assert position(app) == "REMOTE_CONTROL_MODAL"
+    await pilot.press("down")
+    await pilot.press("enter")
+    await asyncio.wait_for(asking, timeout=5)
     assert any(isinstance(item, RemoteControlCommand) for item in launcher.issued)
 
 

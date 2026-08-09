@@ -56,6 +56,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION_ID = SessionId.new()
@@ -184,10 +185,13 @@ async def _drive_to_review(app: RemoteAgentsTui) -> None:
     app.screen.submit("nightly run")
 
 
-async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> None:
+async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
+    """Same shape as the force drive, and modal for the same reason."""
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    await app.screen.confirm_remote_control()
+    return asyncio.create_task(
+        app.screen.confirm_remote_control(RemoteControlState.ACTIVE)
+    )
 
 
 async def _drive_to_resume_confirm(app: RemoteAgentsTui) -> None:
@@ -213,7 +217,7 @@ _RESTING = (
     pytest.param(
         _drive_to_remote_control_confirm,
         "Cancel",
-        "REMOTE_CONTROL_CONFIRM",
+        "REMOTE_CONTROL_MODAL",
         id="remote-control-confirm",
     ),
     # The resume flow's commit point. Same "abort under the cursor" shape as the two

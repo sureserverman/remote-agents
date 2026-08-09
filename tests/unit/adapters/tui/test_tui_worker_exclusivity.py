@@ -564,10 +564,15 @@ async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
         await pilot.pause()
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
-        await app.screen.confirm_remote_control()
         await settle(app, pilot)
 
-        first = asyncio.create_task(_select(app, "remote-control-active"))
+        # The direction is a row on the detail now, and its confirmation is a modal — so the
+        # first task covers choosing, confirming and issuing, and the repeated press lands
+        # back on the detail where the busy guard is what must refuse it.
+        first = asyncio.create_task(app.screen.choose("remote-control-active"))
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.press("enter")
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
         second = asyncio.create_task(_select(app, "remote-control-active"))
         await asyncio.sleep(0)

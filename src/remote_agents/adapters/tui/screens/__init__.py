@@ -21,7 +21,7 @@ from __future__ import annotations
 from remote_agents.adapters.tui.screens.confirm import (
     ALL_CONFIRMS,
     ForceConfirmModal,
-    RemoteControlConfirmScreen,
+    RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.launch import (
     LabelScreen,
@@ -64,7 +64,7 @@ ALL_SCREENS = (
     ResumeConversationsScreen,
     ResumeConfirmScreen,
     ForceConfirmModal,
-    RemoteControlConfirmScreen,
+    RemoteControlConfirmModal,
 )
 
 __all__ = [
@@ -78,7 +78,7 @@ __all__ = [
     "ProfilesScreen",
     "ProjectReviewScreen",
     "ProjectsScreen",
-    "RemoteControlConfirmScreen",
+    "RemoteControlConfirmModal",
     "ResumeConfirmScreen",
     "ResumeConversationsScreen",
     "ResumeProfilesScreen",

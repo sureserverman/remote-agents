@@ -39,7 +39,7 @@ from remote_agents.adapters.tui.screens import (
     ProfilesScreen,
     ProjectReviewScreen,
     ProjectsScreen,
-    RemoteControlConfirmScreen,
+    RemoteControlConfirmModal,
     ResumeConfirmScreen,
     ResumeConversationsScreen,
     ResumeProfilesScreen,
@@ -65,6 +65,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION_ID = SessionId.new()
@@ -171,7 +172,9 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),
     ResumeConfirmScreen: lambda: ResumeConfirmScreen(_PROJECT, "claude", _RESOLVED),
     ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
-    RemoteControlConfirmScreen: lambda: RemoteControlConfirmScreen(str(_SESSION_ID), _record()),
+    RemoteControlConfirmModal: lambda: RemoteControlConfirmModal.for_change(
+        _record(), RemoteControlState.ACTIVE
+    ),
 }
 
 

@@ -11,6 +11,7 @@ why every test here runs the choice as a task, answers the modal with real keys,
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -317,7 +318,14 @@ async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
     """Index 0 is where a stray keypress lands, so index 0 must always be harmless."""
     record = _record(state)
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
-    mutating = {"graceful", "cleanup", "force", "remote-control", "force-confirm"}
+    mutating = {
+        "graceful",
+        "cleanup",
+        "force",
+        "remote-control-active",
+        "remote-control-inactive",
+        "force-confirm",
+    }
 
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
@@ -410,7 +418,18 @@ async def _answer_any_open_modal(app: RemoteAgentsTui, pilot) -> None:
 # `show_attach`/`show_inspect` — which were written in the same task and missed because the
 # guard was a per-method opt-in. The parametrization is what makes the *class* covered, so a
 # fifth reader added later fails here rather than being discovered by whoever hits the crash.
-_DETAIL_READS = ("confirm_force", "confirm_remote_control", "show_attach", "show_inspect")
+#
+# Each entry is name → how to call it, because the Remote Control read takes the direction the
+# detail row chose. A bare name list would have quietly dropped that one when it gained the
+# argument, which is the same "sweep with a hole" this parametrization exists to prevent.
+_DETAIL_READS: dict[str, Callable[[object], Awaitable[None]]] = {
+    "confirm_force": lambda detail: detail.confirm_force(),
+    "confirm_remote_control": lambda detail: detail.confirm_remote_control(
+        RemoteControlState.ACTIVE
+    ),
+    "show_attach": lambda detail: detail.show_attach(),
+    "show_inspect": lambda detail: detail.show_inspect(),
+}
 
 
 @pytest.mark.parametrize("entry_point", _DETAIL_READS)
@@ -474,7 +493,7 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
         await pilot.pause()
         detail = app.screen
 
-        reading = asyncio.create_task(getattr(detail, entry_point)())
+        reading = asyncio.create_task(_DETAIL_READS[entry_point](detail))
         await _escape_during()
         await pilot.pause()
 
@@ -546,7 +565,7 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
 
         # The assertion is that this returns at all: an unguarded write to a popped screen
         # raises out of here, and in the real app that exits it.
-        reading = asyncio.create_task(getattr(detail, entry_point)())
+        reading = asyncio.create_task(_DETAIL_READS[entry_point](detail))
         await _escape_during()
         await pilot.pause()
         await _answer_any_open_modal(app, pilot)

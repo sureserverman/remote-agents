@@ -105,7 +105,7 @@ _POSITIONS = (
     "SESSIONS",
     "SESSION_DETAIL",
     "FORCE_MODAL",
-    "REMOTE_CONTROL_CONFIRM",
+    "REMOTE_CONTROL_MODAL",
     "INSPECT",
     "RESUME_PROJECTS",
     "RESUME_PROFILES",
@@ -315,7 +315,7 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     if step == "SESSIONS":
         await app.show_sessions()
         return None
-    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_CONFIRM", "INSPECT"}:
+    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_MODAL", "INSPECT"}:
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
         if step == "FORCE_MODAL":
@@ -323,8 +323,10 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
             # it is answered, and answering it is exactly what would take the screen being
             # captured off screen. The test joins it after the capture.
             return asyncio.create_task(app.screen.confirm_force())
-        if step == "REMOTE_CONTROL_CONFIRM":
-            await app.screen.confirm_remote_control()
+        if step == "REMOTE_CONTROL_MODAL":
+            return asyncio.create_task(
+                app.screen.confirm_remote_control(RemoteControlState.ACTIVE)
+            )
         elif step == "INSPECT":
             await app.screen.show_inspect()
         return None

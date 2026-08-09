@@ -20,9 +20,12 @@ the modal and is unchanged by it — `initial_focus_is_mutating` is what the gat
 registered confirm for, and `ALL_CONFIRMS` is what makes a third one added later fail that
 sweep rather than ship without it.
 
-The Remote Control confirmation at the bottom of this file is still an ordinary screen; the
-next task converts it. The force path lands first and alone because it is the one that cannot
-be undone.
+**Both confirmations are modals now, and the Remote Control one changed shape to get here.**
+It used to be a three-row screen — Cancel, Enable, Disable — which is a *chooser*, not a
+confirmation: the direction was still undecided when the question was asked. The direction is
+chosen on the session detail now and this modal confirms exactly one of them, which is both
+what makes it answerable with a `bool` and what the bot has always done
+(`telegram/service.py`, `_detail_reply`).
 """
 
 from __future__ import annotations
@@ -35,13 +38,9 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _CANCEL
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.session_actions import explain_state
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
-
-_ENABLE = "remote-control-active"
-_DISABLE = "remote-control-inactive"
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -214,53 +213,8 @@ class RemoteControlConfirmModal(ConfirmScreen):
         )
 
 
-class RemoteControlConfirmScreen(ChoiceScreen):
-    """Ask before changing a live pane's control mode, with Cancel as the resting row.
-
-    **The last confirmation still repainted as an ordinary screen**, and the next task
-    converts it to `RemoteControlConfirmModal` above. It is left alone here so that the force
-    path — the one that cannot be undone — lands and is proved on its own, rather than being
-    committed together with a second flow whose failure would be indistinguishable from it.
-    """
-
-    position = "REMOTE_CONTROL_CONFIRM"
-
-    def __init__(self, session_value: str, record: SessionRecord) -> None:
-        super().__init__()
-        self.session_value = session_value
-        self.record = record
-
-    async def populate(self) -> None:
-        self.hide_entry()
-        self.set_status(
-            f"Claude Remote Control for {self.record.display.rendered}\n"
-            "Enabling lets this session be driven remotely; disabling returns it to local "
-            "control only."
-        )
-        self.show_choices(
-            (
-                (_CANCEL, "Cancel"),
-                (_ENABLE, "Enable Remote Control"),
-                (_DISABLE, "Disable Remote Control"),
-            )
-        )
-
-    async def after_command(self) -> None:
-        """Leave the confirmation; the detail beneath re-reads on the way back."""
-        await self.tui.go_back()
-
-    async def choose(self, key: str) -> None:
-        desired = {_ENABLE: RemoteControlState.ACTIVE, _DISABLE: RemoteControlState.INACTIVE}.get(
-            key
-        )
-        if desired is None:
-            await self.tui.go_back()
-            return
-        await self.tui.set_remote_control(self.session_value, desired, self)
-
-
 #: Every confirm the surface can put in front of a destructive action. The stage gate sweeps
 #: it for a resting row that mutates, and `tests/unit/adapters/tui/test_confirm_modals.py`
 #: parametrizes over it — so a third destructive confirm added later without these
 #: guarantees fails here rather than shipping.
-ALL_CONFIRMS = (ForceConfirmModal,)
+ALL_CONFIRMS = (ForceConfirmModal, RemoteControlConfirmModal)
