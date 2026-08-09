@@ -177,8 +177,13 @@ class ChoiceScreen(Screen[None]):
         """Push `screen`, unless this one has been left while a read was in flight.
 
         The other half of `showing`. A push from a screen that is no longer on top lands on
-        whatever replaced it — which is how a "Yes, force stop it" dialog ends up sitting
-        above a position that is not showing the session it names.
+        whatever replaced it — which is how an output pane ends up sitting above a position
+        that is not showing the session whose output it captured.
+
+        The example used to be the force confirmation, which was pushed through here. It is a
+        `ModalScreen` awaited through `ask_to_confirm` now and does not come this way at all,
+        so the hazard is the same and the illustration had to change with the call sites: the
+        inspect screen and the three resume pushes are what still travel through this.
         """
         if not self.showing:
             return
@@ -353,14 +358,20 @@ class ChoiceScreen(Screen[None]):
     async def after_command(self) -> None:
         """What this screen does once a command it asked for has landed.
 
-        The default is to re-read in place, which is right for the session detail issuing a
-        graceful stop: the owner stays where they are and the rows are redrawn from the
-        store. A confirmation overrides it to leave itself instead, revealing the position
-        beneath — which re-reads through `on_reveal` on the way back.
+        Re-read in place, which is right for the session detail issuing any of its commands:
+        the owner stays where they are and the rows are redrawn from the store.
 
-        A hook rather than a test on the stack inside `stop`, because "am I a position the
-        owner should stay on after this?" is the screen's own question. An earlier version
-        guessed it from stack depth and popped the detail out from under a graceful stop.
+        **Nothing overrides this today, and the docstring here used to say something did.**
+        The override was the two confirmations, which left themselves after issuing so the
+        detail beneath came back refreshed. Both are `ModalScreen`s now, dismissed by the
+        answer before the command is issued at all, so the only caller of this is the detail
+        and the only implementation is this one.
+
+        Kept rather than inlined because the question it asks — "am I a position the owner
+        should stay on after this?" — is still the screen's own, and an earlier version that
+        guessed it from stack depth popped the detail out from under a graceful stop. A seam
+        with one implementation is cheap; re-deriving it from the stack is what was expensive.
+        Worth revisiting in the presentation sub-plan if no second implementation appears.
         """
         await self.on_reveal()
 

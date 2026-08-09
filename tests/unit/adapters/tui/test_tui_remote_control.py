@@ -121,10 +121,14 @@ async def test_the_toggle_is_offered_exactly_where_the_policy_allows_it(
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        offered = {key for key in _keys(app) if key in {_ENABLE, _DISABLE}}
+        # Every remote-control row, not the two this test expects. Filtering to the expected
+        # pair would have made the assertion blind to a *third* one — including the single
+        # `remote-control` row this stage replaced, which would then have sat on the detail
+        # opening nothing, and passed. Found by sweeping for that key at the stage gate.
+        offered = {key for key in _keys(app) if key and key.startswith("remote-control")}
 
     # Both directions or neither: the policy decides whether the toggle exists at all, and
-    # nothing in the surface may offer one half of it.
+    # nothing in the surface may offer one half of it, or a third thing beside it.
     assert offered == ({_ENABLE, _DISABLE} if remote_control_available(record) else set())
 
 

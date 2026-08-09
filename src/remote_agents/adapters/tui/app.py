@@ -380,7 +380,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def set_remote_control(
         self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen
     ) -> None:
-        """Change one session's control mode, after re-reading and re-checking the policy."""
+        """Change one session's control mode, after re-reading and re-checking the policy.
+
+        Unlike `stop`, this does not open with `if self._busy: return`. The asymmetry is real
+        and worth knowing about: what refuses a second concurrent change is
+        `ChoiceScreen.on_option_list_option_selected`, which drops a row selection while the
+        surface is busy, so the refusal happens before this is ever called. That holds for the
+        one caller there is — `SessionDetailScreen.confirm_remote_control`, reached only
+        through that handler. A second caller reaching this directly would not be refused
+        here, which is the thing to check before adding one.
+        """
         self._busy = True
         try:
             record = await self.current_record(session_value)
@@ -404,13 +413,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
             return
         else:
-            # Held for the same reason as `stop`'s refresh: nothing else may run until the
-            # result is on screen, and leaving the confirmation awaits the detail's re-read.
+            # Inside the guard on purpose, as in `stop`: nothing else may run until the
+            # result is on screen, and this awaits a re-read.
             await screen.after_command()
-            # Deliberately `self.body` and not `screen`: `after_command` has just left the
-            # confirmation, so the position now showing is the detail beneath it, and that is
-            # where the new control mode belongs. `screen` at this point is the popped dialog.
-            self.body.set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
+            # Reported onto `screen`, which is the session detail — the confirmation was a
+            # modal and was dismissed by the answer, so there is no dialog left on the stack
+            # for this to land on by mistake. This line used to read `self.body` with a
+            # comment explaining that `screen` was the popped confirmation and `self.body`
+            # the detail beneath it. That distinction was real when the confirmation was a
+            # pushed screen and is gone now: both expressions resolve to the same detail, and
+            # naming it once is what stops the next reader from looking for the dialog.
+            #
+            # The order matters and survives the change: `after_command` re-reads the detail,
+            # which rewrites the status from the store, so this has to come after it or the
+            # new control mode would be painted and then immediately overwritten.
+            screen.set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
         finally:
             self._busy = False
 
