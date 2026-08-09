@@ -111,6 +111,17 @@ class SessionDetailScreen(ChoiceScreen):
 
     position = "SESSION_DETAIL"
 
+    #: Its `on_reveal` already re-reads this one session from the shared store on every
+    #: back path, so there was something to
+    #: re-read here all along. `can_refresh` was first set from "does this screen own a
+    #: catalogue-style read" rather than from "is there anything here that goes stale", which
+    #: is the question the footer is actually answering. Found by the Stage 1 gate evaluator.
+    can_refresh = True
+
+    async def refresh_contents(self) -> None:
+        """Ctrl+R does here what coming back to this position does: read it again."""
+        await self.on_reveal()
+
     async def populate(self) -> None:
         self.hide_entry()
         await self.render_detail()

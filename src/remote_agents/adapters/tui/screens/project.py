@@ -94,6 +94,17 @@ class NameScreen(ChoiceScreen):
 class ProjectReviewScreen(ChoiceScreen):
     """Name the project before creating it, exactly as the bot's Review does."""
 
+    @property
+    def work_in_flight(self) -> bool:
+        """Leaving here throws away the area and the project name gathered across two screens.
+
+        The entry is empty at this point — the value was committed a screen ago — so the
+        default answer would be "nothing in flight" while a whole flow's worth of the owner's
+        choices sits one keystroke from being discarded with no way back to them.
+        """
+        return True
+
+
     position = "PROJECT_REVIEW"
 
     def __init__(self, area: str, project_name: str) -> None:

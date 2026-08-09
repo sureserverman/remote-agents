@@ -174,7 +174,10 @@ uv run --locked remote-agents tui
 7. Press Ctrl+N, confirm the offered areas are the eligible existing directories under the
    configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
    created, then create a valid one and confirm it becomes selectable without leaving the app.
-   Escape is Back, Ctrl+R re-reads the catalogue, and Ctrl+Q quits.
+   Escape is Back, Ctrl+Q quits, and Ctrl+R re-reads the screen you are on rather than
+   returning to the project list — confirm on the sessions view that it re-lists in place.
+   Confirm the footer drops Refresh on a screen with nothing to re-read, and that typing a
+   project name greys Ctrl+N, Ctrl+S and Ctrl+O rather than discarding what you typed.
 
 ## Terminal and service on one database
 
@@ -202,8 +205,12 @@ moment.
 Each process also holds its own catalogue and its own profile probe, both taken when it starts. A
 project created in the terminal is invisible to a running service until it re-reads — press
 Refresh in any paginated view — and one created from Telegram or the command line is invisible in
-a running terminal until Ctrl+R. Ctrl+R re-reads the catalogue only: an agent installed after the
-terminal started stays reported as unavailable there until the terminal is restarted, and the
+a running terminal until it re-reads the catalogue — press Ctrl+R on the project list, the
+resume project list, or use Add Project, which re-reads on the way out. Ctrl+R re-reads only
+what the screen it is pressed on shows, and the catalogue is what those two show; on the
+sessions view it re-runs the readiness pass and the session list instead. No screen's Refresh
+re-probes the agents: one installed after the terminal started stays reported as unavailable
+there until the terminal is restarted, and the
 service's profile list is a snapshot of its own start in the same way. When the two surfaces
 disagree about which projects or agents exist, neither is wrong; refresh or restart the older
 process, and treat `doctor --profiles`, which probes when it is run, as the current answer.

@@ -56,10 +56,19 @@ class ProjectsScreen(ChoiceScreen):
         the rows are deliberately left alone — the catalogue already drawn is stale, not
         wrong, and blanking it would take away projects the owner can still launch.
         """
+        from textual.widgets import Input
+
+        # Keep whatever the owner has typed. `render_projects()` defaults to clearing the
+        # filter and moving the keyboard, which is right on the way *back* into this screen
+        # and wrong here: Refresh does not leave the position, so it has no business
+        # discarding the query the list is currently narrowed by. The stage's own rule
+        # exempts this filter from the flow-jump protection on the grounds that leaving is
+        # the ordinary thing to do here — an argument that does not reach a key which stays.
+        query = self.query_one("#filter", Input).value
         if not await self.tui.reload_catalogue():
             self.set_status("The project catalogue could not be re-read. Check this host.")
             return
-        self.render_projects()
+        self.render_projects(query, keep_focus=True)
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         """Draw the catalogue, filtered by whatever is typed in the filter input."""
@@ -173,6 +182,17 @@ class LabelScreen(ChoiceScreen):
 
 class ReviewScreen(ChoiceScreen):
     """The last position before a launch is issued, resting on Back rather than Launch."""
+
+    @property
+    def work_in_flight(self) -> bool:
+        """Leaving here throws away the project, agent and label gathered across three screens.
+
+        The entry is empty at this point — the value was committed a screen ago — so the
+        default answer would be "nothing in flight" while a whole flow's worth of the owner's
+        choices sits one keystroke from being discarded with no way back to them.
+        """
+        return True
+
 
     position = "REVIEW"
 

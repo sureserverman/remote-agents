@@ -183,13 +183,24 @@ class ChoiceScreen(Screen[None]):
         honest fix is not a hidden key: a footer whose entries vanish and reappear as the
         surface works would be worse than one that is briefly optimistic.
 
-        **The one rule here that mirrors no early return is the in-flight-text one, and it is
-        deliberate.** The three flow jumps unwind the stack, so pressing one while a label or a
-        project name is half-typed discards it with no warning and no way back — the action has
-        no early return for that because the action never knew. This is the rule that had to be
-        invented rather than mirrored, and it is the only one answering `None`: the key stays
-        drawn and greyed rather than vanishing, because a footer entry that disappears as the
-        owner types would be a second surprise on top of the first.
+        **The one rule here that mirrors no early return is the work-in-flight one, and it is
+        deliberate.** The three flow jumps unwind the stack, so pressing one while a label is
+        half-typed — or while a whole selection is gathered and waiting at the review step —
+        discards it with no warning and no way back. The action has no early return for that
+        because the action never knew. This is the rule that had to be invented rather than
+        mirrored, and it is the only one answering `None`: the key stays drawn and greyed rather
+        than vanishing, because a footer entry that disappears as the owner types would be a
+        second surprise on top of the first.
+
+        **Quit is deliberately not in that set, and saying so is the point.** `ctrl+q` discards
+        in-flight work exactly as the three jumps do, and a stage review reproduced it: type a
+        label, press it, the app is gone and the label with it. It is left enabled because the
+        two keys mean different things to the person pressing them. The jumps mean "go somewhere
+        else in this app", and losing the work is a side effect nobody asked for; quit means
+        "leave", and an app that refuses to close until an entry is cleared is a worse answer
+        than the one it replaces. What it *should* have is a warning rather than a refusal —
+        recorded as BL-025, and it belongs with the notification work rather than here, because
+        the surface currently has nowhere to put such a warning.
         """
         if action == "back":
             # `go_back` refuses to pop the last screen, so at the resting position escape is
@@ -205,22 +216,37 @@ class ChoiceScreen(Screen[None]):
             # in-flight rule below so a host without the capability hides the key outright
             # rather than greying it, which would imply it were available later.
             return False
-        if action in _FLOW_JUMPS and self.text_in_flight:
+        if action in _FLOW_JUMPS and self.work_in_flight:
             return None
         return True
 
     @property
-    def text_in_flight(self) -> bool:
-        """Whether this screen holds typed input that leaving would discard.
+    def work_in_flight(self) -> bool:
+        """Whether leaving this position would discard something the owner built.
 
-        The entry has to be *shown* as well as non-empty: `hide_entry` leaves the widget in the
-        tree with a stale value on screens that do not use it, so reading the value alone would
-        report text in flight on positions that have no entry at all.
+        Not "is there text in the box" — that was the first version of this, and a stage review
+        found what it missed. A label typed on `LABEL` is protected while it is being typed and
+        then *committed*, at which point the box is empty and the same three keys throw away the
+        whole gathered selection from the review step one screen later. The thing worth
+        protecting was never the widget's contents; it is work the owner cannot get back by
+        pressing escape.
+
+        So a screen that holds gathered state says so by overriding this, and the default
+        answers for the ordinary case: an entry that is shown, non-empty, and a commitment. The
+        entry has to be *shown* as well as non-empty because `hide_entry` leaves the widget in
+        the tree with a stale value, so reading the value alone reports work in flight on
+        positions that have no entry at all.
         """
         if not self.entry_is_a_commitment:
             return False
-        entry = self.query_one("#filter", Input)
-        return bool(entry.display and entry.value)
+        # `query_one` raises `NoMatches` before the screen has composed, and this runs from
+        # `check_action` — the same path `App.check_action` already guards its own dereference
+        # on. No driven sequence reaches it (a gate evaluator tried, across a full keyed walk
+        # and twenty unawaited-push bursts), because every real consumer runs from the pump
+        # after mount. Guarded anyway: an exception out of a footer redraw is the class that
+        # has already cost this app once, and "unreachable today" is what that was too.
+        entry = self.query("#filter").first(Input) if self.query("#filter") else None
+        return bool(entry is not None and entry.display and entry.value)
 
     # Rendering -----------------------------------------------------------------
 

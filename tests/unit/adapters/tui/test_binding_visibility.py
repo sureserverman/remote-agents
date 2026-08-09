@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.screen import Screen
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -320,7 +321,16 @@ def test_no_screen_inherits_the_permissive_default(screen_type: type[Screen]) ->
 
 # --- Task 1.3: a global key must not discard what the owner is typing -------------------
 
-_TYPING_SCREENS = tuple(s for s in ALL_SCREENS if getattr(s, "entry_is_a_commitment", False))
+#: Every position where leaving would discard something the owner built — the two that gather
+#: typed text, and the two review steps that hold a whole flow's worth of choices. Derived from
+#: the property itself rather than listed, so a screen that starts protecting its work is
+#: covered here on the same commit.
+_WORK_SCREENS = tuple(
+    s
+    for s in ALL_SCREENS
+    if getattr(s, "entry_is_a_commitment", False)
+    or "work_in_flight" in vars(s)
+)
 
 
 def test_every_screen_that_commits_typed_text_declares_it() -> None:
@@ -346,8 +356,8 @@ def test_every_screen_that_commits_typed_text_declares_it() -> None:
 
 
 @pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
-@pytest.mark.parametrize("screen_type", _TYPING_SCREENS, ids=lambda c: c.__name__)
-async def test_a_flow_jump_neither_navigates_nor_loses_text_that_is_being_typed(
+@pytest.mark.parametrize("screen_type", _WORK_SCREENS, ids=lambda c: c.__name__)
+async def test_a_flow_jump_neither_navigates_nor_loses_work_in_flight(
     screen_type: type[Screen], binding: str
 ) -> None:
     """The task's own case: press a global key mid-entry and keep both the position and the text.
@@ -364,10 +374,12 @@ async def test_a_flow_jump_neither_navigates_nor_loses_text_that_is_being_typed(
         await pilot.pause()
         await _arrange(app, pilot, screen_type)
         entry = app.screen.query_one("#filter", Input)
-        entry.focus()
-        await pilot.press(*"nightly")
-        await pilot.pause()
-        assert entry.value == "nightly", "the fixture never typed anything"
+        if entry.display:
+            entry.focus()
+            await pilot.press(*"nightly")
+            await pilot.pause()
+            assert entry.value == "nightly", "the fixture never typed anything"
+        assert app.screen.work_in_flight, "the fixture did not reach a state worth protecting"
 
         position_before = app.screen.position
         depth_before = len(app.screen_stack)
@@ -378,13 +390,14 @@ async def test_a_flow_jump_neither_navigates_nor_loses_text_that_is_being_typed(
             f"{binding} left {position_before} with text half-typed"
         )
         assert len(app.screen_stack) == depth_before
-        assert app.screen.query_one("#filter", Input).value == "nightly", (
-            f"{binding} discarded the text the owner was typing"
-        )
+        if entry.display:
+            assert app.screen.query_one("#filter", Input).value == "nightly", (
+                f"{binding} discarded the text the owner was typing"
+            )
 
 
 @pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
-@pytest.mark.parametrize("screen_type", _TYPING_SCREENS, ids=lambda c: c.__name__)
+@pytest.mark.parametrize("screen_type", _WORK_SCREENS, ids=lambda c: c.__name__)
 async def test_a_flow_jump_is_greyed_rather_than_hidden_while_text_is_in_flight(
     screen_type: type[Screen], binding: str
 ) -> None:
@@ -401,9 +414,12 @@ async def test_a_flow_jump_is_greyed_rather_than_hidden_while_text_is_in_flight(
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await _arrange(app, pilot, screen_type)
-        app.screen.query_one("#filter", Input).focus()
-        await pilot.press(*"nightly")
-        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        if entry.display:
+            entry.focus()
+            await pilot.press(*"nightly")
+            await pilot.pause()
+        assert app.screen.work_in_flight
 
         active = app.screen.active_bindings
         assert binding in active, f"{binding} vanished from the footer while typing"
@@ -437,4 +453,92 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
 
         assert app.screen.position != "PROJECTS", (
             f"{binding} was refused on the project filter, where the text is disposable"
+        )
+
+
+#: The positions that protect work, named rather than derived. `_WORK_SCREENS` is computed from
+#: the code, so a screen that stopped protecting its work would drop out of that parametrization
+#: and take its own coverage with it — the tests would shrink to fit the regression and stay
+#: green. Verified: deleting the review screens' override passed every case until this list
+#: existed. A literal is the only form that can fail.
+_PROTECTS_WORK = {"LabelScreen", "NameScreen", "ReviewScreen", "ProjectReviewScreen"}
+
+
+def test_exactly_these_positions_protect_work_in_flight() -> None:
+    """Which screens have something to lose is a decision, so it is written down.
+
+    Two kinds: the two that gather typed text, and the two review steps that hold a whole
+    flow's worth of choices with an empty entry. The second kind is the one a rule written
+    against the input widget misses, which is what a stage review found by walking to Review
+    with a label committed and pressing Ctrl+S.
+    """
+    actual = {
+        screen.__name__
+        for screen in ALL_SCREENS
+        if getattr(screen, "entry_is_a_commitment", False) or "work_in_flight" in vars(screen)
+    }
+    assert actual == _PROTECTS_WORK
+
+
+async def test_the_gathered_launch_survives_a_flow_jump_at_the_review_step() -> None:
+    """The journey the review reproduced, driven end to end rather than asserted on a flag.
+
+    Project, then agent, then a label committed with enter — at which point the entry is empty
+    and the first version of this rule considered nothing to be in flight. Ctrl+S there
+    unwound the stack to the sessions list and the next project choice replaced the selection
+    outright, so three screens of the owner's choices were gone with no way back to them.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        app.screen.submit("nightly run")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW"
+        assert app.selection.label == "nightly run"
+        depth = len(app.screen_stack)
+
+        await pilot.press("ctrl+s")
+        await pilot.pause()
+
+        assert app.screen.position == "REVIEW", "a flow jump discarded the gathered launch"
+        assert len(app.screen_stack) == depth
+        assert app.selection.label == "nightly run"
+        assert app.selection.project is not None and app.selection.profile is not None
+
+
+async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:
+    """Refresh re-reads the position; it does not clear it.
+
+    A live instance of this stage's own third clause, and the one the flow-jump rule could not
+    reach. The project filter is deliberately exempt from that rule because leaving for another
+    flow is the ordinary thing to do here — an argument that does not apply to a key which
+    *stays*. `render_projects()` defaults to clearing the entry and moving the keyboard, which
+    is right on the way back into this screen and wrong on Ctrl+R.
+    """
+    from textual.widgets import Input
+
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        entry.focus()
+        await pilot.press(*"exist")
+        await pilot.pause()
+        narrowed = [o.id for o in app.screen.query_one("#choices", OptionList).options]
+
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        assert app.screen.query_one("#filter", Input).value == "exist", (
+            "Refresh discarded the filter the owner typed"
+        )
+        assert [o.id for o in app.screen.query_one("#choices", OptionList).options] == narrowed, (
+            "Refresh widened the list back out from under the filter"
+        )
+        assert app.screen.query_one("#filter", Input).has_focus, (
+            "Refresh moved the keyboard off the filter the owner was using"
         )

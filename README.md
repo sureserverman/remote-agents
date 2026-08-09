@@ -109,9 +109,20 @@ beside one that cannot be launched here; choosing that one is refused rather tha
 label is optional, bounded by the configured `max_label_length`, and an empty entry skips it.
 Review names the project, agent, and label before anything is created, and it opens with Back
 highlighted rather than Launch, so a stray enter mutates nothing; Back restores the agent choice
-and Cancel returns to the project list. Escape is Back, Ctrl+R re-reads the catalogue, Ctrl+N adds
-a project, Ctrl+S opens the managed sessions, Ctrl+O resumes a saved conversation, and Ctrl+Q
-quits. A launch that raises, or one whose session never reaches readiness, returns to Review with
+and Cancel returns to the project list. Escape is Back, Ctrl+R re-reads whatever the screen
+you are on shows without leaving it, Ctrl+N adds a project, Ctrl+S opens the managed sessions,
+Ctrl+O resumes a saved conversation, and Ctrl+Q quits.
+
+The footer lists only the keys that do something where you are. Refresh appears only where
+something can be re-read, Back is absent at the project list because there is nowhere behind
+it, and Resume is absent entirely on a host that wired no conversation service. While a flow
+holds work you would lose — a label or a project name being typed, or a review step holding
+everything gathered so far — the three keys that leave the flow are greyed rather than
+hidden, so a keystroke meant for somewhere else does not discard it. Ctrl+Q is deliberately
+not among them: quit means leave, and an app that refuses to close until an entry is cleared
+would be the worse answer. It does take unsaved work with it.
+
+A launch that raises, or one whose session never reaches readiness, returns to Review with
 the reason and attaches to nothing.
 
 Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates

@@ -117,6 +117,17 @@ class ResumeProfilesScreen(ChoiceScreen):
 
     position = "RESUME_PROFILES"
 
+    #: Its `on_reveal` already re-reads the profile capabilities from the provider on every
+    #: back path, so there was something to
+    #: re-read here all along. `can_refresh` was first set from "does this screen own a
+    #: catalogue-style read" rather than from "is there anything here that goes stale", which
+    #: is the question the footer is actually answering. Found by the Stage 1 gate evaluator.
+    can_refresh = True
+
+    async def refresh_contents(self) -> None:
+        """Ctrl+R does here what coming back to this position does: read it again."""
+        await self.on_reveal()
+
     def __init__(
         self, project: CatalogProject, capable: tuple[ProfileResumeCapability, ...]
     ) -> None:
@@ -184,6 +195,17 @@ class ResumeConversationsScreen(ChoiceScreen):
     """One bounded page of safe metadata; provider IDs never leave the server."""
 
     position = "RESUME_CONVERSATIONS"
+
+    #: Its `on_reveal` already re-reads the current page of conversations on every
+    #: back path, so there was something to
+    #: re-read here all along. `can_refresh` was first set from "does this screen own a
+    #: catalogue-style read" rather than from "is there anything here that goes stale", which
+    #: is the question the footer is actually answering. Found by the Stage 1 gate evaluator.
+    can_refresh = True
+
+    async def refresh_contents(self) -> None:
+        """Ctrl+R does here what coming back to this position does: read it again."""
+        await self.on_reveal()
 
     def __init__(
         self, project: CatalogProject, profile: str, page: ConversationCataloguePage
