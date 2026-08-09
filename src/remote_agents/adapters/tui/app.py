@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import TypeVar, cast
+from typing import TypeVar
 
 from textual import work
 from textual.app import App
@@ -142,9 +142,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._busy = busy
 
     @property
-    def body(self) -> ChoiceScreen:
-        """The active screen, typed as the body every position renders."""
-        return cast(ChoiceScreen, self.screen)
+    def body(self) -> ChoiceScreen | None:
+        """The active screen when it is one that renders the shared body, otherwise `None`.
+
+        This was an unchecked `cast` to `ChoiceScreen` — the last vestige of the single
+        repainted-body model, and an unchecked one. BL-021 recorded it at the Stage 2 gate as
+        safe *for now* and reachable as soon as this stage landed a `ModalScreen`, which is
+        exactly what happened: a confirmation is not a `ChoiceScreen`, it has no
+        `show_choices`, and the cast would have handed one to `report_store_failure` to call
+        it on.
+
+        Answering `None` rather than raising, because every caller here is already on a
+        failure path — reporting a catalogue read that failed, or a store read that failed —
+        and the one thing those must not do is raise again. A message that cannot be rendered
+        because the owner is looking at a modal is a message that will be re-rendered by the
+        re-read on the way back; losing the app instead is what this surface exists not to do.
+        """
+        screen = self.screen
+        return screen if isinstance(screen, ChoiceScreen) else None
 
     def return_to_projects(self) -> None:
         """Unwind to the resting position, whatever the owner had pushed on top of it."""
@@ -289,7 +304,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         except Exception:
             _LOG.exception("catalogue refresh failed")
-            self.body.set_status("The project catalogue could not be re-read. Check this host.")
+            if (body := self.body) is not None:
+                body.set_status("The project catalogue could not be re-read. Check this host.")
             return
         self.return_to_projects()
 
@@ -511,16 +527,32 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     # Store reads screens share ---------------------------------------------------
 
-    def report_store_failure(self, error: Exception) -> None:
-        """Report a failed store or terminal read without tearing the surface down.
+    def report_store_failure(self, error: Exception, screen: ChoiceScreen | None = None) -> None:
+        """Report a failed store or terminal read onto the screen that asked, or nowhere.
 
         Every read this surface makes can fail: the store has a second writer, and a
         recovery surface is used precisely when things are already broken. Losing the app
         to an exception is the one outcome that leaves the owner with nothing.
+
+        `screen` is the position whose read failed, and it is reported onto **only if it is
+        still the one showing**. Without that check this rendered onto whatever was on top:
+        a read that failed after the asking screen had been left replaced the *project
+        list's* rows with a lone "Back" and told the owner to "press escape to return to the
+        project list" — at the project list, where escape is inert. Every screen in this
+        package already guards its own renders with `showing` for exactly this reason; this
+        was the one render path that reached around it, and it is the path that runs when
+        things are already going wrong.
+
+        Reporting nowhere is the right outcome when the asker has been left: the message
+        describes a read the owner is no longer waiting on, the log line above is the durable
+        record, and the position they *are* looking at re-reads on its own terms.
         """
         _LOG.exception("session read failed", exc_info=error)
-        self.body.show_choices(((_BACK, "Back"),))
-        self.body.set_status(
+        target = screen if screen is not None else self.body
+        if target is None or not target.showing:
+            return
+        target.show_choices(((_BACK, "Back"),))
+        target.set_status(
             f"The managed sessions could not be read: {error}\n"
             "Press escape to return to the project list."
         )
@@ -567,7 +599,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.return_to_projects()
             return None
         self._busy = True
-        self.body.set_status("Launching…")
+        if (body := self.body) is not None:
+            body.set_status("Launching…")
         try:
             record = await self._services.launcher.launch(
                 LaunchCommand(

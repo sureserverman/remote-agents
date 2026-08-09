@@ -74,7 +74,7 @@ class SessionsScreen(ChoiceScreen):
         try:
             records = await self.tui.load_sessions()
         except Exception as error:
-            self.tui.report_store_failure(error)
+            self.tui.report_store_failure(error, self)
             return
         if not records:
             self.show_choices(())
@@ -122,7 +122,7 @@ class SessionDetailScreen(ChoiceScreen):
         try:
             record = await tui.current_record(self.session_value)
         except Exception as error:
-            tui.report_store_failure(error)
+            tui.report_store_failure(error, self)
             return
         if record is None:
             self.show_choices(((_BACK, "Back"),))
@@ -308,7 +308,7 @@ class SessionDetailScreen(ChoiceScreen):
                     return
                 command = await self.services.launcher.copy_attach(record.session_id)
             except Exception as error:
-                self.tui.report_store_failure(error)
+                self.tui.report_store_failure(error, self)
                 return
         if command is None:
             self.set_status(

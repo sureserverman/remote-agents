@@ -726,6 +726,93 @@ async def test_the_guard_is_still_held_while_the_abort_refreshes(confirm, arrang
     assert launcher.issued == []
 
 
+@pytest.mark.parametrize("bursts", [2, 3, 4, 8])
+@pytest.mark.parametrize("confirm,arrangement", _CASES)
+async def test_a_burst_of_answers_answers_once_and_pops_once(
+    confirm, arrangement, bursts: int
+) -> None:
+    """Several key events in one pump turn must answer the question once, not once per key.
+
+    `Screen.dismiss` calls the result callback (if one is left) and then `app.pop_screen()`
+    unconditionally — and `pop_screen` pops the *top of the stack*, which after the first
+    dismiss is no longer this screen. So a second answer popped the session detail, a third
+    took the sessions list with it, and a fourth raised `ScreenStackError` out of a message
+    handler and killed the app.
+
+    **Posted rather than pressed, and that is the whole reason this defect survived the
+    suite.** `Pilot.press` awaits idle between keys, so it can never produce the burst; key
+    autorepeat, a double-tap, and buffered stdin over a laggy link all can, because the driver
+    parses one read into several key events posted back to back. A test that presses is
+    testing a shape the terminal does not always send.
+    """
+    launcher = _Launcher()
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.show_sessions()
+        await pilot.pause()
+        await app.show_detail(str(_SESSION_ID))
+        await pilot.pause()
+        depth = len(app.screen_stack)
+        asking = await _ask(app, pilot, arrangement)
+        modal = app.screen
+        choices = modal.query_one("#choices", OptionList)
+        chosen = choices.get_option_at_index(modal.resting_index)
+
+        # No pump turn between them, which is what a single terminal read delivers.
+        for _ in range(bursts):
+            modal.post_message(
+                OptionList.OptionSelected(choices, chosen, modal.resting_index)
+            )
+        await pilot.pause()
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+
+        assert app.is_running, f"{bursts} answers in one turn took the app down"
+        assert len(app.screen_stack) == depth, (
+            f"{bursts} answers popped {depth - len(app.screen_stack)} screens; "
+            "one question is one pop"
+        )
+        assert position(app) == "SESSION_DETAIL", (
+            f"the owner was left on {position(app)} rather than the position they asked from"
+        )
+
+    assert launcher.issued == [], "the resting row is the abort, so a burst must issue nothing"
+
+
+@pytest.mark.parametrize("confirm,arrangement", _CASES)
+async def test_a_store_failure_reported_under_a_modal_does_not_crash(
+    confirm, arrangement
+) -> None:
+    """BL-021, which the Stage 2 gate recorded and predicted this stage would make reachable.
+
+    `RemoteAgentsTui.body` was an unchecked cast to `ChoiceScreen`, safe only while nothing
+    else could be on top. A confirmation is not a `ChoiceScreen` and has no `show_choices`, so
+    a store failure reported while one is open called a method that does not exist — from the
+    path that exists to report trouble *without* losing the app.
+    """
+    launcher = _Launcher()
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.show_detail(str(_SESSION_ID))
+        await pilot.pause()
+        asking = await _ask(app, pilot, arrangement)
+        assert isinstance(app.screen, ConfirmScreen)
+
+        # The assertion is that this returns at all.
+        app.report_store_failure(RuntimeError("the store went away"))
+        await pilot.pause()
+
+        assert app.is_running, "reporting a store failure under a modal took the app down"
+        assert isinstance(app.screen, confirm), "the report redrew over the open question"
+
+        await pilot.press("escape")
+        await asyncio.wait_for(asking, timeout=5)
+
+    assert launcher.issued == []
+
+
 @pytest.mark.parametrize("confirm,arrangement", _CASES)
 async def test_the_question_names_the_session_it_is_about(confirm, arrangement) -> None:
     """An owner confirming a kill must be able to see which session they are killing.

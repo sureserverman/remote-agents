@@ -8,7 +8,20 @@ away from.
 **What "modal" buys, precisely.** `ModalScreen` sets `_modal = True`, and `Screen`'s
 `_modal_binding_chain` truncates the binding chain at the first modal node
 (`textual/screen.py`), so while one of these is on top the app's own `BINDINGS` — `ctrl+s`,
-`ctrl+n`, `ctrl+o`, `ctrl+r`, `escape`, `ctrl+q` — are not in the chain at all. As ordinary
+`ctrl+n`, `ctrl+o`, `ctrl+r`, `escape` — are not in the chain at all.
+
+**That truncation covers ordinary bindings only, and two things escape it.**
+`App._check_bindings(key, priority=True)` walks the *untruncated* chain, so Textual's own
+command palette (`ctrl+p`) still opens over a confirmation — harmlessly: the question stays
+open beneath it, escape returns to it, and quitting from it resolves the answer to no.
+`ctrl+q` is the second, and it does not quit under a confirmation for a reason worth writing
+down, because it is not this one: `App.BINDINGS` declares `ctrl+q` with `priority=True`, and
+`DOMNode._merge_bindings` **replaces** a key's bindings per most-derived class rather than
+extending them — so `RemoteAgentsTui.BINDINGS`' own non-priority `ctrl+q` strips the priority
+off it and it falls inside the truncated chain. Deleting that line as redundant with Textual's
+default would bring the priority binding back and let the app be quit out from under an open
+kill confirmation. It resolves to no, so nothing is killed; the line is load-bearing anyway.
+As ordinary
 screens they *were*: `ctrl+s` on the force confirmation ran `action_sessions`, which unwound
 the stack to the sessions list, and the caller that had asked the question never learned the
 answer. That is the gap between "the abort is highlighted" and "the question was answered",
@@ -92,6 +105,8 @@ class ConfirmScreen(ModalScreen[bool]):
         super().__init__()
         self._question = question or self.question
         self._confirm_label = confirm_label or self.confirm_label
+        # A question is answered once. See `_answer` for what the second answer did.
+        self._answered = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
@@ -145,10 +160,36 @@ class ConfirmScreen(ModalScreen[bool]):
         choices.highlighted = self.resting_index
         choices.focus()
 
+    def _answer(self, confirmed: bool) -> None:
+        """Deliver the answer, and refuse to deliver a second one.
+
+        `Screen.dismiss` calls the top result callback and then `app.pop_screen()`
+        *unconditionally* — and `pop_screen` pops `_screen_stack[-1]`, which is not
+        necessarily this screen. The first dismiss also consumes the result callback, so a
+        second one finds none, raises nothing, and quietly pops **whatever is on top now**.
+
+        That made a burst of Enter keys walk back down the stack: two answered the question
+        and popped the session detail, three took the sessions list with it, and four raised
+        `ScreenStackError` out of a message handler and killed the app. It needs no unusual
+        input — key autorepeat on the dialog, a double-tap, or buffered stdin over a laggy
+        link all deliver several key events in one pump turn, which is exactly the shape the
+        pilot's own `press()` does not produce, because it waits for idle between keys. That
+        is why the suite could not see it and an adversarial pass could.
+
+        Consent was never inverted by it: the answer delivered is the first one, and the first
+        one lands on the abort. What it broke was everything after — a force stop whose
+        failure report was then written to a screen no longer on top, so the owner was
+        deposited on the sessions list and never told the kill had failed.
+        """
+        if self._answered:
+            return
+        self._answered = True
+        self.dismiss(confirmed)
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Answer with the row that was chosen, and with `False` for anything unrecognized."""
         event.stop()
-        self.dismiss(event.option_id == self.confirm_key)
+        self._answer(event.option_id == self.confirm_key)
 
     def action_abort(self) -> None:
         """Escape answers the question rather than leaving it unanswered.
@@ -158,7 +199,7 @@ class ConfirmScreen(ModalScreen[bool]):
         closes it. Answering `False` rather than popping raw keeps every exit routed through
         the one result the caller awaits.
         """
-        self.dismiss(False)
+        self._answer(False)
 
 
 class ForceConfirmModal(ConfirmScreen):
