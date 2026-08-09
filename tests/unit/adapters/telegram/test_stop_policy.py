@@ -5,11 +5,15 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_stop_that_did_not_take
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
-from remote_agents.application.session_actions import available_actions
+from remote_agents.application.session_actions import (
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    available_actions,
+)
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
 from remote_agents.ports.terminal import TerminalObservation
 
@@ -103,9 +107,9 @@ async def test_execute_dispatches_exactly_what_the_policy_permits(
     service = _RecordingService()
     request = StopRequest(action, session, profile)
 
-    dispatched = await _controller().execute(request, service, _Record(session, profile, state))
+    result = await _controller().execute(request, service, _Record(session, profile, state))
 
-    assert dispatched is (action in available_actions(state))
+    assert result.dispatched is (action in available_actions(state))
     assert service.dispatched == ([action] if action in available_actions(state) else [])
 
 
@@ -121,13 +125,13 @@ async def test_an_orphaned_force_never_reaches_the_service() -> None:
     profile = ProfileId("claude")
     service = _RecordingService()
 
-    dispatched = await _controller().execute(
+    result = await _controller().execute(
         StopRequest("force", session, profile),
         service,
         _Record(session, profile, SessionState.ORPHANED),
     )
 
-    assert dispatched is False
+    assert result.dispatched is False
     assert service.dispatched == []
 
 
@@ -136,12 +140,12 @@ async def test_execute_still_refuses_a_record_that_is_not_the_requested_session(
     from remote_agents.adapters.telegram.stops import StopRequest
 
     service = _RecordingService()
-    dispatched = await _controller().execute(
+    result = await _controller().execute(
         StopRequest("force", SessionId(UUID(int=1)), ProfileId("claude")),
         service,
         _Record(SessionId(UUID(int=2)), ProfileId("claude"), SessionState.RUNNING),
     )
-    assert dispatched is False
+    assert result.dispatched is False
     assert service.dispatched == []
 
 
@@ -161,3 +165,93 @@ def test_a_starting_session_is_tokenized_for_nothing() -> None:
             )
             is None
         )
+
+
+# BL-008 on this surface — `execute` reports *why* a graceful stop did not take effect -------
+#
+# `StopController.execute` answered a bare bool, so the one thing `graceful_stop`'s
+# observation carries — whether the profile's own exit sequence actually worked, and if not
+# which of two unrelated causes it was — was discarded here exactly as it was on the local
+# surface. The bot then inferred "it did not exit in time" from the session still being
+# listed, which is right for one cause and confidently wrong for the other.
+
+
+class _FailingService:
+    """A graceful stop that reports back the cause the test named."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        self.dispatched: list[str] = []
+
+    async def graceful_stop(self, _command) -> TerminalObservation:
+        self.dispatched.append("graceful")
+        return a_stop_that_did_not_take(self.detail)
+
+    async def cleanup(self, _command) -> None:  # pragma: no cover - not reached
+        self.dispatched.append("cleanup")
+
+    async def force_stop(self, _command) -> None:  # pragma: no cover - not reached
+        self.dispatched.append("force")
+
+
+@pytest.mark.parametrize("detail", [UNKNOWN_SESSION, GRACEFUL_TIMEOUT])
+async def test_execute_reports_why_a_graceful_stop_did_not_take_effect(detail: str) -> None:
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    session = SessionId(UUID(int=1))
+    profile = ProfileId("claude")
+    service = _FailingService(detail)
+
+    result = await _controller().execute(
+        StopRequest("graceful", session, profile),
+        service,
+        _Record(session, profile, SessionState.RUNNING),
+    )
+
+    assert result.dispatched is True, "the command ran; only its outcome was a failure"
+    assert result.failure is not None
+    assert result.failure.detail == detail
+
+
+async def test_execute_reports_no_failure_when_the_stop_worked() -> None:
+    """The other direction: a clean exit must not be reported as suspect.
+
+    `_RecordingService` answers a preserved observation, which is what the real service
+    returns when the profile's own exit sequence ran.
+    """
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    session = SessionId(UUID(int=1))
+    profile = ProfileId("claude")
+
+    result = await _controller().execute(
+        StopRequest("graceful", session, profile),
+        _RecordingService(),
+        _Record(session, profile, SessionState.RUNNING),
+    )
+
+    assert result.dispatched is True
+    assert result.failure is None
+
+
+@pytest.mark.parametrize("action", ["cleanup", "force"])
+async def test_only_a_graceful_stop_can_report_a_failure(action: str) -> None:
+    """`cleanup` returns nothing and `force` kills; neither has two causes to tell apart.
+
+    Pinned so a later change that starts reading their return values has to say so here
+    rather than quietly reporting a force as a stop that did not take effect.
+    """
+    from remote_agents.adapters.telegram.stops import StopRequest
+
+    session = SessionId(UUID(int=1))
+    profile = ProfileId("claude")
+    state = SessionState.PRESERVED if action == "cleanup" else SessionState.RUNNING
+
+    result = await _controller().execute(
+        StopRequest(action, session, profile),
+        _RecordingService(),
+        _Record(session, profile, state),
+    )
+
+    assert result.dispatched is True
+    assert result.failure is None

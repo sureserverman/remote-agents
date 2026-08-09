@@ -73,7 +73,9 @@ async def test_force_stop_rechecks_the_current_record_before_dispatch() -> None:
 
     accepted = await controller.execute(request, service, changed)
 
-    assert not accepted
+    # `.dispatched`, never the result itself: `StopResult` refuses to be a bool precisely so
+    # this line cannot quietly stop checking anything, which is what it did for one commit.
+    assert not accepted.dispatched
     assert service.calls == 0
 
 

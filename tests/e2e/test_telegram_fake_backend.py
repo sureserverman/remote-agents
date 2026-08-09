@@ -87,5 +87,5 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
     request = stops.claim(token, 7, 11, 1)
     assert request is not None
     service = Service()
-    assert await stops.execute(request, service, record)
+    assert (await stops.execute(request, service, record)).dispatched
     assert service.called

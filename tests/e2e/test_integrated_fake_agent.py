@@ -51,7 +51,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert token is not None
         request = stop.claim(token, 7, 11, 2)
         assert request is not None
-        assert await stop.execute(request, service, record)
+        assert (await stop.execute(request, service, record)).dispatched
         stopped = (await service.list_sessions())[0]
         # One button ended it: the graceful stop removed the tmux session it exited, so
         # there is no pane left to capture and no second step for the owner to confirm.
@@ -70,7 +70,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert token is not None and force.confirm_force(token, 7, 11, 4)
         request = force.claim(token, 7, 11, 4)
         assert request is not None
-        assert await force.execute(request, service, command)
+        assert (await force.execute(request, service, command)).dispatched
     finally:
         for record in await service.list_sessions():
             try:

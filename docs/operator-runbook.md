@@ -274,8 +274,17 @@ Telegram reaches a session the terminal launched, because the profile a graceful
 resolved from the curated launch factories rather than from the launching process's memory of it.
 Those factories hold only the profiles this host reports available. If no factory is curated here
 for that session's profile, the graceful stop fails closed: nothing is sent to the pane, and the
-session is not recorded as stopped — detail still shows it RUNNING rather than claiming a stop
-that never happened. Check `doctor --profiles` before concluding that a session refuses to stop.
+session is not recorded as stopped, rather than claiming a stop that never happened.
+
+Both surfaces now say so, and say which of two things went wrong, because the two have nothing
+to do with each other. "The stop was never sent" is this case — no profile could be resolved on
+this host, so no exit sequence was signalled, and `doctor --profiles` is where the answer is.
+"The agent did not exit in time" is the other one — the sequence was sent and the agent was
+still running when the wait ran out, which is the agent's behaviour and not this host's
+configuration. Until that distinction was added, the detail simply re-rendered the session as
+RUNNING and the bot asserted the timeout wording for both, so this paragraph was the only place
+an operator could learn the first case existed. It is no longer load-bearing in that way, which
+is the point; check `doctor --profiles` when the surface tells you the stop was never sent.
 Force and cleanup resolve no profile, because they remove the managed tmux session itself, so
 force remains available when a graceful stop cannot be resolved.
 

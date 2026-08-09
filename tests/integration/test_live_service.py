@@ -19,7 +19,7 @@ from remote_agents.adapters.telegram.service import (
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.session_actions import GRACEFUL_TIMEOUT
+from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.bootstrap import ServiceComposition, _resolve_profile_executable, main
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
@@ -539,6 +539,10 @@ class _Launcher:
         self.launch_result = None
         self.stopped: list[str] = []
         self.leave_running = False
+        #: Which cause `leave_running` models. Two of them, and they are the whole of BL-008
+        #: on this surface — the bot could see the session was still there and could not see
+        #: which of two unrelated things had gone wrong.
+        self.graceful_detail = GRACEFUL_TIMEOUT
 
     async def launch(self, command):
         self.commands.append(command)
@@ -562,10 +566,10 @@ class _Launcher:
                 record for record in self.records if record.session_id != command.session_id
             ]
             return a_clean_stop(command.session_id)
-        # The timeout, reported the way the real runtime reports it. It used to answer `None`,
+        # The failure, reported the way the real runtime reports it. It used to answer `None`,
         # which the surfaces discarded — so this double modelled the *records* faithfully and
         # the *observation* not at all, which is exactly the half BL-008 was about.
-        return a_stop_that_did_not_take(GRACEFUL_TIMEOUT, command.session_id)
+        return a_stop_that_did_not_take(self.graceful_detail, command.session_id)
 
     async def force_stop(self, command):
         self.stopped.append("force")
@@ -910,3 +914,42 @@ def _record(state: SessionState, label: str, project_id: ProjectId) -> SessionRe
         state,
         datetime.now(UTC),
     )
+
+
+# BL-008 on this surface — which of the two causes, not just that the session is still there --
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail,names,denies",
+    [
+        (UNKNOWN_SESSION, "The stop was never sent.", "did not exit in time"),
+        (GRACEFUL_TIMEOUT, "The agent did not exit in time.", "never sent"),
+    ],
+)
+async def test_the_bot_names_which_cause_left_the_session_running(
+    detail: str, names: str, denies: str
+) -> None:
+    """The bot used to infer the cause from the session still being listed, and got it wrong.
+
+    Finding the session still there says a stop did not take effect; it cannot say why,
+    because both causes leave identical evidence. So "It did not exit in time" was asserted
+    for `unknown_session` too — where no exit sequence was ever sent — and an owner who
+    believed it would sit waiting for an agent nobody had asked to stop.
+
+    `denies` is the half that makes this a real pair: each case asserts the *other* cause's
+    wording is absent, so wording that converges back into one sentence fails here rather than
+    passing both cases on the same string.
+    """
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    launcher.leave_running = True
+    launcher.graceful_detail = detail
+    token = boundary.stops.offer(
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+    )
+
+    reply = await boundary._stop_reply("graceful", token)
+
+    assert names in reply["text"], reply["text"]
+    assert denies not in reply["text"], reply["text"]

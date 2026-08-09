@@ -79,9 +79,10 @@ async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup()
     assert request is not None
     service = FakeService()
 
-    assert await controller.execute(
+    forced = await controller.execute(
         request, service, Record(session, SessionState.FAILED, ProfileId("codex"))
     )
+    assert forced.dispatched
     assert service.actions == ["force"]
 
 
@@ -97,10 +98,14 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
     assert claimed is not None
     service = FakeService()
 
-    assert not await controller.execute(
+    result = await controller.execute(
         claimed, service, Record(session, SessionState.PRESERVED, ProfileId("claude"))
     )
+    # `.dispatched`, not the result's own truthiness: `StopResult` is a dataclass, so a
+    # refusal is truthy as an object and `not result` would silently pass on every outcome.
+    assert not result.dispatched
     assert service.actions == []
-    assert not await controller.execute(
+    mismatched = await controller.execute(
         claimed, service, Record(session, SessionState.RUNNING, ProfileId("codex"))
     )
+    assert not mismatched.dispatched

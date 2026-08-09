@@ -62,6 +62,7 @@ from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
     GRACEFUL,
+    StopFailure,
     available_actions,
     explain_state,
     remote_control_available,
@@ -858,7 +859,12 @@ class PrivateBotBoundary:
         if request is None or self.launcher is None:
             return _reply_arguments(self._message("That request has expired."))
         record = await self._record(str(request.session_id))
-        if record is None or not await self.stops.execute(request, self.launcher, record):
+        result = (
+            await self.stops.execute(request, self.launcher, record)
+            if record is not None
+            else None
+        )
+        if result is None or not result.dispatched:
             return _reply_arguments(
                 self._message(
                     "That session moved on before this could run, so nothing was done.\n"
@@ -867,7 +873,7 @@ class PrivateBotBoundary:
                 )
             )
         self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(await self._stop_outcome_reply(action, record))
+        return _reply_arguments(await self._stop_outcome_reply(action, record, result.failure))
 
     async def _force_confirm_reply(self, token: str, revision: int) -> RenderedMessage:
         """Name the session and the cost before offering the only irreversible button.
@@ -900,22 +906,52 @@ class PrivateBotBoundary:
             ),
         )
 
-    async def _stop_outcome_reply(self, action: str, record: SessionRecord) -> RenderedMessage:
+    async def _stop_outcome_reply(
+        self, action: str, record: SessionRecord, failure: StopFailure | None = None
+    ) -> RenderedMessage:
         """Report what the session actually did, named, rather than that a command ran.
 
         A graceful stop that times out leaves the session RUNNING and removes nothing, so
         "completed" would have been false for the one outcome the owner most needs to act
         on. The record is re-read instead of assumed: `_records()` omits ended sessions, so
         a session that has left the list is one that ended.
+
+        **`failure` is why that re-read is not enough on its own, and it is BL-008.** Finding
+        the session still listed says a stop did not take effect; it cannot say which of two
+        unrelated things went wrong, because they leave identical evidence. This branch used
+        to assert "It did not exit in time" for both — true for `graceful_timeout`, and flatly
+        false for `unknown_session`, where no exit sequence was ever sent and the fault is a
+        profile this host cannot resolve (DEC-006). Being told the wrong cause is worse than
+        being told none: the owner waits for an agent that was never asked to stop.
+
+        The words come from `application.session_actions`, which is where the local surface
+        takes them from too — DEC-007 wants the two surfaces to agree about what a stop did,
+        and being handed the same sentence is the cheapest form of agreeing. They are escaped
+        despite being ours because `stop_failure`'s fallback interpolates the raw `detail` the
+        terminal adapter reported, which this module does not author.
         """
         subject = escape(record.display.rendered)
         session_value = str(record.session_id)
         current = await self._record(session_value)
         if current is not None:
+            # The `else` is **unreachable today and worded as if it were not**, which is the
+            # honest shape for it. `failure` is non-None for exactly the graceful action, and
+            # `cleanup` and `force_stop` both walk the record to ENDED on every non-raising
+            # path (`application/services.py`), so a session that is still listed after one of
+            # those is a state no current code produces. The wording is deliberately neutral
+            # about *why* rather than repeating the graceful-stop advice it used to carry:
+            # reached at all, this branch is a session that outlived a command that claimed to
+            # end it, and telling that operator to wait for a graceful exit would be a guess.
+            said = (
+                f"{escape(failure.summary)} {escape(failure.remedy)}"
+                if failure is not None
+                else (
+                    "Nothing was removed and it was left as it is.\n"
+                    "Open it again to see where it is now."
+                )
+            )
             return self._message(
-                f"<b>{subject} is still running</b>\n"
-                "It did not exit in time, so nothing was removed and it was left as it is.\n"
-                "Open it again to force stop it if it cannot exit on its own.",
+                f"<b>{subject} is still running</b>\n{said}",
                 ((Button("Open session", self._callback("session.detail", session_value)),),),
                 back=self._callback("sessions.open", "sessions"),
             )

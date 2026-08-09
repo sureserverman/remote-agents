@@ -68,9 +68,12 @@ For safe stop behavior, choose Stop and close: the agent exits on its own terms 
 removed in the same action, so the session ends in one step and its output is not kept. Clean up
 remains for a session whose pane died on its own, which is preserved for inspection until you
 close it. Force stop names the session and what will be lost, offers Cancel first, and is for a
-live session that cannot exit gracefully. Each of them reports what the session actually did —
-including a graceful stop that timed out and left the agent running. The bot never relays
-arbitrary commands, agent text, shell access, or approval responses.
+live session that cannot exit gracefully. Each of them reports what the session actually did, and
+a graceful stop that did not take effect says which of two unrelated things went wrong: the stop
+was never sent, because no agent profile could be resolved on this host, or the agent was still
+running when the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
+forced, and both surfaces use the same words for them. The bot never relays arbitrary commands,
+agent text, shell access, or approval responses.
 
 Resume uses a server-resolved catalogue selection. It may show a bounded provider-generated title
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
