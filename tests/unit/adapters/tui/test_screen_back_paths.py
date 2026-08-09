@@ -34,11 +34,14 @@ from remote_agents.adapters.tui.screens import (
     AreasScreen,
     InspectScreen,
     LabelScreen,
-    LegacyScreen,
     NameScreen,
     ProfilesScreen,
     ProjectReviewScreen,
     ProjectsScreen,
+    ResumeConfirmScreen,
+    ResumeConversationsScreen,
+    ResumeProfilesScreen,
+    ResumeProjectsScreen,
     ReviewScreen,
     SessionDetailScreen,
     SessionsScreen,
@@ -139,6 +142,15 @@ async def _captured() -> str:
     return "some output"
 
 
+_CAPABLE = (
+    ProfileResumeCapability(
+        ProfileId("claude"), catalogue_available=True, selected_resume_available=True
+    ),
+)
+_PAGE = ConversationCataloguePage((_summary(),), 1, 1)
+_RESOLVED = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
+
+
 # Screens reached by pushing an instance directly. Constructor arguments are supplied here
 # rather than defaulted on the screens themselves: a screen that cannot be built without the
 # state it renders is the point of moving the seven navigation fields onto them.
@@ -152,6 +164,10 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     SessionsScreen: SessionsScreen,
     SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
     InspectScreen: lambda: InspectScreen("output", "some output"),
+    ResumeProjectsScreen: ResumeProjectsScreen,
+    ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
+    ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),
+    ResumeConfirmScreen: lambda: ResumeConfirmScreen(_PROJECT, "claude", _RESOLVED),
 }
 
 
@@ -162,7 +178,7 @@ def test_every_registered_screen_is_reachable_by_this_file() -> None:
     screen absent from `_DIRECT` and from the two special cases would otherwise simply never
     be walked, and the file would stay green while covering less than it claims.
     """
-    arranged = set(_DIRECT) | {ProjectsScreen, LegacyScreen}
+    arranged = set(_DIRECT) | {ProjectsScreen}
     assert set(ALL_SCREENS) == arranged, (
         "every screen in ALL_SCREENS needs an arrangement in this file, and every "
         "arrangement needs to still be registered"
@@ -173,13 +189,7 @@ async def _arrange(app: RemoteAgentsTui, pilot, screen_type: type[Screen]) -> No
     """Put `screen_type` on the stack, the way the surface itself gets there."""
     if screen_type is ProjectsScreen:
         return
-    if screen_type is LegacyScreen:
-        # The transitional host is only ever reached through the resume flow, and it needs
-        # that flow's position set to know what escape means. Pushing a bare one would test
-        # a state the surface cannot be in.
-        await app.action_resume()
-    else:
-        await app.push_screen(_DIRECT[screen_type]())
+    await app.push_screen(_DIRECT[screen_type]())
     await pilot.pause()
 
 

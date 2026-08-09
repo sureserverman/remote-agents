@@ -168,7 +168,7 @@ async def test_only_resume_capable_profiles_are_offered() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
         keys = _keys(app)
 
@@ -187,14 +187,14 @@ async def test_the_catalogue_is_paginated() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
         first = _rows(app)
         assert any("conversation 1" in row for row in first)
 
-        await app._resolve_resume_conversation("\x00next")
+        await app.screen.choose("\x00next")
         await pilot.pause()
         second = _rows(app)
 
@@ -208,9 +208,9 @@ async def test_no_provider_id_or_path_is_ever_rendered() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
         rendered = " ".join(_rows(app)) + _status(app) + " ".join(str(k) for k in _keys(app))
 
@@ -230,16 +230,16 @@ async def test_resume_requires_a_confirm_step_and_issues_a_tui_key() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
-        await app._resolve_resume_conversation(str(_summary(1).reference))
+        await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
         assert position(app) == "RESUME_CONFIRM"
         assert launcher.resumed == [], "the selection alone must not resume"
 
-        await app._resolve_resume_confirm("resume-confirm")
+        await app.screen.choose("resume-confirm")
         await pilot.pause()
 
     assert len(launcher.resumed) == 1
@@ -255,13 +255,13 @@ async def test_aborting_the_confirm_resumes_nothing() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
-        await app._resolve_resume_conversation(str(_summary(1).reference))
+        await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
-        await app._resolve_resume_confirm("\x00cancel")
+        await app.screen.choose("\x00cancel")
         await pilot.pause()
 
     assert launcher.resumed == []
@@ -275,13 +275,13 @@ async def test_a_ready_resume_ends_in_the_same_attach_handoff_as_a_launch() -> N
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
-        await app._resolve_resume_conversation(str(_summary(1).reference))
+        await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
-        await app._resolve_resume_confirm("resume-confirm")
+        await app.screen.choose("resume-confirm")
         await pilot.pause()
 
     assert isinstance(app.return_value, AttachRequest)
@@ -296,12 +296,12 @@ async def test_a_reference_that_no_longer_resolves_does_not_resume() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
         conversations.pages = {}
-        await app._resolve_resume_conversation(str(_summary(1).reference))
+        await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
         status = _status(app)
 
@@ -319,14 +319,65 @@ async def test_a_forged_reference_is_refused(forged: str) -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        await app._resolve_resume_project("opaque-existing")
+        await app.screen.choose("opaque-existing")
         await pilot.pause()
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("claude")
         await pilot.pause()
-        await app._resolve_resume_conversation(forged)
+        await app.screen.choose(forged)
         await pilot.pause()
 
     assert launcher.resumed == []
+
+
+async def test_back_out_of_the_resume_flow_stops_at_every_position() -> None:
+    """Back walks the resume flow out one position at a time, and Cancel agrees with it.
+
+    **Two deliberate navigation changes, matching the pairs Tasks 2.1 and 2.2 removed.**
+    Escape at the agent choice used to jump straight to the project list, skipping the resume
+    project choice. And the confirm's Cancel row used to restart the entire flow while Escape
+    from that same position went back exactly one — so the two rows disagreed about what
+    leaving meant. On a real stack both are one level, which is what makes them agree.
+
+    Asserted as the whole walk, so reinstating either shortcut fails here rather than passing
+    on a single destination.
+    """
+    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+    launcher = _Launcher()
+    app = RemoteAgentsTui(_context(conversations, launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        await app.screen.choose(str(_summary(1).reference))
+        await pilot.pause()
+        assert position(app) == "RESUME_CONFIRM"
+
+        # Cancel, not Escape: the row is the half that used to restart the flow.
+        await app.screen.choose("\x00cancel")
+        await pilot.pause()
+        assert position(app) == "RESUME_CONVERSATIONS", (
+            "Cancel at the confirm must go back one position, as Escape always did"
+        )
+
+        await app.action_back()
+        await pilot.pause()
+        assert position(app) == "RESUME_PROFILES"
+
+        await app.action_back()
+        await pilot.pause()
+        assert position(app) == "RESUME_PROJECTS", (
+            "escape from the agent choice must return to the resume project list"
+        )
+
+        await app.action_back()
+        await pilot.pause()
+        assert position(app) == "PROJECTS"
+
+    assert launcher.resumed == [], "walking back out must resume nothing"
 
 
 async def test_reopening_resume_mid_navigation_does_not_strand_the_owner() -> None:
@@ -360,7 +411,7 @@ async def test_reopening_resume_mid_navigation_does_not_strand_the_owner() -> No
         await app.action_resume()
         await pilot.pause()
         await asyncio.gather(
-            app._resolve_resume_project("opaque-existing"),
+            app.screen.choose("opaque-existing"),
             _reenter_during(app),
         )
         await pilot.pause()
@@ -368,11 +419,53 @@ async def test_reopening_resume_mid_navigation_does_not_strand_the_owner() -> No
         # Whatever screen the owner lands on, selecting the offered profile must go
         # somewhere rather than silently doing nothing.
         if position(app) == "RESUME_PROFILES":
-            await app._resolve_resume_profile("claude")
+            await app.screen.choose("claude")
             await pilot.pause()
             assert position(app) == "RESUME_CONVERSATIONS", (
                 "selecting a profile did nothing: the chosen project was lost mid-navigation"
             )
+
+
+async def test_the_navigation_guard_is_held_until_the_next_screen_is_pushed() -> None:
+    """The guard must span the push, not just the read that precedes it.
+
+    `push_screen` yields while the new screen mounts. A guard cleared before that await
+    leaves a window in which a second global binding pops the screen being mounted, and the
+    work that was just fetched is discarded with no error at all — the same "second entry
+    point mid-navigation" class the guard exists for, failing silently rather than stranding.
+
+    Asserted by recording the stack depth at each flip rather than by racing a second action:
+    a race would reproduce it only sometimes, while "was the screen already pushed when the
+    guard was released" is the property itself, and it fails deterministically if the
+    `finally` is ever narrowed back to the fetch alone.
+    """
+    flips: list[tuple[bool, int]] = []
+
+    class _Watching(RemoteAgentsTui):
+        def set_busy(self, busy: bool) -> None:
+            flips.append((busy, len(self.screen_stack)))
+            super().set_busy(busy)
+
+    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+    app = _Watching(_context(conversations, _Launcher()))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        flips.clear()
+
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+
+    assert flips, "choosing a resume project must take the navigation guard"
+    taken, depth_when_taken = flips[0]
+    released, depth_when_released = flips[-1]
+    assert taken is True and released is False
+    assert depth_when_released > depth_when_taken, (
+        "the guard was released at stack depth "
+        f"{depth_when_released}, the same depth it was taken at — the next screen had not "
+        "been pushed yet, so a global binding firing here would discard the fetched work"
+    )
 
 
 async def _reenter_during(app) -> None:

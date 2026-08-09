@@ -42,8 +42,9 @@ from textual.widgets import OptionList
 from textual.worker import WorkerState
 from tui_positions import position
 
-from remote_agents.adapters.tui.app import _CANCEL, RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.screens import ResumeConfirmScreen
 from remote_agents.application.project_admin import CreatedProject
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -572,14 +573,15 @@ async def test_a_concurrent_second_resume_is_refused_by_the_handler_guard() -> N
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        # The resume flow is still hosted on the transitional screen, so enter it before
-        # painting its rows: the selection handler dispatches on whatever screen is on top.
-        await app._enter_legacy()
-        app._resume_project = _PROJECT
-        app._resume_profile = "claude"
-        app._resume_choice = ResolvedConversation(summary, ProviderConversationId("abc123"))
-        app._step = Step.RESUME_CONFIRM
-        app._fill(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
+        # The confirm is a screen of its own now, carrying the project, agent and resolved
+        # conversation it was built with — so this pushes the real thing rather than setting
+        # four fields on the app and painting the rows by hand. The selection handler
+        # dispatches on whatever screen is on top, which is exactly what is under test.
+        await app.push_screen(
+            ResumeConfirmScreen(
+                _PROJECT, "claude", ResolvedConversation(summary, ProviderConversationId("abc123"))
+            )
+        )
         await settle(app, pilot)
 
         first = asyncio.create_task(_select(app, "resume-confirm"))

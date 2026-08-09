@@ -18,11 +18,16 @@ from remote_agents.adapters.tui.screens.launch import (
     ProjectsScreen,
     ReviewScreen,
 )
-from remote_agents.adapters.tui.screens.legacy import LegacyScreen
 from remote_agents.adapters.tui.screens.project import (
     AreasScreen,
     NameScreen,
     ProjectReviewScreen,
+)
+from remote_agents.adapters.tui.screens.resume import (
+    ResumeConfirmScreen,
+    ResumeConversationsScreen,
+    ResumeProfilesScreen,
+    ResumeProjectsScreen,
 )
 from remote_agents.adapters.tui.screens.sessions import (
     InspectScreen,
@@ -30,9 +35,9 @@ from remote_agents.adapters.tui.screens.sessions import (
     SessionsScreen,
 )
 
-#: Every screen the owner can reach. Task 2.4 removes `LegacyScreen` from it along with the
-#: step machine it hosts; until then it is registered like any other, because it is a
-#: position the owner can be in and its back path is as worth proving as the rest.
+#: Every screen the owner can reach. Fourteen of the sixteen positions; the two destructive
+#: confirmations are still repainted onto the session detail and join this registry when
+#: Task 2.4 gives them a screen of their own.
 ALL_SCREENS = (
     ProjectsScreen,
     ProfilesScreen,
@@ -44,7 +49,10 @@ ALL_SCREENS = (
     SessionsScreen,
     SessionDetailScreen,
     InspectScreen,
-    LegacyScreen,
+    ResumeProjectsScreen,
+    ResumeProfilesScreen,
+    ResumeConversationsScreen,
+    ResumeConfirmScreen,
 )
 
 __all__ = [
@@ -52,11 +60,14 @@ __all__ = [
     "AreasScreen",
     "InspectScreen",
     "LabelScreen",
-    "LegacyScreen",
     "NameScreen",
     "ProfilesScreen",
     "ProjectReviewScreen",
     "ProjectsScreen",
+    "ResumeConfirmScreen",
+    "ResumeConversationsScreen",
+    "ResumeProfilesScreen",
+    "ResumeProjectsScreen",
     "ReviewScreen",
     "SessionDetailScreen",
     "SessionsScreen",

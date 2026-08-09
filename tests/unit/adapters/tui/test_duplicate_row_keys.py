@@ -5,7 +5,7 @@
 was a plain attribute — so the migration converted "renders an ambiguous list" into "raises
 uncaught inside `_fill`".
 
-The exposure is not hypothetical at one call site: `_show_resume_conversations` keys its rows
+The exposure is not hypothetical at one call site: `ResumeConversationsScreen` keys its rows
 on `ConversationReference`s that the agent adapters derive from on-disk provider state, and
 its `try/except` wraps the catalogue await, not the `_fill` beneath it. A provider reporting
 the same conversation twice on one page would have crashed the screen.
@@ -31,8 +31,8 @@ async def test_a_repeated_key_renders_one_row_instead_of_raising() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
         # Two rows claiming the same key, which is what a provider reporting one conversation
-        # twice produces after `_show_resume_conversations` maps it to `str(item.reference)`.
-        app._fill((("same", "First"), ("same", "Second"), ("other", "Third")))
+        # twice produces after `ResumeConversationsScreen` maps it to `str(item.reference)`.
+        app.screen.show_choices((("same", "First"), ("same", "Second"), ("other", "Third")))
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         assert [option.id for option in choices.options] == ["same", "other"]
@@ -48,7 +48,7 @@ async def test_the_first_occurrence_is_the_one_kept() -> None:
     app = RemoteAgentsTui(_context(_SlowLauncher()))
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
-        app._fill((("dup", "kept"), ("dup", "dropped")))
+        app.screen.show_choices((("dup", "kept"), ("dup", "dropped")))
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         prompts = [str(option.prompt) for option in choices.options]
@@ -60,8 +60,8 @@ async def test_the_dropped_row_is_logged_rather_than_silently_swallowed(caplog) 
     app = RemoteAgentsTui(_context(_SlowLauncher()))
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
-        with caplog.at_level(logging.WARNING, logger="remote_agents.adapters.tui.app"):
-            app._fill((("dup", "kept"), ("dup", "dropped")))
+        with caplog.at_level(logging.WARNING, logger="remote_agents.adapters.tui.screens.base"):
+            app.screen.show_choices((("dup", "kept"), ("dup", "dropped")))
         await pilot.pause()
         messages = [record.getMessage() for record in caplog.records]
         assert any("dup" in message for message in messages), (
@@ -79,7 +79,7 @@ async def test_the_resting_cursor_still_lands_on_a_real_row_after_a_drop() -> No
     app = RemoteAgentsTui(_context(_SlowLauncher()))
     async with app.run_test(size=(100, 30)) as pilot:
         await settle(app, pilot)
-        app._fill((("a", "A"), ("b", "B"), ("a", "A again")), highlight=2)
+        app.screen.show_choices((("a", "A"), ("b", "B"), ("a", "A again")), highlight=2)
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
         assert choices.highlighted is not None

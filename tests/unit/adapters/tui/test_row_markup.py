@@ -179,8 +179,8 @@ async def test_a_conversation_description_containing_markup_is_shown_literally()
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.action_resume()
-        await app._resolve_resume_project("opaque-existing")
-        await app._resolve_resume_profile("claude")
+        await app.screen.choose("opaque-existing")
+        await app.screen.choose("claude")
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_DESCRIPTION in screen, (
@@ -200,9 +200,9 @@ async def test_the_status_line_shows_a_markup_bearing_description_literally() ->
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.action_resume()
-        await app._resolve_resume_project("opaque-existing")
-        await app._resolve_resume_profile("claude")
-        await app._resolve_resume_conversation(str(_REFERENCE))
+        await app.screen.choose("opaque-existing")
+        await app.screen.choose("claude")
+        await app.screen.choose(str(_REFERENCE))
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_DESCRIPTION in screen, (

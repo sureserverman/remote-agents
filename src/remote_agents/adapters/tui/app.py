@@ -18,8 +18,6 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.model import (
     _BACK,
     _CANCEL,
-    _NEXT,
-    _PREVIOUS,
     AttachRequest,
     LaunchSelection,
     age,
@@ -31,8 +29,8 @@ from remote_agents.adapters.tui.model import (
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
-    LegacyScreen,
     ProjectsScreen,
+    ResumeProjectsScreen,
     SessionDetailScreen,
     SessionsScreen,
 )
@@ -45,7 +43,6 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
@@ -58,7 +55,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.domain.conversations import ConversationReference
+from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
 
@@ -88,11 +85,11 @@ __all__ = [
 class Step(StrEnum):
     """The wizard positions this stage has not extracted into screens yet.
 
-    Shrinking, not growing. Ten of the sixteen members are now screens and are kept here only
-    because the committed snapshot baselines still name them; what still *drives* anything is
-    the four resume positions, hosted on `LegacyScreen`, and the two confirmations, which
-    `SessionDetailScreen` repaints in place exactly as the surface does today. Task 2.3 takes
-    the first group and Stage 3 takes the second, after which Task 2.4 deletes the enum.
+    Shrinking, not growing. Fourteen of the sixteen members are now screens and are kept here
+    only because the committed snapshot baselines still name them. What still *drives*
+    anything is the two confirmations, which `SessionDetailScreen` repaints in place exactly
+    as the surface does today; Task 2.4 gives those a screen of their own and deletes this
+    enum, and Stage 3 turns them into modals.
     """
 
     PROJECTS = "projects"
@@ -142,11 +139,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self.selection = LaunchSelection()
         self._step = Step.PROJECTS
         self._busy = False
-        self._resume_project: CatalogProject | None = None
-        self._resume_profile: str | None = None
-        self._resume_page = 1
-        self._resume_page_count = 1
-        self._resume_choice: object | None = None
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.
@@ -179,9 +171,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def step(self) -> Step:
         """Which position the remaining step machine believes it is on.
 
-        Read by exactly two places now — `SessionDetailScreen`, for the two confirmations it
-        still repaints in place, and the resume flow on `LegacyScreen`. Both go away by the
-        end of Stage 3, and so does this.
+        Read by exactly one place now: `SessionDetailScreen`, for the two confirmations it
+        still repaints in place. Task 2.4 takes it with them.
         """
         return self._step
 
@@ -228,23 +219,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         while len(self.screen_stack) > 1:
             self.pop_screen()
         await self.push_screen(screen)
-
-    # Rendering -------------------------------------------------------------------
-    #
-    # These delegate to the active screen. They are what remains of the app-owned rendering
-    # the extracted screens took over, kept for the resume positions still hosted on
-    # `LegacyScreen`; Task 2.4 deletes them with it.
-
-    def _set_status(self, text: str) -> None:
-        self.body.set_status(text)
-
-    def _fill(
-        self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
-    ) -> None:
-        self.body.show_choices(entries, focus=focus, highlight=highlight)
-
-    def _hide_entry(self) -> None:
-        self.body.hide_entry()
 
     async def in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
         """Run one blocking call on a worker thread and return what it returned.
@@ -296,41 +270,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         return await self.push_screen_wait(screen)
 
-    # The transitional bridge -----------------------------------------------------
-
-    async def _enter_legacy(self) -> None:
-        """Make the transitional host the active screen, without stacking two of them.
-
-        Only the resume flow still needs it. Every position it hosts rests directly on the
-        project list, which is what the back paths those positions already had assert.
-        """
-        if isinstance(self.screen, LegacyScreen):
-            return
-        await self.switch_flow(LegacyScreen())
-
-    def _show_projects(self) -> None:
-        self.return_to_projects()
-
-    async def legacy_choose(self, key: str) -> None:
-        """Dispatch a chosen row for the positions `Step` still owns."""
-        if self._step is Step.RESUME_PROJECTS:
-            await self._resolve_resume_project(key)
-        elif self._step is Step.RESUME_PROFILES:
-            await self._resolve_resume_profile(key)
-        elif self._step is Step.RESUME_CONVERSATIONS:
-            await self._resolve_resume_conversation(key)
-        elif self._step is Step.RESUME_CONFIRM:
-            await self._resolve_resume_confirm(key)
-
     # Actions -------------------------------------------------------------------
 
     async def action_back(self) -> None:
         """Leave the current position for the one it was reached from.
 
         For an extracted screen this is the stack itself — pop, and the screen beneath is by
-        construction where the owner came from. Two exceptions remain, and both disappear by
-        the end of Stage 3: the resume flow repaints one host screen, so it has no stack to
-        pop; and the two confirmations are repainted onto the session detail, so leaving one
+        construction where the owner came from. One exception remains and Stage 3 removes it:
+        the two confirmations are still repainted onto the session detail, so leaving one
         means redrawing the detail rather than popping away from it.
         """
         if self._busy:
@@ -341,14 +288,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             Step.REMOTE_CONTROL_CONFIRM,
         }:
             await screen.render_detail()
-            return
-        if isinstance(screen, LegacyScreen):
-            if self._step in {Step.RESUME_PROJECTS, Step.RESUME_PROFILES}:
-                self._show_projects()
-            elif self._step is Step.RESUME_CONVERSATIONS:
-                await self._show_resume_profiles()
-            elif self._step is Step.RESUME_CONFIRM:
-                await self._show_resume_conversations()
             return
         if len(self.screen_stack) > 1:
             self.pop_screen()
@@ -363,9 +302,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         except Exception:
             _LOG.exception("catalogue refresh failed")
-            self._set_status("The project catalogue could not be re-read. Check this host.")
+            self.body.set_status("The project catalogue could not be re-read. Check this host.")
             return
-        self._show_projects()
+        self.return_to_projects()
 
     async def action_add_project(self) -> None:
         if not self._busy:
@@ -406,191 +345,41 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Open the resume flow, if this host wired a conversation service at all."""
         if self._busy or self._services.conversations is None:
             return
-        await self._enter_legacy()
-        self._resume_project = None
-        self._resume_profile = None
-        self._resume_choice = None
-        self._step = Step.RESUME_PROJECTS
-        self._hide_entry()
-        self._set_status("Resume a conversation. Choose its project.")
-        self._fill(
-            tuple(
-                (project.opaque_id, f"{project.area}/{project.name}") for project in self._catalogue
-            )
-            or ((_CANCEL, "No projects available"),)
-        )
+        await self.switch_flow(ResumeProjectsScreen())
 
-    async def _resolve_resume_project(self, key: str) -> None:
-        project = next((item for item in self._catalogue if item.opaque_id == key), None)
-        if project is None:
-            # Stay in the resume flow, as the launch picker does for the same failure,
-            # rather than dropping the owner into a different wizard with no explanation.
-            self._set_status("That project is no longer available. Refresh and try again.")
-            return
-        self._resume_project = project
-        # Guarded across the await for the reason Stage 3 established: a second entry point
-        # firing mid-navigation used to reset the chosen project, after which selecting a
-        # profile silently did nothing and only Escape recovered.
-        self._busy = True
-        try:
-            await self._show_resume_profiles()
-        finally:
-            self._busy = False
+    async def issue_resume(
+        self,
+        screen: ChoiceScreen,
+        project: CatalogProject,
+        profile: str,
+        resolved: ResolvedConversation,
+    ) -> None:
+        """Start the resumed session, and hand back the attach command if it is ready.
 
-    async def _show_resume_profiles(self) -> None:
-        """Offer only profiles that report themselves resume-capable (DEC-002).
-
-        Capability comes from `capabilities()`, which reports what each provider can
-        actually do on this host — never from a version allowlist.
+        On the app rather than on the confirm screen for the same reason `launch` is: it ends
+        in `self.exit(...)`, which is the app's to do. What stays with the screen is where a
+        failure leaves the cursor, so the message is rendered onto `screen`.
         """
-        conversations = self._services.conversations
-        if conversations is None:
-            return
-        try:
-            capabilities = await conversations.capabilities()
-        except Exception as error:
-            _LOG.exception("resume capabilities failed")
-            self._set_status(f"Resume is unavailable: {error}")
-            self._fill(((_BACK, "Back"),))
-            return
-        capable = tuple(
-            capability
-            for capability in capabilities
-            if capability.catalogue_available and capability.selected_resume_available
-        )
-        self._step = Step.RESUME_PROFILES
-        if not capable:
-            self._set_status("No agent on this host can resume a saved conversation.")
-            self._fill(((_BACK, "Back"),))
-            return
-        self._set_status("Choose the agent whose conversation you want to resume.")
-        self._fill(
-            tuple((str(item.profile_id), str(item.profile_id)) for item in capable)
-            + ((_BACK, "Back"),)
-        )
-
-    async def _resolve_resume_profile(self, key: str) -> None:
-        if key == _BACK:
-            await self.action_resume()
-            return
-        if not any(profile.profile_id == key for profile in self._services.profiles):
-            # Defence in depth, matching the launch picker: the rows here are already
-            # filtered to resume-capable profiles, so a key naming another one is stale.
-            self._set_status("That agent is not available on this host.")
-            return
-        self._resume_profile = key
-        self._resume_page = 1
-        self._busy = True
-        try:
-            await self._show_resume_conversations()
-        finally:
-            self._busy = False
-
-    async def _show_resume_conversations(self) -> None:
-        """One bounded page of safe metadata; provider IDs never leave the server."""
-        conversations = self._services.conversations
-        if conversations is None or self._resume_profile is None or self._resume_project is None:
-            return
-        try:
-            page = await conversations.catalogue(
-                ConversationCatalogueQuery(
-                    profile_id=ProfileId(self._resume_profile),
-                    project_id=ProjectId(self._resume_project.opaque_id),
-                    page=self._resume_page,
-                    page_size=_RESUME_PAGE_SIZE,
-                )
-            )
-        except Exception as error:
-            _LOG.exception("conversation catalogue failed")
-            self._set_status(f"The conversations could not be listed: {error}")
-            self._fill(((_BACK, "Back"),))
-            return
-        self._step = Step.RESUME_CONVERSATIONS
-        self._resume_page_count = page.page_count
-        if page.unavailable_reason is not None:
-            self._set_status(f"Conversations are unavailable: {page.unavailable_reason}")
-            self._fill(((_BACK, "Back"),))
-            return
-        if not page.conversations:
-            self._set_status("There are no saved conversations for that agent and project.")
-            self._fill(((_BACK, "Back"),))
-            return
-        entries = [(str(item.reference), conversation_row(item)) for item in page.conversations]
-        if page.page > 1:
-            entries.append((_PREVIOUS, "Previous page"))
-        if page.page < page.page_count:
-            entries.append((_NEXT, "Next page"))
-        entries.append((_BACK, "Back"))
-        self._set_status(f"Choose a conversation. Page {page.page} of {page.page_count}.")
-        self._fill(tuple(entries))
-
-    async def _resolve_resume_conversation(self, key: str) -> None:
-        conversations = self._services.conversations
-        if conversations is None:
-            return
-        if key == _BACK:
-            await self._show_resume_profiles()
-            return
-        if key in {_NEXT, _PREVIOUS}:
-            step = 1 if key == _NEXT else -1
-            self._resume_page = max(1, min(self._resume_page + step, self._resume_page_count))
-            self._busy = True
-            try:
-                await self._show_resume_conversations()
-            finally:
-                self._busy = False
-            return
-        try:
-            # The reference is only ever one this surface rendered from a server-issued
-            # page; constructing it here re-validates its opaque shape, and resolution is
-            # server-side, so a forged or stale value resolves to nothing rather than a path.
-            resolved = await conversations.resolve_for_resume(ConversationReference(key))
-        except ValueError:
-            self._set_status("That conversation selection is not valid.")
-            return
-        except Exception as error:
-            _LOG.exception("conversation resolve failed")
-            self._set_status(f"That conversation could not be resolved: {error}")
-            return
-        if resolved is None:
-            self._set_status("That conversation is no longer available.")
-            return
-        self._resume_choice = resolved
-        self._step = Step.RESUME_CONFIRM
-        self._set_status(
-            f"Resume {conversation_row(resolved.summary)}\n"
-            f"Agent: {self._resume_profile}\n"
-            "This starts a new managed session continuing that conversation."
-        )
-        self._fill(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
-
-    async def _resolve_resume_confirm(self, key: str) -> None:
-        if key != "resume-confirm" or self._resume_choice is None:
-            await self.action_resume()
-            return
-        if self._resume_project is None or self._resume_profile is None:
-            await self.action_resume()
-            return
         self._busy = True
         try:
             record = await self._services.launcher.resume(
                 ResumeCommand(
-                    ProjectId(self._resume_project.opaque_id),
-                    ProfileId(self._resume_profile),
-                    self._resume_choice,
+                    ProjectId(project.opaque_id),
+                    ProfileId(profile),
+                    resolved,
                     _idempotency_key(),
                 )
             )
         except Exception as error:
             _LOG.exception("resume failed")
-            self._fill(((_BACK, "Back"),))
-            self._set_status(f"The conversation was not resumed: {error}")
+            screen.show_choices(((_BACK, "Back"),))
+            screen.set_status(f"The conversation was not resumed: {error}")
             return
         finally:
             self._busy = False
         if record.state is SessionState.FAILED:
-            self._fill(((_BACK, "Back"),))
-            self._set_status(
+            screen.show_choices(((_BACK, "Back"),))
+            screen.set_status(
                 "The resumed session did not become ready, but its pane may still exist. "
                 "Reach it with:\n"
                 f"{' '.join(self._services.attach_argv(str(record.session_id)))}"
@@ -618,23 +407,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         finally:
             self._busy = False
         if record is None:
-            self._set_status("That session is no longer available.")
+            self.body.set_status("That session is no longer available.")
             return
         if not remote_control_available(record):
-            self._set_status(
+            self.body.set_status(
                 f"{record.display.rendered}\n"
                 "Remote Control is not available for this session.\n"
                 f"{explain_state(record.state)}"
             )
             return
         self._step = Step.REMOTE_CONTROL_CONFIRM
-        self._hide_entry()
-        self._set_status(
+        self.body.hide_entry()
+        self.body.set_status(
             f"Claude Remote Control for {record.display.rendered}\n"
             "Enabling lets this session be driven remotely; disabling returns it to local "
             "control only."
         )
-        self._fill(
+        self.body.show_choices(
             (
                 (_CANCEL, "Cancel"),
                 ("remote-control-active", "Enable Remote Control"),
@@ -656,10 +445,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                self._set_status("That session is no longer available.")
+                self.body.set_status("That session is no longer available.")
                 return
             if not remote_control_available(record):
-                self._set_status("Remote Control is no longer available for this session.")
+                self.body.set_status("Remote Control is no longer available for this session.")
                 return
             state = await self._services.launcher.set_remote_control(
                 RemoteControlCommand(record.session_id, desired, _idempotency_key())
@@ -668,8 +457,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
             # button that just failed, or a second enter re-issues it as a blind retry.
-            self._fill(((_BACK, "Back"),))
-            self._set_status(
+            self.body.show_choices(((_BACK, "Back"),))
+            self.body.set_status(
                 f"Remote Control was not changed: {error}\n"
                 "Go back and open the session again to see its current state."
             )
@@ -679,8 +468,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # the result is on screen. These calls are synchronous today, so the window
             # is empty — the guard is here so it stays empty if one of them ever awaits.
             self._step = Step.SESSION_DETAIL
-            self._set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
-            self._fill(self.body.detail_entries(record))  # type: ignore[attr-defined]
+            self.body.set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
+            self.body.show_choices(self.body.detail_entries(record))  # type: ignore[attr-defined]
         finally:
             self._busy = False
 
@@ -703,17 +492,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         finally:
             self._busy = False
         if record is None:
-            self._set_status("That session is no longer available.")
+            self.body.set_status("That session is no longer available.")
             return
         self._step = Step.FORCE_CONFIRM
-        self._hide_entry()
-        self._set_status(
+        self.body.hide_entry()
+        self.body.set_status(
             f"Force stop {record.display.rendered}?\n"
             "This kills the agent immediately and cannot be undone. Any work it has not "
             "saved is lost.\n"
             f"{explain_state(record.state)}"
         )
-        self._fill(((_CANCEL, "Cancel"), ("force-confirm", "Yes, force stop it")))
+        self.body.show_choices(((_CANCEL, "Cancel"), ("force-confirm", "Yes, force stop it")))
 
     async def resolve_force_confirm(self, key: str) -> None:
         if key == "force-confirm":
@@ -739,10 +528,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                self._set_status("That session is no longer available.")
+                self.body.set_status("That session is no longer available.")
                 return
             if action not in available_actions(record.state):
-                self._set_status(
+                self.body.set_status(
                     f"{record.display.rendered}\n"
                     f"{_ACTION_LABELS[action]} is no longer available for this session.\n"
                     f"{explain_state(record.state)}"
@@ -754,8 +543,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Move the cursor off the confirm button before reporting. A failed force
             # leaves the owner resting on "Yes, force stop it", so without this a second
             # enter re-issues the kill as a retry nobody deliberately chose.
-            self._fill(((_BACK, "Back"),))
-            self._set_status(
+            self.body.show_choices(((_BACK, "Back"),))
+            self.body.set_status(
                 f"{_ACTION_LABELS[action]} did not complete: {error}\n"
                 "The session was left as it is. Go back and open it again to see its "
                 "current state, then retry if you still want to."
@@ -790,8 +579,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         to an exception is the one outcome that leaves the owner with nothing.
         """
         _LOG.exception("session read failed", exc_info=error)
-        self._fill(((_BACK, "Back"),))
-        self._set_status(
+        self.body.show_choices(((_BACK, "Back"),))
+        self.body.set_status(
             f"The managed sessions could not be read: {error}\n"
             "Press escape to return to the project list."
         )
@@ -838,7 +627,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self.return_to_projects()
             return None
         self._busy = True
-        self._set_status("Launching…")
+        self.body.set_status("Launching…")
         try:
             record = await self._services.launcher.launch(
                 LaunchCommand(

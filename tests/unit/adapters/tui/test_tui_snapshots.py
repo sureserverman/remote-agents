@@ -304,13 +304,13 @@ async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
     await app.action_resume()
     if step is Step.RESUME_PROJECTS:
         return
-    await app._resolve_resume_project("opaque-existing")
+    await app.screen.choose("opaque-existing")
     if step is Step.RESUME_PROFILES:
         return
-    await app._resolve_resume_profile("claude")
+    await app.screen.choose("claude")
     if step is Step.RESUME_CONVERSATIONS:
         return
-    await app._resolve_resume_conversation(str(_REFERENCE))
+    await app.screen.choose(str(_REFERENCE))
 
 
 @pytest.fixture(autouse=True)
