@@ -157,9 +157,10 @@ class ChoiceScreen(Screen[None]):
         """Hold the surface's busy guard for the duration of a store read.
 
         Extracted because the same six-line `set_busy(True)` / `try` / `finally` body was
-        copy-pasted across six methods and *omitted* from two of them, which is how the
+        copy-pasted across six methods and *omitted* from two more, which is how the
         Escape-mid-read defect survived its first repair. One helper is one thing to reach
-        for; six near-identical bodies are six chances to forget.
+        for; eight near-identical bodies are eight chances to forget — and all eight go
+        through this now, not just the two the review happened to name.
 
         This prevents the situation — `action_back` refuses to pop while it is held — where
         `showing` merely makes the aftermath harmless. Both are kept: the guard is the narrow

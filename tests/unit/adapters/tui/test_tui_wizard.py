@@ -588,6 +588,48 @@ async def test_back_out_of_the_add_project_flow_stops_at_every_position() -> Non
     assert creator.commands == [], "walking back out must create nothing"
 
 
+async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_keyboard() -> None:
+    """Backing out of any flow lands on a clean list with the keyboard where typing works.
+
+    The sixth of this stage's navigation changes, and the only one that was a *regression*
+    rather than a deliberate simplification. The chain this replaces reached the project list
+    through a method that cleared the filter and refocused it, so every back path landed on a
+    fresh list. A bare pop returned the owner to a filtered list with focus still on the rows
+    — where keystrokes are swallowed by the option list instead of filtering, and only Tab or
+    Ctrl+R recovers.
+
+    Driven through a real flow and real keys rather than by calling the reveal hook, because
+    the failure was about *focus*, and a private-method test cannot see focus.
+    """
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        for character in "other":
+            await pilot.press(character)
+        await pilot.pause()
+        assert _rows(app) == ["dev-area/other-thing  [Unregistered]"], "expected a filtered list"
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#choices").has_focus, "expected the keyboard on the rows"
+
+        await _choose(app, pilot, "opaque-other")
+        assert _rows(app) == ["claude", "cursor-agent  (unavailable: executable_missing)"]
+
+        await app.action_back()
+        await pilot.pause()
+
+        entry = app.screen.query_one("#filter")
+        assert entry.value == "", "the filter kept its text, so the list is still filtered"
+        assert entry.has_focus, (
+            "the keyboard stayed on the rows, where typing is swallowed rather than filtering"
+        )
+        assert _rows(app) == [
+            "infra/existing  [Registered]",
+            "dev-area/other-thing  [Unregistered]",
+        ]
+
+
 async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:
     app = RemoteAgentsTui(_context(creator=FakeCreator(areas=("infra", "Not_A_Slug", "web"))))
 

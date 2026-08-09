@@ -74,12 +74,10 @@ class ResumeProjectsScreen(ChoiceScreen):
         conversations = self.services.conversations
         if conversations is None:
             return
-        tui = self.tui
         # Guarded across the read for the reason the hand-rolled flow established: a second
         # entry point firing mid-navigation used to reset the chosen project, after which
         # selecting a profile silently did nothing and only Escape recovered.
-        tui.set_busy(True)
-        try:
+        async with self.holding_the_guard():
             try:
                 capabilities = await conversations.capabilities()
             except Exception as error:
@@ -98,8 +96,6 @@ class ResumeProjectsScreen(ChoiceScreen):
             # no error — the same "a second entry point mid-navigation" class the guard
             # exists for, just failing silently instead of stranding.
             await self.advance_to(ResumeProfilesScreen(project, capable))
-        finally:
-            tui.set_busy(False)
 
 
 class ResumeProfilesScreen(ChoiceScreen):
@@ -162,16 +158,12 @@ class ResumeProfilesScreen(ChoiceScreen):
             # filtered to resume-capable profiles, so a key naming another one is stale.
             self.set_status("That agent is not available on this host.")
             return
-        tui = self.tui
-        tui.set_busy(True)
-        try:
+        async with self.holding_the_guard():
             page = await fetch_page(self, self.project, key, 1)
             if page is None:
                 return
             # Held across the push for the reason given on `ResumeProjectsScreen.choose`.
             await self.advance_to(ResumeConversationsScreen(self.project, key, page))
-        finally:
-            tui.set_busy(False)
 
 
 class ResumeConversationsScreen(ChoiceScreen):
@@ -248,13 +240,9 @@ class ResumeConversationsScreen(ChoiceScreen):
         await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
     async def turn_page(self, step: int) -> None:
-        tui = self.tui
         wanted = max(1, min(self.page.page + step, self.page.page_count))
-        tui.set_busy(True)
-        try:
+        async with self.holding_the_guard():
             page = await fetch_page(self, self.project, self.profile, wanted)
-        finally:
-            tui.set_busy(False)
         if page is None:
             return
         self.page = page

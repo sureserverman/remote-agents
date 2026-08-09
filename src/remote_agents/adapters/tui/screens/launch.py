@@ -49,6 +49,8 @@ class ProjectsScreen(ChoiceScreen):
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         """Draw the catalogue, filtered by whatever is typed in the filter input."""
+        if not self.showing:
+            return
         catalogue = self.tui.catalogue
         projects = search_catalogue(catalogue, query) if query else catalogue
         entry = self.query_one("#filter", Input)
@@ -143,10 +145,13 @@ class LabelScreen(ChoiceScreen):
             self.set_status(str(error))
             return
         self.tui.selection = replace(self.tui.selection, label=label)
-        # Not awaited, unlike its siblings above, because `on_input_submitted` is synchronous
-        # — Textual mounts the pushed screen on the next pump cycle either way, and awaiting
+        if not self.showing:
+            return
+        # Not awaited, unlike its siblings, because `on_input_submitted` is synchronous —
+        # Textual mounts the pushed screen on the next pump cycle either way, and awaiting
         # only decides whether *this* caller waits for the mount. Nothing here touches the new
-        # screen's widgets afterwards, so there is nothing to wait for.
+        # screen's widgets afterwards, so there is nothing to wait for. The `showing` check
+        # above is `advance_to`'s guard inlined, since that one is a coroutine and this is not.
         self.app.push_screen(ReviewScreen())
 
 

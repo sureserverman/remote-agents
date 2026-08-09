@@ -83,6 +83,9 @@ class NameScreen(ChoiceScreen):
         except ValueError as error:
             self.set_status(str(error))
             return
+        if not self.showing:
+            return
+        # `advance_to`'s guard inlined: that one is a coroutine and this handler is not.
         self.app.push_screen(ProjectReviewScreen(self.area, value.strip()))
 
 
@@ -118,22 +121,20 @@ class ProjectReviewScreen(ChoiceScreen):
         if key != "create":
             return
         tui = self.tui
-        tui.set_busy(True)
-        try:
-            command = CreateProjectCommand(self.area, self.project_name)
-            created = await tui.in_thread(
-                lambda: self.services.creator.create(command), group="create-project"
-            )
-        except Exception as error:
-            _LOG.exception("project creation failed")
-            # Re-render before reporting, so the cursor leaves "Create" and a second enter
-            # cannot re-issue a creation nobody deliberately chose.
-            self.render_review()
-            self.set_status(
-                f"Project not created: {error}\nArea: {self.area}\nName: {self.project_name}"
-            )
-            return
-        finally:
-            tui.set_busy(False)
+        async with self.holding_the_guard():
+            try:
+                command = CreateProjectCommand(self.area, self.project_name)
+                created = await tui.in_thread(
+                    lambda: self.services.creator.create(command), group="create-project"
+                )
+            except Exception as error:
+                _LOG.exception("project creation failed")
+                # Re-render before reporting, so the cursor leaves "Create" and a second enter
+                # cannot re-issue a creation nobody deliberately chose.
+                self.render_review()
+                self.set_status(
+                    f"Project not created: {error}\nArea: {self.area}\nName: {self.project_name}"
+                )
+                return
         await tui.action_refresh()
         tui.body.set_status(f"Created {created.identity}. Choose a project.")
