@@ -56,6 +56,7 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.screens import ALL_SCREENS
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -352,6 +353,20 @@ async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
         await settle(app, pilot)
         assert position(app) == step, f"drove to {position(app)}, expected {step}"
         _assert_snapshot(app, step)
+
+
+def test_every_position_has_a_baseline() -> None:
+    """The list above covers the registry, so a new position cannot go unwatched.
+
+    This is the tie the parametrization lost when it stopped being derived from an enum.
+    A screen added to `ALL_SCREENS` is caught by the back-path suite's own exhaustiveness
+    check, but without this it would be silently absent from the *visual* net — which is the
+    one defect class this file was bought for, so a hole here is worse than a hole elsewhere.
+
+    Deliberately an equality, not a subset: a name left in `_POSITIONS` after its screen was
+    deleted would otherwise sit there pointing at a baseline nothing renders.
+    """
+    assert set(_POSITIONS) == {screen.position for screen in ALL_SCREENS}
 
 
 async def test_a_missing_baseline_fails_rather_than_being_written() -> None:

@@ -1,8 +1,15 @@
 """The launch wizard: pick a project, pick an agent, name the run, review it, go.
 
-Four screens replacing four `Step` members. Each owns the rows it renders and what a row
+Four screens replacing four wizard positions. Each owns the rows it renders and what a row
 means when it is chosen, so the position an event belongs to is decided by which screen is
 on top of the stack rather than by an `if` chain re-reading a field.
+
+**Two back-path shortcuts are deliberately gone**, and this is where the pair that
+`project.py` and `resume.py` both refer back to was removed. Back at the review used to jump
+straight to the agent list, skipping the label, so a mistyped label could not be corrected
+without re-picking the agent; and Escape at the label used to jump straight to the project
+list, skipping the agent choice. On a real stack each is one level.
+`test_back_from_review_walks_out_through_the_label_to_the_agent_choice` is that behaviour.
 """
 
 from __future__ import annotations
@@ -27,6 +34,17 @@ class ProjectsScreen(ChoiceScreen):
     filter_placeholder = "Filter projects"
 
     async def populate(self) -> None:
+        self.render_projects()
+
+    async def on_reveal(self) -> None:
+        """Come back to a clean list with the keyboard in the filter.
+
+        The chain this replaces reached the project list by calling a method that cleared the
+        filter and refocused it, so backing out of any flow always landed on a fresh list. A
+        bare pop would instead return the owner to a filtered list with the keyboard on the
+        rows — where typing is swallowed rather than filtering — which is a worse position to
+        be dropped into than the one they left.
+        """
         self.render_projects()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
@@ -71,7 +89,7 @@ class ProjectsScreen(ChoiceScreen):
         # A fresh selection rather than a patched one: choosing a project restarts the
         # wizard, so an agent or label left over from an abandoned pass must not survive it.
         self.tui.selection = replace(LaunchSelection(), project=project)
-        await self.app.push_screen(ProfilesScreen())
+        await self.advance_to(ProfilesScreen())
 
 
 class ProfilesScreen(ChoiceScreen):
@@ -101,7 +119,7 @@ class ProfilesScreen(ChoiceScreen):
             self.set_status(f"That agent cannot be launched here: {reason}")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
-        await self.app.push_screen(LabelScreen())
+        await self.advance_to(LabelScreen())
 
 
 class LabelScreen(ChoiceScreen):

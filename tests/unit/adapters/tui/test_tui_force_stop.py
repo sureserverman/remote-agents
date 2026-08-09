@@ -343,25 +343,34 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
     assert len(launcher.issued) == 1, "a repeated enter re-issued the force stop"
 
 
-@pytest.mark.parametrize("confirm", ["confirm_force", "confirm_remote_control"])
-async def test_escape_cannot_detach_a_confirmation_from_the_session_it_describes(
-    confirm: str,
+# Every entry point on the session detail that reads the store and then draws or pushes.
+# Named as a set rather than as the two that were reported: this defect was found once in
+# `confirm_force`/`confirm_remote_control`, fixed there, and then found again in
+# `show_attach`/`show_inspect` — which were written in the same task and missed because the
+# guard was a per-method opt-in. The parametrization is what makes the *class* covered, so a
+# fifth reader added later fails here rather than being discovered by whoever hits the crash.
+_DETAIL_READS = ("confirm_force", "confirm_remote_control", "show_attach", "show_inspect")
+
+
+@pytest.mark.parametrize("entry_point", _DETAIL_READS)
+async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
+    entry_point: str,
 ) -> None:
-    """Escape fired while a confirmation is still reading its record must be refused.
+    """Escape fired while the detail is mid-read must not strand, detach, or take the app down.
 
-    Both confirmations re-read the session before they draw, and `action_back` runs on the
-    app's message pump while that read runs on the screen's — two tasks, genuinely
-    interleaved. Without the busy guard the Escape pops the session detail mid-read, and the
-    confirmation is then pushed onto whatever the pop revealed: a "Yes, force stop it" dialog
-    sitting above a position that is no longer showing the session it names.
+    `action_back` runs on the app's message pump while these reads run on the screen's — two
+    tasks, genuinely interleaved. Two distinct failures follow from an unguarded read, and
+    both were live regressions found in review rather than hypotheticals:
 
-    The second failure is worse and is why this is parametrized over both. If the session
-    vanishes during that same window — the exact case the re-read exists to catch — the
-    "no longer available" report is written to a screen that has already been unmounted, and
-    `NoMatches` escapes out of the path whose whole job is to report trouble without losing
-    the app.
+    * the coroutine resumes and *pushes* onto whatever the Escape revealed, so a
+      "Yes, force stop it" dialog — or an output pane — ends up above a position that is not
+      showing the session it names;
+    * or it resumes and *draws* onto a screen whose widgets are already gone. Textual raises
+      `NoMatches` there, and an exception out of a message handler exits the whole app — from
+      the very paths that exist to report a vanished session without losing it.
 
-    Both were live regressions caught in review, not hypotheticals.
+    The second is why `_DETAIL_READS` includes the two read-only entry points and not just the
+    destructive ones: `show_attach` cannot issue anything, and could still crash the surface.
     """
     import asyncio
 
@@ -402,13 +411,79 @@ async def test_escape_cannot_detach_a_confirmation_from_the_session_it_describes
         await pilot.pause()
         detail = app.screen
 
-        await asyncio.gather(getattr(detail, confirm)(), _escape_during())
+        await asyncio.gather(getattr(detail, entry_point)(), _escape_during())
         await pilot.pause()
 
-        # The confirmation sits directly on the detail it was built from — not on whatever
-        # an interleaved Escape would otherwise have revealed.
-        assert app.screen_stack[-2] is detail, (
-            f"the {confirm} dialog was pushed onto "
-            f"{type(app.screen_stack[-2]).__name__}, not the session detail it describes"
-        )
-        assert launcher.issued == [], "reaching the confirmation must issue nothing"
+        # Whatever the interleave produced, the surface is coherent. Three outcomes are all
+        # correct — the Escape was refused and the detail is still on top; the Escape won and
+        # the push was refused, leaving the resting position; or the push landed, in which
+        # case it must sit on the detail it was built from. The one outcome ruled out is a
+        # screen pushed onto a position that is not that detail.
+        stack = app.screen_stack
+        if len(stack) > 1 and app.screen is not detail:
+            assert stack[-2] is detail, (
+                f"{entry_point} pushed onto {type(stack[-2]).__name__}, "
+                "not the session detail it describes"
+            )
+        assert launcher.issued == [], f"{entry_point} must issue nothing"
+
+
+@pytest.mark.parametrize("entry_point", _DETAIL_READS)
+async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
+    entry_point: str,
+) -> None:
+    """The crash half, on the branch that only runs when the store answers `None`.
+
+    This is the case the re-read exists to catch — the other writer ended the session while
+    the owner was looking at it — arriving at the same moment as an Escape. Before the fix
+    the "no longer available" report was written to an unmounted screen and `NoMatches`
+    escaped the handler, exiting the app.
+    """
+    import asyncio
+
+    record = _record()
+
+    @dataclass(slots=True)
+    class _Vanishing:
+        seen: int = 0
+        issued: list[object] = field(default_factory=list)
+
+        async def refresh_readiness(self):
+            return (record,)
+
+        async def list_sessions(self):
+            await asyncio.sleep(0.03)
+            self.seen += 1
+            # Present for the detail's own first render, gone by the time the entry point
+            # under test re-reads it.
+            return (record,) if self.seen <= 1 else ()
+
+        async def copy_attach(self, _session_id):
+            return None
+
+        async def force_stop(self, command):
+            self.issued.append(command)
+
+        async def set_remote_control(self, command):
+            self.issued.append(command)
+            return RemoteControlState.ACTIVE
+
+    launcher = _Vanishing()
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async def _escape_during() -> None:
+        await asyncio.sleep(0.005)
+        await app.action_back()
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        detail = app.screen
+
+        # The assertion is that this returns at all: an unguarded write to a popped screen
+        # raises out of here, and in the real app that exits it.
+        await asyncio.gather(getattr(detail, entry_point)(), _escape_during())
+        await pilot.pause()
+
+        assert app.is_running, f"{entry_point} took the app down when the session vanished"
+        assert launcher.issued == []

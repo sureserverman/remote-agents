@@ -168,26 +168,20 @@ class SessionDetailScreen(ChoiceScreen):
         already been unmounted, raising `NoMatches` out of the very path that exists to report
         a vanished session without losing the app.
         """
-        tui = self.tui
-        tui.set_busy(True)
-        try:
-            record = await tui.current_record(self.session_value)
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
             if record is None:
                 self.set_status("That session is no longer available.")
                 return
-            await self.app.push_screen(ForceConfirmScreen(self.session_value, record))
-        finally:
-            tui.set_busy(False)
+            await self.advance_to(ForceConfirmScreen(self.session_value, record))
 
     async def confirm_remote_control(self) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first.
 
         Guarded for the reason given on `confirm_force`.
         """
-        tui = self.tui
-        tui.set_busy(True)
-        try:
-            record = await tui.current_record(self.session_value)
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
             if record is None:
                 self.set_status("That session is no longer available.")
                 return
@@ -198,9 +192,7 @@ class SessionDetailScreen(ChoiceScreen):
                     f"{explain_state(record.state)}"
                 )
                 return
-            await self.app.push_screen(RemoteControlConfirmScreen(self.session_value, record))
-        finally:
-            tui.set_busy(False)
+            await self.advance_to(RemoteControlConfirmScreen(self.session_value, record))
 
     async def show_attach(self) -> None:
         """Render the command that reaches this pane, or say why there is none.
@@ -209,16 +201,16 @@ class SessionDetailScreen(ChoiceScreen):
         when unavailable. Hiding it is what the bot does, and it leaves the owner unable to
         tell a dead pane from a surface that simply forgot to draw the button.
         """
-        tui = self.tui
-        try:
-            record = await tui.current_record(self.session_value)
-            if record is None:
-                self.set_status("That session is no longer available.")
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(self.session_value)
+                if record is None:
+                    self.set_status("That session is no longer available.")
+                    return
+                command = await self.services.launcher.copy_attach(record.session_id)
+            except Exception as error:
+                self.tui.report_store_failure(error)
                 return
-            command = await self.services.launcher.copy_attach(record.session_id)
-        except Exception as error:
-            tui.report_store_failure(error)
-            return
         if command is None:
             self.set_status(
                 f"{record.display.rendered}\n"
@@ -239,23 +231,26 @@ class SessionDetailScreen(ChoiceScreen):
         capture = self.services.capture
         if capture is None:
             return
-        record = await self.tui.current_record(self.session_value)
-        if record is None:
-            self.set_status("That session is no longer available.")
-            return
-        try:
-            captured = await capture(record.session_id)
-        except Exception as error:
-            _LOG.exception("capture failed")
-            self.set_status(f"{record.display.rendered}\nThe output could not be captured: {error}")
-            return
-        text = render_capture(captured, self.services.capture_redactions)
-        await self.app.push_screen(
-            InspectScreen(
-                f"{record.display.rendered}\nOutput. Press escape to go back.",
-                text or "This session has produced no output yet.",
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
+            if record is None:
+                self.set_status("That session is no longer available.")
+                return
+            try:
+                captured = await capture(record.session_id)
+            except Exception as error:
+                _LOG.exception("capture failed")
+                self.set_status(
+                    f"{record.display.rendered}\nThe output could not be captured: {error}"
+                )
+                return
+            text = render_capture(captured, self.services.capture_redactions)
+            await self.advance_to(
+                InspectScreen(
+                    f"{record.display.rendered}\nOutput. Press escape to go back.",
+                    text or "This session has produced no output yet.",
+                )
             )
-        )
 
 
 class InspectScreen(ChoiceScreen):

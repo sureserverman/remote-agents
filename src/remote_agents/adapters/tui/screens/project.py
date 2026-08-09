@@ -55,7 +55,7 @@ class AreasScreen(ChoiceScreen):
         if key == _CANCEL:
             self.tui.return_to_projects()
             return
-        await self.app.push_screen(NameScreen(key))
+        await self.advance_to(NameScreen(key))
 
 
 class NameScreen(ChoiceScreen):

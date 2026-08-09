@@ -39,6 +39,14 @@ from tui_positions import position
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.domain.conversations import (
+    ConversationCataloguePage,
+    ConversationReference,
+    ConversationState,
+    ConversationSummary,
+    ProfileResumeCapability,
+    ResolvedConversation,
+)
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -50,6 +58,7 @@ from remote_agents.domain.models import (
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION_ID = SessionId.new()
+_REFERENCE = ConversationReference("c-" + "0" * 14 + "01")
 
 
 def _record() -> SessionRecord:
@@ -83,6 +92,34 @@ class _Creator:
         return ("dev-area", "infra")
 
 
+def _summary() -> ConversationSummary:
+    return ConversationSummary(
+        _REFERENCE,
+        ProfileId("claude"),
+        ProjectId("opaque-existing"),
+        ConversationState.RESUMABLE,
+        datetime.now(UTC),
+        description="a saved conversation",
+    )
+
+
+class _Conversations:
+    """Wired so the resume flow's commit point can be driven to, and only for that."""
+
+    async def catalogue(self, query):
+        return ConversationCataloguePage((_summary(),), query.page, 1)
+
+    async def resolve_for_resume(self, _reference):
+        return ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
+
+    async def capabilities(self):
+        return (
+            ProfileResumeCapability(
+                ProfileId("claude"), catalogue_available=True, selected_resume_available=True
+            ),
+        )
+
+
 def _context() -> TuiContext:
     return TuiContext(
         launcher=_Launcher(),  # type: ignore[arg-type]
@@ -91,6 +128,7 @@ def _context() -> TuiContext:
         refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         catalogue=(_PROJECT,),
+        conversations=_Conversations(),  # type: ignore[arg-type]
     )
 
 
@@ -145,6 +183,13 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> None:
     await app.screen.confirm_remote_control()
 
 
+async def _drive_to_resume_confirm(app: RemoteAgentsTui) -> None:
+    await app.action_resume()
+    await app.screen.choose("opaque-existing")
+    await app.screen.choose("claude")
+    await app.screen.choose(str(_REFERENCE))
+
+
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     await app.show_areas()
     await app.screen.choose("infra")
@@ -163,6 +208,12 @@ _RESTING = (
         "Cancel",
         "REMOTE_CONTROL_CONFIRM",
         id="remote-control-confirm",
+    ),
+    # The resume flow's commit point. Same "abort under the cursor" shape as the two
+    # destructive confirms, and it held only because Cancel happens to be listed first with
+    # the default highlight — nothing pinned it until this entry.
+    pytest.param(
+        _drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"
     ),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),

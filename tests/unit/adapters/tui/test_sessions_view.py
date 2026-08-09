@@ -10,6 +10,7 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.screens import ProjectsScreen
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -294,3 +295,54 @@ async def test_selecting_a_row_never_escapes_as_an_exception() -> None:
         status = _status(app)
 
     assert "could not be read" in status.casefold()
+
+
+async def test_a_screen_left_mid_read_does_not_draw_onto_its_own_corpse() -> None:
+    """The shared guard, pinned on a path that deliberately holds no busy guard.
+
+    `SessionsScreen.reload` is one of several screen methods that await a store read and then
+    draw, without blocking navigation while they do — reloading a list is not worth freezing
+    the surface for. That makes it the right place to pin `ChoiceScreen.showing`, which is the
+    *class* fix for this: a screen that has been left renders nothing, instead of calling
+    `query_one` on widgets that are already unmounted and raising `NoMatches` out of a message
+    handler, which exits the app.
+
+    The distinction matters because the destructive paths close the same hole a second way, by
+    holding the busy guard so the pop cannot happen at all. If this test were written against
+    one of those it would pass with `showing` removed entirely — verified by mutation, which is
+    why it is written here instead.
+    """
+    import asyncio
+
+    @dataclass(slots=True)
+    class _SlowListing:
+        records: tuple[SessionRecord, ...] = ()
+
+        async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
+            return self.records
+
+        async def list_sessions(self) -> tuple[SessionRecord, ...]:
+            await asyncio.sleep(0.03)
+            return self.records
+
+        async def copy_attach(self, _session_id) -> str | None:
+            return None
+
+    app = RemoteAgentsTui(_context(_SlowListing((_record(),))))  # type: ignore[arg-type]
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        sessions = app.screen
+
+        async def _escape_during() -> None:
+            await asyncio.sleep(0.005)
+            await app.action_back()
+
+        # The assertion is that this returns at all, and that the app survives it.
+        await asyncio.gather(sessions.reload(), _escape_during())
+        await pilot.pause()
+
+        assert app.is_running, "a render onto a left screen took the app down"
+        assert isinstance(app.screen, ProjectsScreen)
+        assert len(app.screen_stack) == 1

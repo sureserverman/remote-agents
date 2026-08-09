@@ -97,7 +97,7 @@ class ResumeProjectsScreen(ChoiceScreen):
             # pops the screen being mounted and the fetched capabilities are discarded with
             # no error — the same "a second entry point mid-navigation" class the guard
             # exists for, just failing silently instead of stranding.
-            await self.app.push_screen(ResumeProfilesScreen(project, capable))
+            await self.advance_to(ResumeProfilesScreen(project, capable))
         finally:
             tui.set_busy(False)
 
@@ -113,6 +113,33 @@ class ResumeProfilesScreen(ChoiceScreen):
         super().__init__()
         self.project = project
         self.capable = capable
+
+    async def on_reveal(self) -> None:
+        """Re-ask which agents can resume, because the answer can move while the owner is away.
+
+        The chain this replaces re-ran the whole capability read on the way back from the
+        conversation list, so a provider that stopped being resume-capable meanwhile was not
+        still offered. A bare pop would have returned the owner to the answer from before
+        they left — the same staleness `SessionsScreen` and `SessionDetailScreen` re-read to
+        avoid, and it is only listed separately here because this flow was extracted a task
+        after that precedent was set and did not inherit it.
+        """
+        conversations = self.services.conversations
+        if conversations is None:
+            return
+        try:
+            capabilities = await conversations.capabilities()
+        except Exception as error:
+            _LOG.exception("resume capabilities failed")
+            self.set_status(f"Resume is unavailable: {error}")
+            self.show_choices(((_BACK, "Back"),))
+            return
+        self.capable = tuple(
+            capability
+            for capability in capabilities
+            if capability.catalogue_available and capability.selected_resume_available
+        )
+        await self.populate()
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -142,7 +169,7 @@ class ResumeProfilesScreen(ChoiceScreen):
             if page is None:
                 return
             # Held across the push for the reason given on `ResumeProjectsScreen.choose`.
-            await self.app.push_screen(ResumeConversationsScreen(self.project, key, page))
+            await self.advance_to(ResumeConversationsScreen(self.project, key, page))
         finally:
             tui.set_busy(False)
 
@@ -161,6 +188,14 @@ class ResumeConversationsScreen(ChoiceScreen):
         # The paging state the app used to carry as `_resume_page` / `_resume_page_count`.
         # Local to the one screen that pages, so nothing else can move it under this screen.
         self.page = page
+
+    async def on_reveal(self) -> None:
+        """Re-read this page on the way back from the confirmation, for the same reason."""
+        page = await fetch_page(self, self.project, self.profile, self.page.page)
+        if page is None:
+            return
+        self.page = page
+        self.render_page()
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -210,7 +245,7 @@ class ResumeConversationsScreen(ChoiceScreen):
         if resolved is None:
             self.set_status("That conversation is no longer available.")
             return
-        await self.app.push_screen(ResumeConfirmScreen(self.project, self.profile, resolved))
+        await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
     async def turn_page(self, step: int) -> None:
         tui = self.tui

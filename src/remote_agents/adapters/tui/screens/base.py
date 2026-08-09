@@ -8,7 +8,9 @@ fed by an external source must not be able to reintroduce the crash by forgettin
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, cast
 
 from textual.app import ComposeResult
@@ -102,7 +104,7 @@ class ChoiceScreen(Screen[None]):
         """Render this screen's rows. Overridden by every concrete screen."""
 
     async def on_reveal(self) -> None:
-        """Re-read whatever this screen shows, because it just became active again.
+        """Re-render whatever this screen shows, because it just became active again.
 
         Called by `RemoteAgentsTui.go_back` after the screen above this one is popped, so a
         position whose content can go stale while the owner is elsewhere gets a fresh read on
@@ -127,7 +129,63 @@ class ChoiceScreen(Screen[None]):
     def services(self) -> TuiContext:
         return self.tui.services
 
+    @property
+    def showing(self) -> bool:
+        """Whether this screen is still the one the owner is looking at.
+
+        Every render below is guarded by this, and the guard is the *class* fix for a defect
+        that has now been found twice in this surface: a coroutine awaits a store read, the
+        owner presses Escape, the screen is popped, and the coroutine resumes and writes to
+        widgets that are gone. Textual raises `NoMatches` there, and an exception out of a
+        message handler takes the whole app down — from the very code paths that exist to
+        report trouble *without* losing the app.
+
+        `is_mounted` cannot answer this and must not be used for it: it stays `True` after a
+        pop while the screen's widgets are already unmounted, so a `query_one` still raises.
+        Identity against `app.screen` flips synchronously with the pop, which is what makes it
+        usable from inside a coroutine that awaited across one.
+
+        Guarding here rather than at each call site is deliberate. A sweep of this package
+        found eleven methods that await and then render or push; adding a caller-side guard to
+        each is precisely the arrangement that let two of them be missed when their four
+        siblings got one.
+        """
+        return self.app.screen is self
+
+    @contextlib.asynccontextmanager
+    async def holding_the_guard(self) -> AsyncIterator[None]:
+        """Hold the surface's busy guard for the duration of a store read.
+
+        Extracted because the same six-line `set_busy(True)` / `try` / `finally` body was
+        copy-pasted across six methods and *omitted* from two of them, which is how the
+        Escape-mid-read defect survived its first repair. One helper is one thing to reach
+        for; six near-identical bodies are six chances to forget.
+
+        This prevents the situation — `action_back` refuses to pop while it is held — where
+        `showing` merely makes the aftermath harmless. Both are kept: the guard is the narrow
+        fix for the paths that can afford to block, `showing` is the one that covers every
+        path including the ones that cannot.
+        """
+        self.tui.set_busy(True)
+        try:
+            yield
+        finally:
+            self.tui.set_busy(False)
+
+    async def advance_to(self, screen: Screen[None]) -> None:
+        """Push `screen`, unless this one has been left while a read was in flight.
+
+        The other half of `showing`. A push from a screen that is no longer on top lands on
+        whatever replaced it — which is how a "Yes, force stop it" dialog ends up sitting
+        above a position that is not showing the session it names.
+        """
+        if not self.showing:
+            return
+        await self.app.push_screen(screen)
+
     def set_status(self, text: str) -> None:
+        if not self.showing:
+            return
         self.query_one("#status", Static).update(text)
 
     @staticmethod
@@ -174,6 +232,8 @@ class ChoiceScreen(Screen[None]):
         Refilling while the owner is typing a filter must leave the keyboard where it is, or
         every character after the first lands on the list instead of the query.
         """
+        if not self.showing:
+            return
         # Restoring here rather than in each exit route: the inspect screen swaps the list
         # for a scrollable output pane, and every other screen renders through this, so
         # this is the one place that cannot be forgotten by a new navigation path.
@@ -235,6 +295,8 @@ class ChoiceScreen(Screen[None]):
 
     def text_entry(self, placeholder: str) -> None:
         """Hand the keyboard to the input, which only the text screens ever use."""
+        if not self.showing:
+            return
         self.show_choices(())
         entry = self.query_one("#filter", Input)
         entry.display = True
@@ -243,16 +305,22 @@ class ChoiceScreen(Screen[None]):
         entry.focus()
 
     def hide_entry(self) -> None:
+        if not self.showing:
+            return
         entry = self.query_one("#filter", Input)
         entry.value = ""
         entry.display = False
 
     def show_output(self, text: str) -> None:
+        if not self.showing:
+            return
         self.query_one("#output-pane").display = True
         self.query_one("#choices").display = False
         self.query_one("#output", Static).update(text)
 
     def hide_output(self) -> None:
+        if not self.showing:
+            return
         self.query_one("#output-pane").display = False
         self.query_one("#choices").display = True
 
