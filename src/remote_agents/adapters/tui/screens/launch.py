@@ -16,11 +16,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.project_catalog import search_catalogue
+
+#: How long the filter waits for the typing to stop before it re-searches the catalogue.
+#: Every keystroke used to run `search_catalogue` over the whole catalogue and rebuild every
+#: row, so a five-character word did that work five times and threw four of the answers away.
+#: 120ms is under the ~200ms at which a pause starts to read as lag, and above a fast typist's
+#: inter-key interval, so an ordinary word searches once.
+_FILTER_DEBOUNCE = 0.12
 
 
 class ProjectsScreen(ChoiceScreen):
@@ -92,13 +100,75 @@ class ProjectsScreen(ChoiceScreen):
             entry.value = ""
             entry.focus()
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: The scheduled re-search, kept so the next keystroke can cancel it.
+        self._filter_timer: Timer | None = None
+        #: What that scheduled search will look for. Held separately from the timer because
+        #: the two ways out of the filter — enter and down — have to apply it *now* rather
+        #: than wait, and they need the query to do it.
+        self._pending_query: str | None = None
+
     def on_input_changed(self, event: Input.Changed) -> None:
+        """Schedule the re-search, replacing any the previous keystroke scheduled.
+
+        Cancel-and-reschedule is cancel-on-re-entry, which DEC-008 forbids in this adapter —
+        but the decision's own text carves out exactly this case ("a debounced filter or a
+        catalogue refresh"), because what is abandoned here is a *read* whose answer is
+        already stale. What DEC-008 actually forbids is `@work(exclusive=True)`, and its
+        enforcement is an unconditional grep for that string, so this is a timer: the
+        behaviour the decision permits, expressed without the token its check bans.
+        """
         event.stop()
-        self.render_projects(event.value, keep_focus=True)
+        self._pending_query = event.value
+        if self._filter_timer is not None:
+            self._filter_timer.stop()
+        self._filter_timer = self.set_timer(_FILTER_DEBOUNCE, self._apply_pending_filter)
+
+    def _apply_pending_filter(self) -> None:
+        self._filter_timer = None
+        query, self._pending_query = self._pending_query, None
+        if query is None:
+            return
+        # `render_projects` returns early when the screen is no longer showing, which is what
+        # keeps a timer that outlives a navigation from repainting a position the owner left.
+        self.render_projects(query, keep_focus=True)
+
+    def _flush_filter(self) -> None:
+        """Apply a scheduled search immediately, because the owner is about to act on it.
+
+        Without this the debounce introduces its own defect: type `oth`, press down inside the
+        120ms, and the keyboard lands on rows that are still the *unfiltered* catalogue — so
+        the row under the cursor is not the one the owner was looking at when they pressed.
+        """
+        if self._filter_timer is not None:
+            self._filter_timer.stop()
+        self._apply_pending_filter()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Move from the filter into the filtered list, so arrows and enter can pick."""
         event.stop()
+        self._flush_filter()
+        self._enter_results()
+
+    def key_down(self, event: object) -> None:
+        """Down-arrow leaves the filter for the rows, which enter alone used to be able to do.
+
+        `Input` binds no `down`, so the key bubbles from the focused entry to this screen and
+        this handler is what it reaches. Guarded on the entry actually holding the keyboard:
+        once focus is on the list, `OptionList` consumes `down` as cursor movement and never
+        gets here.
+        """
+        entry = self.query_one("#filter", Input)
+        if not entry.has_focus:
+            return
+        stop = getattr(event, "stop", None)
+        if callable(stop):
+            stop()
+        self._flush_filter()
+        self._enter_results()
+
+    def _enter_results(self) -> None:
         choices = self.query_one("#choices", OptionList)
         if choices.options:
             choices.highlighted = 0

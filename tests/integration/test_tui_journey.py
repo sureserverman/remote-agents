@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from tui_filter import settle_filter
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
@@ -80,7 +81,7 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
 
             for character in "brand-new":
                 await pilot.press(character)
-            await pilot.pause()
+            await settle_filter(pilot)
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")

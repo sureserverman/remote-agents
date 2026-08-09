@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_feedback import status as _status
+from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import (
     AttachRequest,
@@ -131,7 +132,7 @@ async def test_typing_filters_the_project_list_one_character_at_a_time() -> None
     async with app.run_test() as pilot:
         for character in "other":
             await pilot.press(character)
-        await pilot.pause()
+        await settle_filter(pilot)
         typed = app.screen.query_one("#filter").value
         rows = _rows(app)
 
@@ -612,7 +613,7 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
     async with app.run_test() as pilot:
         for character in "other":
             await pilot.press(character)
-        await pilot.pause()
+        await settle_filter(pilot)
         assert _rows(app) == ["dev-area/other-thing  [Unregistered]"], "expected a filtered list"
 
         await pilot.press("enter")
@@ -685,3 +686,133 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
     assert "attach-session" in status
     assert "did not become ready" in reported
     assert app.return_value is None
+
+
+async def test_four_characters_in_quick_succession_search_the_catalogue_once(monkeypatch) -> None:
+    """The filter waits for the typing to stop instead of re-searching per keystroke.
+
+    Counted at `search_catalogue` rather than at the render, because the render is cheap and
+    the search is the part that walks the whole catalogue. Before the debounce this was four
+    searches and four full row rebuilds for one four-character word, three of them discarded
+    before the owner could read them.
+
+    **"Quick succession" is expressed by handing the screen four changes with no await between
+    them, not by pressing four keys and hoping the machine is fast.** The first version of this
+    test did the latter and asserted that nothing had been searched yet; it passed alone and
+    failed inside the full suite, because four `pilot.press` calls on a loaded machine can take
+    longer than the 120ms they are supposed to fit inside. An assertion about the debounce that
+    is really an assertion about the host's spare capacity is worth less than no assertion.
+    """
+    import remote_agents.adapters.tui.screens.launch as launch
+
+    calls: list[str] = []
+    real = launch.search_catalogue
+
+    def counting(catalogue, query):
+        calls.append(query)
+        return real(catalogue, query)
+
+    monkeypatch.setattr(launch, "search_catalogue", counting)
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        entry = app.screen.query_one("#filter", Input)
+        for typed in ("o", "ot", "oth", "othe"):
+            entry.value = typed
+            app.screen.on_input_changed(Input.Changed(entry, typed))
+        await settle_filter(pilot)
+        searched = list(calls)
+        rows = _rows(app)
+
+    assert searched == ["othe"], f"expected one search for the settled query, got {searched}"
+    assert rows == ["dev-area/other-thing  [Unregistered]"]
+
+
+async def test_typing_with_real_keys_searches_fewer_times_than_it_has_characters(
+    monkeypatch,
+) -> None:
+    """The same claim through the real key path, stated so a slow machine cannot break it.
+
+    The deterministic case above proves the debounce collapses a burst; this one proves the
+    burst actually reaches it through `Input.Changed` from real keystrokes. It asserts an
+    inequality rather than a count, because how many 120ms windows five keypresses fall across
+    is a fact about the machine — but "fewer searches than characters" is false for the
+    per-keystroke behaviour this replaced no matter how slow the host is.
+    """
+    import remote_agents.adapters.tui.screens.launch as launch
+
+    calls: list[str] = []
+    real = launch.search_catalogue
+
+    def counting(catalogue, query):
+        calls.append(query)
+        return real(catalogue, query)
+
+    monkeypatch.setattr(launch, "search_catalogue", counting)
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        for character in "other":
+            await pilot.press(character)
+        await settle_filter(pilot)
+        searched = list(calls)
+        rows = _rows(app)
+
+    assert len(searched) < 5, f"one search per keystroke survived: {searched}"
+    assert searched[-1] == "other", f"the settled query was not the last one typed: {searched}"
+    assert rows == ["dev-area/other-thing  [Unregistered]"]
+
+
+async def test_down_arrow_moves_from_the_filter_into_the_results() -> None:
+    """Enter was the only way out of the filter; the key an owner reaches for is down."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        assert app.screen.query_one("#filter").has_focus
+
+        await pilot.press("down")
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        focused_rows = choices.has_focus
+        highlighted = choices.highlighted
+
+    assert focused_rows, "down-arrow left the keyboard in the filter"
+    assert highlighted == 0, "down-arrow entered the rows without resting on the first one"
+
+
+async def test_down_arrow_enters_the_filtered_rows_and_not_the_stale_ones() -> None:
+    """The debounce's own hazard: leaving the filter before the scheduled search has run.
+
+    Typed and left inside the debounce window, so the pending search has not fired when the
+    key arrives. If down-arrow simply moved focus, the cursor would rest on the first row of
+    the *unfiltered* catalogue — a different project from the one the owner narrowed to.
+    """
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        for character in "other":
+            await pilot.press(character)
+        await pilot.press("down")
+        await pilot.pause()
+        rows = _rows(app)
+        choices = app.screen.query_one("#choices", OptionList)
+        resting = str(choices.get_option_at_index(choices.highlighted).prompt)
+
+    assert rows == ["dev-area/other-thing  [Unregistered]"], "the pending filter was not applied"
+    assert resting == "dev-area/other-thing  [Unregistered]"
+
+
+async def test_leaving_the_filter_with_enter_also_applies_a_pending_search() -> None:
+    """Enter had the same hazard as down, and gets the same flush."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        for character in "other":
+            await pilot.press(character)
+        await pilot.press("enter")
+        await pilot.pause()
+        rows = _rows(app)
+        focused_rows = app.screen.query_one("#choices").has_focus
+
+    assert rows == ["dev-area/other-thing  [Unregistered]"]
+    assert focused_rows

@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 import pytest
 from textual.screen import Screen
 from textual.widgets import OptionList
+from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -527,8 +528,12 @@ async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:
         entry = app.screen.query_one("#filter", Input)
         entry.focus()
         await pilot.press(*"exist")
-        await pilot.pause()
+        await settle_filter(pilot)
         narrowed = [o.id for o in app.screen.query_one("#choices", OptionList).options]
+        assert narrowed == ["opaque-existing"], (
+            "the filter had not been applied yet, so this test would compare two unfiltered "
+            "lists and pass without checking anything"
+        )
 
         await pilot.press("ctrl+r")
         await pilot.pause()
