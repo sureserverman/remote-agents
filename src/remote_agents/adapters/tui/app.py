@@ -264,6 +264,42 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         return await self.push_screen_wait(screen)
 
+    @staticmethod
+    def _unique_by_key(entries: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+        """Drop a repeated key, keeping the first, so a duplicate cannot take the screen down.
+
+        `OptionList.add_options` raises `DuplicateID` when two options in one batch share an
+        `id` (`_option_list.py:379-382`), and it raises *within* a single call rather than only
+        against options already added. The widget this replaced tolerated a repeated key
+        silently — it was a plain attribute with no uniqueness rule — so the migration turned
+        "renders an ambiguous list" into "raises uncaught inside `_fill`".
+
+        That matters at exactly one call site today and it is the one fed by data this app does
+        not own: `_show_resume_conversations` keys its rows on `ConversationReference`s built by
+        the agent adapters from on-disk provider state. Its `try/except` covers the catalogue
+        await, not the `_fill` below it, so a provider reporting one conversation twice on a
+        page would crash the screen. Every other caller keys on ids this app controls.
+
+        Deduplicating here rather than at that one site because `_fill` is the single choke
+        point every row set passes through, so a future screen fed by another external source
+        cannot reintroduce the crash by forgetting a guard. Keeping the first occurrence
+        preserves the old behaviour's outcome: under the previous widget both rows rendered and
+        selecting either dispatched the same key, so one row and the same key is the closer
+        match to what the owner used to get — and strictly better than an exception.
+
+        The drop is logged rather than silent: a page that lost a row is a provider bug worth
+        being able to find, and a silent dedup would hide it exactly as the crash would.
+        """
+        seen: set[str] = set()
+        unique: list[tuple[str, str]] = []
+        for key, text in entries:
+            if key in seen:
+                _LOG.warning("dropped a repeated row key from the surface: %r", key)
+                continue
+            seen.add(key)
+            unique.append((key, text))
+        return tuple(unique)
+
     def _fill(
         self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
     ) -> None:
@@ -279,6 +315,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._resting_generation += 1
         choices = self.query_one("#choices", OptionList)
         choices.clear_options()
+        entries = self._unique_by_key(entries)
         # The key is the `Option`'s own `id`, which is what the selection message carries
         # back as `option_id`. It replaces the attribute this used to bolt onto each mounted
         # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and

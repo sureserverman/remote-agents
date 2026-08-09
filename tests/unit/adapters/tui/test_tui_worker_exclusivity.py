@@ -5,7 +5,7 @@ Two guarantees this project relied on and had never tested.
 The first is DEC-007's: a repeated enter must not destroy anything twice. **Which mechanism
 delivers that depends on how the second enter arrives, and the two are not the same test.**
 Concurrently — two coroutines in flight at once — the `_busy` flag refuses the second at
-`on_list_view_selected`. Queued, which is what two fast keypresses actually produce because
+`on_option_list_option_selected`. Queued, which is what two fast keypresses actually produce because
 Textual serialises handlers on the pump, `_busy` has already been cleared by the first
 handler's `finally`, and what refuses the second stop is `_stop` re-reading the record and
 re-checking the policy. Both are covered below, and they are labelled for which is which.
@@ -237,7 +237,7 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
 
 
 async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> None:
-    """The `_busy` guard at `on_list_view_selected`, exercised by concurrent delivery.
+    """The `_busy` guard at `on_option_list_option_selected`, exercised by concurrent delivery.
 
     Named for the mechanism, not for a guarantee the surface does not give. Under **queued**
     delivery — what two fast enters actually produce — this flow issues twice: `_launch`

@@ -166,6 +166,15 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         assert marked == expected, (
             f"{step.name} rests on {marked!r}, not the non-mutating {expected!r}. Rows were {rows}."
         )
+        # The row an enter would activate, tied to the row the owner can see. `action_select`
+        # reads `highlighted`, so this is the *enter target*, and asserting it against
+        # `expected` rather than against `marked` is what keeps the check from being circular:
+        # `render_line` paints the highlight by comparing `highlighted` to the row index, so
+        # "the drawn row and the reactive agree" is true by construction and proves nothing.
+        # Landing on the wrong row is the failure this catches, and it is reachable.
+        choices = app.query_one("#choices", OptionList)
+        assert choices.highlighted is not None
+        assert rows[choices.highlighted] == expected
 
 
 async def test_a_list_with_no_resting_preference_still_draws_a_cursor() -> None:
@@ -180,24 +189,19 @@ async def test_a_list_with_no_resting_preference_still_draws_a_cursor() -> None:
         assert marked == rows[0]
 
 
-async def test_the_index_and_the_drawn_cursor_agree() -> None:
-    """The two halves cannot drift apart again without this failing.
-
-    The defect this file was written for was precisely a disagreement between them: the
-    index said row 0, and no row was drawn as row 0. `OptionList` closes that structurally
-    by keeping one reactive instead of an index plus a per-row class, so what this now pins
-    is that the row an enter would activate — `highlighted`, which `action_select` reads — is
-    the row the owner can see, taken from the rendered output and not from that reactive.
-    """
-    app = RemoteAgentsTui(_context())
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        await _drive_to_force_confirm(app)
-        await settle(app, pilot)
-        choices = app.query_one("#choices", OptionList)
-        marked, rows = _highlighted(app)
-        assert choices.highlighted is not None
-        assert rows[choices.highlighted] == marked
+# `test_the_index_and_the_drawn_cursor_agree` was deleted here, and the deletion is the point.
+#
+# It asserted `rows[choices.highlighted] == marked` — that the reactive and the painted row
+# agree. Under the widget this file was originally written against, that was the whole defect:
+# an index said row 0 while no row was drawn as row 0, because the highlight was a per-row
+# class applied to a mounted child and the index was a separate number. `OptionList` keeps a
+# single reactive, and `render_line` paints the highlight by comparing it to the row index —
+# so the two cannot disagree, and the assertion could not fail for any reason the tests above
+# would not also catch. It had become a test of Textual's internal consistency.
+#
+# Its one real value — that the *enter target* is the row the owner sees — is folded into the
+# parametrized test above, where it is asserted against the expected non-mutating label rather
+# than against the drawn row. That version can fail, which is the difference.
 
 
 async def test_a_superseded_cursor_placement_stands_down() -> None:
