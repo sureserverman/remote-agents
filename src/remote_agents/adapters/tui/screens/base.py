@@ -762,10 +762,19 @@ class ChoiceScreen(Screen[None]):
         self.show_choices(())
         entry = self.query_one("#filter", Input)
         entry.display = True
-        entry.value = ""
         entry.placeholder = placeholder
+        # **Both of these are set before the value is cleared, and the order is load-bearing.**
+        # `Input.value` is a reactive whose watcher validates the new value and posts `Changed`,
+        # so assigning the value first would run whatever validators the entry was last given
+        # under whatever `valid_empty` it was last given. Today that happens to be harmless —
+        # the value is already `""` so the watcher does not fire, and Textual's own default for
+        # `valid_empty` is `False`, which is what `NameScreen` wants anyway — but both of those
+        # are coincidences of the current defaults rather than anything this code arranges. A
+        # review found the whole "no rejection toast when the name entry opens" property
+        # resting on them. Setting the contract first makes it arranged.
         entry.validators = list(validators)
         entry.valid_empty = valid_empty
+        entry.value = ""
         # An entry the owner has not typed into yet is neither valid nor invalid, and it must
         # not open wearing the red border a previous screen's rejection left on the class list.
         entry.remove_class("-invalid", "-valid")

@@ -956,7 +956,60 @@ async def test_the_project_filter_is_not_validated() -> None:
 
         invalid = entry.has_class("-invalid")
         rejected = announcements(app, severity="warning")
+        validators = list(entry.validators)
 
-    assert entry.validators == []
+    assert validators == []
     assert not invalid
     assert rejected == []
+
+
+async def test_the_name_entry_opens_without_refusing_the_value_it_has_not_been_given() -> None:
+    """`valid_empty=False` must reject an empty name on submit, not on arrival.
+
+    A review found this property holding by coincidence: `text_entry` used to assign the
+    value before the validators, and no spurious rejection fired only because Textual's own
+    default for `valid_empty` already matched what this screen wanted, so the reactive
+    watcher never ran. Both orderings are now arranged rather than inherited, and this is
+    what would notice if they slipped — the sibling label case has asserted the same shape
+    all along, which is how the asymmetry was spotted.
+    """
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        await _choose(app, pilot, "infra")
+        entry = app.screen.query_one("#filter", Input)
+
+        # Every one of these is read *inside* the running app, deliberately. Reading them
+        # after the block asks a torn-down widget: shutdown blurs the entry, `validate_on`
+        # includes "blur", and an empty value under `valid_empty=False` is invalid — so an
+        # assertion taken outside reports a rejection that never happened while the owner was
+        # looking at the screen. The first draft of this test did exactly that and failed.
+        focused = entry.has_focus
+        rejected = announcements(app, severity="warning")
+        invalid = entry.has_class("-invalid")
+
+    assert focused, "expected the name entry"
+    assert rejected == [], f"the entry refused a value before one was typed: {rejected}"
+    assert not invalid, "the entry opened already marked invalid"
+
+
+async def test_the_name_entry_still_refuses_an_empty_name_when_it_is_submitted() -> None:
+    """The other half of the same rule: arrival is silent, submit is not."""
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        await _choose(app, pilot, "infra")
+        before = app.screen.position
+
+        await pilot.press("enter")
+        await pilot.pause()
+        rejected = announcements(app, severity="warning")
+        after = app.screen.position
+
+    assert before == "NAME"
+    assert after == "NAME", "an empty project name was accepted"
+    assert any("lowercase letters, digits" in message for message in rejected), rejected

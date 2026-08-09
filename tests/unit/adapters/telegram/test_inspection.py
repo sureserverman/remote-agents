@@ -38,3 +38,15 @@ def test_binary_output_is_refused_without_an_attachment() -> None:
     assert result.kind == "refused"
     assert result.attachment is None
     assert "binary" in result.text
+
+
+def test_tab_separated_output_keeps_its_columns_on_this_surface_too() -> None:
+    """The sanitizer fix is shared, so the bot gained it without a change of its own.
+
+    Asserted here rather than only at the port, because "both surfaces" is the claim and a
+    port-level test cannot show that this adapter still routes through the shared function.
+    """
+    result = inspect_capture(b"col1\tcol2\nname\tvalue")
+
+    assert result.kind == "text"
+    assert result.text == "col1    col2\nname    value"

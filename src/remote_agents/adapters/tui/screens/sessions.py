@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import logging
 
+from textual.binding import Binding
+from textual.widgets import Input, TextArea
+
 from remote_agents.adapters.tui.model import _BACK, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import (
@@ -377,15 +380,53 @@ class SessionDetailScreen(ChoiceScreen):
 
 
 class InspectScreen(ChoiceScreen):
-    """This session's captured output, on the scrollable pane rather than in the list."""
-    #: shows the output pane, never rows.
+    """This session's captured output: scrollable, jumpable, and searchable.
+
+    **All three of those verbs are this screen's own work, and two of them were assumed.**
+    The sub-plan's research recorded that a read-only `TextArea` "gives selection, search, and
+    scroll-to-end", and the stage goal was written on that premise. Measured against the
+    pinned Textual 8.2.8, it gives selection and line-by-line movement and neither of the
+    other two: its 32 bindings contain no find action and no document-start or document-end
+    action, so `ctrl+f`, `/`, `f3`, `ctrl+end` and `ctrl+home` were all inert here, and
+    reaching the bottom of a long capture took 105 `pagedown` presses. A gate evaluator drove
+    it and counted them.
+
+    So the keys are bound here rather than the goal being quietly reinterpreted as the one
+    verb the widget happened to supply. The newest output of an agent is at the *bottom*,
+    which is what makes the missing jump the sharper of the two absences.
+    """
+
+    #: Shows the output pane, never rows.
     empty_state = NEVER_EMPTY
 
     position = "INSPECT"
-    status = "Output. Press escape to go back."
+    status = (
+        "Output. / to find, n and N to step, ctrl+home and ctrl+end to jump, escape to go back."
+    )
     #: "Output", not the session's name: the detail one level down the stack already carries
     #: that, and a trail that repeats its own last entry says nothing twice.
     crumb = "Output"
+    filter_placeholder = "Find in output"
+
+    BINDINGS = [
+        Binding("slash", "find", "Find", tooltip="Search this capture"),
+        Binding("n", "next_match", "Next match", show=False),
+        Binding("N", "previous_match", "Previous match", show=False),
+        Binding("ctrl+end", "to_end", "End", tooltip="Jump to the newest output"),
+        # Hidden from the footer, not from the surface. Three new entries here overflowed the
+        # bar at 80 columns and clipped `Resume` to `Resum` — a binding this screen did not
+        # add, silently truncated by one that did, which is a worse trade than an unlisted
+        # key. `ctrl+end` is the half that matters (an agent's newest output is at the
+        # bottom); its inverse is named in the status line above, where there is room to say
+        # both. Measured against the committed 80-column baseline, not assumed.
+        Binding(
+            "ctrl+home",
+            "to_start",
+            "Start",
+            tooltip="Jump to the top of the capture",
+            show=False,
+        ),
+    ]
 
     def __init__(self, output: str) -> None:
         super().__init__()
@@ -394,11 +435,103 @@ class InspectScreen(ChoiceScreen):
         # names the session in its own crumb, so passing it here would have been carrying a
         # value only to render it twice.
         self._output_text = output
+        #: Line indices matching the current query, and where in that list the cursor sits.
+        #: Recomputed per query rather than incrementally, because a capture is immutable
+        #: once shown — there is no edit for an index to drift against.
+        self._matches: tuple[int, ...] = ()
+        self._match_index = 0
+        self._query = ""
 
     async def populate(self) -> None:
         self.hide_entry()
         self.show_choices(())
         self.show_output(self._output_text)
+
+    @property
+    def _pane(self) -> TextArea:
+        return self.query_one("#output", TextArea)
+
+    def action_find(self) -> None:
+        """Reveal the entry as a find box, reusing the widget every screen already composes."""
+        entry = self.query_one("#filter", Input)
+        entry.display = True
+        entry.placeholder = self.filter_placeholder or ""
+        entry.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Search as the query is typed, and land on the first match without waiting for enter."""
+        event.stop()
+        self._search(event.value)
+        if self._matches:
+            self._match_index = 0
+            self._reveal_match()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter hands the keyboard back to the pane, so n and N work immediately."""
+        event.stop()
+        self.query_one("#filter", Input).display = False
+        self._pane.focus()
+        if not self._matches and self._query:
+            self.announce(f"No line matches {self._query!r}.", severity="warning")
+
+    def _search(self, query: str) -> None:
+        self._query = query
+        if not query:
+            self._matches = ()
+            self.set_status(self.status)
+            return
+        folded = query.casefold()
+        self._matches = tuple(
+            index
+            for index, line in enumerate(self._output_text.splitlines())
+            if folded in line.casefold()
+        )
+        if not self._matches:
+            self.set_status(f"No match for {query!r}. Escape to go back.")
+
+    def _reveal_match(self) -> None:
+        if not self._matches:
+            return
+        line = self._matches[self._match_index]
+        pane = self._pane
+        # Moving the cursor is what scrolls a `TextArea`; there is no scroll-to-line that also
+        # marks where the owner is. `(line, 0)` rather than the match column, so a wrapped hit
+        # puts the start of its line on screen instead of the middle of it.
+        pane.move_cursor((line, 0))
+        pane.scroll_cursor_visible(center=True)
+        self.set_status(
+            f"Match {self._match_index + 1} of {len(self._matches)} for {self._query!r} "
+            f"— line {line + 1}. n and N to step."
+        )
+
+    def action_next_match(self) -> None:
+        if not self._matches:
+            return
+        self._match_index = (self._match_index + 1) % len(self._matches)
+        self._reveal_match()
+
+    def action_previous_match(self) -> None:
+        if not self._matches:
+            return
+        self._match_index = (self._match_index - 1) % len(self._matches)
+        self._reveal_match()
+
+    def action_to_end(self) -> None:
+        """The tail, which is where an agent's newest output is."""
+        pane = self._pane
+        lines = self._output_text.splitlines()
+        pane.move_cursor((max(0, len(lines) - 1), 0))
+        pane.scroll_cursor_visible()
+
+    def action_to_start(self) -> None:
+        self._pane.move_cursor((0, 0))
+        self._pane.scroll_cursor_visible()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Step-to-match is only a key when there is a match list to step through."""
+        if action in {"next_match", "previous_match"}:
+            return bool(self._matches)
+        return super().check_action(action, parameters)
 
 
 def render_capture(captured: str, redactions: tuple[str, ...]) -> str:

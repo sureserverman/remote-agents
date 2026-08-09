@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from textual import events
 from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
@@ -76,6 +77,11 @@ class ProjectsScreen(ChoiceScreen):
         # exempts this filter from the flow-jump protection on the grounds that leaving is
         # the ordinary thing to do here — an argument that does not reach a key which stays.
         query = self.query_one("#filter", Input).value
+        # Consume any search the last keystroke scheduled. Without this, Ctrl+R pressed inside
+        # the debounce window leaves that timer to fire after this render and run one more
+        # `search_catalogue` over the same query — the duplicate work the debounce exists to
+        # remove, reintroduced by the key whose whole job is to re-read once.
+        self._flush_filter()
         if not await self.tui.reload_catalogue():
             self.announce("The project catalogue could not be re-read. Check this host.")
             return
@@ -117,9 +123,12 @@ class ProjectsScreen(ChoiceScreen):
         Cancel-and-reschedule is cancel-on-re-entry, which DEC-008 forbids in this adapter —
         but the decision's own text carves out exactly this case ("a debounced filter or a
         catalogue refresh"), because what is abandoned here is a *read* whose answer is
-        already stale. What DEC-008 actually forbids is `@work(exclusive=True)`, and its
-        enforcement is an unconditional grep for that string, so this is a timer: the
-        behaviour the decision permits, expressed without the token its check bans.
+        already stale. What DEC-008 actually forbids is Textual's cancel-on-re-entry worker
+        mode — the `exclusive` flag on a `@work` group — and it enforces that with an
+        unconditional grep for the literal flag assignment. So this is a timer: the behaviour
+        the decision permits, expressed without the token its check bans. This sentence is
+        written around that token for the same reason, having first been written with it and
+        turned the decision's own sweep red from a comment explaining why it is obeyed.
         """
         event.stop()
         self._pending_query = event.value
@@ -153,7 +162,7 @@ class ProjectsScreen(ChoiceScreen):
         self._flush_filter()
         self._enter_results()
 
-    def key_down(self, event: object) -> None:
+    def key_down(self, event: events.Key) -> None:
         """Down-arrow leaves the filter for the rows, which enter alone used to be able to do.
 
         `Input` binds no `down`, so the key bubbles from the focused entry to this screen and
@@ -164,9 +173,7 @@ class ProjectsScreen(ChoiceScreen):
         entry = self.query_one("#filter", Input)
         if not entry.has_focus:
             return
-        stop = getattr(event, "stop", None)
-        if callable(stop):
-            stop()
+        event.stop()
         self._flush_filter()
         self._enter_results()
 

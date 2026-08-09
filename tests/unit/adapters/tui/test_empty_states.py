@@ -128,8 +128,23 @@ def test_every_screen_has_answered_whether_it_can_be_empty(screen: type) -> None
         )
 
 
-def test_the_four_emptiable_positions_are_the_ones_declaring_a_sentence() -> None:
-    """Pins the split itself, so moving a screen between the two answers is a visible change."""
+def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source() -> None:
+    """Pins the split itself, so moving a screen between the two answers is a visible change.
+
+    **The set is six, and the plan said four.** The two it missed are the resume flow's
+    project and profile pickers, both declared `NEVER_EMPTY` on a stated precondition that
+    nothing enforces — "reached only from a catalogue that had projects in it", and "the same
+    curated list as the launch wizard's". A Tier-2 review found them, and the predicate that
+    separates the two answers is what the corrected declarations are derived from rather than
+    a longer list of names: **does this screen's rows come from a runtime-variable source?**
+    The catalogue, the store, the disk, and a live capability probe are all variable;
+    `closed_profiles()` returning its fixed five is not, which is why `ProfilesScreen` stays
+    `NEVER_EMPTY` while `ResumeProfilesScreen` — the same five, filtered by a probe DEC-002
+    insists on asking — does not.
+
+    Updating this set is a deliberate act, which is the point of asserting it: a seventh
+    emptiable screen should have to be argued for here, not appear silently.
+    """
     emptiable = {
         screen.__name__
         for screen in ALL_SCREENS
@@ -140,6 +155,8 @@ def test_the_four_emptiable_positions_are_the_ones_declaring_a_sentence() -> Non
         "ProjectsScreen",
         "SessionsScreen",
         "ResumeConversationsScreen",
+        "ResumeProjectsScreen",
+        "ResumeProfilesScreen",
         "AreasScreen",
     }
 
@@ -235,3 +252,56 @@ async def test_the_empty_row_cannot_be_chosen() -> None:
 def test_the_records_used_here_are_stamped_now() -> None:
     """Guards this file against the age-rendering trap the snapshot harness documents."""
     assert datetime.now(UTC).tzinfo is UTC
+
+
+async def test_an_empty_catalogue_says_so_in_the_resume_flow() -> None:
+    """And the row it replaces was worse than blank: it was selectable and it lied.
+
+    The old fallback rendered `(_CANCEL, "No projects available")` as an ordinary row.
+    `ResumeProjectsScreen.choose` has no `_CANCEL` branch, so pressing enter on it fell
+    through to the not-found path and announced "That project is no longer available. Refresh
+    and try again." — telling the owner a project had disappeared when none had ever existed.
+    """
+    from remote_agents.adapters.tui.screens.resume import ResumeProjectsScreen
+
+    app = RemoteAgentsTui(_context(catalogue=(), conversations=_Conversations()))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        rows = _rows(app)
+        enabled = _enabled_rows(app)
+
+        await pilot.press("enter")
+        await pilot.pause()
+        announced = list(app._notifications)
+        still_here = app.screen.position
+
+    assert rows == [ResumeProjectsScreen.empty_state, "Back"]
+    assert enabled == ["Back"]
+    assert still_here == "RESUME_PROJECTS" or still_here == "PROJECTS", still_here
+    assert not any("no longer available" in str(note.message) for note in announced), (
+        "the empty catalogue was reported as a project that had vanished"
+    )
+
+
+async def test_a_host_where_no_agent_can_resume_says_so() -> None:
+    """DEC-002 asks the host rather than consulting a table, so "none today" is a real state."""
+    from remote_agents.adapters.tui.screens.resume import ResumeProfilesScreen
+
+    class _NoneCapable(_Conversations):
+        async def capabilities(self):
+            return (ProfileResumeCapability(ProfileId("claude"), False, False),)
+
+    app = RemoteAgentsTui(_context(conversations=_NoneCapable()))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        rows = _rows(app)
+        enabled = _enabled_rows(app)
+
+    assert rows == [ResumeProfilesScreen.empty_state, "Back"]
+    assert enabled == ["Back"]

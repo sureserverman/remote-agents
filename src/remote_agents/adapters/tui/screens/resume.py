@@ -50,8 +50,13 @@ _RESUME_PAGE_SIZE = 10
 
 class ResumeProjectsScreen(ChoiceScreen):
     """The project whose saved conversations the owner wants to reopen."""
-    #: reached only from a catalogue that had projects in it.
-    empty_state = NEVER_EMPTY
+
+    #: Declared `NEVER_EMPTY` at first writing, on the reasoning that this screen is "reached
+    #: only from a catalogue that had projects in it". Nothing enforces that: `action_resume`
+    #: pushes this position without checking the catalogue, and a freshly configured host —
+    #: or one whose catalogue read came back empty — reaches it with nothing to list. The
+    #: original declaration was a claim about a precondition that does not exist.
+    empty_state = "No projects in the catalogue to reopen a conversation in."
 
     position = "RESUME_PROJECTS"
     status = "Choose the project whose conversation you want to reopen."
@@ -73,15 +78,24 @@ class ResumeProjectsScreen(ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
+        # The `or ((_CANCEL, "No projects available"),)` this replaces was an empty state
+        # written before there was a mechanism for one, and it had the defect that shape
+        # invites: the row was selectable, and `choose` has no `_CANCEL` branch, so pressing
+        # enter on it fell through to `project is None` and announced "That project is no
+        # longer available. Refresh and try again." — telling the owner a project had
+        # vanished when the truth is that none has ever been there.
         self.show_choices(
             tuple(
                 (project.opaque_id, f"{project.area}/{project.name}")
                 for project in self.tui.catalogue
-            )
-            or ((_CANCEL, "No projects available"),)
+            ),
+            trailing=((_BACK, "Back"),) if not self.tui.catalogue else (),
         )
 
     async def choose(self, key: str) -> None:
+        if key == _BACK:
+            await self.tui.go_back()
+            return
         project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
         if project is None:
             # Stay in the resume flow, as the launch picker does for the same failure,
@@ -120,8 +134,14 @@ class ResumeProjectsScreen(ChoiceScreen):
 
 class ResumeProfilesScreen(ChoiceScreen):
     """Only the agents that report themselves resume-capable on this host (DEC-002)."""
-    #: the same curated list as the launch wizard's.
-    empty_state = NEVER_EMPTY
+
+    #: **Not** "the same curated list as the launch wizard's", which is what this said at
+    #: first writing and is the reason it was wrongly declared `NEVER_EMPTY`. The launch
+    #: wizard renders all five closed profiles, greyed with a reason, so its list is fixed by
+    #: construction; this one is filtered to the profiles that answered *yes* to a live
+    #: capability probe, and DEC-002 is precisely the decision that the answer is asked rather
+    #: than tabled — so "none of them can resume today" is an ordinary state, not a broken host.
+    empty_state = "No agent on this host can resume a saved conversation."
 
     position = "RESUME_PROFILES"
 
@@ -180,7 +200,7 @@ class ResumeProfilesScreen(ChoiceScreen):
         self.hide_entry()
         if not self.capable:
             self.set_status("No agent on this host can resume a saved conversation.")
-            self.show_choices(((_BACK, "Back"),))
+            self.show_choices((), trailing=((_BACK, "Back"),))
             return
         self.set_status("Choose the agent whose conversation you want to resume.")
         self.show_choices(

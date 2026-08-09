@@ -45,6 +45,11 @@ class AreasScreen(ChoiceScreen):
             _LOG.exception("listing areas failed")
             self.set_status("Press escape to return to the project list.")
             self.announce(f"The development root could not be read: {error}")
+            # Through `entries`, unlike the sibling branch six lines below, and deliberately:
+            # this is a *failed read*, not an empty one. Routing it through `trailing=` would
+            # substitute the declared empty state — "No area in the development root can hold
+            # a new project" — which states as fact the very thing this branch could not
+            # determine. An error is not an emptiness.
             self.show_choices(((_CANCEL, "Back"),))
             return
         areas = tuple(area for area in offered if selectable_area(area))
