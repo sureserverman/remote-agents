@@ -32,7 +32,7 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
-    ForceConfirmScreen,
+    ForceConfirmModal,
     InspectScreen,
     LabelScreen,
     NameScreen,
@@ -170,7 +170,7 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),
     ResumeConfirmScreen: lambda: ResumeConfirmScreen(_PROJECT, "claude", _RESOLVED),
-    ForceConfirmScreen: lambda: ForceConfirmScreen(str(_SESSION_ID), _record()),
+    ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
     RemoteControlConfirmScreen: lambda: RemoteControlConfirmScreen(str(_SESSION_ID), _record()),
 }
 

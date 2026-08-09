@@ -45,6 +45,7 @@ re-baseline turns this file from a net into a rubber stamp.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -103,7 +104,7 @@ _POSITIONS = (
     "PROJECT_REVIEW",
     "SESSIONS",
     "SESSION_DETAIL",
-    "FORCE_CONFIRM",
+    "FORCE_MODAL",
     "REMOTE_CONTROL_CONFIRM",
     "INSPECT",
     "RESUME_PROJECTS",
@@ -281,56 +282,64 @@ def _assert_snapshot(app: RemoteAgentsTui, name: str) -> None:
         )
 
 
-async def _drive(app: RemoteAgentsTui, pilot, step: str) -> None:
-    """Put the app in `step`, using the same private entry points the sibling tests use."""
+async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] | None:
+    """Put the app in `step`, using the same private entry points the sibling tests use.
+
+    Answers with the suspended caller when the position is a modal, and with `None`
+    otherwise — a modal is not a position the driver can simply arrive at and leave.
+    """
     if step == "PROJECTS":
-        return
+        return None
     if step in {"PROFILES", "LABEL", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
         await pilot.pause()
         if step == "PROFILES":
-            return
+            return None
         await app.screen.choose("claude")
         await pilot.pause()
         if step == "REVIEW":
             app.screen.submit("nightly run")
             await pilot.pause()
-        return
+        return None
     if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
         await app.show_areas()
         if step == "AREAS":
-            return
+            return None
         await app.screen.choose("infra")
         if step == "NAME":
-            return
+            return None
         app.screen.submit("new-project")
-        return
+        return None
     if step == "SESSIONS":
         await app.show_sessions()
-        return
-    if step in {"SESSION_DETAIL", "FORCE_CONFIRM", "REMOTE_CONTROL_CONFIRM", "INSPECT"}:
+        return None
+    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_CONFIRM", "INSPECT"}:
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
-        if step == "FORCE_CONFIRM":
-            await app.screen.confirm_force()
-        elif step == "REMOTE_CONTROL_CONFIRM":
+        if step == "FORCE_MODAL":
+            # Handed back rather than awaited: a modal suspends the caller that asked until
+            # it is answered, and answering it is exactly what would take the screen being
+            # captured off screen. The test joins it after the capture.
+            return asyncio.create_task(app.screen.confirm_force())
+        if step == "REMOTE_CONTROL_CONFIRM":
             await app.screen.confirm_remote_control()
         elif step == "INSPECT":
             await app.screen.show_inspect()
-        return
+        return None
     # The four resume positions, each one step further into the same flow.
     await app.action_resume()
     if step == "RESUME_PROJECTS":
-        return
+        return None
     await app.screen.choose("opaque-existing")
     if step == "RESUME_PROFILES":
-        return
+        return None
     await app.screen.choose("claude")
     if step == "RESUME_CONVERSATIONS":
-        return
+        return None
     await app.screen.choose(str(_REFERENCE))
+    return None
 
 
 @pytest.fixture(autouse=True)
@@ -349,10 +358,13 @@ async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
         # to be set early enough for the pump to have applied it by the time we export.
         app.theme = _THEME
         await pilot.pause()
-        await _drive(app, pilot, step)
+        asking = await _drive(app, pilot, step)
         await settle(app, pilot)
         assert position(app) == step, f"drove to {position(app)}, expected {step}"
         _assert_snapshot(app, step)
+        if asking is not None:
+            await pilot.press("escape")
+            await asyncio.wait_for(asking, timeout=5)
 
 
 def test_every_position_has_a_baseline() -> None:

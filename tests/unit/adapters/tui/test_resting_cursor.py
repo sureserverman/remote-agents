@@ -28,6 +28,7 @@ cursor stops being *painted* for some other reason.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -163,10 +164,16 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
     return (marked[0] if marked else None), rows
 
 
-async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
+async def _drive_to_force_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
+    """Open the force confirmation and leave it open, suspending the caller that asked.
+
+    It is a modal now, so `confirm_force` does not return until the question is answered —
+    the drive hands back the suspended task and the test joins it once it has looked at the
+    cursor. Answering first would close the very screen being examined.
+    """
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    await app.screen.confirm_force()
+    return asyncio.create_task(app.screen.confirm_force())
 
 
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
@@ -198,7 +205,7 @@ async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
 
 # Each entry is a position whose resting row must be the one that mutates nothing.
 _RESTING = (
-    pytest.param(_drive_to_force_confirm, "Cancel", "FORCE_CONFIRM", id="force-confirm"),
+    pytest.param(_drive_to_force_confirm, "Cancel", "FORCE_MODAL", id="force-confirm"),
     # The second destructive confirm. Added because DEC-007's abort-rests-under-the-cursor
     # mitigation was only ever checked here on the force path, so the Remote Control confirm
     # had its row order asserted but never the cursor actually painted on it — which is the
@@ -225,7 +232,10 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await drive(app)
+        # A drive that opens a modal hands back the suspended caller; every other one
+        # returns None. Joined at the end of the test rather than here, because a modal
+        # answered is a modal already gone from the screen this is about to read.
+        asking = await drive(app)
         await settle(app, pilot)
         assert position(app) == step
         marked, rows = _highlighted(app)
@@ -245,6 +255,10 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         choices = app.screen.query_one("#choices", OptionList)
         assert choices.highlighted is not None
         assert rows[choices.highlighted] == expected
+
+        if asking is not None:
+            await pilot.press("escape")
+            await asyncio.wait_for(asking, timeout=5)
 
 
 async def test_a_list_with_no_resting_preference_still_draws_a_cursor() -> None:

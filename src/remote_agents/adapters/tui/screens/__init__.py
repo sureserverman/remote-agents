@@ -6,14 +6,21 @@ stranding the owner on it.
 
 **Only navigable screens belong in this namespace.** The Stage 2 gate sweeps `vars()` here
 for `Screen` subclasses missing from `ALL_SCREENS`, so re-exporting a base class — or
-`Screen` itself — would fail a check that is asking a fair question. `ChoiceScreen` is
-therefore imported from `.base` by whoever needs it, never from here.
+`Screen` itself — would fail a check that is asking a fair question. `ChoiceScreen` and
+`ConfirmScreen` are therefore imported from `.base` and `.confirm` by whoever needs them,
+never from here.
+
+`ALL_CONFIRMS` is re-exported alongside `ALL_SCREENS` because the Stage 3 gate sweeps it from
+this namespace. It is a strict subset — the confirmations standing in front of a destructive
+action — and its members are registered in `ALL_SCREENS` too: a modal is still a position the
+owner can be in, still needs a back path, and still has a committed visual baseline.
 """
 
 from __future__ import annotations
 
 from remote_agents.adapters.tui.screens.confirm import (
-    ForceConfirmScreen,
+    ALL_CONFIRMS,
+    ForceConfirmModal,
     RemoteControlConfirmScreen,
 )
 from remote_agents.adapters.tui.screens.launch import (
@@ -56,14 +63,15 @@ ALL_SCREENS = (
     ResumeProfilesScreen,
     ResumeConversationsScreen,
     ResumeConfirmScreen,
-    ForceConfirmScreen,
+    ForceConfirmModal,
     RemoteControlConfirmScreen,
 )
 
 __all__ = [
+    "ALL_CONFIRMS",
     "ALL_SCREENS",
     "AreasScreen",
-    "ForceConfirmScreen",
+    "ForceConfirmModal",
     "InspectScreen",
     "LabelScreen",
     "NameScreen",

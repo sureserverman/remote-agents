@@ -9,6 +9,7 @@ launching process's remembered profile straight into the stopping process.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -264,9 +265,14 @@ async def test_force_stop_from_the_terminal_also_crosses_the_process_boundary(
         async with app.run_test() as pilot:
             await app.show_detail(str(launched.session_id))
             await pilot.pause()
-            await app.screen.choose("force")
+            # The confirmation is a modal, so the choice that opens it does not return until
+            # it has been answered — the answer is the two keys below, and joining the task
+            # is what waits for the stop the answer issues.
+            asking = asyncio.create_task(app.screen.choose("force"))
             await pilot.pause()
-            await app.screen.choose("force-confirm")
+            await pilot.press("down")
+            await pilot.press("enter")
+            await asyncio.wait_for(asking, timeout=5)
             await pilot.pause()
 
         final = await service.list_sessions()

@@ -198,10 +198,25 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
     )
 
 
-async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
+async def _drive_to_force_confirm(app: RemoteAgentsTui, pilot) -> asyncio.Task[None]:
+    """Open the force confirmation, and hand back the caller it suspends.
+
+    The confirmation is a modal awaited by `confirm_force`, so the choice that opens it does
+    not return until it has been answered — and answering it is what issues the stop. The
+    returned task therefore covers *both* halves, and joining it is how these tests wait for
+    the stop to finish.
+    """
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    await app.screen.confirm_force()
+    asking = asyncio.create_task(app.screen.choose("force"))
+    await pilot.pause()
+    return asking
+
+
+async def _confirm_the_force(pilot) -> None:
+    """Move off the resting abort and answer yes — the two deliberate acts, as keys."""
+    await pilot.press("down")
+    await pilot.press("enter")
 
 
 @pytest.mark.parametrize(
@@ -213,7 +228,16 @@ async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
     ],
 )
 async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expected) -> None:
-    """DEC-007: a second enter while a stop is in flight must not issue a second stop."""
+    """DEC-007: a second enter while a stop is in flight must not issue a second stop.
+
+    The force case takes a different shape from the other two now, because the modal changed
+    where the second press lands. Answering the modal dismisses it, so a stop that is still in
+    flight is in flight with the **detail** on top — and the repeated press is therefore a
+    press on `force` again, refused by the busy guard in the detail's selection handler. Note
+    what that means even if the guard were gone: a second `force` there would open a second
+    confirmation, not issue a second kill. The modal is strictly stronger than the guard here,
+    and the guard is what this test is about.
+    """
     launcher = _SlowLauncher(state=state)
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
@@ -223,11 +247,11 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
         await pilot.pause()
 
         if resolve == "force-confirm":
-            await app.screen.confirm_force()
+            first = asyncio.create_task(app.screen.choose("force"))
             await pilot.pause()
-            first = asyncio.create_task(app.screen.choose("force-confirm"))
+            await _confirm_the_force(pilot)
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
-            second = asyncio.create_task(app.screen.choose("force-confirm"))
+            second = asyncio.create_task(_select(app, "force"))
         else:
             first = asyncio.create_task(app.screen.choose(resolve))
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
@@ -410,21 +434,27 @@ async def test_a_cancelled_read_does_not_render_an_error_into_a_dying_screen() -
     )
 
 
-async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
-    """A dropped second press must not half-navigate — the screen belongs to the first."""
+async def test_the_position_is_unchanged_by_a_dropped_keypress() -> None:
+    """A dropped second press must not half-navigate — the position belongs to the first.
+
+    Answering the modal dismisses it, so the position a stop is issued *from* is the session
+    detail, and that is what must still be showing when the second press is dropped. The
+    property is the same one the confirmation screen used to carry: a press that the guard
+    refuses changes nothing the owner can see.
+    """
     launcher = _SlowLauncher()
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await _drive_to_force_confirm(app)
-        await pilot.pause()
-        first = asyncio.create_task(app.screen.choose("force-confirm"))
+        first = await _drive_to_force_confirm(app, pilot)
+        await _confirm_the_force(pilot)
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
-        assert position(app) == "FORCE_CONFIRM"
+        assert position(app) == "SESSION_DETAIL"
         # Bounded on purpose. This await is the *dropped* second press, so it must return
         # promptly; if a regression lets it through to the launcher it would block on
         # `release` instead, and an unbounded await would hang the run rather than fail it.
-        await asyncio.wait_for(app.screen.choose("force-confirm"), timeout=5)
+        await asyncio.wait_for(_select(app, "force"), timeout=5)
+        assert position(app) == "SESSION_DETAIL", "the dropped press opened a second question"
         launcher.release.set()
         await first
         assert launcher.issued == ["force"]

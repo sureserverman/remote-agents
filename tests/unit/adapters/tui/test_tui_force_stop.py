@@ -1,7 +1,16 @@
-"""Force stop is irreversible, so it takes two deliberate choices and defaults to abort."""
+"""Force stop is irreversible, so it takes two deliberate choices and defaults to abort.
+
+The second choice is a **modal** now, and that changes how these tests drive it. Choosing
+Force no longer returns once a confirmation screen has been pushed: `confirm_force` awaits the
+modal's answer and only then decides whether to issue anything. That is the property the stage
+buys — the caller that asked the question is the one that learns the answer, so there is no
+longer a path where the question is abandoned and the surface simply carries on — and it is
+why every test here runs the choice as a task, answers the modal with real keys, and joins.
+"""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -11,6 +20,8 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.model import _BACK
+from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.application.commands import ForceStopCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -86,7 +97,25 @@ def _status(app: RemoteAgentsTui) -> str:
     return str(app.screen.query_one("#status").content)
 
 
-async def test_choosing_force_opens_a_confirm_step_and_issues_nothing_yet() -> None:
+async def _open_the_confirm(app: RemoteAgentsTui, pilot) -> asyncio.Task[None]:
+    """Choose Force on the detail and leave the modal open, as a keypress would.
+
+    The choice cannot be awaited: `confirm_force` does not return until the question has been
+    answered. So it runs as a task the test answers with keys and then joins — which is also
+    the closest a test gets to the real arrangement, where the keypress handler is likewise
+    suspended for exactly as long as the owner takes to decide.
+    """
+    task = asyncio.create_task(app.screen.choose("force"))
+    await pilot.pause()
+    return task
+
+
+async def _answered(task: asyncio.Task[None]) -> None:
+    """Join the suspended choice, bounded so a modal that never resolves fails rather than hangs."""
+    await asyncio.wait_for(task, timeout=5)
+
+
+async def test_choosing_force_opens_a_confirm_modal_and_issues_nothing_yet() -> None:
     record = _record()
     launcher = _RecordingLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))
@@ -94,17 +123,20 @@ async def test_choosing_force_opens_a_confirm_step_and_issues_nothing_yet() -> N
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         step = position(app)
         status = _status(app)
+        modal = app.screen.is_modal
+        await pilot.press("escape")
+        await _answered(asking)
 
-    assert step == "FORCE_CONFIRM"
+    assert step == "FORCE_MODAL"
+    assert modal, "the confirmation must be modal, or an app binding can leave it unanswered"
     assert launcher.issued == [], "force must not be issued on the first selection"
     assert record.display.rendered in status, "the confirm step must name the session"
 
 
-async def test_the_confirm_step_opens_with_abort_highlighted() -> None:
+async def test_the_confirm_modal_opens_with_abort_highlighted() -> None:
     """A stray enter must abort, not destroy — the wizard's review-before-mutate rule."""
     record = _record()
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
@@ -112,15 +144,17 @@ async def test_the_confirm_step_opens_with_abort_highlighted() -> None:
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         highlighted = app.screen.query_one("#choices").highlighted
         keys = _keys(app)
+        await pilot.press("escape")
+        await _answered(asking)
 
     assert keys[highlighted] != "force-confirm", "the destructive option must not be preselected"
 
 
-async def test_a_single_stray_enter_at_the_confirm_step_destroys_nothing() -> None:
+async def test_a_single_stray_enter_at_the_confirm_modal_destroys_nothing() -> None:
+    """The plan's named case: a bare Enter on the freshly-pushed modal issues zero commands."""
     record = _record()
     launcher = _RecordingLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))
@@ -128,15 +162,17 @@ async def test_a_single_stray_enter_at_the_confirm_step_destroys_nothing() -> No
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         await pilot.press("enter")
+        await _answered(asking)
         await pilot.pause()
+        step = position(app)
 
     assert launcher.issued == []
+    assert step == "SESSION_DETAIL", "an aborted confirmation must leave the owner on the detail"
 
 
-async def test_escape_at_the_confirm_step_aborts_and_issues_nothing() -> None:
+async def test_escape_at_the_confirm_modal_aborts_and_issues_nothing() -> None:
     record = _record()
     launcher = _RecordingLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))
@@ -144,9 +180,9 @@ async def test_escape_at_the_confirm_step_aborts_and_issues_nothing() -> None:
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
-        await app.action_back()
+        asking = await _open_the_confirm(app, pilot)
+        await pilot.press("escape")
+        await _answered(asking)
         await pilot.pause()
         step = position(app)
 
@@ -162,27 +198,29 @@ async def test_only_the_second_confirmation_issues_the_force_stop() -> None:
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         assert launcher.issued == []
-        await app.screen.choose("force-confirm")
-        await pilot.pause()
+        # Moving off the abort is the second deliberate act; nothing else issues.
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _answered(asking)
 
     assert len(launcher.issued) == 1
     assert isinstance(launcher.issued[0], ForceStopCommand)
     assert launcher.issued[0].session_id == record.session_id
 
 
-async def test_the_confirm_step_says_the_action_is_irreversible() -> None:
+async def test_the_confirm_modal_says_the_action_is_irreversible() -> None:
     record = _record()
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         status = _status(app).casefold()
+        await pilot.press("escape")
+        await _answered(asking)
 
     assert "cannot be undone" in status or "irreversible" in status
 
@@ -195,9 +233,9 @@ async def test_aborting_returns_to_a_detail_that_still_offers_force() -> None:
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
-        await app.screen.choose("\x00cancel")
+        asking = await _open_the_confirm(app, pilot)
+        await pilot.press("enter")  # the abort, since that is where the cursor rests
+        await _answered(asking)
         await pilot.pause()
         keys = _keys(app)
 
@@ -205,6 +243,12 @@ async def test_aborting_returns_to_a_detail_that_still_offers_force() -> None:
 
 
 async def test_a_session_that_vanished_before_confirming_is_not_forced() -> None:
+    """DEC-007's fourth mitigation, and the modal is what makes its window worth having.
+
+    The owner can leave the question open for as long as they like, so the record read to
+    build it is exactly the one most likely to be stale by the time it is answered. `stop`
+    re-reads and re-checks rather than trusting the record the modal was built from.
+    """
     record = _record()
     launcher = _RecordingLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))
@@ -212,10 +256,11 @@ async def test_a_session_that_vanished_before_confirming_is_not_forced() -> None
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
+        asking = await _open_the_confirm(app, pilot)
         launcher.records = ()
-        await app.screen.choose("force-confirm")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _answered(asking)
         await pilot.pause()
         status = _status(app)
 
@@ -249,7 +294,8 @@ async def test_mashing_enter_from_the_sessions_list_destroys_nothing(
 
     A destructive action must not be reachable by repeating one key. Every screen resets
     the highlight to index 0, and index 0 is never a mutating entry — so an owner holding
-    enter walks into Copy attach and stays there, whatever the session's state.
+    enter walks into Copy attach and stays there, whatever the session's state. The modal
+    inherits the same rule: index 0 there is the abort.
     """
     launcher = _RecordingLauncher(tuple(_record(state) for _ in range(5)))
     app = RemoteAgentsTui(_context(launcher))
@@ -280,17 +326,24 @@ async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
         assert detail_keys[app.screen.query_one("#choices").highlighted] not in mutating
 
         if "force" in detail_keys:
-            await app.screen.choose("force")
-            await pilot.pause()
+            asking = await _open_the_confirm(app, pilot)
             confirm_keys = _keys(app)
             assert confirm_keys[app.screen.query_one("#choices").highlighted] not in mutating
+            await pilot.press("escape")
+            await _answered(asking)
 
 
 async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() -> None:
     """The one same-key-repeat path that could destroy: retry after a transient failure.
 
-    If a stop fails and the screen is left as it was, the cursor is still resting on
-    "Yes, force stop it" — so a second enter re-issues the kill without a fresh decision.
+    If a stop fails and the screen is left as it was, the cursor is still resting on the row
+    that issued it — so a second enter re-issues the kill without a fresh decision. Under the
+    modal the failure is reported onto the *detail*, because the modal has already been
+    dismissed by the answer that issued the stop, and that changes what this can assert.
+    `"force-confirm"` is a row that exists only on the modal, so "the cursor is not resting on
+    it" is now true whatever the failure path does — an assertion that cannot fail. The
+    falsifiable form is that path's actual post-condition: the detail is left showing one Back
+    row, resting on it. That fails if the cursor is left anywhere a repeat enter could act.
     """
 
     @dataclass(slots=True)
@@ -325,11 +378,11 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app.screen.choose("force")
-        await pilot.pause()
-        # Navigate the way an owner does: the cursor ends up ON the confirm button.
+        asking = await _open_the_confirm(app, pilot)
+        # Navigate the way an owner does: the cursor ends up ON the confirm row.
         await pilot.press("down")
         await pilot.press("enter")
+        await _answered(asking)
         await pilot.pause()
         assert len(launcher.issued) == 1
 
@@ -339,8 +392,16 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
         await pilot.press("enter")
         await pilot.pause()
 
-    assert resting != "force-confirm", "the cursor must not rest on the confirm button"
+    assert keys == [_BACK], f"a failed force left the detail offering {keys}"
+    assert resting == _BACK, "the cursor must be moved off every row that acts"
     assert len(launcher.issued) == 1, "a repeated enter re-issued the force stop"
+
+
+async def _answer_any_open_modal(app: RemoteAgentsTui, pilot) -> None:
+    """Abort a confirmation if one is showing, so a suspended caller can finish."""
+    if isinstance(app.screen, ConfirmScreen):
+        await pilot.press("escape")
+        await pilot.pause()
 
 
 # Every entry point on the session detail that reads the store and then draws or pushes.
@@ -371,9 +432,11 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
 
     The second is why `_DETAIL_READS` includes the two read-only entry points and not just the
     destructive ones: `show_attach` cannot issue anything, and could still crash the surface.
-    """
-    import asyncio
 
+    The stack is inspected *before* the confirmation is answered, deliberately: with the modal
+    suspended on top is exactly when a push onto the wrong position would be visible, and
+    answering first would tidy the evidence away.
+    """
     record = _record()
 
     @dataclass(slots=True)
@@ -411,7 +474,8 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
         await pilot.pause()
         detail = app.screen
 
-        await asyncio.gather(getattr(detail, entry_point)(), _escape_during())
+        reading = asyncio.create_task(getattr(detail, entry_point)())
+        await _escape_during()
         await pilot.pause()
 
         # Whatever the interleave produced, the surface is coherent. Three outcomes are all
@@ -425,6 +489,8 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
                 f"{entry_point} pushed onto {type(stack[-2]).__name__}, "
                 "not the session detail it describes"
             )
+        await _answer_any_open_modal(app, pilot)
+        await asyncio.wait_for(reading, timeout=5)
         assert launcher.issued == [], f"{entry_point} must issue nothing"
 
 
@@ -439,8 +505,6 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
     the "no longer available" report was written to an unmounted screen and `NoMatches`
     escaped the handler, exiting the app.
     """
-    import asyncio
-
     record = _record()
 
     @dataclass(slots=True)
@@ -482,8 +546,11 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
 
         # The assertion is that this returns at all: an unguarded write to a popped screen
         # raises out of here, and in the real app that exits it.
-        await asyncio.gather(getattr(detail, entry_point)(), _escape_during())
+        reading = asyncio.create_task(getattr(detail, entry_point)())
+        await _escape_during()
         await pilot.pause()
+        await _answer_any_open_modal(app, pilot)
+        await asyncio.wait_for(reading, timeout=5)
 
         assert app.is_running, f"{entry_point} took the app down when the session vanished"
         assert launcher.issued == []

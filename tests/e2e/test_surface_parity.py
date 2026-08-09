@@ -222,11 +222,23 @@ async def _probe_cleanup(app, launcher, pilot) -> None:
 
 
 async def _probe_force(app, launcher, pilot) -> None:
+    """The one capability whose confirmation is a modal, so the probe answers rather than selects.
+
+    `_choose` cannot drive the second step any more: selecting `force` suspends its handler
+    until the modal is answered, so awaiting it to completion would wait for an answer the
+    probe has not given yet. The keys below are that answer — down onto the confirm row, then
+    enter — which is also the only way the owner can reach it.
+    """
+    import asyncio
+
     await _open_detail(app, launcher, pilot)
-    await _choose(app, pilot, "force")
-    assert position(app) == "FORCE_CONFIRM"
+    asking = asyncio.create_task(_choose(app, pilot, "force"))
+    await pilot.pause()
+    assert position(app) == "FORCE_MODAL"
     assert launcher.issued == [], "force must not fire on the first selection"
-    await _choose(app, pilot, "force-confirm")
+    await pilot.press("down")
+    await pilot.press("enter")
+    await asyncio.wait_for(asking, timeout=5)
     assert any(isinstance(item, ForceStopCommand) for item in launcher.issued)
 
 

@@ -5,11 +5,12 @@ the seven navigation fields the app used to carry; it is `SessionDetailScreen.se
 here, so the detail cannot be rendered for a session the screen was not opened with, and no
 other flow can leave a stale id behind for it to read.
 
-The two destructive confirmations are no longer repainted onto this screen: they are
-`screens/confirm.py`, pushed and popped like any other position, which is what let the step
-machine be deleted. They are still ordinary `Screen`s — Stage 3 turns them into
-`ModalScreen[bool]` answered through `push_screen_wait`, which is what buys DEC-007 the
-guarantee that an app-level binding cannot walk away from an unanswered confirmation.
+The destructive confirmations live in `screens/confirm.py`. The force one is a
+`ModalScreen[bool]` awaited through `ask_to_confirm`, so the answer comes back to the method
+that asked and no app-level binding can walk away from the question; the Remote Control one is
+still an ordinary screen until the next task. What that changes here is where the decision
+lives: `confirm_force` now reads the answer and issues the stop itself, rather than handing
+the session id to a screen that issued it on its own.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import logging
 from remote_agents.adapters.tui.model import _BACK, session_row
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import (
-    ForceConfirmScreen,
+    ForceConfirmModal,
     RemoteControlConfirmScreen,
 )
 from remote_agents.application.session_actions import (
@@ -158,22 +159,54 @@ class SessionDetailScreen(ChoiceScreen):
             await self.tui.stop(key, self.session_value, self)
 
     async def confirm_force(self) -> None:
-        """Re-read the record, then hand the decision to its own screen.
+        """Re-read the record, ask the modal, and issue only on a `True`.
 
-        Guarded across both the read and the push, and this guard is load-bearing twice over.
-        `action_back` runs on the app's pump while this runs on the screen's, so without it an
-        Escape landing inside the read pops *this* screen — and then the confirmation is
-        pushed onto whatever the pop revealed, describing a session the position beneath it is
-        no longer showing. Worse, the `set_status` below would be called on a screen that has
+        Guarded across the read *and* the whole modal, and this guard is load-bearing twice
+        over. `action_back` runs on the app's pump while this runs on the screen's, so without
+        it an Escape landing inside the read pops *this* screen — and then the modal is pushed
+        onto whatever the pop revealed, describing a session the position beneath it is no
+        longer showing. Worse, the `set_status` below would be called on a screen that has
         already been unmounted, raising `NoMatches` out of the very path that exists to report
         a vanished session without losing the app.
+
+        Holding it *across* the question, rather than releasing once the modal is up, is what
+        closes the window between the two: `ask_to_confirm` yields to the pump before the
+        modal is mounted, and an Escape delivered in that gap would pop this screen out from
+        under a question already on its way. Nothing is lost by holding it — under a modal the
+        app's own bindings are not in the binding chain at all, so there is no second action
+        the guard could be refusing.
+
+        The guard is released before the stop, because `stop` takes it itself and refuses
+        outright when it is already held.
         """
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
                 self.set_status("That session is no longer available.")
                 return
-            await self.advance_to(ForceConfirmScreen(self.session_value, record))
+            if not self.showing:
+                return
+            try:
+                confirmed = await self.tui.ask_to_confirm(ForceConfirmModal.for_record(record))
+            except Exception as error:
+                # `ask_to_confirm` unwraps a failed worker and re-raises, and this call runs
+                # inside a message handler — where an escaping exception exits the app. Every
+                # other awaited read on this screen already reports rather than raises; this
+                # one is newer, not different.
+                _LOG.exception("the force confirmation could not be shown")
+                self.set_status(
+                    f"{record.display.rendered}\n"
+                    f"The confirmation could not be shown: {error}\n"
+                    "Nothing was stopped."
+                )
+                return
+        if not confirmed:
+            # Abort re-reads, exactly as leaving the confirmation screen used to: the owner
+            # may have opened it only to look, and the session can have moved on while it
+            # was open.
+            await self.on_reveal()
+            return
+        await self.tui.stop(FORCE, self.session_value, self)
 
     async def confirm_remote_control(self) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first.

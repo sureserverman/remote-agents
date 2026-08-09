@@ -33,6 +33,7 @@ from remote_agents.adapters.tui.screens import (
     SessionsScreen,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
@@ -84,12 +85,17 @@ _RESUME_PAGE_SIZE = 10
 class RemoteAgentsTui(App[AttachRequest | None]):
     """Choose a project and an agent, launch it, and hand back an attach command."""
 
+    # Scoped to `ChoiceScreen`, not to every `OptionList` in the app. A bare type selector
+    # here also reached the confirmation modal's list, and app CSS outranks a screen's own
+    # `DEFAULT_CSS` whatever the selector's specificity — so `1fr` won over the modal's
+    # `height: auto` and stretched a two-row dialog down the whole terminal. The rule was
+    # always about the body every position renders; this says so.
     CSS = """
     Screen { layout: vertical; }
     #body { height: 1fr; }
-    #status { height: auto; padding: 0 1; }
-    OptionList { height: 1fr; }
-    #output { height: 1fr; padding: 0 1; }
+    ChoiceScreen #status { height: auto; padding: 0 1; }
+    ChoiceScreen OptionList { height: 1fr; }
+    ChoiceScreen #output { height: 1fr; padding: 0 1; }
     """
     BINDINGS = [
         Binding("escape", "back", "Back"),
@@ -227,9 +233,30 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         Callers take the result with `await self._ask(screen).wait()` — the decorator returns
         a `Worker`, and it is the body that runs inside the context, so awaiting it from a
-        handler is correct.
+        handler is correct. Confirmations go through `ask_to_confirm` rather than calling this
+        directly, so there is one place that decides what a cancelled worker means.
         """
         return await self.push_screen_wait(screen)
+
+    async def ask_to_confirm(self, modal: ConfirmScreen) -> bool:
+        """Put one modal question in front of the owner and answer what they said.
+
+        The single entry point for every destructive confirmation, which is what makes
+        "a destructive call is reachable only after a modal returned `True`" a property one
+        can look for rather than a convention spread across the screens that issue commands.
+
+        A cancelled worker is `False`, never an answer. `_ask`'s worker is owned by the app,
+        so it is cancelled when the app is shutting down — and the one reading of "the app
+        went away mid-question" that must never be reachable is consent. `WorkerFailed` is
+        unwrapped for the same reason `in_thread` unwraps it: the caller reports the failure,
+        and "Worker raised exception: …" is not what the owner needs to read.
+        """
+        try:
+            return bool(await self._ask(modal).wait())
+        except WorkerCancelled:
+            return False
+        except WorkerFailed as failure:
+            raise failure.error from None
 
     # Actions -------------------------------------------------------------------
 
@@ -342,10 +369,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     # The destructive path ---------------------------------------------------------
     #
-    # The two confirmations are `screens/confirm.py` now, so what is left here is the part
+    # The two confirmations are modals in `screens/confirm.py`, answered through
+    # `ask_to_confirm` before either of these is called at all. What is left here is the part
     # that talks to the service: re-read, re-check, issue once, and refresh whatever screen
-    # asked. Stage 3 changes how the *answer* is obtained — `ModalScreen[bool]` through
-    # `push_screen_wait` — and nothing in this section moves with it.
+    # asked. The re-read is *not* redundant with the modal — it is DEC-007's fourth
+    # mitigation, and the window it covers is precisely the one the modal opens, since the
+    # owner may deliberate for as long as they like while the other writer moves the session
+    # on underneath them.
 
     async def set_remote_control(
         self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen
@@ -393,8 +423,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         from seeing an exception instead of an explanation. This re-read-and-recheck is
         DEC-007's fourth mitigation and it is why a stale row cannot issue a stale command.
 
-        `screen` is whichever position asked — the detail for a graceful or a cleanup, the
-        force confirmation for a force — so a failure reports where the owner is looking.
+        `screen` is whichever position asked, so a failure reports where the owner is looking.
+        Since the confirmation became a modal that is dismissed by the answer, that is the
+        session detail for every action including force — there is no confirmation screen
+        still on the stack by the time this runs.
         """
         if self._busy:
             return
