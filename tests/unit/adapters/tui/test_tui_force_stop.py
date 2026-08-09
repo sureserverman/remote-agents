@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import ForceStopCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -90,14 +91,14 @@ async def test_choosing_force_opens_a_confirm_step_and_issues_nothing_yet() -> N
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
-        step = app._step
+        step = position(app)
         status = _status(app)
 
-    assert step is Step.FORCE_CONFIRM
+    assert step == "FORCE_CONFIRM"
     assert launcher.issued == [], "force must not be issued on the first selection"
     assert record.display.rendered in status, "the confirm step must name the session"
 
@@ -108,9 +109,9 @@ async def test_the_confirm_step_opens_with_abort_highlighted() -> None:
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         highlighted = app.screen.query_one("#choices").highlighted
         keys = _keys(app)
@@ -124,9 +125,9 @@ async def test_a_single_stray_enter_at_the_confirm_step_destroys_nothing() -> No
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
@@ -140,16 +141,16 @@ async def test_escape_at_the_confirm_step_aborts_and_issues_nothing() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         await app.action_back()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
     assert launcher.issued == []
-    assert step is Step.SESSION_DETAIL
+    assert step == "SESSION_DETAIL"
 
 
 async def test_only_the_second_confirmation_issues_the_force_stop() -> None:
@@ -158,12 +159,12 @@ async def test_only_the_second_confirmation_issues_the_force_stop() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         assert launcher.issued == []
-        await app._resolve_force_confirm("force-confirm")
+        await app.resolve_force_confirm("force-confirm")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -176,9 +177,9 @@ async def test_the_confirm_step_says_the_action_is_irreversible() -> None:
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         status = _status(app).casefold()
 
@@ -191,11 +192,11 @@ async def test_aborting_returns_to_a_detail_that_still_offers_force() -> None:
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
-        await app._resolve_force_confirm("\x00cancel")
+        await app.resolve_force_confirm("\x00cancel")
         await pilot.pause()
         keys = _keys(app)
 
@@ -208,12 +209,12 @@ async def test_a_session_that_vanished_before_confirming_is_not_forced() -> None
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         launcher.records = ()
-        await app._resolve_force_confirm("force-confirm")
+        await app.resolve_force_confirm("force-confirm")
         await pilot.pause()
         status = _status(app)
 
@@ -272,13 +273,13 @@ async def test_no_screen_puts_a_mutating_entry_under_the_resting_cursor(
     mutating = {"graceful", "cleanup", "force", "remote-control", "force-confirm"}
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         detail_keys = _keys(app)
         assert detail_keys[app.screen.query_one("#choices").highlighted] not in mutating
 
         if "force" in detail_keys:
-            await app._resolve_detail("force")
+            await app.screen.choose("force")
             await pilot.pause()
             confirm_keys = _keys(app)
             assert confirm_keys[app.screen.query_one("#choices").highlighted] not in mutating
@@ -321,9 +322,9 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("force")
+        await app.screen.choose("force")
         await pilot.pause()
         # Navigate the way an owner does: the cursor ends up ON the confirm button.
         await pilot.press("down")

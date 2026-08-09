@@ -77,9 +77,9 @@ async def test_the_attach_command_is_rendered_byte_for_byte() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("attach")
+        await app.screen.choose("attach")
         await pilot.pause()
         status = _status(app)
 
@@ -100,9 +100,9 @@ async def test_the_command_is_rendered_verbatim_and_not_reformatted() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("attach")
+        await app.screen.choose("attach")
         await pilot.pause()
         status = _status(app)
 
@@ -116,9 +116,9 @@ async def test_an_unavailable_attach_says_why_instead_of_hiding() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("attach")
+        await app.screen.choose("attach")
         await pilot.pause()
         status = _status(app)
 
@@ -133,7 +133,7 @@ async def test_the_attach_entry_is_offered_on_a_live_session() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,), attach="tmux attach")))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         rows = _rows(app)
 
@@ -146,7 +146,7 @@ async def test_the_affordance_is_present_even_when_the_pane_is_dead() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,), attach=None)))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         rows = _rows(app)
 

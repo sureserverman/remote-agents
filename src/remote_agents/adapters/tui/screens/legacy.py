@@ -11,8 +11,6 @@ It renders nothing of its own: whichever legacy `_show_*` on the app pushed it a
 
 from __future__ import annotations
 
-from textual.widgets import Input
-
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 
 
@@ -21,7 +19,3 @@ class LegacyScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         await self.tui.legacy_choose(key)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        event.stop()
-        self.tui.legacy_submit(event.value)

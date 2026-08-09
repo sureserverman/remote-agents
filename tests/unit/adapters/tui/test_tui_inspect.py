@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -85,14 +86,14 @@ async def test_inspect_renders_the_captured_output() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing("Claude Code ready\nline two")))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
-        step = app._step
+        step = position(app)
         output = _output(app)
 
-    assert step is Step.INSPECT
+    assert step == "INSPECT"
     assert "Claude Code ready" in output
     assert "line two" in output
 
@@ -103,9 +104,9 @@ async def test_ansi_escapes_are_stripped_by_the_shared_sanitizer() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing(raw)))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         output = _output(app)
 
@@ -120,9 +121,9 @@ async def test_configured_redactions_are_applied() -> None:
     )
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         output = _output(app)
 
@@ -135,9 +136,9 @@ async def test_binary_output_containing_a_nul_byte_is_refused() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing("before\x00after")))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         output = _output(app)
         status = _status(app)
@@ -153,9 +154,9 @@ async def test_no_telegram_limit_or_attachment_fallback_reaches_the_local_surfac
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing(long_output)))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         output = _output(app)
         status = _status(app)
@@ -177,15 +178,15 @@ async def test_a_context_without_capture_offers_no_inspect_entry() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), capture=None))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         keys = _keys(app)
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
     assert "inspect" not in keys
-    assert step is Step.SESSION_DETAIL
+    assert step == "SESSION_DETAIL"
 
 
 async def test_a_failing_capture_reports_itself_rather_than_crashing() -> None:
@@ -197,9 +198,9 @@ async def test_a_failing_capture_reports_itself_rather_than_crashing() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), exploding))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         status = _status(app)
 
@@ -211,15 +212,15 @@ async def test_escape_returns_from_inspect_to_the_detail() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing("output")))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         await app.action_back()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.SESSION_DETAIL
+    assert step == "SESSION_DETAIL"
 
 
 async def test_leaving_inspect_by_any_route_restores_the_list() -> None:
@@ -228,9 +229,9 @@ async def test_leaving_inspect_by_any_route_restores_the_list() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,)), _capturing("output")))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("inspect")
+        await app.screen.choose("inspect")
         await pilot.pause()
         assert app.screen.query_one("#choices").display is False
 
@@ -238,8 +239,8 @@ async def test_leaving_inspect_by_any_route_restores_the_list() -> None:
         await pilot.pause()
         choices_visible = app.screen.query_one("#choices").display
         output_visible = app.screen.query_one("#output-pane").display
-        step = app._step
+        step = position(app)
 
-    assert step is Step.SESSIONS
+    assert step == "SESSIONS"
     assert choices_visible is True, "the session list is invisible after leaving inspect"
     assert output_visible is False

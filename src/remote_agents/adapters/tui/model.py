@@ -8,9 +8,12 @@ data, and `app.py` re-exports them so existing importers keep working.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from remote_agents.adapters.tui.context import ProfileChoice
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.domain.conversations import ConversationSummary
+from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.projects import ProjectIdentity
 
 # Row keys for choices that are navigation rather than data. The NUL prefix is what keeps
@@ -70,3 +73,18 @@ def selectable_area(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def conversation_row(summary: ConversationSummary) -> str:
+    """Safe selection metadata only — never a provider ID, path, or path fragment."""
+    described = summary.description or "(no description)"
+    return f"{described} · {summary.state.value} · {age(summary.updated_at)}"
+
+
+def session_row(record: SessionRecord) -> str:
+    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
+
+
+def age(created_at: datetime) -> str:
+    minutes = max(0, int((datetime.now(UTC) - created_at).total_seconds() // 60))
+    return f"{minutes}m ago"

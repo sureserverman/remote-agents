@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import explain_state
@@ -76,7 +77,7 @@ async def test_detail_explains_every_reachable_lifecycle_state(state: SessionSta
     app = RemoteAgentsTui(_context(_Listing((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app)
 
@@ -94,7 +95,7 @@ async def test_an_ended_session_has_no_detail_to_open() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app)
 
@@ -106,7 +107,7 @@ async def test_detail_names_the_session_and_its_state() -> None:
     app = RemoteAgentsTui(_context(_Listing((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app)
 
@@ -121,14 +122,14 @@ async def test_escape_returns_from_detail_to_the_list() -> None:
     async with app.run_test() as pilot:
         await app.action_sessions()
         await pilot.pause()
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        assert app._step is Step.SESSION_DETAIL
+        assert position(app) == "SESSION_DETAIL"
         await app.action_back()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.SESSIONS
+    assert step == "SESSIONS"
 
 
 async def test_a_session_that_vanished_between_list_and_detail_does_not_raise() -> None:
@@ -141,7 +142,7 @@ async def test_a_session_that_vanished_between_list_and_detail_does_not_raise() 
         await app.action_sessions()
         await pilot.pause()
         launcher.records = ()
-        await app._show_detail(str(listed.session_id))
+        await app.show_detail(str(listed.session_id))
         await pilot.pause()
         status = _status(app)
 
@@ -157,8 +158,8 @@ async def test_selecting_a_row_opens_its_detail() -> None:
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        step = app._step
+        step = position(app)
         status = _status(app)
 
-    assert step is Step.SESSION_DETAIL
+    assert step == "SESSION_DETAIL"
     assert record.display.rendered in status

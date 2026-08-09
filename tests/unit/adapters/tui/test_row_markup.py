@@ -164,7 +164,7 @@ async def test_a_session_label_containing_markup_is_shown_literally() -> None:
     app = RemoteAgentsTui(_context(project=project, record=_record(_MARKUP_LABEL)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
+        await app.show_sessions()
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_LABEL in screen, (
@@ -216,8 +216,8 @@ async def test_the_status_line_shows_a_markup_bearing_session_label_literally() 
     app = RemoteAgentsTui(_context(project=project, record=_record(_MARKUP_LABEL)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_LABEL in screen, (
@@ -235,7 +235,7 @@ async def test_captured_output_bearing_markup_is_shown_literally() -> None:
     app = RemoteAgentsTui(_context(project=project))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        app._show_output(f"agent said: {_MARKUP_DESCRIPTION}")
+        app.screen.show_output(f"agent said: {_MARKUP_DESCRIPTION}")
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_DESCRIPTION in screen, (

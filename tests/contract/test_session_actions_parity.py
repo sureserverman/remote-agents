@@ -100,7 +100,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
         )
     )
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         # Still the *rendered* rows, which is this file's whole premise (see the module
         # docstring). The widget changed from a list of mounted `Label`s to an `OptionList`,

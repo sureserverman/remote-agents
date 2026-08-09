@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -97,14 +98,14 @@ async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> No
             await app.screen.choose("claude")
             app.screen.submit("")
         elif step_setup == "areas":
-            await app._show_areas()
+            await app.show_areas()
         await pilot.pause()
 
         await app.action_sessions()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.SESSIONS
+    assert step == "SESSIONS"
 
 
 async def test_ctrl_s_is_refused_while_busy() -> None:
@@ -116,9 +117,9 @@ async def test_ctrl_s_is_refused_while_busy() -> None:
         app._busy = True
         await app.action_sessions()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.PROJECTS
+    assert step == "PROJECTS"
     assert launcher.refreshed == 0
 
 
@@ -130,9 +131,9 @@ async def test_pressing_the_key_actually_reaches_the_action() -> None:
     async with app.run_test() as pilot:
         await pilot.press("ctrl+s")
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.SESSIONS
+    assert step == "SESSIONS"
     assert launcher.refreshed == 1
 
 

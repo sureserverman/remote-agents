@@ -25,12 +25,13 @@ from pathlib import Path
 
 import pytest
 from textual.widgets import OptionList
+from tui_positions import position
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.fake import FakeTerminal
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -87,7 +88,7 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
 
             await pilot.press("enter")
             await pilot.pause()
-            assert app._step is Step.SESSION_DETAIL
+            assert position(app) == "SESSION_DETAIL"
             detail = _status(app)
             assert str(launched.display.rendered) in detail
             assert "running" in detail

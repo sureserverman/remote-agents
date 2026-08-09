@@ -19,6 +19,16 @@ from remote_agents.adapters.tui.screens.launch import (
     ReviewScreen,
 )
 from remote_agents.adapters.tui.screens.legacy import LegacyScreen
+from remote_agents.adapters.tui.screens.project import (
+    AreasScreen,
+    NameScreen,
+    ProjectReviewScreen,
+)
+from remote_agents.adapters.tui.screens.sessions import (
+    InspectScreen,
+    SessionDetailScreen,
+    SessionsScreen,
+)
 
 #: Every screen the owner can reach. Task 2.4 removes `LegacyScreen` from it along with the
 #: step machine it hosts; until then it is registered like any other, because it is a
@@ -28,14 +38,26 @@ ALL_SCREENS = (
     ProfilesScreen,
     LabelScreen,
     ReviewScreen,
+    AreasScreen,
+    NameScreen,
+    ProjectReviewScreen,
+    SessionsScreen,
+    SessionDetailScreen,
+    InspectScreen,
     LegacyScreen,
 )
 
 __all__ = [
     "ALL_SCREENS",
+    "AreasScreen",
+    "InspectScreen",
     "LabelScreen",
     "LegacyScreen",
+    "NameScreen",
     "ProfilesScreen",
+    "ProjectReviewScreen",
     "ProjectsScreen",
     "ReviewScreen",
+    "SessionDetailScreen",
+    "SessionsScreen",
 ]

@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -170,10 +171,10 @@ async def test_a_store_error_reports_itself_and_leaves_the_wizard_reachable() ->
         status = _status(app)
         await app.action_back()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
     assert "could not be read" in status.casefold()
-    assert step is Step.PROJECTS
+    assert step == "PROJECTS"
 
 
 async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None:
@@ -184,9 +185,9 @@ async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None
         app._busy = True
         await app.action_sessions()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.PROJECTS
+    assert step == "PROJECTS"
     assert launcher.refreshed == 0
 
 
@@ -198,13 +199,17 @@ class _FlakyListing:
     reads: int = 0
     fail_reads: bool = True
     attach_error: Exception | None = None
+    # How many reads succeed before the store starts failing. One is enough to open the
+    # sessions list; a test that has to *navigate* somewhere before provoking the failure
+    # says how many it needs rather than hard-coding a count into the fake.
+    fail_after: int = 1
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         self.reads += 1
-        if self.fail_reads and self.reads > 1:
+        if self.fail_reads and self.reads > self.fail_after:
             raise RuntimeError("database is locked")
         return self.records
 
@@ -222,7 +227,7 @@ async def test_a_store_error_opening_detail_is_reported_not_raised() -> None:
     async with app.run_test() as pilot:
         await app.action_sessions()
         await pilot.pause()
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app)
 
@@ -230,15 +235,28 @@ async def test_a_store_error_opening_detail_is_reported_not_raised() -> None:
 
 
 async def test_a_store_error_rendering_attach_is_reported_not_raised() -> None:
+    """The read `show_attach` makes for itself can fail even once the detail is open.
+
+    Two reads are allowed through so the owner genuinely reaches the detail — the list, then
+    the detail's own re-read — and the store fails on the third, which is the one this method
+    makes. The previous version of this test skipped the navigation by writing the session id
+    onto the app; the id belongs to the screen now, so the test walks there instead, and that
+    is a better exercise of the same guarantee rather than a workaround for the move.
+    """
     record = _record()
-    launcher = _FlakyListing((record,))
+    launcher = _FlakyListing((record,), fail_after=2)
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
         await app.action_sessions()
         await pilot.pause()
-        app._detail_id = str(record.session_id)
-        await app._show_attach()
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        assert "could not be read" not in _status(app).casefold(), (
+            "the detail must open cleanly, or this asserts on the wrong read"
+        )
+
+        await app.screen.show_attach()
         await pilot.pause()
         status = _status(app)
 
@@ -254,9 +272,9 @@ async def test_a_failing_copy_attach_is_reported_not_raised() -> None:
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("attach")
+        await app.screen.choose("attach")
         await pilot.pause()
         status = _status(app)
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeVar, cast
 
@@ -23,10 +22,20 @@ from remote_agents.adapters.tui.model import (
     _PREVIOUS,
     AttachRequest,
     LaunchSelection,
+    age,
+    conversation_row,
     label_or_error,
     selectable_area,
+    session_row,
 )
-from remote_agents.adapters.tui.screens import ALL_SCREENS, LegacyScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens import (
+    ALL_SCREENS,
+    AreasScreen,
+    LegacyScreen,
+    ProjectsScreen,
+    SessionDetailScreen,
+    SessionsScreen,
+)
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.commands import (
     CleanupCommand,
@@ -37,7 +46,6 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery
-from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
@@ -50,11 +58,9 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.domain.conversations import ConversationReference, ConversationSummary
+from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
-from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -70,18 +76,23 @@ __all__ = [
     "RemoteAgentsTui",
     "Step",
     "TuiContext",
+    "age",
+    "conversation_row",
     "label_or_error",
     "run_local_terminal",
     "selectable_area",
+    "session_row",
 ]
 
 
 class Step(StrEnum):
     """The wizard positions this stage has not extracted into screens yet.
 
-    Shrinking, not growing: the four launch positions are `screens/launch.py` now, and their
-    members stay here only because the snapshot baselines and the remaining dispatch chain
-    still name them. Task 2.4 deletes the enum outright.
+    Shrinking, not growing. Ten of the sixteen members are now screens and are kept here only
+    because the committed snapshot baselines still name them; what still *drives* anything is
+    the four resume positions, hosted on `LegacyScreen`, and the two confirmations, which
+    `SessionDetailScreen` repaints in place exactly as the surface does today. Task 2.3 takes
+    the first group and Stage 3 takes the second, after which Task 2.4 deletes the enum.
     """
 
     PROJECTS = "projects"
@@ -102,10 +113,7 @@ class Step(StrEnum):
     RESUME_CONFIRM = "resume-confirm"
 
 
-_TEXT_STEPS = frozenset({Step.NAME})
 _RESUME_PAGE_SIZE = 10
-_INSPECT_MAX_LINES = 2000
-_INSPECT_MAX_BYTES = 512 * 1024
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
@@ -133,10 +141,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._catalogue = context.catalogue
         self.selection = LaunchSelection()
         self._step = Step.PROJECTS
-        self._area: str | None = None
-        self._name: str | None = None
         self._busy = False
-        self._detail_id: str | None = None
         self._resume_project: CatalogProject | None = None
         self._resume_profile: str | None = None
         self._resume_page = 1
@@ -167,27 +172,68 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Whether an action is mid-flight and no other may start."""
         return self._busy
 
+    def set_busy(self, busy: bool) -> None:
+        self._busy = busy
+
+    @property
+    def step(self) -> Step:
+        """Which position the remaining step machine believes it is on.
+
+        Read by exactly two places now — `SessionDetailScreen`, for the two confirmations it
+        still repaints in place, and the resume flow on `LegacyScreen`. Both go away by the
+        end of Stage 3, and so does this.
+        """
+        return self._step
+
+    @step.setter
+    def step(self, step: Step) -> None:
+        self._step = step
+
     @property
     def body(self) -> ChoiceScreen:
         """The active screen, typed as the body every position renders."""
         return cast(ChoiceScreen, self.screen)
+
+    @property
+    def detail_session(self) -> str | None:
+        """The session the detail on screen was opened for, if a detail is on screen.
+
+        This replaces the `_detail_id` field the app used to carry. Reading it off the screen
+        rather than off the app is what makes a stale value impossible: the id and the screen
+        rendering it are now the same object's state, so navigating away cannot leave one
+        behind for a later action to pick up.
+        """
+        screen = self.screen
+        return screen.session_value if isinstance(screen, SessionDetailScreen) else None
 
     def return_to_projects(self) -> None:
         """Unwind to the resting position, whatever the owner had pushed on top of it."""
         while len(self.screen_stack) > 1:
             self.pop_screen()
         self._step = Step.PROJECTS
-        self._area = None
-        self._name = None
         screen = self.screen
         if isinstance(screen, ProjectsScreen):
             screen.render_projects()
 
+    async def switch_flow(self, screen: Screen[None]) -> None:
+        """Leave whatever flow is open and start another one from the resting position.
+
+        The three global bindings — sessions, add project, resume — are jumps between flows
+        rather than steps within one, and the chain this replaces implemented them by
+        *replacing* the position outright. Unwinding first is the faithful translation:
+        entering the sessions view from three levels into the launch wizard has always
+        returned the owner to the project list on escape, and stacking instead would make the
+        depth depend on where they happened to be.
+        """
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        await self.push_screen(screen)
+
     # Rendering -------------------------------------------------------------------
     #
-    # These four delegate to the active screen. They are what remains of the app-owned
-    # rendering the extracted screens took over, kept only for the `Step` positions still
-    # hosted on `LegacyScreen`; Task 2.4 deletes them with it.
+    # These delegate to the active screen. They are what remains of the app-owned rendering
+    # the extracted screens took over, kept for the resume positions still hosted on
+    # `LegacyScreen`; Task 2.4 deletes them with it.
 
     def _set_status(self, text: str) -> None:
         self.body.set_status(text)
@@ -197,19 +243,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     ) -> None:
         self.body.show_choices(entries, focus=focus, highlight=highlight)
 
-    def _text_entry(self, placeholder: str) -> None:
-        self.body.text_entry(placeholder)
-
     def _hide_entry(self) -> None:
         self.body.hide_entry()
 
-    def _show_output(self, text: str) -> None:
-        self.body.show_output(text)
-
-    def _hide_output(self) -> None:
-        self.body.hide_output()
-
-    async def _in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
+    async def in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
         """Run one blocking call on a worker thread and return what it returned.
 
         The worker is owned by this app, so it is cancelled when the app goes away rather
@@ -246,7 +283,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         This exists to be a **worker context**, which is the one thing the surface did not
         have. `push_screen_wait` calls `get_current_worker()` and raises `NoActiveWorker`
         unless it is already running in a worker (`textual/app.py:2958-2964`), and every
-        handler here runs on the message pump, which is not one. `_in_thread` does not help:
+        handler here runs on the message pump, which is not one. `in_thread` does not help:
         its worker runs the blocking call, while its *caller* still awaits from the pump.
 
         `exclusive` is not passed, and must not be (DEC-008): a confirmation that cancelled
@@ -264,36 +301,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def _enter_legacy(self) -> None:
         """Make the transitional host the active screen, without stacking two of them.
 
-        Every position still driven by `Step` rests directly on the project list, which is
-        what the back paths those positions already had assert. Unwinding first is therefore
-        the faithful translation of the old behaviour, not a simplification of it: entering
-        the sessions view from three levels into the launch wizard used to *replace* the
-        position rather than descend from it.
+        Only the resume flow still needs it. Every position it hosts rests directly on the
+        project list, which is what the back paths those positions already had assert.
         """
         if isinstance(self.screen, LegacyScreen):
             return
-        while len(self.screen_stack) > 1:
-            self.pop_screen()
-        await self.push_screen(LegacyScreen())
+        await self.switch_flow(LegacyScreen())
 
     def _show_projects(self) -> None:
         self.return_to_projects()
 
     async def legacy_choose(self, key: str) -> None:
         """Dispatch a chosen row for the positions `Step` still owns."""
-        if self._step is Step.AREAS:
-            await self._choose_area(key)
-        elif self._step is Step.PROJECT_REVIEW:
-            await self._resolve_project_review(key)
-        elif self._step is Step.SESSIONS:
-            await self._show_detail(key)
-        elif self._step is Step.SESSION_DETAIL:
-            await self._resolve_detail(key)
-        elif self._step is Step.FORCE_CONFIRM:
-            await self._resolve_force_confirm(key)
-        elif self._step is Step.REMOTE_CONTROL_CONFIRM:
-            await self._resolve_remote_control(key)
-        elif self._step is Step.RESUME_PROJECTS:
+        if self._step is Step.RESUME_PROJECTS:
             await self._resolve_resume_project(key)
         elif self._step is Step.RESUME_PROFILES:
             await self._resolve_resume_profile(key)
@@ -302,130 +322,43 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         elif self._step is Step.RESUME_CONFIRM:
             await self._resolve_resume_confirm(key)
 
-    def legacy_submit(self, value: str) -> None:
-        """Accept typed text for the one text position `Step` still owns."""
-        if self._step is Step.NAME:
-            self._submit_name(value)
-
-    async def _show_areas(self) -> None:
-        await self._enter_legacy()
-        self._step = Step.AREAS
-        self._hide_entry()
-        try:
-            offered = await self._in_thread(self._services.creator.available_areas, group="areas")
-        except Exception:
-            _LOG.exception("listing areas failed")
-            self._set_status("The development root could not be read. Check this host.")
-            self._fill(((_CANCEL, "Back"),))
-            return
-        areas = tuple(area for area in offered if selectable_area(area))
-        if not areas:
-            self._set_status("No area is available for a new project.")
-            self._fill(((_CANCEL, "Back"),))
-            return
-        self._set_status("Choose the area for the new project.")
-        self._fill(tuple((area, area) for area in areas) + ((_CANCEL, "Back"),))
-
-    def _show_project_review(self) -> None:
-        """Name the project before creating it, exactly as the bot's Review does."""
-        self._step = Step.PROJECT_REVIEW
-        self._hide_entry()
-        self._set_status(f"Review new project\nArea: {self._area}\nName: {self._name}")
-        self._fill((("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
-
-    async def _choose_area(self, area: str) -> None:
-        if area == _CANCEL:
-            self._show_projects()
-            return
-        self._area = area
-        self._step = Step.NAME
-        self._set_status(f"Enter the new project name for {area}, then press enter.")
-        self._text_entry("New project name")
-
-    def _submit_name(self, value: str) -> None:
-        """Validate the typed name, then review it; nothing is created on this keystroke."""
-        if self._area is None:
-            self._show_projects()
-            return
-        try:
-            ProjectIdentity(area=self._area, name=value.strip())
-        except ValueError as error:
-            self._set_status(str(error))
-            return
-        self._name = value.strip()
-        self._show_project_review()
-
-    async def _resolve_project_review(self, key: str) -> None:
-        if key in {_BACK, _CANCEL} or self._area is None or self._name is None:
-            if key == _BACK:
-                await self._show_areas()
-            else:
-                self._show_projects()
-            return
-        if key != "create":
-            return
-        self._busy = True
-        try:
-            command = CreateProjectCommand(self._area, self._name)
-            created = await self._in_thread(
-                lambda: self._services.creator.create(command), group="create-project"
-            )
-        except Exception as error:
-            _LOG.exception("project creation failed")
-            self._show_project_review()
-            self._set_status(
-                f"Project not created: {error}\nArea: {self._area}\nName: {self._name}"
-            )
-            return
-        finally:
-            self._busy = False
-        await self.action_refresh()
-        self._set_status(f"Created {created.identity}. Choose a project.")
-
     # Actions -------------------------------------------------------------------
 
     async def action_back(self) -> None:
         """Leave the current position for the one it was reached from.
 
         For an extracted screen this is the stack itself — pop, and the screen beneath is by
-        construction where the owner came from. The chain below survives only for the
-        positions still hosted on `LegacyScreen`, which repaint one host in place and so have
-        no stack to pop.
+        construction where the owner came from. Two exceptions remain, and both disappear by
+        the end of Stage 3: the resume flow repaints one host screen, so it has no stack to
+        pop; and the two confirmations are repainted onto the session detail, so leaving one
+        means redrawing the detail rather than popping away from it.
         """
         if self._busy:
             return
-        if not isinstance(self.screen, LegacyScreen):
-            if len(self.screen_stack) > 1:
-                self.pop_screen()
+        screen = self.screen
+        if isinstance(screen, SessionDetailScreen) and self._step in {
+            Step.FORCE_CONFIRM,
+            Step.REMOTE_CONTROL_CONFIRM,
+        }:
+            await screen.render_detail()
             return
-        if self._step in {Step.RESUME_PROJECTS, Step.RESUME_PROFILES}:
-            self._show_projects()
-        elif self._step is Step.RESUME_CONVERSATIONS:
-            await self._show_resume_profiles()
-        elif self._step is Step.RESUME_CONFIRM:
-            await self._show_resume_conversations()
-        elif self._step is Step.INSPECT:
-            self._hide_output()
-            if self._detail_id is not None:
-                await self._show_detail(self._detail_id)
-        elif self._step in {Step.FORCE_CONFIRM, Step.REMOTE_CONTROL_CONFIRM}:
-            if self._detail_id is not None:
-                await self._show_detail(self._detail_id)
-        elif self._step is Step.SESSION_DETAIL:
-            await self._show_sessions()
-        elif self._step in {Step.AREAS, Step.SESSIONS}:
-            self._show_projects()
-        elif self._step is Step.PROJECT_REVIEW:
-            await self._show_areas()
-        elif self._step in _TEXT_STEPS:
-            self._show_projects()
+        if isinstance(screen, LegacyScreen):
+            if self._step in {Step.RESUME_PROJECTS, Step.RESUME_PROFILES}:
+                self._show_projects()
+            elif self._step is Step.RESUME_CONVERSATIONS:
+                await self._show_resume_profiles()
+            elif self._step is Step.RESUME_CONFIRM:
+                await self._show_resume_conversations()
+            return
+        if len(self.screen_stack) > 1:
+            self.pop_screen()
 
     async def action_refresh(self) -> None:
         """Re-read the catalogue, so a project another process created becomes selectable."""
         if self._busy:
             return
         try:
-            self._catalogue = await self._in_thread(
+            self._catalogue = await self.in_thread(
                 self._services.refresh_catalogue, group="catalogue"
             )
         except Exception:
@@ -436,123 +369,36 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_add_project(self) -> None:
         if not self._busy:
-            await self._show_areas()
+            await self.show_areas()
+
+    async def show_areas(self) -> None:
+        await self.switch_flow(AreasScreen())
 
     async def action_sessions(self) -> None:
         """Show every managed session, including ones this process never launched."""
         if self._busy:
             return
-        await self._show_sessions()
+        await self.show_sessions()
 
-    async def _show_sessions(self) -> None:
-        """Re-read readiness, then list what the shared store actually holds.
+    async def show_sessions(self) -> None:
+        screen = self.screen
+        if isinstance(screen, SessionsScreen):
+            await screen.reload()
+            return
+        await self.switch_flow(SessionsScreen())
 
-        Readiness is refreshed first for the same reason the bot does it: a launch that
-        failed here may have become ready since, and listing a stale FAILED would send the
-        owner to fix something that already works.
+    async def show_detail(self, session_value: str) -> None:
+        """Open — or redraw — the detail for one session.
+
+        Redrawing rather than pushing when the same detail is already on screen is what keeps
+        a stop, a confirmation abort, or a remote-control change from growing the stack by one
+        screen every time the owner uses it.
         """
-        await self._enter_legacy()
-        self._step = Step.SESSIONS
-        self._hide_entry()
-        try:
-            records = await self._load_sessions()
-        except Exception as error:
-            self._report_store_failure(error)
+        screen = self.screen
+        if isinstance(screen, SessionDetailScreen) and screen.session_value == session_value:
+            await screen.render_detail()
             return
-        if not records:
-            self._fill(())
-            self._set_status(
-                "There are no managed sessions. Press escape to return to the project list."
-            )
-            return
-        self._set_status(f"{len(records)} managed session(s). Select one for detail.")
-        self._fill(tuple((str(record.session_id), _session_row(record)) for record in records))
-
-    async def _show_detail(self, session_value: str) -> None:
-        """Show one session's state and what it means, re-read from the shared store.
-
-        The record is looked up again rather than trusted from the list: the store has two
-        writers, so a session can be stopped elsewhere while this list is on screen.
-        """
-        await self._enter_legacy()
-        self._step = Step.SESSION_DETAIL
-        self._hide_entry()
-        try:
-            record = await self._current_record(session_value)
-        except Exception as error:
-            self._report_store_failure(error)
-            return
-        if record is None:
-            self._detail_id = None
-            self._fill(((_BACK, "Back"),))
-            self._set_status("That session is no longer available.")
-            return
-        self._detail_id = session_value
-        self._set_status(
-            f"{record.display.rendered}\nState: {record.state.value}\n{explain_state(record.state)}"
-        )
-        self._fill(self._detail_entries(record))
-
-    async def _resolve_detail(self, key: str) -> None:
-        if key == _BACK:
-            await self._show_sessions()
-        elif key == "attach":
-            await self._show_attach()
-        elif key == "inspect":
-            await self._show_inspect()
-        elif key == "remote-control":
-            await self._confirm_remote_control()
-        elif key == FORCE:
-            await self._confirm_force()
-        elif key in _ACTION_LABELS and key != FORCE:
-            # The `key != FORCE` is redundant with the branch above and deliberately kept:
-            # FORCE is a member of _ACTION_LABELS, so without it the only thing stopping a
-            # single keypress from force-stopping is the *order* of these two branches.
-            # Restructuring this chain into a dispatch table would silently remove the
-            # confirmation step, and no existing test asserts the ordering itself.
-            await self._stop(key)
-
-    async def _show_inspect(self) -> None:
-        """Render this session's captured output, sanitized by the shared port.
-
-        `ports/terminal_text.sanitize_terminal_text` is the shared safety transformation,
-        so nothing is re-implemented here. What is deliberately *not* reused is the
-        Telegram presentation wrapper: its 4096-UTF-16-unit inline cap and
-        session-output.txt attachment fallback exist because Telegram messages are bounded,
-        and a scrollable local pane is not.
-        """
-        capture = self._services.capture
-        if capture is None or self._detail_id is None:
-            return
-        record = await self._current_record(self._detail_id)
-        if record is None:
-            self._set_status("That session is no longer available.")
-            return
-        try:
-            captured = await capture(record.session_id)
-        except Exception as error:
-            _LOG.exception("capture failed")
-            self._set_status(
-                f"{record.display.rendered}\nThe output could not be captured: {error}"
-            )
-            return
-        self._step = Step.INSPECT
-        self._hide_entry()
-        self._fill(())
-        raw = captured.encode()
-        if b"\x00" in raw:
-            # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
-            # rendering text, and printing it to a terminal can corrupt the display.
-            text = "This session's output is binary and cannot be displayed."
-        else:
-            text = sanitize_terminal_text(
-                raw,
-                max_lines=_INSPECT_MAX_LINES,
-                max_bytes=_INSPECT_MAX_BYTES,
-                redactions=self._services.capture_redactions,
-            )
-        self._set_status(f"{record.display.rendered}\nOutput. Press escape to go back.")
-        self._show_output(text or "This session has produced no output yet.")
+        await self.push_screen(SessionDetailScreen(session_value))
 
     # Resume ---------------------------------------------------------------------
 
@@ -669,7 +515,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self._set_status("There are no saved conversations for that agent and project.")
             self._fill(((_BACK, "Back"),))
             return
-        entries = [(str(item.reference), _conversation_row(item)) for item in page.conversations]
+        entries = [(str(item.reference), conversation_row(item)) for item in page.conversations]
         if page.page > 1:
             entries.append((_PREVIOUS, "Previous page"))
         if page.page < page.page_count:
@@ -712,7 +558,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._resume_choice = resolved
         self._step = Step.RESUME_CONFIRM
         self._set_status(
-            f"Resume {_conversation_row(resolved.summary)}\n"
+            f"Resume {conversation_row(resolved.summary)}\n"
             f"Agent: {self._resume_profile}\n"
             "This starts a new managed session continuing that conversation."
         )
@@ -753,11 +599,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
-    async def _confirm_remote_control(self) -> None:
+    # The destructive path, still repainted onto the session detail until Stage 3 ---------
+
+    async def confirm_remote_control(self) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first."""
-        if self._detail_id is None:
+        session_value = self.detail_session
+        if session_value is None:
             return
-        record = await self._current_record(self._detail_id)
+        # Guarded across the read, not just around the command. Without this, `action_back`
+        # sees an open guard and a step that has not flipped yet, so a plain Escape during
+        # the await pops the detail — and the confirmation then paints its rows onto
+        # whatever screen was underneath it. `stop` has always held the guard for this
+        # reason; building the dialog needs it just as much now that leaving the position
+        # means leaving the *screen*.
+        self._busy = True
+        try:
+            record = await self.current_record(session_value)
+        finally:
+            self._busy = False
         if record is None:
             self._set_status("That session is no longer available.")
             return
@@ -783,18 +642,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         )
 
-    async def _resolve_remote_control(self, key: str) -> None:
+    async def resolve_remote_control(self, key: str) -> None:
         desired = {
             "remote-control-active": RemoteControlState.ACTIVE,
             "remote-control-inactive": RemoteControlState.INACTIVE,
         }.get(key)
-        if desired is None or self._detail_id is None:
-            if self._detail_id is not None:
-                await self._show_detail(self._detail_id)
+        session_value = self.detail_session
+        if desired is None or session_value is None:
+            if session_value is not None:
+                await self.show_detail(session_value)
             return
         self._busy = True
         try:
-            record = await self._current_record(self._detail_id)
+            record = await self.current_record(session_value)
             if record is None:
                 self._set_status("That session is no longer available.")
                 return
@@ -815,25 +675,33 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
             return
         else:
-            # Held for the same reason as `_stop`'s refresh: nothing else may run until
+            # Held for the same reason as `stop`'s refresh: nothing else may run until
             # the result is on screen. These calls are synchronous today, so the window
             # is empty — the guard is here so it stays empty if one of them ever awaits.
             self._step = Step.SESSION_DETAIL
             self._set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
-            self._fill(self._detail_entries(record))
+            self._fill(self.body.detail_entries(record))  # type: ignore[attr-defined]
         finally:
             self._busy = False
 
-    async def _confirm_force(self) -> None:
-        """Ask a second time, on its own step, with abort as the resting choice.
+    async def confirm_force(self) -> None:
+        """Ask a second time, on its own position, with abort as the resting choice.
 
         Force kills a running agent and cannot be undone, so it is deliberately not
         reachable by repeating whatever keystroke opened the detail: the abort entry is
         first and highlighted, and confirming means moving to a different row on purpose.
         """
-        if self._detail_id is None:
+        session_value = self.detail_session
+        if session_value is None:
             return
-        record = await self._current_record(self._detail_id)
+        # Guarded for the reason given on `confirm_remote_control`: an Escape landing inside
+        # this read would otherwise pop the detail and leave the force confirmation painted
+        # onto the screen beneath it.
+        self._busy = True
+        try:
+            record = await self.current_record(session_value)
+        finally:
+            self._busy = False
         if record is None:
             self._set_status("That session is no longer available.")
             return
@@ -847,15 +715,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         )
         self._fill(((_CANCEL, "Cancel"), ("force-confirm", "Yes, force stop it")))
 
-    async def _resolve_force_confirm(self, key: str) -> None:
+    async def resolve_force_confirm(self, key: str) -> None:
         if key == "force-confirm":
-            await self._stop(FORCE)
+            await self.stop(FORCE)
             return
         # Anything else -- cancel, back, or an unrecognized key -- aborts without issuing.
-        if self._detail_id is not None:
-            await self._show_detail(self._detail_id)
+        session_value = self.detail_session
+        if session_value is not None:
+            await self.show_detail(session_value)
 
-    async def _stop(self, action: str) -> None:
+    async def stop(self, action: str) -> None:
         """Issue one stop, after re-reading the record and re-checking the policy.
 
         The policy is consulted again here rather than trusted from the rendered entry: the
@@ -863,11 +732,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         then can be illegal now. The service would refuse it anyway — this keeps the owner
         from seeing an exception instead of an explanation.
         """
-        if self._detail_id is None or self._busy:
+        session_value = self.detail_session
+        if session_value is None or self._busy:
             return
         self._busy = True
         try:
-            record = await self._current_record(self._detail_id)
+            record = await self.current_record(session_value)
             if record is None:
                 self._set_status("That session is no longer available.")
                 return
@@ -893,10 +763,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         else:
             # Inside the guard on purpose. `_busy` means "no other action may run until
-            # this one's result is on screen" — and `_show_detail` awaits, so releasing
-            # first leaves a window where the step has flipped but the list still holds
-            # the previous screen's entries.
-            await self._show_detail(self._detail_id)
+            # this one's result is on screen" — and the redraw awaits, so releasing first
+            # leaves a window where the position has flipped but the list still holds the
+            # previous screen's entries.
+            await self.show_detail(session_value)
         finally:
             self._busy = False
 
@@ -910,56 +780,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         else:
             await launcher.force_stop(ForceStopCommand(record.session_id))
 
-    async def _show_attach(self) -> None:
-        """Render the command that reaches this pane, or say why there is none.
+    # Store reads screens share ---------------------------------------------------
 
-        The affordance is always offered and answers when chosen, rather than being hidden
-        when unavailable. Hiding it is what the bot does, and it leaves the owner unable to
-        tell a dead pane from a surface that simply forgot to draw the button.
-        """
-        if self._detail_id is None:
-            return
-        try:
-            record = await self._current_record(self._detail_id)
-            if record is None:
-                self._set_status("That session is no longer available.")
-                return
-            command = await self._services.launcher.copy_attach(record.session_id)
-        except Exception as error:
-            self._report_store_failure(error)
-            return
-        if command is None:
-            self._set_status(
-                f"{record.display.rendered}\n"
-                "Attach is not available: this session's pane is not live, or the pane "
-                "found for it belongs to a different project or agent.\n"
-                f"{explain_state(record.state)}"
-            )
-            return
-        self._set_status(f"{record.display.rendered}\nAttach with:\n{command}")
-
-    def _detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
-        """The actions this session offers, taken from the policy and not decided here.
-
-        The stop entries are exactly `available_actions(record.state)` in the order it
-        returns them, which puts the destructive one last. Adding, filtering, or reordering
-        here is what `tests/contract/test_session_actions_parity.py` exists to catch.
-        """
-        entries: list[tuple[str, str]] = [("attach", "Copy attach")]
-        if self._services.capture is not None:
-            entries.append(("inspect", "Inspect output"))
-        if remote_control_available(record):
-            entries.append(("remote-control", "Claude Remote Control"))
-        entries.extend(
-            (action, _ACTION_LABELS[action]) for action in available_actions(record.state)
-        )
-        entries.append((_BACK, "Back"))
-        return tuple(entries)
-
-    def _report_store_failure(self, error: Exception) -> None:
+    def report_store_failure(self, error: Exception) -> None:
         """Report a failed store or terminal read without tearing the surface down.
 
-        Every read this screen makes can fail: the store has a second writer, and a
+        Every read this surface makes can fail: the store has a second writer, and a
         recovery surface is used precisely when things are already broken. Losing the app
         to an exception is the one outcome that leaves the owner with nothing.
         """
@@ -970,7 +796,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             "Press escape to return to the project list."
         )
 
-    async def _current_record(self, session_value: str) -> SessionRecord | None:
+    async def current_record(self, session_value: str) -> SessionRecord | None:
         """Re-read one session from the store, without refreshing readiness.
 
         The re-read is what detects a session stopped by the other writer while this list
@@ -979,21 +805,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         would make opening a detail and copying its attach command cost three full passes.
         The bot refreshes once per list open for the same reason.
         """
-        for record in await self._read_sessions():
+        for record in await self.read_sessions():
             if str(record.session_id) == session_value:
                 return record
         return None
 
-    async def _load_sessions(self) -> tuple[SessionRecord, ...]:
+    async def load_sessions(self) -> tuple[SessionRecord, ...]:
         """Refresh readiness, then return the sessions worth showing.
 
         Order is whatever the store returns; nothing here sorts, and the row's age column
         is what tells the owner how old a session is.
         """
         await self._services.launcher.refresh_readiness()
-        return await self._read_sessions()
+        return await self.read_sessions()
 
-    async def _read_sessions(self) -> tuple[SessionRecord, ...]:
+    async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
         records = await self._services.launcher.list_sessions()
         # ENDED is filtered exactly as the bot filters it: the record is retained for audit
@@ -1038,21 +864,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
         return None
-
-
-def _conversation_row(summary: ConversationSummary) -> str:
-    """Safe selection metadata only — never a provider ID, path, or path fragment."""
-    described = summary.description or "(no description)"
-    return f"{described} · {summary.state.value} · {_age(summary.updated_at)}"
-
-
-def _age(created_at: datetime) -> str:
-    minutes = max(0, int((datetime.now(UTC) - created_at).total_seconds() // 60))
-    return f"{minutes}m ago"
-
-
-def _session_row(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {_age(record.created_at)}"
 
 
 def _idempotency_key() -> str:

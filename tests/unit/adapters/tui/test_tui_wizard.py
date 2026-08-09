@@ -345,8 +345,10 @@ async def test_a_new_project_name_outside_the_slug_rule_creates_nothing(name: st
 
     async with app.run_test() as pilot:
         await app.action_add_project()
-        await app._choose_area("infra")
-        app._submit_name(name)
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        app.screen.submit(name)
         await pilot.pause()
 
     assert creator.commands == []
@@ -359,9 +361,12 @@ async def test_a_created_project_is_selectable_without_leaving_the_app() -> None
 
     async with app.run_test() as pilot:
         await app.action_add_project()
-        await app._choose_area("infra")
-        app._submit_name("brand-new")
-        await app._resolve_project_review("create")
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        app.screen.submit("brand-new")
+        await pilot.pause()
+        await app.screen.choose("create")
         await pilot.pause()
         rows = _rows(app)
 
@@ -375,9 +380,12 @@ async def test_a_refused_creation_is_reported_and_leaves_the_catalogue_alone() -
 
     async with app.run_test() as pilot:
         await app.action_add_project()
-        await app._choose_area("infra")
-        app._submit_name("brand-new")
-        await app._resolve_project_review("create")
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        app.screen.submit("brand-new")
+        await pilot.pause()
+        await app.screen.choose("create")
         await pilot.pause()
         status = _status(app)
 
@@ -518,12 +526,66 @@ async def test_cancelling_the_new_project_review_creates_nothing() -> None:
 
     async with app.run_test() as pilot:
         await app.action_add_project()
-        await app._choose_area("infra")
-        app._submit_name("typed-name")
-        await app._resolve_project_review(_CANCEL)
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        app.screen.submit("typed-name")
+        await pilot.pause()
+        await app.screen.choose(_CANCEL)
         await pilot.pause()
 
     assert creator.commands == []
+
+
+async def test_back_out_of_the_add_project_flow_stops_at_every_position() -> None:
+    """Back walks the add-project flow out one position at a time.
+
+    **A deliberate navigation change, the same pair Task 2.1 removed from the launch wizard.**
+    The hand-rolled chain sent Escape at the name entry straight to the project list, skipping
+    the area choice, because `NAME` was lumped into `_TEXT_STEPS` with the launch label; and it
+    sent Back at the review straight to the area list, skipping the name — so an owner who
+    mistyped a project name could not correct it, only start the flow again. On a real stack
+    each is one level.
+
+    Asserted as the whole walk rather than as any single destination, so reinstating either
+    shortcut fails here instead of passing on the endpoint alone.
+    """
+    creator = FakeCreator()
+    app = RemoteAgentsTui(_context(creator=creator))
+
+    async with app.run_test() as pilot:
+        await app.action_add_project()
+        await pilot.pause()
+        assert _keys(app)[:2] == ["dev-area", "infra"], "expected the area list"
+
+        await app.screen.choose("infra")
+        await pilot.pause()
+        assert app.screen.query_one("#filter").has_focus, "expected the name entry"
+
+        app.screen.submit("typed-name")
+        await pilot.pause()
+        assert _keys(app) == ["create", _BACK, _CANCEL], "expected the new-project review"
+
+        await app.screen.choose(_BACK)
+        await pilot.pause()
+        assert app.screen.query_one("#filter").has_focus, (
+            "back from the review must restore the name entry, not skip past it"
+        )
+
+        await app.action_back()
+        await pilot.pause()
+        assert _keys(app)[:2] == ["dev-area", "infra"], (
+            "escape from the name entry must return to the area list, not to the projects"
+        )
+
+        await app.action_back()
+        await pilot.pause()
+        assert _rows(app) == [
+            "infra/existing  [Registered]",
+            "dev-area/other-thing  [Unregistered]",
+        ]
+
+    assert creator.commands == [], "walking back out must create nothing"
 
 
 async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:

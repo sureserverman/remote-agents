@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import ResumeCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -135,9 +136,9 @@ async def test_resume_is_offered_when_a_conversation_service_is_wired() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.RESUME_PROJECTS
+    assert step == "RESUME_PROJECTS"
 
 
 async def test_a_context_without_conversations_offers_no_resume() -> None:
@@ -154,9 +155,9 @@ async def test_a_context_without_conversations_offers_no_resume() -> None:
     async with app.run_test() as pilot:
         await app.action_resume()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.PROJECTS
+    assert step == "PROJECTS"
 
 
 async def test_only_resume_capable_profiles_are_offered() -> None:
@@ -235,7 +236,7 @@ async def test_resume_requires_a_confirm_step_and_issues_a_tui_key() -> None:
         await pilot.pause()
         await app._resolve_resume_conversation(str(_summary(1).reference))
         await pilot.pause()
-        assert app._step is Step.RESUME_CONFIRM
+        assert position(app) == "RESUME_CONFIRM"
         assert launcher.resumed == [], "the selection alone must not resume"
 
         await app._resolve_resume_confirm("resume-confirm")
@@ -366,10 +367,10 @@ async def test_reopening_resume_mid_navigation_does_not_strand_the_owner() -> No
 
         # Whatever screen the owner lands on, selecting the offered profile must go
         # somewhere rather than silently doing nothing.
-        if app._step is Step.RESUME_PROFILES:
+        if position(app) == "RESUME_PROFILES":
             await app._resolve_resume_profile("claude")
             await pilot.pause()
-            assert app._step is Step.RESUME_CONVERSATIONS, (
+            assert position(app) == "RESUME_CONVERSATIONS", (
                 "selecting a profile did nothing: the chosen project was lost mid-navigation"
             )
 

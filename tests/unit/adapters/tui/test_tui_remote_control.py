@@ -7,8 +7,9 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import RemoteControlCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -88,7 +89,7 @@ async def test_the_toggle_is_offered_exactly_where_the_policy_allows_it(
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         offered = any(key == "remote-control" for key in _keys(app))
 
@@ -101,13 +102,13 @@ async def test_the_toggle_requires_a_confirm_step() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
-    assert step is Step.REMOTE_CONTROL_CONFIRM
+    assert step == "REMOTE_CONTROL_CONFIRM"
     assert launcher.issued == [], "the first selection must not toggle anything"
 
 
@@ -117,11 +118,11 @@ async def test_confirming_issues_the_command_with_a_tui_idempotency_key() -> Non
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
-        await app._resolve_remote_control("remote-control-active")
+        await app.resolve_remote_control("remote-control-active")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -137,11 +138,11 @@ async def test_the_returned_state_is_surfaced() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
-        await app._resolve_remote_control("remote-control-active")
+        await app.resolve_remote_control("remote-control-active")
         await pilot.pause()
         status = _status(app)
 
@@ -154,16 +155,16 @@ async def test_aborting_the_confirm_issues_nothing() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
         await app.action_back()
         await pilot.pause()
-        step = app._step
+        step = position(app)
 
     assert launcher.issued == []
-    assert step is Step.SESSION_DETAIL
+    assert step == "SESSION_DETAIL"
 
 
 async def test_a_failure_reports_itself_and_does_not_claim_a_state() -> None:
@@ -172,11 +173,11 @@ async def test_a_failure_reports_itself_and_does_not_claim_a_state() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
-        await app._resolve_remote_control("remote-control-active")
+        await app.resolve_remote_control("remote-control-active")
         await pilot.pause()
         status = _status(app)
 
@@ -189,7 +190,7 @@ async def test_no_version_gating_is_applied_to_the_toggle() -> None:
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app).casefold()
 
@@ -202,11 +203,11 @@ async def test_a_non_claude_session_offers_no_toggle_even_when_running() -> None
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         keys = _keys(app)
         # Even a stale key must not drive it.
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
 
     assert "remote-control" not in keys
@@ -220,9 +221,9 @@ async def test_a_failed_toggle_does_not_leave_the_cursor_on_the_button_that_fail
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("remote-control")
+        await app.screen.choose("remote-control")
         await pilot.pause()
         await pilot.press("down")
         await pilot.press("enter")

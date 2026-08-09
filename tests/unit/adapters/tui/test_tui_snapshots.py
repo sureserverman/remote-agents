@@ -52,6 +52,7 @@ from pathlib import Path
 
 import pytest
 from textual.widgets import Input
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -255,17 +256,6 @@ def _assert_snapshot(app: RemoteAgentsTui, name: str) -> None:
         )
 
 
-def _position(app: RemoteAgentsTui) -> str:
-    """The name of the position on screen, whichever mechanism still owns it.
-
-    Stage 2 moves the 16 positions onto screens a few at a time, so for the length of the
-    stage both answers are live: an extracted screen declares its own `position`, and what
-    is left reports through `Step`. Task 2.4 deletes the second half of this expression along
-    with the enum, and the baselines keep their names across the whole move.
-    """
-    return getattr(app.screen, "position", "") or app._step.name
-
-
 async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
     """Put the app in `step`, using the same private entry points the sibling tests use."""
     if step is Step.PROJECTS:
@@ -284,16 +274,16 @@ async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
             await pilot.pause()
         return
     if step in {Step.AREAS, Step.NAME, Step.PROJECT_REVIEW}:
-        await app._show_areas()
+        await app.show_areas()
         if step is Step.AREAS:
             return
-        await app._choose_area("infra")
+        await app.screen.choose("infra")
         if step is Step.NAME:
             return
-        app._submit_name("new-project")
+        app.screen.submit("new-project")
         return
     if step is Step.SESSIONS:
-        await app._show_sessions()
+        await app.show_sessions()
         return
     if step in {
         Step.SESSION_DETAIL,
@@ -301,14 +291,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
         Step.REMOTE_CONTROL_CONFIRM,
         Step.INSPECT,
     }:
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
         if step is Step.FORCE_CONFIRM:
-            await app._confirm_force()
+            await app.confirm_force()
         elif step is Step.REMOTE_CONTROL_CONFIRM:
-            await app._confirm_remote_control()
+            await app.confirm_remote_control()
         elif step is Step.INSPECT:
-            await app._show_inspect()
+            await app.screen.show_inspect()
         return
     # The four resume positions, each one step further into the same flow.
     await app.action_resume()
@@ -341,7 +331,7 @@ async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
         await pilot.pause()
         await _drive(app, pilot, step)
         await settle(app, pilot)
-        assert _position(app) == step.name, f"drove to {_position(app)}, expected {step.name}"
+        assert position(app) == step.name, f"drove to {position(app)}, expected {step.name}"
         _assert_snapshot(app, step.name)
 
 

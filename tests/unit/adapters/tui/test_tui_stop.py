@@ -106,7 +106,7 @@ async def test_detail_offers_exactly_the_policy_actions(state: SessionState) -> 
     app = RemoteAgentsTui(_context(_RecordingLauncher((record,))))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         offered = _offered(app)
 
@@ -119,9 +119,9 @@ async def test_graceful_issues_a_graceful_stop_command() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -137,9 +137,9 @@ async def test_cleanup_issues_a_cleanup_command() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("cleanup")
+        await app.screen.choose("cleanup")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -153,9 +153,9 @@ async def test_a_failed_stop_reports_the_reason_and_does_not_claim_success() -> 
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         await pilot.pause()
         status = _status(app)
 
@@ -170,9 +170,9 @@ async def test_a_failed_stop_re_renders_the_refreshed_state() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         await pilot.pause()
         status = _status(app)
 
@@ -187,11 +187,11 @@ async def test_an_action_the_policy_refuses_is_never_issued(state: SessionState)
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         for action in ("graceful", "cleanup"):
             if action not in available_actions(state):
-                await app._resolve_detail(action)
+                await app.screen.choose(action)
                 await pilot.pause()
 
     assert launcher.issued == []
@@ -203,10 +203,10 @@ async def test_a_session_that_vanished_before_the_stop_is_not_stopped() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         launcher.records = ()
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         await pilot.pause()
         status = _status(app)
 
@@ -226,17 +226,17 @@ async def test_the_busy_guard_is_held_until_the_post_stop_refresh_completes() ->
     observed: list[bool] = []
 
     class _Watching(RemoteAgentsTui):
-        async def _show_detail(self, session_value: str) -> None:
+        async def show_detail(self, session_value: str) -> None:
             observed.append(self._busy)
-            await super()._show_detail(session_value)
+            await super().show_detail(session_value)
 
     app = _Watching(_context(launcher))
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         observed.clear()
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         await pilot.pause()
 
     assert observed, "the post-stop refresh must happen"
@@ -280,10 +280,10 @@ async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
-        await app._show_detail(str(record.session_id))
+        await app.show_detail(str(record.session_id))
         await pilot.pause()
         await asyncio.gather(
-            app._resolve_detail("graceful"),
+            app.screen.choose("graceful"),
             _press_escape_during(pilot),
         )
         await pilot.pause()

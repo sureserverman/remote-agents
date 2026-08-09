@@ -40,6 +40,7 @@ import pytest
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from textual.worker import WorkerState
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import _CANCEL, RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -197,9 +198,9 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
 
 
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
-    await app._show_sessions()
-    await app._show_detail(str(_SESSION_ID))
-    await app._confirm_force()
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
+    await app.confirm_force()
 
 
 @pytest.mark.parametrize(
@@ -216,20 +217,20 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
         await pilot.pause()
 
         if resolve == "force-confirm":
-            await app._confirm_force()
+            await app.confirm_force()
             await pilot.pause()
-            first = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
+            first = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
-            second = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
+            second = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
         else:
-            first = asyncio.create_task(app._resolve_detail(resolve))
+            first = asyncio.create_task(app.screen.choose(resolve))
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
-            second = asyncio.create_task(app._resolve_detail(resolve))
+            second = asyncio.create_task(app.screen.choose(resolve))
         await asyncio.sleep(0)
         launcher.release.set()
         await asyncio.gather(first, second)
@@ -273,9 +274,9 @@ async def test_a_repeated_keypress_creates_exactly_one_project() -> None:
     app = RemoteAgentsTui(_context(_SlowLauncher(), creator))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_areas()
-        await app._choose_area("infra")
-        app._submit_name("new-project")
+        await app.show_areas()
+        await app.screen.choose("infra")
+        app.screen.submit("new-project")
         await pilot.pause()
         first = asyncio.create_task(_select(app, "create"))
         assert await asyncio.to_thread(creator.started.wait, 5), "the create never started"
@@ -306,20 +307,20 @@ async def test_the_guard_is_the_reason_and_not_a_coincidence() -> None:
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
         await pilot.pause()
 
         launcher.release.set()  # this test needs the stop to run to completion
         app._busy = True
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         assert launcher.issued == [], (
             f"a stop was issued while the guard was set: {launcher.issued}. The guard is not "
             f"consulted, so the single-issue tests above prove nothing."
         )
 
         app._busy = False
-        await app._resolve_detail("graceful")
+        await app.screen.choose("graceful")
         assert launcher.issued == ["graceful"], (
             f"clearing the guard should let exactly one stop through; got {launcher.issued}"
         )
@@ -388,9 +389,9 @@ async def test_a_cancelled_read_does_not_render_an_error_into_a_dying_screen() -
     try:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
-            await app._show_areas()
-            await app._choose_area("infra")
-            app._submit_name("new-project")
+            await app.show_areas()
+            await app.screen.choose("infra")
+            app.screen.submit("new-project")
             await settle(app, pilot)
             creating = asyncio.create_task(_select(app, "create"))
             assert await asyncio.to_thread(creator.started.wait, 5), "the create never started"
@@ -416,13 +417,13 @@ async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
         await pilot.pause()
         await _drive_to_force_confirm(app)
         await pilot.pause()
-        first = asyncio.create_task(app._resolve_force_confirm("force-confirm"))
+        first = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
-        assert app._step is Step.FORCE_CONFIRM
+        assert position(app) == "FORCE_CONFIRM"
         # Bounded on purpose. This await is the *dropped* second press, so it must return
         # promptly; if a regression lets it through to the launcher it would block on
         # `release` instead, and an unbounded await would hang the run rather than fail it.
-        await asyncio.wait_for(app._resolve_force_confirm("force-confirm"), timeout=5)
+        await asyncio.wait_for(app.resolve_force_confirm("force-confirm"), timeout=5)
         launcher.release.set()
         await first
         assert launcher.issued == ["force"]
@@ -491,8 +492,8 @@ async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path()
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
         await settle(app, pilot)
 
         choices = app.screen.query_one("#choices", OptionList)
@@ -530,9 +531,9 @@ async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
-        await app._show_detail(str(_SESSION_ID))
-        await app._confirm_remote_control()
+        await app.show_sessions()
+        await app.show_detail(str(_SESSION_ID))
+        await app.confirm_remote_control()
         await settle(app, pilot)
 
         first = asyncio.create_task(_select(app, "remote-control-active"))

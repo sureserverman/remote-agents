@@ -164,7 +164,7 @@ async def test_the_terminal_gracefully_stops_a_session_the_service_launched(
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            await app._resolve_detail("graceful")
+            await app.screen.choose("graceful")
             await pilot.pause()
 
         assert gateway.keys, "the terminal resolved no profile and sent no keys"
@@ -197,9 +197,9 @@ async def test_the_profile_is_resolved_from_the_factories_not_a_process_local_ca
 
         app = _tui(tui_service)
         async with app.run_test() as pilot:
-            await app._show_detail(str(launched.session_id))
+            await app.show_detail(str(launched.session_id))
             await pilot.pause()
-            await app._resolve_detail("graceful")
+            await app.screen.choose("graceful")
             await pilot.pause()
 
         assert gateway.keys and gateway.keys[0][0] == launched.session_id
@@ -228,9 +228,9 @@ async def test_a_stop_with_an_unresolvable_profile_fails_closed(
         app = _tui(tui_service)
 
         async with app.run_test() as pilot:
-            await app._show_detail(str(launched.session_id))
+            await app.show_detail(str(launched.session_id))
             await pilot.pause()
-            await app._resolve_detail("graceful")
+            await app.screen.choose("graceful")
             await pilot.pause()
             status = str(app.screen.query_one("#status").content)
 
@@ -262,11 +262,11 @@ async def test_force_stop_from_the_terminal_also_crosses_the_process_boundary(
 
         app = _tui(tui_service)
         async with app.run_test() as pilot:
-            await app._show_detail(str(launched.session_id))
+            await app.show_detail(str(launched.session_id))
             await pilot.pause()
-            await app._resolve_detail("force")
+            await app.screen.choose("force")
             await pilot.pause()
-            await app._resolve_force_confirm("force-confirm")
+            await app.resolve_force_confirm("force-confirm")
             await pilot.pause()
 
         final = await service.list_sessions()

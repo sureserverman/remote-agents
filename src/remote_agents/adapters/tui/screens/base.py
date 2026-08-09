@@ -31,8 +31,9 @@ class ChoiceScreen(Screen[None]):
     snapshot baselines survive the extraction: the widget tree a screen composes here is the
     tree the app used to compose once and repaint in place.
 
-    Deliberately **not** re-exported from `screens/__init__`. The Stage 2 gate sweeps that
-    namespace for `Screen` subclasses missing from `ALL_SCREENS`, and this base is not a
+    Deliberately **not** re-exported from `screens/__init__`. That namespace is swept for
+    `Screen` subclasses missing from `ALL_SCREENS` — by the sub-plan's Stage 2 gate, and on
+    every run by `test_screen_back_paths.py`'s exhaustiveness check — and this base is not a
     position the owner can navigate to, so exporting it would fail a check that is asking a
     fair question.
     """

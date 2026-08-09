@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 import pytest
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -124,20 +125,10 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
     return (marked[0] if marked else None), rows
 
 
-def _position(app: RemoteAgentsTui) -> str:
-    """The name of the position on screen, whichever mechanism still owns it.
-
-    Stage 2 moves the positions onto screens a few at a time, so both answers are live for
-    the length of the stage: an extracted screen declares its own `position`, and what is
-    left reports through `Step`. Task 2.4 deletes the second half with the enum.
-    """
-    return getattr(app.screen, "position", "") or app._step.name
-
-
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
-    await app._show_sessions()
-    await app._show_detail(str(_SESSION_ID))
-    await app._confirm_force()
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
+    await app.confirm_force()
 
 
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
@@ -149,9 +140,9 @@ async def _drive_to_review(app: RemoteAgentsTui) -> None:
 
 
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
-    await app._show_areas()
-    await app._choose_area("infra")
-    app._submit_name("new-project")
+    await app.show_areas()
+    await app.screen.choose("infra")
+    app.screen.submit("new-project")
 
 
 # Each entry is a position whose resting row must be the one that mutates nothing.
@@ -169,7 +160,7 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         await pilot.pause()
         await drive(app)
         await settle(app, pilot)
-        assert _position(app) == step.name
+        assert position(app) == step.name
         marked, rows = _highlighted(app)
         assert marked is not None, (
             f"{step.name} drew no cursor at all; rows were {rows}. The owner cannot see "
@@ -194,7 +185,7 @@ async def test_a_list_with_no_resting_preference_still_draws_a_cursor() -> None:
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app._show_sessions()
+        await app.show_sessions()
         await settle(app, pilot)
         marked, rows = _highlighted(app)
         assert marked is not None, f"the sessions list drew no cursor; rows were {rows}"

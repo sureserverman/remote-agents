@@ -15,8 +15,9 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import (
     CleanupCommand,
@@ -189,7 +190,7 @@ async def _open_detail(app, launcher, pilot) -> None:
 async def _probe_sessions_list(app, launcher, pilot) -> None:
     await pilot.press("ctrl+s")
     await pilot.pause()
-    assert app._step is Step.SESSIONS
+    assert position(app) == "SESSIONS"
     assert any("existing" in row for row in _rows(app))
 
 
@@ -197,7 +198,7 @@ async def _probe_detail(app, launcher, pilot) -> None:
     await app.action_sessions()
     await pilot.pause()
     await _choose(app, pilot, str(launcher.record.session_id))
-    assert app._step is Step.SESSION_DETAIL
+    assert position(app) == "SESSION_DETAIL"
     assert launcher.record.display.rendered in _status(app)
     assert launcher.record.state.value in _status(app)
 
@@ -223,7 +224,7 @@ async def _probe_cleanup(app, launcher, pilot) -> None:
 async def _probe_force(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "force")
-    assert app._step is Step.FORCE_CONFIRM
+    assert position(app) == "FORCE_CONFIRM"
     assert launcher.issued == [], "force must not fire on the first selection"
     await _choose(app, pilot, "force-confirm")
     assert any(isinstance(item, ForceStopCommand) for item in launcher.issued)
@@ -232,7 +233,7 @@ async def _probe_force(app, launcher, pilot) -> None:
 async def _probe_remote_control(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "remote-control")
-    assert app._step is Step.REMOTE_CONTROL_CONFIRM
+    assert position(app) == "REMOTE_CONTROL_CONFIRM"
     await _choose(app, pilot, "remote-control-active")
     assert any(isinstance(item, RemoteControlCommand) for item in launcher.issued)
 
@@ -240,7 +241,7 @@ async def _probe_remote_control(app, launcher, pilot) -> None:
 async def _probe_inspect(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "inspect")
-    assert app._step is Step.INSPECT
+    assert position(app) == "INSPECT"
     assert "Claude Code ready" in str(app.screen.query_one("#output").content)
 
 
@@ -250,7 +251,7 @@ async def _probe_resume(app, launcher, pilot) -> None:
     await _choose(app, pilot, "opaque-existing")
     await _choose(app, pilot, "claude")
     await _choose(app, pilot, _REFERENCE)
-    assert app._step is Step.RESUME_CONFIRM
+    assert position(app) == "RESUME_CONFIRM"
     assert launcher.issued == [], "resume must not fire on the selection alone"
     await _choose(app, pilot, "resume-confirm")
     assert any(isinstance(item, ResumeCommand) for item in launcher.issued)
