@@ -347,3 +347,173 @@ async def test_a_screen_left_mid_read_does_not_draw_onto_its_own_corpse() -> Non
         assert app.is_running, "a render onto a left screen took the app down"
         assert isinstance(app.screen, ProjectsScreen)
         assert len(app.screen_stack) == 1
+
+
+async def test_the_list_re_reads_itself_on_an_interval() -> None:
+    """The one position whose answer goes stale with nobody touching it.
+
+    The store has a second writer — the bot, and any reconcile the host runs — so a session
+    can appear or end while the owner sits here reading. Driven by advancing the interval
+    rather than by waiting for it: the timer is asked to fire, and what is asserted is that
+    firing it re-reads the store and redraws.
+    """
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        assert _rows(app) == [_rows(app)[0]]
+        reads_after_open = launcher.refreshed
+
+        launcher.records = (_record(), _record())
+        await app.screen._auto_reload()
+        await pilot.pause()
+        rows_after_tick = _rows(app)
+        reads_after_tick = launcher.refreshed
+
+    assert reads_after_tick > reads_after_open, "the interval did not re-read the store"
+    assert len(rows_after_tick) == 2, "a session another process started never appeared"
+
+
+async def test_the_interval_is_paused_while_another_screen_is_on_top() -> None:
+    """A paused timer is the point: `load_sessions` probes tmux, so an unpaused one would keep
+    a background conversation with the runtime going underneath every screen pushed on this."""
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert screen._auto is not None, "no interval was started"
+        # `Timer.pause()` clears `_active` and `resume()` sets it; there is no public
+        # predicate for "is this timer running", so the flag it actually gates on is what is
+        # read. Asserted at all three points rather than only the paused one, because a timer
+        # that was never running would satisfy the middle assertion on its own.
+        running_here = screen._auto._active.is_set()
+
+        await app.show_detail(str(launcher.records[0].session_id))
+        await pilot.pause()
+        paused_under_detail = screen._auto._active.is_set()
+
+        await app.action_back()
+        await pilot.pause()
+        resumed_on_return = screen._auto._active.is_set()
+
+    assert running_here, "the interval was not running on the screen that owns it"
+    assert not paused_under_detail, "the interval kept polling under the detail screen"
+    assert resumed_on_return, "the interval did not resume when the screen came back"
+
+
+async def test_the_background_read_leaves_the_cursor_where_the_owner_put_it() -> None:
+    """A refill that walks the selection back to row 0 every ten seconds is worse than stale.
+
+    On the tick the owner presses enter, it would open a different session's detail than the
+    one they were looking at — and one screen deeper are the destructive actions.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+
+        await app.screen._auto_reload()
+        await pilot.pause()
+        still_on = app.screen.query_one("#choices", OptionList)
+        resting_id = still_on.get_option_at_index(still_on.highlighted).id
+
+    assert resting_id == chosen, "the background re-read moved the owner's selection"
+
+
+async def test_a_session_ending_above_the_cursor_does_not_shift_the_selection() -> None:
+    """Restored by row key rather than by index, which is what makes that true.
+
+    A session that ends between two ticks shortens the list above the cursor, so the index
+    the owner was on now names a different session.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+
+        launcher.records = (second, third)
+        await app.screen._auto_reload()
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+        resting_id = after.get_option_at_index(after.highlighted).id
+
+    assert resting_id == chosen, "the cursor followed the index instead of the session"
+
+
+async def test_a_selection_that_ended_falls_back_to_the_first_row() -> None:
+    """DEC-007's resting rule: a fill always lands on a non-mutating entry, never nowhere."""
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 1
+
+        launcher.records = (first,)
+        await app.screen._auto_reload()
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+        resting = after.highlighted
+
+    assert resting == 0
+
+
+async def test_the_background_read_is_silent_about_a_failure_the_owner_did_not_ask_for() -> None:
+    """Ctrl+R still reports loudly — that read *was* asked for. A timer must not toast on a loop."""
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+
+        launcher.list_error = RuntimeError("database is locked")
+        await app.screen._auto_reload()
+        await pilot.pause()
+        quiet = announcements(app, severity="error")
+
+        await app.screen.refresh_contents()
+        await pilot.pause()
+        loud = announcements(app, severity="error")
+
+    assert quiet == [], f"the background read announced a failure nobody asked about: {quiet}"
+    assert any("could not be read" in message for message in loud), loud
+
+
+async def test_the_background_read_stands_down_while_a_command_is_in_flight() -> None:
+    """Re-listing under a held guard would repaint the rows a confirmation is reasoning about."""
+    launcher = _Listing((_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        before = launcher.refreshed
+
+        app._busy = True
+        await app.screen._auto_reload()
+        await pilot.pause()
+        during = launcher.refreshed
+        app._busy = False
+
+    assert during == before, "the interval read the store while a command was in flight"

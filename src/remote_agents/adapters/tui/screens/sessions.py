@@ -19,7 +19,8 @@ from __future__ import annotations
 import logging
 
 from textual.binding import Binding
-from textual.widgets import Input, TextArea
+from textual.timer import Timer
+from textual.widgets import Input, OptionList, TextArea
 
 from remote_agents.adapters.tui.model import _BACK, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
@@ -53,18 +54,91 @@ _REMOTE_CONTROL_ROWS: tuple[tuple[str, str, RemoteControlState], ...] = (
 )
 _REMOTE_CONTROL_DIRECTIONS = {key: state for key, _label, state in _REMOTE_CONTROL_ROWS}
 
+#: How often the sessions list re-reads the store while it is the screen on top. Long enough
+#: that a host is not answering a tmux readiness probe continuously, short enough that a
+#: session another process started is visible before the owner thinks to press Ctrl+R.
+_SESSIONS_AUTO_REFRESH = 10.0
+
 
 class SessionsScreen(ChoiceScreen):
-    """Every managed session, including ones this process never launched."""
+    """Every managed session, including ones this process never launched.
+
+    The one position in this surface whose answer goes stale with nobody touching it: the
+    store has a second writer — the bot, and any reconcile the host runs — so a session can
+    start, stop or be reconciled while the owner sits here reading. Ctrl+R has re-read it on
+    demand since sub-plan 3; this screen now also re-reads itself on an interval, and stops
+    doing so the moment it is not the screen on top.
+    """
+
     empty_state = "No managed sessions on this host."
 
     position = "SESSIONS"
     can_refresh = True
     crumb = "Sessions"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._auto: Timer | None = None
+
     async def populate(self) -> None:
         self.hide_entry()
         await self.reload()
+        # Started here rather than in an `on_mount` of this screen's own: the base class makes
+        # `on_mount` a template method precisely so a screen cannot forget the chrome by
+        # defining one, and `populate` is the hook it leaves for exactly this.
+        if self._auto is None:
+            self._auto = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload)
+
+    def on_screen_suspend(self) -> None:
+        """Stop polling the store for a screen the owner is no longer looking at.
+
+        Not merely wasted work. `load_sessions` refreshes readiness before it lists, which
+        talks to tmux — so an unpaused interval would keep a background conversation with the
+        runtime going underneath every detail, confirmation and inspect screen pushed on top
+        of this one, for as long as the owner stayed there.
+
+        `ScreenSuspend` here and `on_reveal` for the re-read are not two spellings of one
+        idea, and the base class documents why the re-read cannot use these: `go_back` awaits
+        `on_reveal`, while a resume handler runs on the pump after the pop returns, outside
+        the guard a stop may still hold. Pausing a timer needs no such ordering, so the
+        framework hook is the right one for this half.
+        """
+        if self._auto is not None:
+            self._auto.pause()
+
+    def on_screen_resume(self) -> None:
+        if self._auto is not None:
+            self._auto.resume()
+
+    async def _auto_reload(self) -> None:
+        """The interval's re-read: quiet, cursor-preserving, and never over work in flight.
+
+        Every one of those three is a defect this would otherwise have introduced, and the
+        loud version of this method is worse than no auto-refresh at all:
+
+        - **Quiet.** `reload` wraps its read in `awaiting(...)`, which is right when the owner
+          pressed a key and is waiting for an answer. On a timer it would flash "Reading the
+          managed sessions…" over the status line every interval forever.
+        - **Cursor-preserving.** `show_choices` rests the cursor on row 0 by default. An
+          unqualified refill would walk the owner's selection back to the top of the list on
+          every tick, and on the tick they pressed enter it would open a different session's
+          detail than the one they were looking at.
+        - **Never over work in flight.** A stop or a resume holds the busy guard; re-listing
+          underneath it would repaint the rows a confirmation was reasoning about.
+
+        A failed background read is logged and swallowed rather than announced. The owner did
+        not ask for this read, and a store that is briefly unreadable would otherwise raise a
+        toast every interval; Ctrl+R still reports the failure loudly, because that one *was*
+        asked for.
+        """
+        if not self.showing or self.tui.busy:
+            return
+        try:
+            records = await self.tui.load_sessions()
+        except Exception:
+            _LOG.warning("the background session re-read failed", exc_info=True)
+            return
+        self._draw_listing(records, keep_cursor=True)
 
     async def on_reveal(self) -> None:
         """Re-read on the way back from a detail, as the hand-rolled chain did."""
@@ -93,14 +167,47 @@ class SessionsScreen(ChoiceScreen):
         except Exception as error:
             self.tui.report_store_failure(error, self)
             return
+        self._draw_listing(records)
+
+    def _draw_listing(
+        self, records: tuple[SessionRecord, ...], *, keep_cursor: bool = False
+    ) -> None:
+        """Draw a listing, optionally leaving the cursor on the row it was already on.
+
+        Named `_draw_listing` and not `_render`, which is what it was called for exactly one
+        test run: `Widget._render` exists, and overriding it with a different signature broke
+        every screen that tried to paint itself — `TypeError: _render() missing 1 required
+        positional argument`. A private name on a framework subclass is only private from
+        other modules, not from the base class.
+
+        Shared by the keyed re-reads and the interval, so the two cannot drift into rendering
+        the same store differently — which is the whole reason the interval does not simply
+        call `reload`.
+        """
         if not records:
             self.show_choices(())
             self.set_status("No managed sessions. Press escape to return to the project list.")
             return
         self.set_status(f"{len(records)} managed session(s). Select one for detail.")
-        self.show_choices(
-            tuple((str(record.session_id), session_row(record)) for record in records)
+        rows = tuple((str(record.session_id), session_row(record)) for record in records)
+        if not keep_cursor:
+            self.show_choices(rows)
+            return
+        # Restore by row *key*, not by index. A session that ended between two ticks shortens
+        # the list above the cursor, so the index the owner was on now names a different
+        # session — and this list's rows are the handles on destructive actions one screen
+        # deeper. A key that has gone falls back to row 0, which is the same non-mutating
+        # resting position every other fill uses (DEC-007).
+        choices = self.query_one("#choices", OptionList)
+        resting = choices.highlighted
+        current = (
+            choices.get_option_at_index(resting).id
+            if resting is not None and resting < choices.option_count
+            else None
         )
+        keys = [key for key, _text in rows]
+        highlight = keys.index(current) if current in keys else 0
+        self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     async def choose(self, key: str) -> None:
         await self.tui.show_detail(key)
