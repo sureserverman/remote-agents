@@ -1,9 +1,9 @@
 """Listing managed sessions, one session's detail, and its captured output.
 
-Three screens replacing three `Step` members. `_detail_id` — one of the seven navigation
-fields — is `SessionDetailScreen.session_value` here, so the detail cannot be rendered for a
-session the screen was not opened with, and no other flow can leave a stale id behind for it
-to read.
+Three screens replacing three wizard positions. The session id the detail renders was one of
+the seven navigation fields the app used to carry; it is `SessionDetailScreen.session_value`
+here, so the detail cannot be rendered for a session the screen was not opened with, and no
+other flow can leave a stale id behind for it to read.
 
 The two destructive confirmations are no longer repainted onto this screen: they are
 `screens/confirm.py`, pushed and popped like any other position, which is what let the step
