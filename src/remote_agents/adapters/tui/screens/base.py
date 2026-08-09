@@ -17,7 +17,7 @@ from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, OptionList, Static
+from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 if TYPE_CHECKING:
@@ -118,14 +118,11 @@ class ChoiceScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical(id="body"):
-            # `markup=False` on both Statics for the reason given at `#choices` below, and it
-            # is the same defect: these two sinks receive the same untrusted strings by
-            # a different route. `#status` is handed the conversation description
-            # (`_resolve_resume_conversation`) and `record.display.rendered`, which
-            # interpolates the owner's custom label; `#output` is handed the session's raw
-            # captured pane output, which `sanitize_terminal_text` filters for control
-            # sequences and NUL but not for brackets. Both raised `MarkupError` on an
-            # unbalanced bracket — an agent's own output could take down the screen showing it.
+            # `markup=False` for the reason given at `#choices` below: `#status` is handed the
+            # conversation description (`_resolve_resume_conversation`) and
+            # `record.display.rendered`, which interpolates the owner's custom label, and an
+            # unbalanced bracket in either raised `MarkupError` — text this app echoes from
+            # another program could take down the screen showing it.
             yield Static(self.status, id="status", markup=False)
             yield Input(placeholder=self.filter_placeholder or "", id="filter")
             # `markup=False` because row text is displayed, never interpreted. Three sources
@@ -143,7 +140,27 @@ class ChoiceScreen(Screen[None]):
             # `Option` would be a `TypeError`; forgetting it here is silent.
             yield OptionList(id="choices", markup=False)
             with VerticalScroll(id="output-pane"):
-                yield Static("", id="output", markup=False)
+                # A read-only `TextArea` rather than the `Static` this used to be. The pane
+                # carries up to `_INSPECT_MAX_LINES` (2000) lines of captured agent output,
+                # and a `Static` offers no way to select inside it, search it, or jump to its
+                # end — the three things an owner reading 2000 lines actually does.
+                #
+                # It is **not** given `markup=False`, because there is no such flag and none
+                # is needed: `TextArea` never parses console markup. It renders each line
+                # through `TextArea.get_line`, which builds `rich.text.Text(line_string)` —
+                # the plain constructor, not `Text.from_markup` — so the `MarkupError` that
+                # the old `Static` needed the flag to avoid cannot arise here at all. That is
+                # pinned by `test_row_markup.py`, not assumed: the untrusted string this sink
+                # receives is the session's raw pane output, which `sanitize_terminal_text`
+                # filters for control sequences and NUL but never for brackets.
+                #
+                # `highlight_cursor_line=False` because the highlight is drawn whenever the
+                # widget has a usable cursor, focused or not (`_has_cursor` is true for a
+                # read-only area that still shows its cursor), which would put a `$boost`
+                # band across the first line of every capture the owner has not touched.
+                yield TextArea(
+                    "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
+                )
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -570,7 +587,8 @@ class ChoiceScreen(Screen[None]):
         reaches here interpolates something this app does not author: an exception's text, an
         agent's own output, the owner's label. An unbalanced `[` in any of them raises
         `MarkupError` out of the notification path — which is the same defect, in the same
-        surface, that `markup=False` on the two Statics was added for. Escaping at each call
+        surface, that `markup=False` on `#status` was added for — and on `#output` too, until
+        that pane became a `TextArea` that cannot parse markup at all. Escaping at each call
         site is what let those go unnoticed for three sources at once.
         """
         self.tui.announce(message, severity=severity)
@@ -703,7 +721,25 @@ class ChoiceScreen(Screen[None]):
             return
         self.query_one("#output-pane").display = True
         self.query_one("#choices").display = False
-        self.query_one("#output", Static).update(text)
+        # `load_text` rather than the `text` setter only to say plainly that this replaces the
+        # document and clears the edit history; the setter is documented as an alias for it.
+        output = self.query_one("#output", TextArea)
+        output.load_text(text)
+        # **Hand the pane the keyboard, or the widget swap buys nothing.** A screen reaches
+        # here through `show_choices(())`, which takes no focus because it has no rows, after
+        # `hide_entry` has left the keyboard on an `Input` it just set `display = False` on. So
+        # the focused widget was an invisible one, and `end`, `pagedown` and the arrows — the
+        # whole reason this pane is a `TextArea` and not a `Static` — went nowhere. Measured
+        # before the fix: `scroll y before/after keys: 0 0` on a 400-line capture.
+        #
+        # Focused here, in the shared path, rather than in `InspectScreen`: today that screen
+        # is the pane's only caller, but the thing that must not be forgotten is the pairing —
+        # revealing the pane and handing it the keyboard — and a second caller that forgot it
+        # would reintroduce exactly this defect with nothing to catch it.
+        #
+        # Safe against the Back path: `TextArea._on_key` returns early on `read_only` *before*
+        # the branch that consumes `escape` to move focus, so escape still reaches the app.
+        output.focus()
 
     def hide_output(self) -> None:
         if not self.showing:

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 import pytest
 from stop_results import a_clean_stop
-from textual.widgets import OptionList
+from textual.widgets import OptionList, TextArea
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -265,7 +265,7 @@ async def _probe_inspect(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "inspect")
     assert position(app) == "INSPECT"
-    assert "Claude Code ready" in str(app.screen.query_one("#output").content)
+    assert "Claude Code ready" in app.screen.query_one("#output", TextArea).text
 
 
 async def _probe_resume(app, launcher, pilot) -> None:

@@ -106,8 +106,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     #body { height: 1fr; }
     ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; }
     ChoiceScreen OptionList { height: 1fr; }
-    ChoiceScreen #output { height: 1fr; padding: 0 1; }
+    ChoiceScreen #output { height: 1fr; padding: 0 1; border: none; }
     """
+    # `border: none` on `#output` because it is a `TextArea` now, and `TextArea.DEFAULT_CSS`
+    # draws `border: tall $border-blurred` — a box the `Static` it replaced never drew, which
+    # would eat a row top and bottom of the pane and redraw itself on focus. `height: 1fr`
+    # keeps it filling `#output-pane` exactly, so the container never scrolls on top of the
+    # `TextArea`'s own scrolling.
     # `#status` is **two rows high and wraps**, and the difference between that and one row is
     # a defect a gate evaluator caught by driving the real thing at 80 columns. The contract is
     # unchanged — one *logical* line, enforced by `__init_subclass__`, the AST sweep over the
