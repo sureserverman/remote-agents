@@ -33,7 +33,7 @@ from remote_agents.adapters.tui.model import (
     _PREVIOUS,
     conversation_row,
 )
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -50,6 +50,8 @@ _RESUME_PAGE_SIZE = 10
 
 class ResumeProjectsScreen(ChoiceScreen):
     """The project whose saved conversations the owner wants to reopen."""
+    #: reached only from a catalogue that had projects in it.
+    empty_state = NEVER_EMPTY
 
     position = "RESUME_PROJECTS"
     status = "Choose the project whose conversation you want to reopen."
@@ -118,6 +120,8 @@ class ResumeProjectsScreen(ChoiceScreen):
 
 class ResumeProfilesScreen(ChoiceScreen):
     """Only the agents that report themselves resume-capable on this host (DEC-002)."""
+    #: the same curated list as the launch wizard's.
+    empty_state = NEVER_EMPTY
 
     position = "RESUME_PROFILES"
 
@@ -203,6 +207,7 @@ class ResumeProfilesScreen(ChoiceScreen):
 
 class ResumeConversationsScreen(ChoiceScreen):
     """One bounded page of safe metadata; provider IDs never leave the server."""
+    empty_state = "No saved conversations for this agent and project."
 
     position = "RESUME_CONVERSATIONS"
 
@@ -252,7 +257,7 @@ class ResumeConversationsScreen(ChoiceScreen):
             return
         if not page.conversations:
             self.set_status("There are no saved conversations for that agent and project.")
-            self.show_choices(((_BACK, "Back"),))
+            self.show_choices((), trailing=((_BACK, "Back"),))
             return
         entries = [(str(item.reference), conversation_row(item)) for item in page.conversations]
         if page.page > 1:
@@ -306,6 +311,8 @@ class ResumeConfirmScreen(ChoiceScreen):
     The abort entry is first, so it is what the cursor rests on and what a stray enter
     activates — the same mitigation every other confirmation in this surface carries.
     """
+    #: Resume, Back and Cancel are written here.
+    empty_state = NEVER_EMPTY
 
     position = "RESUME_CONFIRM"
     #: "Confirm", not the conversation. Everywhere else in this surface the breadcrumb is

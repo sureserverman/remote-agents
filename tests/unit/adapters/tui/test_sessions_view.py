@@ -145,7 +145,10 @@ async def test_no_managed_session_renders_an_explicit_empty_state() -> None:
         rows = _rows(app)
 
     assert "no managed sessions" in status.casefold()
-    assert rows == []
+    assert rows == ["No managed sessions on this host."], (
+        "the pane was blank; the status line alone is not an empty state, because the region "
+        "the owner is reading is the list"
+    )
 
 
 async def test_every_ended_list_still_renders_the_empty_state() -> None:

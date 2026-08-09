@@ -22,6 +22,9 @@ _NEXT = "\x00next"
 _PREVIOUS = "\x00previous"
 _BACK = "\x00back"
 _CANCEL = "\x00cancel"
+#: The one row a position shows in place of no rows at all. Disabled when rendered, so it
+#: occupies the space the absent rows would have without becoming a choice.
+_EMPTY = "\x00empty"
 
 
 @dataclass(frozen=True, slots=True)

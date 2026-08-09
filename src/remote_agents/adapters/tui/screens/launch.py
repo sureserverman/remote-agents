@@ -20,7 +20,7 @@ from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.project_catalog import search_catalogue
 
@@ -38,6 +38,7 @@ class ProjectsScreen(ChoiceScreen):
     It is the app's default screen rather than a pushed one, which is what makes "the stack
     can never empty" structural instead of a rule every back path has to remember.
     """
+    empty_state = "No project matches that filter."
 
     position = "PROJECTS"
     filter_placeholder = "Filter projects"
@@ -190,6 +191,9 @@ class ProjectsScreen(ChoiceScreen):
 
 class ProfilesScreen(ChoiceScreen):
     """The curated agents, each named with the reason it cannot be launched here."""
+    #: The curated profile list is the host's own configuration; a host offering none could
+    #: not launch anything at all, so an empty agent list is a broken install, not a state.
+    empty_state = NEVER_EMPTY
 
     position = "PROFILES"
     status = "Choose an agent."
@@ -233,6 +237,8 @@ class ProfilesScreen(ChoiceScreen):
 
 class LabelScreen(ChoiceScreen):
     """One optional free-text label, bounded by the configured length."""
+    #: a text entry, not a list.
+    empty_state = NEVER_EMPTY
 
     position = "LABEL"
     status = "Enter an optional label, then press enter. Leave empty to skip."
@@ -296,6 +302,8 @@ class LabelScreen(ChoiceScreen):
 
 class ReviewScreen(ChoiceScreen):
     """The last position before a launch is issued, resting on Back rather than Launch."""
+    #: Launch, Back and Cancel are written here.
+    empty_state = NEVER_EMPTY
 
     @property
     def work_in_flight(self) -> bool:

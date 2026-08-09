@@ -22,7 +22,7 @@ import logging
 from textual.widgets import Input
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, selectable_area
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.validation import NameIsAProjectIdentity
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.domain.projects import ProjectIdentity
@@ -32,6 +32,7 @@ _LOG = logging.getLogger(__name__)
 
 class AreasScreen(ChoiceScreen):
     """The areas of the development root a new project may be created in."""
+    empty_state = "No area in the development root can hold a new project."
 
     position = "AREAS"
     crumb = "New project"
@@ -49,7 +50,10 @@ class AreasScreen(ChoiceScreen):
         areas = tuple(area for area in offered if selectable_area(area))
         if not areas:
             self.set_status("No area is available for a new project.")
-            self.show_choices(((_CANCEL, "Back"),))
+            # Through `trailing`, not `entries`: a list holding only a Back button is a blank
+            # pane as far as the owner is concerned, and passing Back as data is exactly how a
+            # screen would opt out of the empty state it just declared.
+            self.show_choices((), trailing=((_CANCEL, "Back"),))
             return
         self.set_status("Choose the area for the new project.")
         self.show_choices(tuple((area, area) for area in areas) + ((_CANCEL, "Back"),))
@@ -63,6 +67,8 @@ class AreasScreen(ChoiceScreen):
 
 class NameScreen(ChoiceScreen):
     """The typed name for the new project. Nothing is created on this keystroke."""
+    #: a text entry, not a list.
+    empty_state = NEVER_EMPTY
 
     position = "NAME"
     filter_placeholder = "New project name"
@@ -114,6 +120,8 @@ class NameScreen(ChoiceScreen):
 
 class ProjectReviewScreen(ChoiceScreen):
     """Name the project before creating it, exactly as the bot's Review does."""
+    #: Create, Back and Cancel are written here.
+    empty_state = NEVER_EMPTY
 
     @property
     def work_in_flight(self) -> bool:

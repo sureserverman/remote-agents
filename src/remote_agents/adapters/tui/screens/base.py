@@ -21,6 +21,8 @@ from textual.validation import ValidationResult, Validator
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from remote_agents.adapters.tui.model import _EMPTY
+
 if TYPE_CHECKING:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import TuiContext
@@ -30,6 +32,15 @@ _LOG = logging.getLogger(__name__)
 #: The three app bindings that leave the current flow entirely — each unwinds the stack to the
 #: resting position, which is what makes them able to discard a half-typed value.
 _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
+
+#: What a screen declares as its `empty_state` when it cannot legitimately be empty — its rows
+#: are fixed by construction, so "no rows" would be a bug rather than a state to describe.
+#:
+#: A sentinel rather than `None`, because the two answers have to be distinguishable: `None`
+#: means *this screen has not been asked yet*, which is what `test_empty_states.py` fails a
+#: newly added screen on. Left as a plain `None` default, a seventeenth screen would inherit
+#: silence and the exhaustiveness check would pass over it.
+NEVER_EMPTY = "\x00never-empty"
 
 
 class ChoiceScreen(Screen[None]):
@@ -69,6 +80,13 @@ class ChoiceScreen(Screen[None]):
     #: step they are on and cannot be recovered; a filter is one keystroke to retype and sits
     #: on the resting position, where leaving for another flow is the ordinary thing to do.
     entry_is_a_commitment = False
+    #: The one line this position shows when it has no rows — "No sessions are running", not a
+    #: blank rectangle. `NEVER_EMPTY` for a position whose rows are fixed by construction.
+    #:
+    #: `None` is not a valid answer, it is the *absence* of one, and `test_empty_states.py`
+    #: fails any screen still carrying it. That is what makes the check exhaustive rather than
+    #: a list of the four screens someone thought of: adding a screen forces the question.
+    empty_state: str | None = None
     #: What this position is called in the header's breadcrumb. A screen whose name depends on
     #: what it was opened with overrides this as a property — the session detail is called
     #: after its session, not after its class.
@@ -634,15 +652,33 @@ class ChoiceScreen(Screen[None]):
         return tuple(unique)
 
     def show_choices(
-        self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
+        self,
+        entries: tuple[tuple[str, str], ...],
+        *,
+        focus: bool = True,
+        highlight: int = 0,
+        trailing: tuple[tuple[str, str], ...] = (),
     ) -> None:
         """Render the choices, and take the keyboard only when the list is the next decision.
 
         Refilling while the owner is typing a filter must leave the keyboard where it is, or
         every character after the first lands on the list instead of the query.
+
+        `entries` are the position's *data* rows and `trailing` are its fixed navigation rows
+        — Back, Previous page, Next page. The split exists for one reason: emptiness is a fact
+        about the data, and a list holding nothing but a Back button is empty in every sense
+        the owner cares about while being a non-empty tuple. Passing the Back row through
+        `entries` is how a screen silently opts out of its own empty state.
         """
         if not self.showing:
             return
+        if not entries and self.empty_state not in (None, NEVER_EMPTY):
+            entries = ((_EMPTY, str(self.empty_state)),)
+            # Rest on the first row that does something. The substituted row is disabled, so a
+            # cursor left on it would answer enter with nothing at all — and where there *is*
+            # a Back row, that is the one action still available here.
+            highlight = 1 if trailing else 0
+        entries = entries + trailing
         # Restoring here rather than in each exit route: the inspect screen swaps the list
         # for a scrollable output pane, and every other screen renders through this, so
         # this is the one place that cannot be forgotten by a new navigation path.
@@ -655,7 +691,9 @@ class ChoiceScreen(Screen[None]):
         # back as `option_id`. It replaces the attribute this used to bolt onto each mounted
         # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and
         # row identity is first-class rather than monkey-patched.
-        choices.add_options(Option(text, id=key) for key, text in entries)
+        choices.add_options(
+            Option(text, id=key, disabled=key == _EMPTY) for key, text in entries
+        )
         if entries and focus:
             resting = min(highlight, len(entries) - 1)
             # Set twice, deliberately. Here, so the cursor is correct the instant this

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 
 from remote_agents.adapters.tui.model import _BACK, session_row
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
@@ -53,6 +53,7 @@ _REMOTE_CONTROL_DIRECTIONS = {key: state for key, _label, state in _REMOTE_CONTR
 
 class SessionsScreen(ChoiceScreen):
     """Every managed session, including ones this process never launched."""
+    empty_state = "No managed sessions on this host."
 
     position = "SESSIONS"
     can_refresh = True
@@ -104,6 +105,8 @@ class SessionsScreen(ChoiceScreen):
 
 class SessionDetailScreen(ChoiceScreen):
     """One session's state, what it means, and the actions the policy allows on it."""
+    #: always at least Back, plus whatever the policy allows.
+    empty_state = NEVER_EMPTY
 
     def __init__(self, session_value: str) -> None:
         super().__init__()
@@ -375,6 +378,8 @@ class SessionDetailScreen(ChoiceScreen):
 
 class InspectScreen(ChoiceScreen):
     """This session's captured output, on the scrollable pane rather than in the list."""
+    #: shows the output pane, never rows.
+    empty_state = NEVER_EMPTY
 
     position = "INSPECT"
     status = "Output. Press escape to go back."

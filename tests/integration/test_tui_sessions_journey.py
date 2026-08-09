@@ -148,7 +148,7 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
             rows = _rows(app)
             status = _status(app)
 
-        assert rows == []
+        assert rows == ["No managed sessions on this host."]
         assert "no managed sessions" in status.casefold()
     finally:
         service_connection.close()
