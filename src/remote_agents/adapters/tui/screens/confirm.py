@@ -126,6 +126,21 @@ class ConfirmScreen(ModalScreen[bool]):
         return self.rows[self.resting_index][0] != _CANCEL
 
     def on_mount(self) -> None:
+        """Rest the cursor on the abort, once, at mount.
+
+        Deliberately **not** through `ChoiceScreen.show_choices` and `_rest_cursor`, which is
+        where DEC-007's third mitigation ("every screen resets the cursor to a non-mutating
+        entry") actually lives. That machinery exists for a screen that is *refilled*: it
+        carries a generation counter so a deferred placement computed against one fill stands
+        down when a later fill supersedes it, and it re-asserts the highlight after a refresh
+        so a resting row below the fold is scrolled into view.
+
+        Neither applies here, and both would be dead weight. A confirmation is built fresh per
+        question, its rows are static, it is never refilled, and it is two rows — there is no
+        second fill to supersede this one and nothing to scroll. **A subclass that starts
+        refilling its rows has to adopt `_rest_cursor`'s generation guard**, because that is
+        the moment the invariant this relies on stops holding.
+        """
         choices = self.query_one("#choices", OptionList)
         choices.highlighted = self.resting_index
         choices.focus()
@@ -217,4 +232,12 @@ class RemoteControlConfirmModal(ConfirmScreen):
 #: it for a resting row that mutates, and `tests/unit/adapters/tui/test_confirm_modals.py`
 #: parametrizes over it — so a third destructive confirm added later without these
 #: guarantees fails here rather than shipping.
+#:
+#: **Not every confirmation in the surface, and the name invites that reading.** What belongs
+#: here is a confirmation standing in front of something *destructive*. `ResumeConfirmScreen`
+#: is a confirmation and is deliberately absent: resume creates a session rather than ending
+#: one, so none of the guarantees this registry carries are the ones it needs. The two stops
+#: that are not here — graceful and cleanup — are absent for a different reason, recorded in
+#: the Stage 3 handoff: neither surface confirms them, and adding a confirmation on one side
+#: only would break the parity DEC-007's first mitigation exists to hold.
 ALL_CONFIRMS = (ForceConfirmModal, RemoteControlConfirmModal)

@@ -196,12 +196,29 @@ class SessionDetailScreen(ChoiceScreen):
         the guard could be refusing.
 
         The guard is released before the stop, because `stop` takes it itself and refuses
-        outright when it is already held.
+        outright when it is already held. It is *not* released before the abort's re-read:
+        that refresh awaits a store read, and between the release and the redraw the detail
+        is showing its pre-modal rows with the cursor still on Force stop and nothing refusing
+        a keypress — so a second enter opened a second confirmation on top of the first one's
+        refresh. Each stacked question still needed its own yes, so nothing could be killed by
+        it, but it is the same await-then-render window `showing` and this guard exist to
+        close everywhere else in this file. Found by the stage's deep review.
         """
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
                 self.set_status("That session is no longer available.")
+                return
+            if FORCE not in available_actions(record.state):
+                # Asked before the question rather than only after the answer. `stop` re-checks
+                # regardless — that is DEC-007's fourth mitigation and it is what makes this
+                # safe rather than necessary — but a surface that opens a kill confirmation it
+                # already knows it will refuse is asking the owner to authorise nothing.
+                self.set_status(
+                    f"{record.display.rendered}\n"
+                    f"{ACTION_LABELS[FORCE]} is no longer available for this session.\n"
+                    f"{explain_state(record.state)}"
+                )
                 return
             if not self.showing:
                 return
@@ -219,20 +236,27 @@ class SessionDetailScreen(ChoiceScreen):
                     "Nothing was stopped."
                 )
                 return
-        if not confirmed:
-            # Abort re-reads, exactly as leaving the confirmation screen used to: the owner
-            # may have opened it only to look, and the session can have moved on while it
-            # was open.
-            await self.on_reveal()
-            return
+            if not confirmed:
+                # Abort re-reads, exactly as leaving the confirmation screen used to: the owner
+                # may have opened it only to look, and the session can have moved on while it
+                # was open.
+                await self.on_reveal()
+                return
         await self.tui.stop(FORCE, self.session_value, self)
 
     async def confirm_remote_control(self, desired: RemoteControlState) -> None:
         """Ask before changing a live pane's control mode, re-checking the policy first.
 
-        Guarded, answered and released for the reasons given on `confirm_force`, which this
-        deliberately mirrors line for line: two destructive-ish confirmations that differ in
-        their control flow are two things to get right rather than one.
+        Guarded, answered and released for the reasons given on `confirm_force`, and to the
+        same shape: read under the guard, check the policy, ask, refresh on an abort without
+        letting go, and take the guard off only for the call that takes it itself.
+
+        An earlier version of this sentence claimed the two methods mirrored each other "line
+        for line", and they did not — this one re-checked its policy before asking and
+        `confirm_force` did not. That was true the day it was written, which is the useful
+        part of the story: a claim of symmetry is a claim about two things at once and goes
+        stale when either moves. They are symmetric now because `confirm_force` gained the
+        check, not because the sentence was softened.
 
         The policy is re-checked here *and* again inside `set_remote_control`. That is not
         redundant — this check decides whether to ask at all, and that one decides whether to
@@ -264,9 +288,9 @@ class SessionDetailScreen(ChoiceScreen):
                     "Nothing was changed."
                 )
                 return
-        if not confirmed:
-            await self.on_reveal()
-            return
+            if not confirmed:
+                await self.on_reveal()
+                return
         await self.tui.set_remote_control(self.session_value, desired, self)
 
     async def show_attach(self) -> None:

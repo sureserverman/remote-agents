@@ -99,11 +99,16 @@ class _Launcher:
 
     records: tuple[SessionRecord, ...] = (_record(),)
     issued: list[object] = field(default_factory=list)
+    #: When set, every store read blocks on it. The test opens this window deliberately, so
+    #: "what is true while a read is in flight" can be asserted without racing the clock.
+    gate: asyncio.Event | None = None
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        if self.gate is not None:
+            await self.gate.wait()
         return self.records
 
     async def copy_attach(self, _session_id) -> str | None:
@@ -673,6 +678,52 @@ async def test_answering_yes_issues_exactly_the_command_the_row_asked_for(
     assert arrangement.expects(launcher.issued[0]), (
         f"{confirm.__name__} issued {launcher.issued[0]!r}, which is not what its row asked for"
     )
+
+
+@pytest.mark.parametrize("confirm,arrangement", _CASES)
+async def test_the_guard_is_still_held_while_the_abort_refreshes(confirm, arrangement) -> None:
+    """Declining must not leave a window where the pre-modal rows are live and unguarded.
+
+    The abort re-reads the detail, and that read awaits. Until the refresh lands, the rows on
+    screen are the ones from before the question was asked — with the cursor still on the row
+    that opened it. If the busy guard is released before the refresh rather than after, a
+    second enter in that gap dispatches the *old* row again and opens a second confirmation on
+    top of the first one's redraw. Nothing could be killed by it, since each stacked question
+    still needs its own yes; it is the await-then-render window `showing` and
+    `holding_the_guard` close everywhere else in this surface.
+
+    **Asserted as the property, not as the race.** The first version of this test declined and
+    then pressed enter, and it passed against the defect — `pilot.press` pumps, so the refresh
+    had already finished by the time the second key arrived. Reproducing the interleaving by
+    timing would make the test a coin flip; the store read is gated instead, so "the guard is
+    held while the read is in flight" is asked directly and answers the same way every run.
+    """
+    launcher = _Launcher()
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.show_detail(str(_SESSION_ID))
+        await pilot.pause()
+        asking = await _ask(app, pilot, arrangement)
+
+        # From here on, any store read blocks — so the abort's refresh is caught mid-flight.
+        launcher.gate = asyncio.Event()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not asking.done(), "the abort returned without refreshing the detail at all"
+        assert app.busy, (
+            "the busy guard was released before the abort's re-read, so the detail is "
+            "showing its pre-modal rows with nothing refusing a keypress on them"
+        )
+
+        launcher.gate.set()
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+        assert not app.busy, "the guard was never released"
+        assert position(app) == "SESSION_DETAIL"
+
+    assert launcher.issued == []
 
 
 @pytest.mark.parametrize("confirm,arrangement", _CASES)

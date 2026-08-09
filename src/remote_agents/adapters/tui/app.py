@@ -48,6 +48,7 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_actions import (
     CLEANUP,
+    FORCE,
     GRACEFUL,
     available_actions,
     explain_state,
@@ -217,7 +218,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except WorkerCancelled as cancelled:
             raise asyncio.CancelledError(str(cancelled)) from None
 
-    @work
+    @work(exit_on_error=False)
     async def _ask(self, screen: Screen[_T]) -> _T:
         """Push a screen and wait for the answer it is dismissed with.
 
@@ -230,6 +231,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         `exclusive` is not passed, and must not be (DEC-008): a confirmation that cancelled
         the one in flight would dismiss an unanswered modal and start a second, which is the
         cancel-on-re-entry the master gate sweeps for.
+
+        `exit_on_error=False` for the same reason `in_thread` passes it, and it was missing
+        here until an evaluator built a modal that raises and watched the app die: the
+        decorator's default is to take the app down on an unhandled exception, so the
+        `except Exception` its callers wrap this in — written precisely because an escaping
+        exception exits the app — could never have run. A confirmation that cannot be drawn
+        must leave the owner on the detail with an explanation, not with nothing.
 
         Callers take the result with `await self._ask(screen).wait()` — the decorator returns
         a `Worker`, and it is the body that runs inside the context, so awaiting it from a
@@ -483,14 +491,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self._busy = False
 
     async def _issue_stop(self, action: str, record: SessionRecord) -> None:
-        """Send exactly one curated command; the commands themselves carry no arguments."""
+        """Send exactly one curated command; the commands themselves carry no arguments.
+
+        Force is its own named branch and an unrecognized action raises, rather than the kill
+        being the trailing `else`. It was, and nothing could reach it — `stop` only calls this
+        for an action `available_actions` returned. But "anything I do not recognize is a
+        kill" is a fail-dangerous default in the one method that kills, and the cost of it
+        being right is that every future caller stays correct by accident.
+        """
         launcher = self._services.launcher
         if action == GRACEFUL:
             await launcher.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
         elif action == CLEANUP:
             await launcher.cleanup(CleanupCommand(record.session_id))
-        else:
+        elif action == FORCE:
             await launcher.force_stop(ForceStopCommand(record.session_id))
+        else:
+            raise ValueError(f"no command is curated for the action {action!r}")
 
     # Store reads screens share ---------------------------------------------------
 
