@@ -860,9 +860,7 @@ class PrivateBotBoundary:
             return _reply_arguments(self._message("That request has expired."))
         record = await self._record(str(request.session_id))
         result = (
-            await self.stops.execute(request, self.launcher, record)
-            if record is not None
-            else None
+            await self.stops.execute(request, self.launcher, record) if record is not None else None
         )
         if result is None or not result.dispatched:
             return _reply_arguments(
@@ -953,6 +951,18 @@ class PrivateBotBoundary:
             return self._message(
                 f"<b>{subject} is still running</b>\n{said}",
                 ((Button("Open session", self._callback("session.detail", session_value)),),),
+                back=self._callback("sessions.open", "sessions"),
+            )
+        if failure is not None:
+            # The session has left the list, but the stop still reported that it did not take
+            # effect — the other writer DEC-005 permits ended it in the window between the two.
+            # Narrow, and worth not getting wrong: the whole point of threading `failure` here
+            # was to stop inferring the outcome from the record, and "Stopped X" over an
+            # observation that says nothing was stopped is the reading DEC-006 forbids. Found
+            # by the Stage 2 gate's evaluator and its second pass independently.
+            return self._message(
+                f"<b>{subject} is no longer listed</b>\n"
+                f"{escape(failure.summary)} {escape(failure.remedy)}",
                 back=self._callback("sessions.open", "sessions"),
             )
         endings = {

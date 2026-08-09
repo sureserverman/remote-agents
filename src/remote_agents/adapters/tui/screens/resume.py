@@ -310,10 +310,15 @@ class ResumeConfirmScreen(ChoiceScreen):
     position = "RESUME_CONFIRM"
     #: "Confirm", not the conversation. Everywhere else in this surface the breadcrumb is
     #: where the subject goes, and this is the one position where it must not be: the header
-    #: elides a long trail (`HeaderTitle` is `text-overflow: ellipsis`), and the description
-    #: is echoed from the agent's own output, so it is exactly the value most likely to be
-    #: long. A confirmation whose subject is cut off is asking the owner to agree to
-    #: something they cannot fully read. The status line is the wider region, so it takes it.
+    #: elides a long trail (`HeaderTitle` is `text-overflow: ellipsis`) and it also carries the
+    #: whole trail before it, so the description — echoed from the agent's own output, and so
+    #: the value here most likely to be long — is what gets cut. The status line takes it
+    #: because it is the wider region and wraps to two rows.
+    #:
+    #: **Wider, not unbounded**, and the second gate pass was right to say the first version of
+    #: this comment implied otherwise. A description near its 120-character bound still elides
+    #: here at a narrow terminal. That is a smaller cut in a better place, not a guarantee; the
+    #: honest fix if it matters is a position that can wrap freely, which is the output pane.
     crumb = "Confirm"
 
     def __init__(

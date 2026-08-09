@@ -174,19 +174,37 @@ class _StopObservation(Protocol):
 _STOP_FAILURES: dict[str, tuple[str, str]] = {
     UNKNOWN_SESSION: (
         "The stop was never sent.",
-        "This host could not match the session to a known agent profile, so no exit sequence "
-        "was sent and nothing was stopped. That is a configuration problem on this host, not "
-        "something the agent did. Check that this host is set up for that agent and try "
-        "again, or force stop the session to end it now.",
+        "Nothing was signalled to the agent and nothing was stopped, because this host could "
+        "not match the session to a live pane it owns: either no profile is curated here for "
+        "that agent, or no managed pane was found for it, or the pane found belongs to a "
+        "different one. Whichever it is, it is this host's view of the session and not "
+        "something the agent did. Run `doctor --profiles`, check the managed sessions on this "
+        "host, or force stop the session to end it now.",
     ),
     GRACEFUL_TIMEOUT: (
         "The agent did not exit in time.",
-        "The exit sequence was sent and the agent was still running when the wait ran out, so "
-        "nothing was stopped and nothing was removed. That is the agent's own behaviour, not "
-        "a problem with this host. Try again if it may still be finishing, or force stop it.",
+        "The exit sequence was sent and no clean exit was seen before the wait ran out, so "
+        "nothing was recorded as stopped and nothing was removed. That is about the agent "
+        "rather than this host's view of the session. Try again if it may still be finishing, "
+        "or force stop it.",
     ),
 }
 """Deliberately worded so the two cannot be mistaken for each other.
+
+`unknown_session` names a **disjunction**, and an earlier version of it did not. `TmuxRuntime.
+graceful_stop` returns that one detail for three conditions — no curated profile, no managed
+pane found, and a pane whose profile differs — and the wording asserted the first of them as
+though it were the only one, sending an operator to `doctor --profiles` for a problem that
+might not be there. A gate evaluator caught it. What is true in all three, and what the summary
+therefore says, is that nothing was signalled: the surface never reached the agent at all.
+
+`graceful_timeout` was narrowed for the same reason and by the second gate pass. It said "the
+agent was still running when the wait ran out" — but `TmuxRuntime.graceful_stop`'s poll loop
+treats an `inspect()` of `None` exactly like "not preserved yet", so a pane destroyed mid-wait
+by a server restart or the other writer lands here too, with `live=True` and an agent that is
+not running at all. What is true in every case is that no clean exit was *seen*, which is what
+it now says. Neither of these paragraphs is a softening: both causes still name what happened
+and what to do, and they still cannot be mistaken for one another.
 
 They are a *configuration* problem and an *agent-behaviour* problem, and the owner's next
 step differs completely: one is fixed on this host, the other is waited out or forced. BL-008
@@ -213,7 +231,7 @@ def stop_failure(observation: _StopObservation) -> StopFailure | None:
     if known is None:
         return StopFailure(
             observation.detail,
-            "The stop did not take effect.",
+            "The terminal did not report a clean exit.",
             f"The terminal reported {observation.detail!r} and the session was left as it is. "
             "Force stop it if you need it ended now.",
         )

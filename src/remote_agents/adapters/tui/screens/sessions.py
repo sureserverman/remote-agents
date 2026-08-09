@@ -84,7 +84,8 @@ class SessionsScreen(ChoiceScreen):
         owner to fix something that already works.
         """
         try:
-            records = await self.tui.load_sessions()
+            async with self.awaiting("Reading the managed sessions…"):
+                records = await self.tui.load_sessions()
         except Exception as error:
             self.tui.report_store_failure(error, self)
             return
@@ -241,27 +242,17 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                # Re-read and redraw. The rows in front of the owner were built from the
-                # record this one just disagreed with, so leaving them is offering actions the
-                # surface has this instant established are not available. The abort path three
-                # branches down has always done exactly this, for exactly this reason.
-                await self.on_reveal()
+                await self.refuse()
                 return
             if FORCE not in available_actions(record.state):
                 # Asked before the question rather than only after the answer. `stop` re-checks
                 # regardless — that is DEC-007's fourth mitigation and it is what makes this
                 # safe rather than necessary — but a surface that opens a kill confirmation it
                 # already knows it will refuse is asking the owner to authorise nothing.
-                self.announce(
+                await self.refuse(
                     f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
-                    f"{explain_state(record.state)}",
-                    severity="warning",
+                    f"{explain_state(record.state)}"
                 )
-                # Re-read and redraw. The rows in front of the owner were built from the
-                # record this one just disagreed with, so leaving them is offering actions the
-                # surface has this instant established are not available. The abort path three
-                # branches down has always done exactly this, for exactly this reason.
-                await self.on_reveal()
                 return
             if not self.showing:
                 return
@@ -304,23 +295,13 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                # Re-read and redraw. The rows in front of the owner were built from the
-                # record this one just disagreed with, so leaving them is offering actions the
-                # surface has this instant established are not available. The abort path three
-                # branches down has always done exactly this, for exactly this reason.
-                await self.on_reveal()
+                await self.refuse()
                 return
             if not remote_control_available(record):
-                self.announce(
+                await self.refuse(
                     "Remote Control is not available for this session. "
-                    f"{explain_state(record.state)}",
-                    severity="warning",
+                    f"{explain_state(record.state)}"
                 )
-                # Re-read and redraw. The rows in front of the owner were built from the
-                # record this one just disagreed with, so leaving them is offering actions the
-                # surface has this instant established are not available. The abort path three
-                # branches down has always done exactly this, for exactly this reason.
-                await self.on_reveal()
                 return
             if not self.showing:
                 return
@@ -348,10 +329,7 @@ class SessionDetailScreen(ChoiceScreen):
             try:
                 record = await self.tui.current_record(self.session_value)
                 if record is None:
-                    # Redrawn rather than only reported, for the reason given in
-                    # `confirm_force`: the rows still offer actions on a session this read has
-                    # just established is gone.
-                    await self.on_reveal()
+                    await self.refuse()
                     return
                 command = await self.services.launcher.copy_attach(record.session_id)
             except Exception as error:
@@ -382,18 +360,17 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                await self.on_reveal()
+                await self.refuse()
                 return
             try:
-                captured = await capture(record.session_id)
+                async with self.awaiting("Capturing the session's output…"):
+                    captured = await capture(record.session_id)
             except Exception as error:
                 _LOG.exception("capture failed")
                 self.announce(f"The output could not be captured: {error}")
                 return
             text = render_capture(captured, self.services.capture_redactions)
-            await self.advance_to(
-                InspectScreen(text or "This session has produced no output yet.")
-            )
+            await self.advance_to(InspectScreen(text or "This session has produced no output yet."))
 
 
 class InspectScreen(ChoiceScreen):

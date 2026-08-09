@@ -145,6 +145,41 @@ async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
 # The layout ---------------------------------------------------------------------
 
 
+async def test_the_attach_command_renders_whole_at_eighty_columns() -> None:
+    """The one payload here the owner has to *copy*, measured against the region that holds it.
+
+    A gate evaluator found this by driving the real `attach_argv`: `Attach with: tmux -L
+    remote-agents attach-session -t ra-<uuid>:` is 93 characters, and a one-row `nowrap` region
+    ellipsised it mid-UUID at 80 columns — Textual's own default width. A terminal can only
+    copy what it draws, so a cut command is not a shortened command, it is no command.
+
+    Three things this test does that the suite could not before, each of which is why the
+    defect survived: it uses the **production** argv shape rather than the short fake every
+    other fixture builds, it reads the **rendered** line rather than `Static.content` (which
+    holds the untruncated value and would pass either way), and it renders at **80** rather
+    than the 100 the snapshot baselines are committed at, where the string happens to fit.
+    """
+    session = "ra-5175f1d9-7f45-4981-83e9-158923e33000:"
+    command = " ".join(("tmux", "-L", "remote-agents", "attach-session", "-t", session))
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        app.screen.set_status(f"Attach with: {command}")
+        await pilot.pause()
+        drawn = "".join(status.render_line(row).text for row in range(status.size.height))
+
+    # Compared with whitespace removed from both sides, because the assertion is about which
+    # *characters reached the screen*, not about where the wrap fell. Reassembling the rows
+    # with a separator would be a guess about the wrap point, and guessing it wrong fails a
+    # command that is fully drawn — the one outcome this test must not produce.
+    assert "…" not in drawn, f"the attach command was elided at 80 columns: {drawn!r}"
+    assert "".join(command.split()) in "".join(drawn.split()), (
+        f"the command is not on screen in full, so it cannot be copied: {drawn!r}"
+    )
+
+
 async def test_a_long_status_does_not_move_the_rows_beneath_it() -> None:
     """The reflow, asserted directly rather than through anything that produces one.
 
@@ -172,7 +207,11 @@ async def test_a_long_status_does_not_move_the_rows_beneath_it() -> None:
     assert one_line == four_lines == before, (
         "the rows moved when the status grew, which is the reflow the region split fixes"
     )
-    assert height == 1, f"the status region is {height} lines high, not 1"
+    # Two rows, and *fixed* is the property that matters — the rows beneath never move. The
+    # second row is there so one long logical line wraps instead of being cut; it is not a
+    # licence for a second sentence, which `test_no_call_site_writes_a_multi_line_status` and
+    # `set_status`'s own guard still refuse.
+    assert height == 2, f"the status region is {height} rows high, not 2"
 
 
 # The literals -------------------------------------------------------------------

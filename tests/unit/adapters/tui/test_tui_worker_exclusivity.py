@@ -273,8 +273,8 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
 
     assert reported == [], reported
     assert launcher.issued == [expected], (
-            f"two keypresses issued {launcher.issued}; exactly one {expected!r} was required"
-        )
+        f"two keypresses issued {launcher.issued}; exactly one {expected!r} was required"
+    )
 
 
 async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> None:
@@ -561,9 +561,9 @@ async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path()
 
     assert reported == [], reported
     assert launcher.issued == ["graceful"], (
-            f"two queued enters issued {launcher.issued}; the record re-read should have "
-            f"refused the second once the session left RUNNING"
-        )
+        f"two queued enters issued {launcher.issued}; the record re-read should have "
+        f"refused the second once the session left RUNNING"
+    )
 
 
 async def test_a_concurrent_second_remote_control_change_is_refused() -> None:

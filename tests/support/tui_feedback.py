@@ -6,8 +6,10 @@ action just did). A test that reaches into whichever one it remembers is how the
 back into being one: an assertion on `#status` passes just as happily when a message that
 belongs in a toast is rendered into the status line by mistake.
 
-So these three readers are the vocabulary, and there are exactly three of them for exactly
-the three sinks. `announcements` reaps expired notifications the way Textual's own renderer
+So these readers are the vocabulary: one per sink, plus `working` for the busy affordance,
+which is a fourth thing the surface says and not a fourth place it says it.
+
+`announcements` reaps expired notifications the way Textual's own renderer
 does, which matters only in the direction that makes a test honest: a toast whose five
 seconds elapsed during a slow test is gone from the surface too.
 """

@@ -87,6 +87,10 @@ __all__ = [
 
 
 _RESUME_PAGE_SIZE = 10
+#: How long a failure toast stays up, against Textual's `NOTIFICATION_TIMEOUT` of 5. Long
+#: enough to read the remedy at an unhurried pace rather than a skim, which is what the
+#: default gave it — a gate evaluator measured the message at 55 words.
+_FAILURE_TIMEOUT = 20.0
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
@@ -100,10 +104,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     CSS = """
     Screen { layout: vertical; }
     #body { height: 1fr; }
-    ChoiceScreen #status { height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; }
     ChoiceScreen OptionList { height: 1fr; }
     ChoiceScreen #output { height: 1fr; padding: 0 1; }
     """
+    # `#status` is **two rows high and wraps**, and the difference between that and one row is
+    # a defect a gate evaluator caught by driving the real thing at 80 columns. The contract is
+    # unchanged — one *logical* line, enforced by `__init_subclass__`, the AST sweep over the
+    # call sites, and `set_status`'s own runtime guard — and `height` is still fixed, so the
+    # rows beneath it never move, which is the whole point of the region split. What one row
+    # additionally imposed was a **display** limit nobody measured against the longest thing
+    # this region carries: `Attach with: tmux -L remote-agents attach-session -t ra-<uuid>:` is
+    # 93 characters, so at 80 columns it was ellipsised mid-UUID. That string is the one payload
+    # here the owner has to *copy*, and a terminal can only copy what is drawn — so a cut one is
+    # not a shortened command, it is no command, on the path where a session did not come up and
+    # it is the only handle left on a pane that may still be live. Two rows hold it at 60.
     #: Shown in the header, with each screen's breadcrumb as the sub-title beside it. Set
     #: rather than left to default: `App.title` falls back to the class name, so the header
     #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.
@@ -208,8 +223,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         policy now refuses and a stop that raised are both "it did not happen", but only one
         of them is a fault — and an owner who sees the same red for both learns to read
         neither.
+
+        **A failure is given longer than Textual's five-second default**, because of what it
+        carries. The stop-failure remedy is 55 words; five seconds is around 650 words a
+        minute, so the half that says what to *do* was expiring before it could be read, and
+        what it left behind was a status line naming the fault with no next step. An
+        `information` toast is a confirmation of something that already happened and keeps the
+        default. The window is still a window — anything the owner must keep belongs in the
+        status line, which is the rule the attach command is already handled by.
         """
-        self.notify(message, severity=severity, markup=False)
+        timeout = _FAILURE_TIMEOUT if severity != "information" else None
+        self.notify(message, severity=severity, markup=False, timeout=timeout)
 
     @property
     def body(self) -> ChoiceScreen | None:
@@ -508,19 +532,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # owner may deliberate for as long as they like while the other writer moves the session
     # on underneath them.
     #
-    # **Every branch where that re-read disagrees with the rows now redraws before returning**,
-    # and the rule is worth stating once rather than per site because the sites are spread
-    # across two files. A re-read that finds the session gone, or in a state the policy no
-    # longer offers this action for, has established that the rows in front of the owner are
-    # wrong — they were built from the earlier read. Reporting and returning left them there,
-    # still offering a stop for a session that had ended. The success path has always ended in
-    # `after_command`; these are the ten branches that did not — four here (`stop` and
-    # `set_remote_control`, a vanished record and a policy refusal each) and six in
-    # `screens/sessions.py` (the same pair on each confirm method, plus the vanished-record
-    # read in `show_attach` and in `show_inspect`). Found as a class after a Tier-1 review
-    # named two of them.
-
-
+    # **Every branch where that re-read disagrees with the rows redraws before returning**, and
+    # all eight of them go through `ChoiceScreen.refuse` rather than saying so individually. A
+    # re-read that finds the session gone, or in a state the policy no longer offers this action
+    # for, has established that the rows in front of the owner are wrong — they were built from
+    # the earlier read. Reporting and returning left them there, still offering a stop for a
+    # session that had ended. Found as a class after a Tier-1 review named two of the branches,
+    # and extracted after the stage's Tier-2 review found the repair written out by hand at
+    # every one of them.
 
     async def set_remote_control(
         self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen
@@ -539,14 +558,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                screen.announce("That session is no longer available.", severity="warning")
-                await screen.after_command()
+                await screen.refuse()
                 return
             if not remote_control_available(record):
-                screen.announce(
-                    "Remote Control is no longer available for this session.", severity="warning"
-                )
-                await screen.after_command()
+                await screen.refuse("Remote Control is no longer available for this session.")
                 return
             async with screen.awaiting(f"Setting Remote Control to {desired.value}…"):
                 state = await self._services.launcher.set_remote_control(
@@ -603,19 +618,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                screen.announce("That session is no longer available.", severity="warning")
-                await screen.after_command()
+                await screen.refuse()
                 return
             if action not in available_actions(record.state):
-                # A refusal, not a fault: the session moved on between the row being drawn
-                # and the key being pressed, which is the window DEC-007's re-read exists to
-                # catch. `warning` rather than `error` says so.
-                screen.announce(
+                await screen.refuse(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
-                    f"{explain_state(record.state)}",
-                    severity="warning",
+                    f"{explain_state(record.state)}"
                 )
-                await screen.after_command()
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
                 failure = await self._issue_stop(action, record)
@@ -637,6 +646,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # first would leave a window where the command has landed but the rows still
             # describe the session as it was.
             await screen.after_command()
+            if failure is None:
+                # Said at all, because the bot has always said it and this surface never did.
+                # A graceful stop that works ends the session, so the redraw above replaces the
+                # detail with "That session is no longer available." — true, and identical to
+                # what the owner would see if the stop had never been issued. Telegram sends
+                # "Stopped <session>"; DEC-007 wants the two to agree about what a stop did,
+                # and agreeing about the failures while disagreeing about the successes is
+                # half of a shared vocabulary. Found by the Stage 2 gate evaluator.
+                screen.announce(
+                    f"{_ACTION_LABELS[action]}: the session has ended.", severity="information"
+                )
             if failure is not None:
                 # After the re-read, not before it, for the reason `set_remote_control` gives:
                 # `after_command` rewrites the status from the store, so a result painted
@@ -668,12 +688,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         kill" is a fail-dangerous default in the one method that kills, and the cost of it
         being right is that every future caller stays correct by accident.
 
-        **Only `graceful_stop` answers anything, and that is the whole of BL-008's scope.**
-        Its `TerminalObservation` has always distinguished a clean exit from a timeout — the
-        service's own docstring says `preserved` "remains the way a caller tells a clean exit
-        from `graceful_timeout`" — and both surfaces threw the value away. `cleanup` returns
-        nothing at all, and `force_stop`'s observation describes a kill that the state machine
-        has already recorded; neither has the two-causes-that-read-alike problem this fixes.
+        **Only `graceful_stop` answers anything, and that is BL-008's scope rather than the
+        whole of the problem.** Its `TerminalObservation` has always distinguished a clean exit
+        from a timeout — the service's own docstring says `preserved` "remains the way a caller
+        tells a clean exit from `graceful_timeout`" — and both surfaces threw the value away.
+        `cleanup` returns nothing at all, so there is nothing there to read.
+
+        **`force_stop` is a different matter and this docstring used to misdescribe it.** It
+        said force's observation "describes a kill the state machine has already recorded",
+        implying there was nothing to distinguish. There is: `TmuxRuntime.force_stop` returns
+        `detail="ownership_lost"` *without* killing anything when no managed pane matches, and
+        `SessionService.force_stop` records `VERIFIED_FORCE_STOP` regardless, so both surfaces
+        report "the session has ended" over an agent that may still be running. That is the
+        same two-causes-that-read-alike shape BL-008 names, in the one method that kills.
+
+        It is **not fixed here**, and the reason is a boundary rather than an oversight: the
+        honest repair is for the service to stop recording a kill it did not perform, which is
+        an application-layer behaviour change on the destructive path — the kind DEC-006 was
+        recorded for — and it needs an owner's decision about whether force should fail closed,
+        not a presentation edit. Recorded as BL-026. Found by the Stage 2 gate's second review
+        pass, checking this docstring's own claim against the runtime.
         """
         launcher = self._services.launcher
         if action == GRACEFUL:

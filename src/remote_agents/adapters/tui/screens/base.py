@@ -13,7 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, cast
 
-from textual.app import ComposeResult
+from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
@@ -93,6 +93,17 @@ class ChoiceScreen(Screen[None]):
         and conclude this check was redundant.)
         """
         super().__init_subclass__(**kwargs)
+        # `isinstance` first, and not defensively. `crumb` two attributes above documents
+        # overriding as a property as the supported idiom, and six screens do it — so the first
+        # screen wanting a dynamic `status` used to get `TypeError: argument of type 'property'
+        # is not a container` at import, naming neither the attribute nor the rule. Refused
+        # explicitly instead: the value is read by `compose` before any instance exists, so a
+        # property genuinely cannot work here, and saying so is the whole job of this check.
+        if not isinstance(cls.status, str):
+            raise TypeError(
+                f"{cls.__name__}.status must be a plain string — `compose` reads it before "
+                "there is an instance to compute one from. Set it in `populate` instead."
+            )
         if "\n" in cls.status:
             raise ValueError(
                 f"{cls.__name__}.status must be one line; the status region is one line high"
@@ -307,12 +318,23 @@ class ChoiceScreen(Screen[None]):
         Identity against `app.screen` flips synchronously with the pop, which is what makes it
         usable from inside a coroutine that awaited across one.
 
+        **`App.screen` itself raises on an empty stack**, and this now answers `False` there
+        rather than propagating — the same guard `RemoteAgentsTui.check_action` carries, for
+        the same reason, and it belongs here rather than at each caller. `awaiting`'s `finally`
+        reaches this during teardown, and at `ProjectReviewScreen.choose` that `finally` is the
+        outermost context with no `except` around it, so the exception would leave a message
+        handler. "Nothing on the stack" and "this screen is not what the owner is looking at"
+        are the same answer anyway. Found by the Stage 2 gate's second review pass.
+
         Guarding here rather than at each call site is deliberate. A sweep of this package
         found eleven methods that await and then render or push; adding a caller-side guard to
         each is precisely the arrangement that let two of them be missed when their four
         siblings got one.
         """
-        return self.app.screen is self
+        try:
+            return self.app.screen is self
+        except ScreenStackError:
+            return False
 
     @contextlib.asynccontextmanager
     async def holding_the_guard(self) -> AsyncIterator[None]:
@@ -380,23 +402,35 @@ class ChoiceScreen(Screen[None]):
         try:
             yield
         finally:
-            self._set_working(False, previous)
+            # Restored **only if nothing wrote a new line meanwhile**. Without that condition
+            # this is a clobber waiting for its first caller: anything that redraws from inside
+            # the cover — a refusal calling `refuse`, a screen re-rendering from a fresh read —
+            # sets the status the owner should be left with, and an unconditional restore would
+            # replace it with the instruction from before the command ran. Comparing against
+            # `doing` rather than tracking a flag keeps that true for a redraw this class never
+            # sees, which is the only kind there will be.
+            self._set_working(False, previous if self._status_text() == doing else None)
+
+    def _set_working(self, working: bool, text: str | None) -> None:
+        if not self.showing:
+            return
+        self.query_one("#choices", OptionList).loading = working
+        if text is not None:
+            self.set_status(text)
 
     def _status_text(self) -> str:
         """What the status line currently reads, so `awaiting` can put it back.
 
-        `str(...)` rather than `.plain`, because `Static.content` is a `str` on a widget built
-        with `markup=False` and a `Content` on one built without it — and `#status` is the
-        former. Reading it as though it were always a `Content` is an `AttributeError` on the
-        one configuration this app actually uses.
+        `str(...)` rather than `.plain`. An earlier version of this paragraph explained the
+        cast by claiming `Static.content` is a `str` under `markup=False` and a `Content`
+        otherwise; that is not what the widget does — `content` returns whatever was last handed
+        to the constructor or `update()`, and knows nothing about markup. The cast is right for
+        a duller reason: `set_status` is the only writer and only ever passes `str`, so this is
+        an identity today and insurance against the day something passes a `Content`. Corrected
+        rather than deleted, because a reader who believed the old reason would conclude the
+        cast becomes removable the moment `#status` gains markup, which is backwards.
         """
         return str(self.query_one("#status", Static).content) if self.showing else ""
-
-    def _set_working(self, working: bool, text: str) -> None:
-        if not self.showing:
-            return
-        self.query_one("#choices", OptionList).loading = working
-        self.set_status(text)
 
     async def advance_to(self, screen: Screen[None]) -> None:
         """Push `screen`, unless this one has been left while a read was in flight.
@@ -488,6 +522,33 @@ class ChoiceScreen(Screen[None]):
             _LOG.warning("a multi-line status was truncated to its first line: %r", text)
             text = text.split("\n", 1)[0]
         self.query_one("#status", Static).update(text)
+
+    async def refuse(
+        self, message: str | None = None, *, severity: SeverityLevel = "warning"
+    ) -> None:
+        """Say an action will not happen, then redraw from the read that established it.
+
+        The redraw is the part that is easy to leave out and the part that matters. Every
+        caller reaches here having just re-read the record and found it disagrees with what
+        the rows were built from — the session is gone, or has moved to a state the policy no
+        longer offers this action for. Reporting and returning leaves those rows on screen,
+        still offering a stop for a session that ended while the owner was reading.
+
+        `message` is optional because the two refusals differ in exactly one way. A session
+        that has *vanished* needs nothing said here: `render_detail` writes "That session is no
+        longer available." as part of the redraw, and announcing it as well would show the same
+        sentence twice for one event, in two places, which `test_confirm_modals` already pins
+        against. A session that has *moved on* needs the toast, because the redraw will show
+        its new state without ever saying that something was attempted and refused.
+
+        `warning` by default rather than `error`: the session moving under a rendered row is
+        the race DEC-007's re-read exists to catch, not a fault. Extracted after a gate review
+        found this written out by hand at eight sites across two files — six of them
+        character-identical, which is how the two that were subtly different went unnoticed.
+        """
+        if message is not None:
+            self.announce(message, severity=severity)
+        await self.on_reveal()
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Say what an action did, over the position rather than instead of it.

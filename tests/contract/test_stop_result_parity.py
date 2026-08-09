@@ -29,6 +29,7 @@ imported the constants would keep passing if a rename changed what the adapter a
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from html import unescape
 
 import pytest
 from textual.widgets import OptionList
@@ -98,7 +99,13 @@ class _Launcher:
 
 
 async def _telegram_said(record: SessionRecord, detail: str) -> str:
-    """Everything the bot's reply put in front of the owner, as one string."""
+    """Everything the bot's reply put in front of the owner, as one string.
+
+    HTML-unescaped, because this asks what the *operator reads* and Telegram renders the
+    entities back to characters — the remedy contains an apostrophe, so a raw comparison
+    against the shared vocabulary fails on `&#x27;` while the surfaces are in perfect
+    agreement. Unescaping here rather than weakening the assertion keeps the comparison exact.
+    """
     launcher = _Launcher(record, detail)
     boundary = PrivateBotBoundary(
         7,
@@ -113,7 +120,7 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
     assert token is not None, "the bot offered no graceful stop, so nothing was exercised"
     reply = await boundary._stop_reply("graceful", token)
     assert launcher.issued, "the bot never issued the stop, so this asserts nothing about it"
-    return str(reply["text"])
+    return unescape(str(reply["text"]))
 
 
 async def _tui_said(record: SessionRecord, detail: str) -> str:
@@ -193,14 +200,22 @@ async def test_both_surfaces_name_the_same_cause(detail: str) -> None:
     """
     from remote_agents.application.session_actions import stop_failure
 
-    failure = stop_failure(TerminalObservation(SessionId.new(), live=True, preserved=False,
-                                               detail=detail))
+    failure = stop_failure(
+        TerminalObservation(SessionId.new(), live=True, preserved=False, detail=detail)
+    )
     assert failure is not None
     said = {name: await render(_record(), detail) for name, render in SURFACES}
 
     for name, rendered in said.items():
         assert failure.summary in rendered, (
             f"{name} did not use the shared vocabulary for {detail}; it said {rendered!r}"
+        )
+        # The remedy as well as the summary, because they are read for different things and
+        # only one of them is actionable. Asserting the summary alone — which this test did
+        # until a gate evaluator measured it — passes a surface that names the cause and
+        # silently drops what to do about it, which is most of what the vocabulary is for.
+        assert failure.remedy in rendered, (
+            f"{name} named the cause for {detail} but not the remedy; it said {rendered!r}"
         )
 
 
