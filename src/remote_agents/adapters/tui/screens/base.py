@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
+#: The three app bindings that leave the current flow entirely — each unwinds the stack to the
+#: resting position, which is what makes them able to discard a half-typed value.
+_FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
+
 
 class ChoiceScreen(Screen[None]):
     """A status line, an optional filter, a list of choices, and an output pane.
@@ -54,6 +58,14 @@ class ChoiceScreen(Screen[None]):
     #: refresh runs, to decide whether the footer advertises the key at all — and "did this
     #: class replace a method" is not a question a binding check should be asking.
     can_refresh = False
+    #: Whether text typed into this screen's entry is a *value being gathered* rather than a
+    #: filter narrowing a list. Set on the screens that commit it with `submit`, and pinned
+    #: against that by a test — the same two-declarations-of-one-fact hazard `can_refresh` has.
+    #:
+    #: The distinction is what the owner loses. A label or a project name is the payload of the
+    #: step they are on and cannot be recovered; a filter is one keystroke to retype and sits
+    #: on the resting position, where leaving for another flow is the ordinary thing to do.
+    entry_is_a_commitment = False
 
     def __init__(self) -> None:
         super().__init__()
@@ -169,8 +181,15 @@ class ChoiceScreen(Screen[None]):
         flight every key here is advertised and does nothing — which is the same complaint,
         during a window measured in the length of a store read. It is left alone because the
         honest fix is not a hidden key: a footer whose entries vanish and reappear as the
-        surface works would be worse than one that is briefly optimistic. Task 1.3 is where
-        in-flight input is dealt with, and this is its problem rather than this task's.
+        surface works would be worse than one that is briefly optimistic.
+
+        **The one rule here that mirrors no early return is the in-flight-text one, and it is
+        deliberate.** The three flow jumps unwind the stack, so pressing one while a label or a
+        project name is half-typed discards it with no warning and no way back — the action has
+        no early return for that because the action never knew. This is the rule that had to be
+        invented rather than mirrored, and it is the only one answering `None`: the key stays
+        drawn and greyed rather than vanishing, because a footer entry that disappears as the
+        owner types would be a second surprise on top of the first.
         """
         if action == "back":
             # `go_back` refuses to pop the last screen, so at the resting position escape is
@@ -179,12 +198,29 @@ class ChoiceScreen(Screen[None]):
         if action == "refresh":
             # Mirrors `action_refresh`, which now delegates to `refresh_contents`.
             return True if self.can_refresh else False
-        if action == "resume":
+        if action == "resume" and self.services.conversations is None:
             # Mirrors `action_resume`'s `self._services.conversations is None` early return: a
             # host that wired no conversation service has no resume flow to open, and the
-            # binding has been advertised on those hosts all along.
-            return True if self.services.conversations is not None else False
+            # binding has been advertised on those hosts all along. Checked before the
+            # in-flight rule below so a host without the capability hides the key outright
+            # rather than greying it, which would imply it were available later.
+            return False
+        if action in _FLOW_JUMPS and self.text_in_flight:
+            return None
         return True
+
+    @property
+    def text_in_flight(self) -> bool:
+        """Whether this screen holds typed input that leaving would discard.
+
+        The entry has to be *shown* as well as non-empty: `hide_entry` leaves the widget in the
+        tree with a stale value on screens that do not use it, so reading the value alone would
+        report text in flight on positions that have no entry at all.
+        """
+        if not self.entry_is_a_commitment:
+            return False
+        entry = self.query_one("#filter", Input)
+        return bool(entry.display and entry.value)
 
     # Rendering -----------------------------------------------------------------
 

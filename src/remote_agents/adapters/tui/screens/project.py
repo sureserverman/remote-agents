@@ -63,6 +63,8 @@ class NameScreen(ChoiceScreen):
 
     position = "NAME"
     filter_placeholder = "New project name"
+    # Typed here and committed by `submit`; leaving discards it.
+    entry_is_a_commitment = True
 
     def __init__(self, area: str) -> None:
         super().__init__()

@@ -316,3 +316,125 @@ def test_no_screen_inherits_the_permissive_default(screen_type: type[Screen]) ->
         f"{screen_type.__name__} inherits the permissive default and would show every "
         "binding regardless of context"
     )
+
+
+# --- Task 1.3: a global key must not discard what the owner is typing -------------------
+
+_TYPING_SCREENS = tuple(s for s in ALL_SCREENS if getattr(s, "entry_is_a_commitment", False))
+
+
+def test_every_screen_that_commits_typed_text_declares_it() -> None:
+    """`entry_is_a_commitment` and `submit` are two declarations of one fact.
+
+    Same hazard as `can_refresh`/`refresh_contents`, and the same fix: a screen that gathers a
+    value with `submit` but forgets the flag lets a global key throw that value away, which is
+    precisely what this task exists to stop — and it would do it silently, on the one screen
+    nobody remembered to mark.
+    """
+    from remote_agents.adapters.tui.screens.base import ChoiceScreen
+
+    disagreeing = {
+        screen.__name__: (screen.entry_is_a_commitment, hasattr(screen, "submit"))
+        for screen in ALL_SCREENS
+        if issubclass(screen, ChoiceScreen)
+        and screen.entry_is_a_commitment != hasattr(screen, "submit")
+    }
+    assert not disagreeing, (
+        "these screens gather a value and declare it inconsistently — "
+        f"(entry_is_a_commitment, has submit) per screen: {disagreeing}"
+    )
+
+
+@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+@pytest.mark.parametrize("screen_type", _TYPING_SCREENS, ids=lambda c: c.__name__)
+async def test_a_flow_jump_neither_navigates_nor_loses_text_that_is_being_typed(
+    screen_type: type[Screen], binding: str
+) -> None:
+    """The task's own case: press a global key mid-entry and keep both the position and the text.
+
+    Each of these three unwinds the stack to the resting position, so before this rule they
+    discarded a half-typed label or project name with no warning and nothing to recover it
+    from. Driven with real keys into the real `Input`, because "the value survived" is a claim
+    about the widget the owner is typing into, not about a flag.
+    """
+    from textual.widgets import Input
+
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _arrange(app, pilot, screen_type)
+        entry = app.screen.query_one("#filter", Input)
+        entry.focus()
+        await pilot.press(*"nightly")
+        await pilot.pause()
+        assert entry.value == "nightly", "the fixture never typed anything"
+
+        position_before = app.screen.position
+        depth_before = len(app.screen_stack)
+        await pilot.press(binding)
+        await pilot.pause()
+
+        assert app.screen.position == position_before, (
+            f"{binding} left {position_before} with text half-typed"
+        )
+        assert len(app.screen_stack) == depth_before
+        assert app.screen.query_one("#filter", Input).value == "nightly", (
+            f"{binding} discarded the text the owner was typing"
+        )
+
+
+@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+@pytest.mark.parametrize("screen_type", _TYPING_SCREENS, ids=lambda c: c.__name__)
+async def test_a_flow_jump_is_greyed_rather_than_hidden_while_text_is_in_flight(
+    screen_type: type[Screen], binding: str
+) -> None:
+    """`None`, not `False` — the key stays drawn and stops working.
+
+    Hiding it would be a second surprise on top of the first: entries vanishing from the footer
+    as the owner types is exactly the blinking that the `_busy` rule was left out to avoid. The
+    distinction is only observable through `active_bindings`, since both answers stop the
+    action, so it is asserted here rather than assumed from the return value.
+    """
+    from textual.widgets import Input
+
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _arrange(app, pilot, screen_type)
+        app.screen.query_one("#filter", Input).focus()
+        await pilot.press(*"nightly")
+        await pilot.pause()
+
+        active = app.screen.active_bindings
+        assert binding in active, f"{binding} vanished from the footer while typing"
+        assert not active[binding].enabled, f"{binding} is still live with text in flight"
+
+
+@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) -> None:
+    """The rule is about text that cannot be recovered, and a filter is not that.
+
+    Typing into the project list's filter narrows a list; it is one keystroke to retype and it
+    sits on the resting position, where leaving for another flow is the ordinary thing to do.
+    Scoping the rule to committed values rather than to "any entry with text in it" is the
+    judgment this asserts, so that widening it later is a deliberate change rather than a
+    drift.
+    """
+    from textual.widgets import Input
+
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        entry.focus()
+        await pilot.press(*"exist")
+        await pilot.pause()
+        assert entry.value == "exist"
+        assert app.screen.position == "PROJECTS"
+
+        await pilot.press(binding)
+        await pilot.pause()
+
+        assert app.screen.position != "PROJECTS", (
+            f"{binding} was refused on the project filter, where the text is disposable"
+        )

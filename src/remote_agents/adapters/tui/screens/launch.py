@@ -144,6 +144,8 @@ class LabelScreen(ChoiceScreen):
     position = "LABEL"
     status = "Enter an optional label, then press enter. Leave empty to skip."
     filter_placeholder = "Optional label"
+    # Typed here and committed by `submit`; leaving discards it.
+    entry_is_a_commitment = True
 
     async def populate(self) -> None:
         self.text_entry("Optional label")
