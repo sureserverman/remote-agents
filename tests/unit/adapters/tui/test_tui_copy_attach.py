@@ -148,3 +148,64 @@ async def test_the_affordance_is_present_even_when_the_pane_is_dead() -> None:
         rows = _rows(app)
 
     assert any("attach" in row.casefold() for row in rows)
+
+
+async def test_the_command_actually_reaches_the_clipboard() -> None:
+    """The affordance has been called "Copy attach" since it was written and only printed.
+
+    `App.copy_to_clipboard` writes OSC 52, which is what makes the name true — and works
+    through SSH and inside tmux, which is where this surface is used.
+    """
+    record = _record()
+    launcher = _Listing((record,), attach="tmux -L remote-agents attach-session -t =abc")
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("attach")
+        await pilot.pause()
+        clipboard = app._clipboard
+        status = _status(app)
+
+    assert clipboard == "tmux -L remote-agents attach-session -t =abc"
+    assert clipboard in status, (
+        "the printed fallback was dropped; OSC 52 is the half that can silently fail"
+    )
+
+
+async def test_the_clipboard_message_does_not_claim_an_outcome_it_cannot_observe() -> None:
+    """A terminal that ignores OSC 52 reports nothing back, so "Copied." would be a guess.
+
+    The same rule sub-plan 3 applied to stop results, one surface over: say what was
+    attempted, not what the other end did with it.
+    """
+    record = _record()
+    launcher = _Listing((record,), attach="tmux attach -t =abc")
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("attach")
+        await pilot.pause()
+        said = " ".join(announcements(app))
+
+    assert "clipboard" in said.casefold()
+    assert "on screen too" in said, said
+
+
+async def test_an_unavailable_attach_copies_nothing() -> None:
+    """A refusal must not leave the previous session's command on the clipboard."""
+    record = _record()
+    launcher = _Listing((record,), attach=None)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("attach")
+        await pilot.pause()
+        clipboard = app._clipboard
+
+    assert clipboard == "", f"a failed attach wrote {clipboard!r} to the clipboard"

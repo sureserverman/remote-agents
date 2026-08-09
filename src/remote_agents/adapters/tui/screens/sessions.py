@@ -349,9 +349,27 @@ class SessionDetailScreen(ChoiceScreen):
                 severity="warning",
             )
             return
-        # The command stays in the status line rather than going to a toast, because it is the
-        # thing the owner came here to copy and a toast expires under them.
+        # **Copied as well as shown, and neither half is redundant.** The affordance has been
+        # called "Copy attach" since it was written and until now it only ever *printed* the
+        # command; `App.copy_to_clipboard` writes it over OSC 52, which is what makes the name
+        # true and works through SSH and inside tmux.
+        #
+        # The printed command stays, because OSC 52 is the half that can silently fail. Some
+        # terminals ignore the sequence outright — Textual's own docstring names macOS Terminal
+        # — and a clipboard write reports nothing back either way. On a session that did not
+        # come up, this string is the only handle left on a pane that may still be live, so the
+        # fallback is load-bearing rather than belt-and-braces. It stays in the status line and
+        # not in a toast for the same reason: a toast expires under the owner mid-copy.
+        self.tui.copy_to_clipboard(command)
         self.set_status(f"Attach with: {command}")
+        # Worded as an attempt, not an outcome. The surface cannot observe whether the terminal
+        # accepted the sequence, and sub-plan 3 spent a stage on the general form of this
+        # mistake: a message that asserts what only the other end could confirm.
+        self.announce(
+            "Sent to the clipboard — not every terminal accepts that, so the command is "
+            "on screen too.",
+            severity="information",
+        )
 
     async def show_inspect(self) -> None:
         """Capture this session's output, then open it on a screen of its own.
