@@ -29,8 +29,14 @@ flake on a machine that is merely configured differently:
    theme.
 3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
    that variable alone also fails all 16.
-4. **The age column.** `_age()` renders `datetime.now(UTC) - created_at` in whole minutes,
-   so every fixture record is stamped at capture time to render a stable `0m ago`.
+4. **The age column.** `application.relative_time.age()` renders `datetime.now(UTC) -
+   created_at`, so every fixture record is stamped at capture time to render a stable
+   `0m ago`. That stamping is also why the sub-plan-4 humanization — minutes, then hours,
+   then days — moved **no baseline at all**, despite the plan naming it as this
+   decomposition's one deliberate re-baseline: a record stamped now is under a minute old
+   under either rendering, so the pinning that makes these files deterministic is the same
+   thing that makes them blind to the change. A future task that alters how a *young* age
+   renders will move all of them at once.
 5. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
@@ -152,7 +158,7 @@ async def settle(app, pilot, *, tries: int = 20) -> None:
 
 
 def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
-    """A session stamped now, so `_age()` renders a stable `0m ago` in the baseline."""
+    """A session stamped now, so `age()` renders a stable `0m ago` in the baseline."""
     return SessionRecord(
         _SESSION_ID,
         ProjectId("opaque-existing"),

@@ -8,7 +8,7 @@ import logging
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from html import escape
 from math import ceil
 
@@ -58,6 +58,7 @@ from remote_agents.application.project_catalog import (
     paginate_catalogue,
     search_catalogue,
 )
+from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -1467,13 +1468,10 @@ def _label(value: str) -> str:
     return normalized
 
 
-def _age(created_at: datetime) -> str:
-    minutes = max(0, int((datetime.now(UTC) - created_at).total_seconds() // 60))
-    return f"{minutes}m ago"
 
 
 def _session_row_label(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {_age(record.created_at)}"
+    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
 
 
 def _state_explanation(state: SessionState) -> str:
