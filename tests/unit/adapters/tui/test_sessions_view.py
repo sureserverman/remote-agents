@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -79,10 +81,6 @@ def _context(launcher: _Listing) -> TuiContext:
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
     return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 async def test_sessions_lists_one_row_per_managed_session() -> None:
@@ -169,12 +167,12 @@ async def test_a_store_error_reports_itself_and_leaves_the_wizard_reachable() ->
     async with app.run_test() as pilot:
         await app.action_sessions()
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
         await app.action_back()
         await pilot.pause()
         step = position(app)
 
-    assert "could not be read" in status.casefold()
+    assert any("could not be read" in message for message in reported), reported
     assert step == "PROJECTS"
 
 
@@ -230,9 +228,9 @@ async def test_a_store_error_opening_detail_is_reported_not_raised() -> None:
         await pilot.pause()
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "could not be read" in status.casefold()
+    assert any("could not be read" in message for message in reported), reported
 
 
 async def test_a_store_error_rendering_attach_is_reported_not_raised() -> None:
@@ -253,15 +251,15 @@ async def test_a_store_error_rendering_attach_is_reported_not_raised() -> None:
         await pilot.pause()
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        assert "could not be read" not in _status(app).casefold(), (
+        assert not announcements(app, severity="error"), (
             "the detail must open cleanly, or this asserts on the wrong read"
         )
 
         await app.screen.show_attach()
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "could not be read" in status.casefold()
+    assert any("could not be read" in message for message in reported), reported
 
 
 async def test_a_failing_copy_attach_is_reported_not_raised() -> None:
@@ -277,9 +275,9 @@ async def test_a_failing_copy_attach_is_reported_not_raised() -> None:
         await pilot.pause()
         await app.screen.choose("attach")
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "could not be read" in status.casefold()
+    assert any("could not be read" in message for message in reported), reported
 
 
 async def test_selecting_a_row_never_escapes_as_an_exception() -> None:
@@ -292,9 +290,9 @@ async def test_selecting_a_row_never_escapes_as_an_exception() -> None:
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "could not be read" in status.casefold()
+    assert any("could not be read" in message for message in reported), reported
 
 
 async def test_a_screen_left_mid_read_does_not_draw_onto_its_own_corpse() -> None:

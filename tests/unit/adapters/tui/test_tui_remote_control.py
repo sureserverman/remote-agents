@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -86,10 +88,6 @@ def _context(launcher: _RecordingLauncher) -> TuiContext:
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 #: The two rows the detail offers when the policy allows the toggle at all.
@@ -252,9 +250,9 @@ async def test_a_failure_reports_itself_and_does_not_claim_a_state() -> None:
         await _confirm(pilot)
         await asyncio.wait_for(asking, timeout=5)
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "pane refused the toggle" in status
+    assert any("pane refused the toggle" in message for message in reported), reported
 
 
 async def test_no_version_gating_is_applied_to_the_toggle() -> None:

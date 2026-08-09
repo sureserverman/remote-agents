@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -62,10 +64,6 @@ def _context(launcher: _Listing) -> TuiContext:
     )
 
 
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
-
-
 def _rows(app: RemoteAgentsTui) -> list[str]:
     return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
@@ -120,11 +118,10 @@ async def test_an_unavailable_attach_says_why_instead_of_hiding() -> None:
         await pilot.pause()
         await app.screen.choose("attach")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app)).casefold()
 
-    lowered = status.casefold()
-    assert "not available" in lowered or "unavailable" in lowered
-    assert "pane" in lowered
+    assert "not available" in reported or "unavailable" in reported
+    assert "pane" in reported
     assert launcher.asked == [record.session_id]
 
 

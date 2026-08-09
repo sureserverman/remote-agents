@@ -42,6 +42,8 @@ from datetime import UTC, datetime
 import pytest
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
+from tui_feedback import announcements
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -249,10 +251,6 @@ def test_each_arrangements_refused_state_is_genuinely_refused(
 
 def _keys(app: RemoteAgentsTui) -> list[str | None]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 async def _ask(app: RemoteAgentsTui, pilot, arrangement: _Arrangement) -> asyncio.Task[None]:
@@ -627,6 +625,11 @@ async def test_a_policy_that_stopped_allowing_it_refuses_the_answer(confirm, arr
     reads an explanation naming the action, rather than the bare "that session is gone" — a
     distinction that is asserted rather than assumed, because a mutation collapsing the two
     messages into one survived when it was not.
+
+    The two now land in *different sinks* — the vanished record in the status line, the policy
+    refusal in a `warning` toast — which is the status split doing the same job this pair of
+    tests was written to do by hand. Read from the toast rather than from `#status`, or this
+    passes on a surface that says nothing at all.
     """
     launcher = _Launcher()
     app = RemoteAgentsTui(_context(launcher))
@@ -641,14 +644,14 @@ async def test_a_policy_that_stopped_allowing_it_refuses_the_answer(confirm, arr
         await _confirm(pilot, app)
         await asyncio.wait_for(asking, timeout=5)
         await pilot.pause()
-        status = _status(app).casefold()
+        refusals = [message.casefold() for message in announcements(app, severity="warning")]
 
     assert launcher.issued == [], (
         f"{confirm.__name__} issued a command for a session in "
         f"{arrangement.refused_state.value}, which the policy does not offer it for"
     )
-    assert "no longer available" in status
-    assert arrangement.refusal_names in status, (
+    assert any("no longer available" in message for message in refusals), refusals
+    assert any(arrangement.refusal_names in message for message in refusals), (
         "the refusal did not name the action, so the owner cannot tell which of the two "
         "reasons applied and this test cannot either"
     )

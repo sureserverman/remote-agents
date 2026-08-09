@@ -154,6 +154,11 @@ def _status(app: RemoteAgentsTui) -> str:
     return str(app.screen.query_one("#status").content)
 
 
+def _breadcrumb(app: RemoteAgentsTui) -> str:
+    """The header trail, which is where the session's own name lives since the status split."""
+    return app.screen.sub_title or ""
+
+
 def _keys(app: RemoteAgentsTui) -> list[str | None]:
     return [option.id for option in _choices(app).options]
 
@@ -200,7 +205,10 @@ async def _probe_detail(app, launcher, pilot) -> None:
     await pilot.pause()
     await _choose(app, pilot, str(launcher.record.session_id))
     assert position(app) == "SESSION_DETAIL"
-    assert launcher.record.display.rendered in _status(app)
+    # Parity is unchanged; which region says what is not. The session's name is the header's
+    # breadcrumb and its state is the one-line status, so both halves of "the local surface
+    # names the session and its state" are still asserted, from the two places they moved to.
+    assert launcher.record.display.rendered in _breadcrumb(app)
     assert launcher.record.state.value in _status(app)
 
 

@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -91,10 +93,6 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
     return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
 
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
-
-
 def _offered(app: RemoteAgentsTui) -> set[str]:
     return {_LABELS[row] for row in _rows(app) if row in _LABELS}
 
@@ -157,10 +155,10 @@ async def test_a_failed_stop_reports_the_reason_and_does_not_claim_success() -> 
         await pilot.pause()
         await app.screen.choose("graceful")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
 
-    assert "tmux server is gone" in status
-    assert "stopped" not in status.casefold()
+    assert "tmux server is gone" in reported
+    assert "stopped" not in reported.casefold()
 
 
 async def test_a_failed_stop_re_renders_the_refreshed_state() -> None:
@@ -174,9 +172,9 @@ async def test_a_failed_stop_re_renders_the_refreshed_state() -> None:
         await pilot.pause()
         await app.screen.choose("graceful")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
 
-    assert "nope" in status
+    assert "nope" in reported
 
 
 @pytest.mark.parametrize("state", list(SessionState))

@@ -52,7 +52,8 @@ class ResumeProjectsScreen(ChoiceScreen):
     """The project whose saved conversations the owner wants to reopen."""
 
     position = "RESUME_PROJECTS"
-    status = "Resume a conversation. Choose its project."
+    status = "Choose the project whose conversation you want to reopen."
+    crumb = "Resume"
     #: This screen renders the catalogue, so Refresh means something here — and its own
     #: failure text below tells the owner to press it. Task 1.1's scope line reads "every
     #: screen that can be refreshed" and then names two in parentheses; this is a third, and
@@ -66,7 +67,7 @@ class ResumeProjectsScreen(ChoiceScreen):
         if await self.tui.reload_catalogue():
             await self.populate()
             return
-        self.set_status("The project catalogue could not be re-read. Check this host.")
+        self.announce("The project catalogue could not be re-read. Check this host.")
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -83,7 +84,9 @@ class ResumeProjectsScreen(ChoiceScreen):
         if project is None:
             # Stay in the resume flow, as the launch picker does for the same failure,
             # rather than dropping the owner into a different wizard with no explanation.
-            self.set_status("That project is no longer available. Refresh and try again.")
+            self.announce(
+                "That project is no longer available. Refresh and try again.", severity="warning"
+            )
             return
         conversations = self.services.conversations
         if conversations is None:
@@ -96,7 +99,8 @@ class ResumeProjectsScreen(ChoiceScreen):
                 capabilities = await conversations.capabilities()
             except Exception as error:
                 _LOG.exception("resume capabilities failed")
-                self.set_status(f"Resume is unavailable: {error}")
+                self.set_status("Press escape to return to the project list.")
+                self.announce(f"Resume is unavailable: {error}")
                 self.show_choices(((_BACK, "Back"),))
                 return
             capable = tuple(
@@ -135,6 +139,11 @@ class ResumeProfilesScreen(ChoiceScreen):
         self.project = project
         self.capable = capable
 
+    @property
+    def crumb(self) -> str:
+        """The project chosen a screen ago, as the launch wizard's agent step also names it."""
+        return f"{self.project.area}/{self.project.name}"
+
     async def on_reveal(self) -> None:
         """Re-ask which agents can resume, because the answer can move while the owner is away.
 
@@ -152,7 +161,8 @@ class ResumeProfilesScreen(ChoiceScreen):
             capabilities = await conversations.capabilities()
         except Exception as error:
             _LOG.exception("resume capabilities failed")
-            self.set_status(f"Resume is unavailable: {error}")
+            self.set_status("Press escape to go back.")
+            self.announce(f"Resume is unavailable: {error}")
             self.show_choices(((_BACK, "Back"),))
             return
         self.capable = tuple(
@@ -181,7 +191,7 @@ class ResumeProfilesScreen(ChoiceScreen):
         if not any(profile.profile_id == key for profile in self.services.profiles):
             # Defence in depth, matching the launch picker: the rows here are already
             # filtered to resume-capable profiles, so a key naming another one is stale.
-            self.set_status("That agent is not available on this host.")
+            self.announce("That agent is not available on this host.", severity="warning")
             return
         async with self.holding_the_guard():
             page = await fetch_page(self, self.project, key, 1)
@@ -216,6 +226,11 @@ class ResumeConversationsScreen(ChoiceScreen):
         # The paging state the app used to carry as `_resume_page` / `_resume_page_count`.
         # Local to the one screen that pages, so nothing else can move it under this screen.
         self.page = page
+
+    @property
+    def crumb(self) -> str:
+        """The agent chosen a screen ago; the project is already the crumb before this one."""
+        return self.profile
 
     async def on_reveal(self) -> None:
         """Re-read this page on the way back from the confirmation, for the same reason."""
@@ -264,14 +279,14 @@ class ResumeConversationsScreen(ChoiceScreen):
             # server-side, so a forged or stale value resolves to nothing rather than a path.
             resolved = await conversations.resolve_for_resume(ConversationReference(key))
         except ValueError:
-            self.set_status("That conversation selection is not valid.")
+            self.announce("That conversation selection is not valid.", severity="warning")
             return
         except Exception as error:
             _LOG.exception("conversation resolve failed")
-            self.set_status(f"That conversation could not be resolved: {error}")
+            self.announce(f"That conversation could not be resolved: {error}")
             return
         if resolved is None:
-            self.set_status("That conversation is no longer available.")
+            self.announce("That conversation is no longer available.", severity="warning")
             return
         await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
@@ -293,6 +308,13 @@ class ResumeConfirmScreen(ChoiceScreen):
     """
 
     position = "RESUME_CONFIRM"
+    #: "Confirm", not the conversation. Everywhere else in this surface the breadcrumb is
+    #: where the subject goes, and this is the one position where it must not be: the header
+    #: elides a long trail (`HeaderTitle` is `text-overflow: ellipsis`), and the description
+    #: is echoed from the agent's own output, so it is exactly the value most likely to be
+    #: long. A confirmation whose subject is cut off is asking the owner to agree to
+    #: something they cannot fully read. The status line is the wider region, so it takes it.
+    crumb = "Confirm"
 
     def __init__(
         self, project: CatalogProject, profile: str, resolved: ResolvedConversation
@@ -305,9 +327,7 @@ class ResumeConfirmScreen(ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         self.set_status(
-            f"Resume {conversation_row(self.resolved.summary)}\n"
-            f"Agent: {self.profile}\n"
-            "This starts a new managed session continuing that conversation."
+            f"Start a new session continuing: {conversation_row(self.resolved.summary)}"
         )
         self.show_choices(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
 
@@ -341,6 +361,7 @@ async def fetch_page(
         )
     except Exception as error:
         _LOG.exception("conversation catalogue failed")
-        screen.set_status(f"The conversations could not be listed: {error}")
+        screen.set_status("Press escape to go back.")
+        screen.announce(f"The conversations could not be listed: {error}")
         screen.show_choices(((_BACK, "Back"),))
         return None

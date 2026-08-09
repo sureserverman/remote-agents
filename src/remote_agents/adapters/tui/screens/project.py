@@ -33,14 +33,16 @@ class AreasScreen(ChoiceScreen):
     """The areas of the development root a new project may be created in."""
 
     position = "AREAS"
+    crumb = "New project"
 
     async def populate(self) -> None:
         self.hide_entry()
         try:
             offered = await self.tui.in_thread(self.services.creator.available_areas, group="areas")
-        except Exception:
+        except Exception as error:
             _LOG.exception("listing areas failed")
-            self.set_status("The development root could not be read. Check this host.")
+            self.set_status("Press escape to return to the project list.")
+            self.announce(f"The development root could not be read: {error}")
             self.show_choices(((_CANCEL, "Back"),))
             return
         areas = tuple(area for area in offered if selectable_area(area))
@@ -70,8 +72,13 @@ class NameScreen(ChoiceScreen):
         super().__init__()
         self.area = area
 
+    @property
+    def crumb(self) -> str:
+        """The area chosen a screen ago, which is what the name is being given inside."""
+        return self.area
+
     async def populate(self) -> None:
-        self.set_status(f"Enter the new project name for {self.area}, then press enter.")
+        self.set_status("Enter the new project name, then press enter.")
         self.text_entry("New project name")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -83,7 +90,9 @@ class NameScreen(ChoiceScreen):
         try:
             ProjectIdentity(area=self.area, name=value.strip())
         except ValueError as error:
-            self.set_status(str(error))
+            # As on the label entry: the rejection is a toast so the instruction the owner is
+            # following stays where they were reading it.
+            self.announce(str(error), severity="warning")
             return
         if not self.showing:
             return
@@ -106,6 +115,7 @@ class ProjectReviewScreen(ChoiceScreen):
 
 
     position = "PROJECT_REVIEW"
+    crumb = "Review"
 
     def __init__(self, area: str, project_name: str) -> None:
         super().__init__()
@@ -119,7 +129,9 @@ class ProjectReviewScreen(ChoiceScreen):
         self.render_review()
 
     def render_review(self) -> None:
-        self.set_status(f"Review new project\nArea: {self.area}\nName: {self.project_name}")
+        # The area is in the breadcrumb; this line names what will be created and nothing the
+        # header already said.
+        self.set_status(f"Create {self.area}/{self.project_name}?")
         self.show_choices(
             (("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1
         )
@@ -143,11 +155,11 @@ class ProjectReviewScreen(ChoiceScreen):
             except Exception as error:
                 _LOG.exception("project creation failed")
                 # Re-render before reporting, so the cursor leaves "Create" and a second enter
-                # cannot re-issue a creation nobody deliberately chose.
+                # cannot re-issue a creation nobody deliberately chose. Re-rendering restores
+                # this screen's own status, which is what the owner needs left behind — the
+                # failure itself is the toast.
                 self.render_review()
-                self.set_status(
-                    f"Project not created: {error}\nArea: {self.area}\nName: {self.project_name}"
-                )
+                self.announce(f"Project not created: {error}")
                 return
         # Spelled out rather than delegated to `action_refresh`, which used to do exactly this
         # pair and no longer does: refresh is the active screen's own re-read now and does not
@@ -155,11 +167,18 @@ class ProjectReviewScreen(ChoiceScreen):
         # the only caller that wanted the navigation, so it is the one that keeps it.
         if not await tui.reload_catalogue():
             self.render_review()
-            self.set_status(
+            # `warning`, not `error`: the project exists. Reporting a partial success in the
+            # same red as a creation that failed is how an owner learns to retry something
+            # that already worked.
+            self.announce(
                 f"Created {created.identity}, but the project catalogue could not be re-read. "
-                "Check this host, then refresh the project list."
+                "Check this host, then refresh the project list.",
+                severity="warning",
             )
             return
         tui.return_to_projects()
-        if (body := tui.body) is not None:
-            body.set_status(f"Created {created.identity}. Choose a project.")
+        # Announced rather than written onto the project list's status line, which is that
+        # screen's own instruction and is rewritten by its next render anyway — so the
+        # confirmation used to survive exactly until the owner typed one character into the
+        # filter. A toast outlives the redraw and belongs to the action, not to the position.
+        tui.announce(f"Created {created.identity}.", severity="information")

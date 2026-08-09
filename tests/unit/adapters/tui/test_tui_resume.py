@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
@@ -123,10 +125,6 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 async def test_resume_is_offered_when_a_conversation_service_is_wired() -> None:
@@ -303,10 +301,10 @@ async def test_a_reference_that_no_longer_resolves_does_not_resume() -> None:
         conversations.pages = {}
         await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app)).casefold()
 
     assert launcher.resumed == []
-    assert "no longer" in status.casefold() or "not available" in status.casefold()
+    assert "no longer" in reported or "not available" in reported
 
 
 @pytest.mark.parametrize("forged", ["../../etc/passwd", _SECRET_PATH, "c-notreal", ""])

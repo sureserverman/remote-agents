@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.widgets import OptionList
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -92,10 +93,6 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 async def _open_the_confirm(app: RemoteAgentsTui, pilot) -> asyncio.Task[None]:

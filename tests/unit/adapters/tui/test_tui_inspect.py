@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from textual.widgets import OptionList
+from tui_feedback import announcements
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -60,10 +62,6 @@ def _context(launcher: _Listing, capture=None, redactions: tuple[str, ...] = ())
         capture=capture,
         capture_redactions=redactions,
     )
-
-
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
 
 
 def _output(app: RemoteAgentsTui) -> str:
@@ -202,9 +200,9 @@ async def test_a_failing_capture_reports_itself_rather_than_crashing() -> None:
         await pilot.pause()
         await app.screen.choose("inspect")
         await pilot.pause()
-        status = _status(app)
+        reported = announcements(app, severity="error")
 
-    assert "pane is gone" in status
+    assert any("pane is gone" in message for message in reported), reported
 
 
 async def test_escape_returns_from_inspect_to_the_detail() -> None:

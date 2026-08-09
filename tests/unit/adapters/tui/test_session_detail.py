@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
+from tui_feedback import breadcrumb
+from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -60,10 +62,6 @@ def _context(launcher: _Listing) -> TuiContext:
     )
 
 
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
-
-
 # ENDED is deliberately unreachable in detail: it is filtered from the listing, so there is
 # no row to select. Its explanation is still pinned, by tests/unit/application/
 # test_state_explanations.py, which enumerates all 7 members.
@@ -103,6 +101,13 @@ async def test_an_ended_session_has_no_detail_to_open() -> None:
 
 
 async def test_detail_names_the_session_and_its_state() -> None:
+    """Both halves are still said; the status split decided *where*.
+
+    The session's name is the header's breadcrumb — it is true of the whole position — and
+    the state is the status line, which is what changes underneath it. Asserting both here
+    rather than dropping one is the point: a split that quietly stopped naming the session
+    would pass a test that had been narrowed to the state.
+    """
     record = _record(SessionState.PRESERVED)
     app = RemoteAgentsTui(_context(_Listing((record,))))
 
@@ -110,8 +115,9 @@ async def test_detail_names_the_session_and_its_state() -> None:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
         status = _status(app)
+        trail = breadcrumb(app)
 
-    assert record.display.rendered in status
+    assert record.display.rendered in trail
     assert "preserved" in status
 
 
@@ -159,7 +165,7 @@ async def test_selecting_a_row_opens_its_detail() -> None:
         await pilot.press("enter")
         await pilot.pause()
         step = position(app)
-        status = _status(app)
+        trail = breadcrumb(app)
 
     assert step == "SESSION_DETAIL"
-    assert record.display.rendered in status
+    assert record.display.rendered in trail

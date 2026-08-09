@@ -197,7 +197,7 @@ async def test_the_status_line_shows_a_markup_bearing_description_literally() ->
     """
     project = CatalogProject("opaque-existing", "existing", "infra", "Registered")
     app = RemoteAgentsTui(_context(project=project, description=_MARKUP_DESCRIPTION))
-    async with app.run_test(size=(100, 30)) as pilot:
+    async with app.run_test(size=(200, 30)) as pilot:
         await pilot.pause()
         await app.action_resume()
         await app.screen.choose("opaque-existing")
@@ -210,18 +210,29 @@ async def test_the_status_line_shows_a_markup_bearing_description_literally() ->
         )
 
 
-async def test_the_status_line_shows_a_markup_bearing_session_label_literally() -> None:
-    """`record.display.rendered` interpolates the owner's label into a dozen status strings."""
+async def test_the_header_shows_a_markup_bearing_session_label_literally() -> None:
+    """The breadcrumb is the third sink for the owner's own label, and it renders differently.
+
+    `record.display.rendered` used to reach only `#status` and the rows, both of which are
+    explicitly `markup=False`. The status split moved the session's name into the header,
+    where nothing in this codebase set that flag — `Header` renders through
+    `App.format_title`, which builds a `Content` from the plain string rather than parsing it
+    as markup. That is the property under test, and it is a property of Textual rather than of
+    a flag this app can see, so it is worth an assertion rather than an assumption.
+
+    Rendered at 200 columns because `HeaderTitle` is `text-overflow: ellipsis`: at 100 the
+    trail is elided mid-label and the test would fail on the width rather than on the markup.
+    """
     project = CatalogProject("opaque-existing", "existing", "infra", "Registered")
     app = RemoteAgentsTui(_context(project=project, record=_record(_MARKUP_LABEL)))
-    async with app.run_test(size=(100, 30)) as pilot:
+    async with app.run_test(size=(200, 30)) as pilot:
         await pilot.pause()
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
         await pilot.pause()
         screen = _rendered(app)
         assert _MARKUP_LABEL in screen, (
-            f"the detail status consumed {_MARKUP_LABEL!r} as markup; screen was {screen!r}"
+            f"the header consumed {_MARKUP_LABEL!r} as markup; screen was {screen!r}"
         )
 
 

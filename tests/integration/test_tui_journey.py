@@ -90,7 +90,10 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             app.screen.query_one("#filter").value = "first run"
             await pilot.press("enter")
             await pilot.pause()
-            assert "brand-new" in str(app.screen.query_one("#status").content)
+            # The project and the agent are the header's trail now; the status line carries
+            # the label, which is the one part of the gathered selection the trail cannot.
+            assert "brand-new" in (app.screen.sub_title or "")
+            assert "first run" in str(app.screen.query_one("#status").content)
 
             await pilot.press("up")
             await pilot.press("enter")

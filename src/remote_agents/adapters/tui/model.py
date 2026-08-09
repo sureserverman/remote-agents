@@ -41,6 +41,24 @@ class LaunchSelection:
 
 
 @dataclass(frozen=True, slots=True)
+class LaunchFailure:
+    """A launch that handed back no session: what stays on screen, and what is said once.
+
+    Two fields rather than one string because the two halves have different lifetimes, which
+    is the distinction the status split is built on. `status` is what the owner may still need
+    in a minute — an attach command they have to copy, or where to go next; `explanation` is
+    why, which they read once and are done with.
+
+    Returned rather than rendered for the reason `launch` has always returned its message: a
+    failure has to leave the cursor somewhere deliberate, and only the review screen knows
+    where that is.
+    """
+
+    status: str
+    explanation: str
+
+
+@dataclass(frozen=True, slots=True)
 class AttachRequest:
     """The one command the app hands back to its caller after a ready launch."""
 

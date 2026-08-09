@@ -49,6 +49,11 @@ def _status(app: RemoteAgentsTui) -> str:
     return str(app.screen.query_one("#status").content)
 
 
+def _breadcrumb(app: RemoteAgentsTui) -> str:
+    """The header trail, which is where the session's own name lives since the status split."""
+    return app.screen.sub_title or ""
+
+
 @pytest.fixture
 def database(tmp_path: Path) -> Path:
     return tmp_path / "sessions.sqlite3"
@@ -90,7 +95,7 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
             await pilot.pause()
             assert position(app) == "SESSION_DETAIL"
             detail = _status(app)
-            assert str(launched.display.rendered) in detail
+            assert str(launched.display.rendered) in _breadcrumb(app)
             assert "running" in detail
 
             # Pressing enter rather than calling _resolve_detail: the detail step's own

@@ -166,7 +166,7 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
     SessionsScreen: SessionsScreen,
     SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
-    InspectScreen: lambda: InspectScreen("output", "some output"),
+    InspectScreen: lambda: InspectScreen("some output"),
     ResumeProjectsScreen: ResumeProjectsScreen,
     ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, _CAPABLE),
     ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", _PAGE),

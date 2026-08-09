@@ -33,6 +33,7 @@ class ProjectsScreen(ChoiceScreen):
     position = "PROJECTS"
     filter_placeholder = "Filter projects"
     can_refresh = True
+    crumb = "Projects"
 
     async def populate(self) -> None:
         self.render_projects()
@@ -66,7 +67,7 @@ class ProjectsScreen(ChoiceScreen):
         # the ordinary thing to do here — an argument that does not reach a key which stays.
         query = self.query_one("#filter", Input).value
         if not await self.tui.reload_catalogue():
-            self.set_status("The project catalogue could not be re-read. Check this host.")
+            self.announce("The project catalogue could not be re-read. Check this host.")
             return
         self.render_projects(query, keep_focus=True)
 
@@ -79,10 +80,7 @@ class ProjectsScreen(ChoiceScreen):
         entry = self.query_one("#filter", Input)
         entry.display = True
         entry.placeholder = "Filter projects"
-        self.set_status(
-            f"Choose a project. {len(projects)} available. "
-            "Type to filter, then press enter for the list."
-        )
+        self.set_status(f"Choose a project — {len(projects)} available. Type to filter.")
         self.show_choices(
             tuple(
                 (project.opaque_id, f"{project.area}/{project.name}  [{project.group}]")
@@ -109,7 +107,9 @@ class ProjectsScreen(ChoiceScreen):
     async def choose(self, key: str) -> None:
         project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
         if project is None:
-            self.set_status("That project is no longer available. Refresh and try again.")
+            self.announce(
+                "That project is no longer available. Refresh and try again.", severity="warning"
+            )
             return
         # A fresh selection rather than a patched one: choosing a project restarts the
         # wizard, so an agent or label left over from an abandoned pass must not survive it.
@@ -122,6 +122,17 @@ class ProfilesScreen(ChoiceScreen):
 
     position = "PROFILES"
     status = "Choose an agent."
+
+    @property
+    def crumb(self) -> str:
+        """The project this wizard is launching into, which is what the owner just chose.
+
+        A property rather than a class attribute because the trail has to name the *choice*,
+        not the step: "Projects › Agent" would tell the owner nothing they did not already
+        know from the rows in front of them.
+        """
+        project = self.tui.selection.project
+        return f"{project.area}/{project.name}" if project is not None else "Agent"
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -141,7 +152,9 @@ class ProfilesScreen(ChoiceScreen):
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:
             reason = profile.reason if profile is not None else "unknown profile"
-            self.set_status(f"That agent cannot be launched here: {reason}")
+            self.announce(
+                f"That agent cannot be launched here: {reason}", severity="warning"
+            )
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
         await self.advance_to(LabelScreen())
@@ -156,6 +169,19 @@ class LabelScreen(ChoiceScreen):
     # Typed here and committed by `submit`; leaving discards it.
     entry_is_a_commitment = True
 
+    @property
+    def crumb(self) -> str:
+        """The agent chosen a screen ago.
+
+        The convention across all three flows: a crumb names *the choice that led here* when
+        there was one, and the step's own name when there was not. So the agent list is called
+        after the project, this is called after the agent, and the review — reached by an entry
+        that may legitimately be empty — is called "Review". Named "Label" first, which read
+        fine and lost the agent from the trail entirely, since no later position carried it.
+        """
+        profile = self.tui.selection.profile
+        return profile.profile_id if profile is not None else "Label"
+
     async def populate(self) -> None:
         self.text_entry("Optional label")
 
@@ -167,7 +193,10 @@ class LabelScreen(ChoiceScreen):
         try:
             label = label_or_error(value, self.services.max_label_length)
         except ValueError as error:
-            self.set_status(str(error))
+            # A toast rather than the status line, which here still holds the instruction the
+            # owner is in the middle of following. Overwriting it with the rejection left them
+            # being told what was wrong and no longer what to do about it.
+            self.announce(str(error), severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, label=label)
         if not self.showing:
@@ -195,13 +224,18 @@ class ReviewScreen(ChoiceScreen):
 
 
     position = "REVIEW"
+    crumb = "Review"
 
     async def populate(self) -> None:
         self.hide_entry()
         self.render_review()
 
     def render_review(self) -> None:
-        self.set_status(f"Review\n{self.tui.selection.review()}")
+        # The project and the agent are in the breadcrumb, so this line carries the one part
+        # of the selection the trail cannot: the label. `review()` is still what the wizard
+        # gathered, in three lines, and it has no home in a one-line region — the header and
+        # this line together say the same thing.
+        self.set_status(f"Label: {self.tui.selection.label or 'none'}. Launch, or go back.")
         self.show_choices((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def choose(self, key: str) -> None:
@@ -214,6 +248,8 @@ class ReviewScreen(ChoiceScreen):
             failure = await self.tui.launch()
             if failure is not None:
                 # Re-render before reporting, so the cursor leaves "Launch" and a second
-                # enter cannot re-issue a launch nobody deliberately chose.
+                # enter cannot re-issue a launch nobody deliberately chose. It also resets
+                # this screen's status, which is why the failure's own status is set after.
                 self.render_review()
-                self.set_status(failure)
+                self.set_status(failure.status)
+                self.announce(failure.explanation)

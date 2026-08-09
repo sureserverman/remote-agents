@@ -10,6 +10,7 @@ from typing import TypeVar
 from textual import work
 from textual.app import App, ScreenStackError
 from textual.binding import Binding
+from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.worker import WorkerCancelled, WorkerFailed
 
@@ -17,6 +18,7 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.model import (
     _BACK,
     AttachRequest,
+    LaunchFailure,
     LaunchSelection,
     age,
     conversation_row,
@@ -67,6 +69,7 @@ _T = TypeVar("_T")
 __all__ = [
     "ALL_SCREENS",
     "AttachRequest",
+    "LaunchFailure",
     "LaunchSelection",
     "ProfileChoice",
     "RemoteAgentsTui",
@@ -94,10 +97,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     CSS = """
     Screen { layout: vertical; }
     #body { height: 1fr; }
-    ChoiceScreen #status { height: auto; padding: 0 1; }
+    ChoiceScreen #status { height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
     ChoiceScreen OptionList { height: 1fr; }
     ChoiceScreen #output { height: 1fr; padding: 0 1; }
     """
+    #: Shown in the header, with each screen's breadcrumb as the sub-title beside it. Set
+    #: rather than left to default: `App.title` falls back to the class name, so the header
+    #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.
+    TITLE = "Remote Agents"
     # Every one of these is answered per screen by `ChoiceScreen.check_action`, which hides
     # the ones that would do nothing here. The tooltips say what the key does *to the thing
     # the owner is looking at*, because the labels alone were ambiguous in the one way that
@@ -182,6 +189,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
+
+    def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
+        """Announce something that did not happen, without taking the position off screen.
+
+        The one place `notify` is called from in this surface, so `markup=False` is decided
+        once rather than at each site. Every message routed here interpolates a string this
+        app did not author — an exception's text, a provider's reason, the owner's own label —
+        and `Toast` renders console markup by default, where an unbalanced `[` raises
+        `MarkupError`. That is not a hypothetical for this codebase: it is the same defect
+        `markup=False` on `#status` and `#choices` was added for, found there in three
+        separate sources because each call site was escaping for itself.
+
+        `severity` is the honest one of Textual's three rather than always `error`. A stop the
+        policy now refuses and a stop that raised are both "it did not happen", but only one
+        of them is a fault — and an owner who sees the same red for both learns to read
+        neither.
+        """
+        self.notify(message, severity=severity, markup=False)
 
     @property
     def body(self) -> ChoiceScreen | None:
@@ -446,16 +471,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except Exception as error:
             _LOG.exception("resume failed")
             screen.show_choices(((_BACK, "Back"),))
-            screen.set_status(f"The conversation was not resumed: {error}")
+            screen.set_status("Nothing was started. Go back and try again.")
+            screen.announce(f"The conversation was not resumed: {error}")
             return
         finally:
             self._busy = False
         if record.state is SessionState.FAILED:
+            # The command stays in the status line and the explanation goes to the toast,
+            # which is the split this whole task turns on applied to its hardest case: the
+            # owner has to be able to *copy* the attach command, and a toast expires. What
+            # they need to keep is the artifact; what they need to be told once is why they
+            # are being handed it.
             screen.show_choices(((_BACK, "Back"),))
             screen.set_status(
+                f"Attach with: {' '.join(self._services.attach_argv(str(record.session_id)))}"
+            )
+            screen.announce(
                 "The resumed session did not become ready, but its pane may still exist. "
-                "Reach it with:\n"
-                f"{' '.join(self._services.attach_argv(str(record.session_id)))}"
+                "The command below reaches it."
             )
             return
         session_id = str(record.session_id)
@@ -470,6 +503,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # mitigation, and the window it covers is precisely the one the modal opens, since the
     # owner may deliberate for as long as they like while the other writer moves the session
     # on underneath them.
+    #
+    # **Every branch where that re-read disagrees with the rows now redraws before returning**,
+    # and the rule is worth stating once rather than per site because the sites are spread
+    # across two files. A re-read that finds the session gone, or in a state the policy no
+    # longer offers this action for, has established that the rows in front of the owner are
+    # wrong — they were built from the earlier read. Reporting and returning left them there,
+    # still offering a stop for a session that had ended. The success path has always ended in
+    # `after_command`; these are the ten branches that did not — four here (`stop` and
+    # `set_remote_control`, a vanished record and a policy refusal each) and six in
+    # `screens/sessions.py` (the same pair on each confirm method, plus the vanished-record
+    # read in `show_attach` and in `show_inspect`). Found as a class after a Tier-1 review
+    # named two of them.
+
+
 
     async def set_remote_control(
         self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen
@@ -488,10 +535,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                screen.set_status("That session is no longer available.")
+                screen.announce("That session is no longer available.", severity="warning")
+                await screen.after_command()
                 return
             if not remote_control_available(record):
-                screen.set_status("Remote Control is no longer available for this session.")
+                screen.announce(
+                    "Remote Control is no longer available for this session.", severity="warning"
+                )
+                await screen.after_command()
                 return
             state = await self._services.launcher.set_remote_control(
                 RemoteControlCommand(record.session_id, desired, _idempotency_key())
@@ -501,10 +552,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Same reason as the failed stop: do not leave the cursor resting on the
             # button that just failed, or a second enter re-issues it as a blind retry.
             screen.show_choices(((_BACK, "Back"),))
-            screen.set_status(
-                f"Remote Control was not changed: {error}\n"
-                "Go back and open the session again to see its current state."
-            )
+            screen.set_status("Go back and open the session again to see its current state.")
+            screen.announce(f"Remote Control was not changed: {error}")
             return
         else:
             # Inside the guard on purpose, as in `stop`: nothing else may run until the
@@ -521,7 +570,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # The order matters and survives the change: `after_command` re-reads the detail,
             # which rewrites the status from the store, so this has to come after it or the
             # new control mode would be painted and then immediately overwritten.
-            screen.set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
+            #
+            # The session's own name is dropped from this line because the header carries it
+            # now — that is what the breadcrumb is for, and repeating it here is what made
+            # this a two-line message in a one-line region.
+            screen.set_status(f"Remote Control: {state.value}")
         finally:
             self._busy = False
 
@@ -545,14 +598,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             record = await self.current_record(session_value)
             if record is None:
-                screen.set_status("That session is no longer available.")
+                screen.announce("That session is no longer available.", severity="warning")
+                await screen.after_command()
                 return
             if action not in available_actions(record.state):
-                screen.set_status(
-                    f"{record.display.rendered}\n"
-                    f"{_ACTION_LABELS[action]} is no longer available for this session.\n"
-                    f"{explain_state(record.state)}"
+                # A refusal, not a fault: the session moved on between the row being drawn
+                # and the key being pressed, which is the window DEC-007's re-read exists to
+                # catch. `warning` rather than `error` says so.
+                screen.announce(
+                    f"{_ACTION_LABELS[action]} is no longer available for this session. "
+                    f"{explain_state(record.state)}",
+                    severity="warning",
                 )
+                await screen.after_command()
                 return
             await self._issue_stop(action, record)
         except Exception as error:
@@ -561,10 +619,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # leaves the owner resting on "Yes, force stop it", so without this a second
             # enter re-issues the kill as a retry nobody deliberately chose.
             screen.show_choices(((_BACK, "Back"),))
-            screen.set_status(
-                f"{_ACTION_LABELS[action]} did not complete: {error}\n"
-                "The session was left as it is. Go back and open it again to see its "
-                "current state, then retry if you still want to."
+            screen.set_status("Go back and open the session again to see its current state.")
+            screen.announce(
+                f"{_ACTION_LABELS[action]} did not complete: {error} "
+                "The session was left as it is; retry if you still want to."
             )
             return
         else:
@@ -622,10 +680,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if target is None or not target.showing:
             return
         target.show_choices(((_BACK, "Back"),))
-        target.set_status(
-            f"The managed sessions could not be read: {error}\n"
-            "Press escape to return to the project list."
-        )
+        target.set_status("Press escape to return to the project list.")
+        target.announce(f"The managed sessions could not be read: {error}")
 
     async def current_record(self, session_value: str) -> SessionRecord | None:
         """Re-read one session from the store, without refreshing readiness.
@@ -657,12 +713,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # but there is nothing left to reach, inspect, or stop.
         return tuple(record for record in records if record.state is not SessionState.ENDED)
 
-    async def launch(self) -> str | None:
+    async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
 
         Returning the message rather than rendering it keeps the screen that owns the
         review in charge of its own rows: a failure has to leave the cursor somewhere
         deliberate, and only the review screen knows where that is.
+
+        A `LaunchFailure` rather than a string since the status split: the two failures below
+        both have something the owner keeps and something they read once, and only the review
+        screen can put the first of those anywhere.
         """
         project, profile = self.selection.project, self.selection.profile
         if project is None or profile is None:
@@ -682,16 +742,22 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
         except Exception as error:
             _LOG.exception("launch failed")
-            return f"The session was not started: {error}\n{self.selection.review()}"
+            return LaunchFailure(
+                status="Nothing was started. Launch again, or go back to change the selection.",
+                explanation=f"The session was not started: {error}",
+            )
         finally:
             self._busy = False
         if record.state is SessionState.FAILED:
-            return (
-                "The session did not become ready, but its pane may still exist. Reach it "
-                "with:\n"
-                f"{' '.join(self._services.attach_argv(str(record.session_id)))}\n"
-                "Check this host before retrying, or a second session will run alongside it.\n"
-                f"{self.selection.review()}"
+            return LaunchFailure(
+                status=(
+                    f"Attach with: {' '.join(self._services.attach_argv(str(record.session_id)))}"
+                ),
+                explanation=(
+                    "The session did not become ready, but its pane may still exist. The "
+                    "command below reaches it. Check this host before retrying, or a second "
+                    "session will run alongside it."
+                ),
             )
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))

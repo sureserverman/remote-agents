@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from textual.widgets import OptionList
+from tui_feedback import announcements, breadcrumb
+from tui_feedback import status as _status
 
 from remote_agents.adapters.tui.app import (
     AttachRequest,
@@ -94,10 +96,6 @@ def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
-def _status(app: RemoteAgentsTui) -> str:
-    return str(app.screen.query_one("#status").content)
-
-
 async def _choose(app: RemoteAgentsTui, pilot, key: str) -> None:
     """Select a row on whatever screen is showing.
 
@@ -160,10 +158,15 @@ async def test_an_unavailable_agent_cannot_be_chosen() -> None:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "cursor-agent")
         await pilot.pause()
+        reported = " ".join(announcements(app, severity="warning"))
         status = _status(app)
 
-    assert "cannot be launched" in status
-    assert "executable_missing" in status
+    assert "cannot be launched" in reported
+    assert "executable_missing" in reported
+    assert status == "Choose an agent.", (
+        "the refusal replaced the instruction the owner was following, which is the "
+        "competition for one region this split exists to end"
+    )
     assert launcher.commands == []
 
 
@@ -177,10 +180,13 @@ async def test_review_names_the_project_agent_and_label_before_any_launch() -> N
         await _submit_label(app, pilot, "nightly run")
         await pilot.pause()
         status = _status(app)
+        trail = breadcrumb(app)
         keys = _keys(app)
 
-    assert "infra/existing" in status
-    assert "claude" in status
+    # Still all three facts, and still before any launch — the project and the agent are the
+    # trail that got the owner here, and the label is the one thing that trail cannot carry.
+    assert "infra/existing" in trail
+    assert "claude" in trail
     assert "nightly run" in status
     assert keys[:1] == ["launch"]
     assert launcher.commands == []
@@ -208,9 +214,9 @@ async def test_a_label_beyond_the_configured_bound_is_refused() -> None:
         await _choose(app, pilot, "claude")
         await _submit_label(app, pilot, "x" * 11)
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="warning"))
 
-    assert "up to 10 characters" in status
+    assert "up to 10 characters" in reported
 
 
 async def test_cancel_at_review_returns_to_the_projects_without_launching() -> None:
@@ -307,10 +313,10 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
         await _submit_label(app, pilot, "")
         await _choose(app, pilot, "launch")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
         keys = _keys(app)
 
-    assert "did not become ready" in status
+    assert "did not become ready" in reported
     assert keys[:1] == ["launch"]
     assert app.return_value is None
 
@@ -386,10 +392,10 @@ async def test_a_refused_creation_is_reported_and_leaves_the_catalogue_alone() -
         await pilot.pause()
         await app.screen.choose("create")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
 
-    assert "Project not created" in status
-    assert "already exists" in status
+    assert "Project not created" in reported
+    assert "already exists" in reported
 
 
 async def test_refresh_re_reads_a_project_another_process_created() -> None:
@@ -654,9 +660,9 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
         await _submit_label(app, pilot, "")
         await _choose(app, pilot, "launch")
         await pilot.pause()
-        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
 
-    assert "was not started" in status
+    assert "was not started" in reported
     assert app.return_value is None
 
 
@@ -671,7 +677,11 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
         await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
 
+    # The command the owner has to copy stays on screen; the reason they are being handed it
+    # is said once. Both are asserted, because keeping only the toast would leave the command
+    # to expire out from under them and keeping only the status would never say why.
     assert "attach-session" in status
-    assert "did not become ready" in status
+    assert "did not become ready" in reported
     assert app.return_value is None

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Input, OptionList, Static
 from textual.widgets.option_list import Option
@@ -44,7 +45,8 @@ class ChoiceScreen(Screen[None]):
     fair question.
     """
 
-    #: Shown in the status line until the screen replaces it.
+    #: Shown in the status line until the screen replaces it. One line, checked at class
+    #: creation by `__init_subclass__` for the reason given there.
     status = ""
     #: When set, the filter input is visible and carries this placeholder.
     filter_placeholder: str | None = None
@@ -66,6 +68,35 @@ class ChoiceScreen(Screen[None]):
     #: step they are on and cannot be recovered; a filter is one keystroke to retype and sits
     #: on the resting position, where leaving for another flow is the ordinary thing to do.
     entry_is_a_commitment = False
+    #: What this position is called in the header's breadcrumb. A screen whose name depends on
+    #: what it was opened with overrides this as a property — the session detail is called
+    #: after its session, not after its class.
+    #:
+    #: Empty means "leave me out of the trail", which is the honest answer for a position that
+    #: adds nothing to it. Declared per screen rather than derived from the class name so that
+    #: renaming a class does not silently rewrite what the owner reads.
+    crumb = ""
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Keep `status` a single line at the point a screen declares one.
+
+        The class-level `status` is the same sink `set_status` writes to, and it reaches it
+        without passing through that method's guard: `compose` constructs the widget with it
+        directly — `Static(self.status, id="status", …)` — before `on_mount` and its
+        `set_status` call ever run. So the guard has to exist twice or it does not exist:
+        once at the call, once here. This one fires at import, which is where a two-line
+        default belongs to be caught.
+
+        (An earlier version of this paragraph named `on_mount` as the bypass. It is not one —
+        it goes through `set_status` like any other caller — and the correction is worth
+        keeping because a reader sent to the wrong method would find the guard working there
+        and conclude this check was redundant.)
+        """
+        super().__init_subclass__(**kwargs)
+        if "\n" in cls.status:
+            raise ValueError(
+                f"{cls.__name__}.status must be one line; the status region is one line high"
+            )
 
     def __init__(self) -> None:
         super().__init__()
@@ -111,6 +142,7 @@ class ChoiceScreen(Screen[None]):
         the chrome by defining its own handler — the output pane in particular starts hidden
         on every screen and used to be reset from a single place in the app.
         """
+        self.show_breadcrumb()
         self.query_one("#output-pane").display = False
         entry = self.query_one("#filter", Input)
         entry.display = self.filter_placeholder is not None
@@ -319,10 +351,105 @@ class ChoiceScreen(Screen[None]):
             return
         await self.app.push_screen(screen)
 
+    # The three sinks -------------------------------------------------------------
+    #
+    # One region per kind of thing the surface has to say, because they were sharing one and
+    # the sharing is the defect. `#status` was `height: auto`, so an instruction one line long
+    # and a failure four lines long were the same widget at two different sizes, and the rows
+    # below it moved every time one replaced the other. Which one an owner is reading was also
+    # left to them to work out: "Choose a project", "Project not created: …" and
+    # "3 managed session(s)" are an instruction, a failure and a result, and they arrived in
+    # the same place in the same voice.
+    #
+    #   breadcrumb  — where the owner is. Header sub-title, set on mount and whenever the
+    #                 thing this position is *about* is read again.
+    #   status      — what to do here. Exactly one line, so the body below it never moves,
+    #                 and it belongs to the position rather than to any one action.
+    #   announce    — what an action just did or failed to do. A toast, because it is about
+    #                 the action and the position outlives it.
+
+    @property
+    def breadcrumb(self) -> str:
+        """The trail of positions the owner walked to get here.
+
+        Built from the stack rather than declared per screen, which is the only form that
+        cannot go stale: a screen names itself with `crumb` and knows nothing about what it
+        was pushed from, so the same detail reached from the sessions list and from a launch
+        reads correctly both times without either flow maintaining a path.
+
+        `self` is appended when it is not on the stack yet, because this is called from
+        `on_mount` and a pushed screen is mounted before `App.push_screen` appends it —
+        without that the screen the owner is being shown is the one missing from its own
+        trail. Identity rather than `in`: `DOMNode` inherits `object.__eq__`, so this is the
+        same comparison either way today, and spelling it out keeps it that way if a screen
+        ever gains a value-based one.
+        """
+        trail = [screen for screen in self.app.screen_stack if isinstance(screen, ChoiceScreen)]
+        if not any(screen is self for screen in trail):
+            trail.append(self)
+        return " › ".join(screen.crumb for screen in trail if screen.crumb)
+
+    def show_breadcrumb(self) -> None:
+        """Put the trail in the header. Called again by a screen whose own crumb has moved.
+
+        **The one render in this class deliberately not guarded by `showing`**, which is worth
+        saying because every other one is and the omission would otherwise read as an
+        oversight. Two reasons, and both are needed:
+
+        * It runs from `on_mount`, where `app.screen` is not yet this screen — the same
+          ordering `breadcrumb` compensates for — so a `showing` guard would skip the
+          breadcrumb on the very call that establishes it.
+        * The failure it would be guarding against does not exist here. `sub_title` is a
+          reactive on the screen itself and each screen composes its own `Header`, so writing
+          to a popped screen's sub-title repaints a header nobody is looking at. That is
+          unlike `query_one("#status")`, which raises `NoMatches` once the widgets are gone —
+          which is the thing `showing` exists for.
+        """
+        self.sub_title = self.breadcrumb
+
     def set_status(self, text: str) -> None:
+        """Say, in one line, what to do here or what just happened.
+
+        One line is a *contract*, not a suggestion the CSS enforces: `#status` is one line
+        high, so a second line is not clipped visibly, it is invisible. The first line is
+        rendered and the whole value is logged, which turns a silent loss into one that can be
+        found — and the log is not the fallback nobody reads, because a static check over this
+        package's own call sites (`test_status_region.py`) fails on a literal that contains a
+        newline. The runtime guard is what catches the values a static check cannot see: an
+        exception's `str()` carries newlines from the library that raised it, and every
+        failure path in this surface interpolates one.
+        """
         if not self.showing:
             return
+        if "\n" in text:
+            _LOG.warning("a multi-line status was truncated to its first line: %r", text)
+            text = text.split("\n", 1)[0]
         self.query_one("#status", Static).update(text)
+
+    def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
+        """Say what an action did, over the position rather than instead of it.
+
+        A toast, for the reason the region split exists: a failed stop is about the stop, and
+        the detail underneath it is still the answer to "what am I looking at". Rendering the
+        failure into the status line meant the position lost its own description for as long
+        as the message stayed — which was until something else overwrote it, since nothing
+        ever cleared it.
+
+        Named for what it does rather than for the common case: `error` is the default because
+        most of what an action has to report here is a failure, but a creation that succeeded
+        and a refusal that is nobody's fault both come through here too, and a method called
+        `report_failure` carrying an `information` severity would be a lie at its own call
+        site.
+
+        Delegated to the app rather than calling `Widget.notify` directly so `markup=False` is
+        decided once. `Toast` renders console markup by default, and every message that
+        reaches here interpolates something this app does not author: an exception's text, an
+        agent's own output, the owner's label. An unbalanced `[` in any of them raises
+        `MarkupError` out of the notification path — which is the same defect, in the same
+        surface, that `markup=False` on the two Statics was added for. Escaping at each call
+        site is what let those go unnoticed for three sources at once.
+        """
+        self.tui.announce(message, severity=severity)
 
     @staticmethod
     def _unique_by_key(entries: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:

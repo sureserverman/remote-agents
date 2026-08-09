@@ -56,6 +56,7 @@ class SessionsScreen(ChoiceScreen):
 
     position = "SESSIONS"
     can_refresh = True
+    crumb = "Sessions"
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -89,9 +90,7 @@ class SessionsScreen(ChoiceScreen):
             return
         if not records:
             self.show_choices(())
-            self.set_status(
-                "There are no managed sessions. Press escape to return to the project list."
-            )
+            self.set_status("No managed sessions. Press escape to return to the project list.")
             return
         self.set_status(f"{len(records)} managed session(s). Select one for detail.")
         self.show_choices(
@@ -108,8 +107,17 @@ class SessionDetailScreen(ChoiceScreen):
     def __init__(self, session_value: str) -> None:
         super().__init__()
         self.session_value = session_value
+        # The session's own name, as the store last reported it. Held rather than re-read on
+        # every breadcrumb build because the breadcrumb is drawn from a synchronous property
+        # and reading the store is not — `render_detail` refreshes it and says so.
+        self._display = ""
 
     position = "SESSION_DETAIL"
+
+    @property
+    def crumb(self) -> str:
+        """The session this detail is about, once it has been read; its id until then."""
+        return self._display or self.session_value
 
     #: Its `on_reveal` already re-reads this one session from the shared store on every
     #: back path, so there was something to
@@ -150,9 +158,13 @@ class SessionDetailScreen(ChoiceScreen):
             self.show_choices(((_BACK, "Back"),))
             self.set_status("That session is no longer available.")
             return
-        self.set_status(
-            f"{record.display.rendered}\nState: {record.state.value}\n{explain_state(record.state)}"
-        )
+        # The name goes to the header and the state's meaning to the status line. They were
+        # three lines in one region, and the first of them — the session's own name — is the
+        # part that was true of the whole position rather than of any moment in it, which is
+        # exactly the split the breadcrumb exists to take.
+        self._display = record.display.rendered
+        self.show_breadcrumb()
+        self.set_status(f"State: {record.state.value}. {explain_state(record.state)}")
         self.show_choices(self.detail_entries(record))
 
     def detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
@@ -229,18 +241,27 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                self.set_status("That session is no longer available.")
+                # Re-read and redraw. The rows in front of the owner were built from the
+                # record this one just disagreed with, so leaving them is offering actions the
+                # surface has this instant established are not available. The abort path three
+                # branches down has always done exactly this, for exactly this reason.
+                await self.on_reveal()
                 return
             if FORCE not in available_actions(record.state):
                 # Asked before the question rather than only after the answer. `stop` re-checks
                 # regardless — that is DEC-007's fourth mitigation and it is what makes this
                 # safe rather than necessary — but a surface that opens a kill confirmation it
                 # already knows it will refuse is asking the owner to authorise nothing.
-                self.set_status(
-                    f"{record.display.rendered}\n"
-                    f"{ACTION_LABELS[FORCE]} is no longer available for this session.\n"
-                    f"{explain_state(record.state)}"
+                self.announce(
+                    f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
+                    f"{explain_state(record.state)}",
+                    severity="warning",
                 )
+                # Re-read and redraw. The rows in front of the owner were built from the
+                # record this one just disagreed with, so leaving them is offering actions the
+                # surface has this instant established are not available. The abort path three
+                # branches down has always done exactly this, for exactly this reason.
+                await self.on_reveal()
                 return
             if not self.showing:
                 return
@@ -252,11 +273,7 @@ class SessionDetailScreen(ChoiceScreen):
                 # other awaited read on this screen already reports rather than raises; this
                 # one is newer, not different.
                 _LOG.exception("the force confirmation could not be shown")
-                self.set_status(
-                    f"{record.display.rendered}\n"
-                    f"The confirmation could not be shown: {error}\n"
-                    "Nothing was stopped."
-                )
+                self.announce(f"The confirmation could not be shown: {error} Nothing was stopped.")
                 return
             if not confirmed:
                 # Abort re-reads, exactly as leaving the confirmation screen used to: the owner
@@ -287,14 +304,23 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                self.set_status("That session is no longer available.")
+                # Re-read and redraw. The rows in front of the owner were built from the
+                # record this one just disagreed with, so leaving them is offering actions the
+                # surface has this instant established are not available. The abort path three
+                # branches down has always done exactly this, for exactly this reason.
+                await self.on_reveal()
                 return
             if not remote_control_available(record):
-                self.set_status(
-                    f"{record.display.rendered}\n"
-                    "Remote Control is not available for this session.\n"
-                    f"{explain_state(record.state)}"
+                self.announce(
+                    "Remote Control is not available for this session. "
+                    f"{explain_state(record.state)}",
+                    severity="warning",
                 )
+                # Re-read and redraw. The rows in front of the owner were built from the
+                # record this one just disagreed with, so leaving them is offering actions the
+                # surface has this instant established are not available. The abort path three
+                # branches down has always done exactly this, for exactly this reason.
+                await self.on_reveal()
                 return
             if not self.showing:
                 return
@@ -304,11 +330,7 @@ class SessionDetailScreen(ChoiceScreen):
                 )
             except Exception as error:
                 _LOG.exception("the Remote Control confirmation could not be shown")
-                self.set_status(
-                    f"{record.display.rendered}\n"
-                    f"The confirmation could not be shown: {error}\n"
-                    "Nothing was changed."
-                )
+                self.announce(f"The confirmation could not be shown: {error} Nothing was changed.")
                 return
             if not confirmed:
                 await self.on_reveal()
@@ -326,21 +348,26 @@ class SessionDetailScreen(ChoiceScreen):
             try:
                 record = await self.tui.current_record(self.session_value)
                 if record is None:
-                    self.set_status("That session is no longer available.")
+                    # Redrawn rather than only reported, for the reason given in
+                    # `confirm_force`: the rows still offer actions on a session this read has
+                    # just established is gone.
+                    await self.on_reveal()
                     return
                 command = await self.services.launcher.copy_attach(record.session_id)
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return
         if command is None:
-            self.set_status(
-                f"{record.display.rendered}\n"
+            self.announce(
                 "Attach is not available: this session's pane is not live, or the pane "
-                "found for it belongs to a different project or agent.\n"
-                f"{explain_state(record.state)}"
+                f"found for it belongs to a different project or agent. "
+                f"{explain_state(record.state)}",
+                severity="warning",
             )
             return
-        self.set_status(f"{record.display.rendered}\nAttach with:\n{command}")
+        # The command stays in the status line rather than going to a toast, because it is the
+        # thing the owner came here to copy and a toast expires under them.
+        self.set_status(f"Attach with: {command}")
 
     async def show_inspect(self) -> None:
         """Capture this session's output, then open it on a screen of its own.
@@ -355,22 +382,17 @@ class SessionDetailScreen(ChoiceScreen):
         async with self.holding_the_guard():
             record = await self.tui.current_record(self.session_value)
             if record is None:
-                self.set_status("That session is no longer available.")
+                await self.on_reveal()
                 return
             try:
                 captured = await capture(record.session_id)
             except Exception as error:
                 _LOG.exception("capture failed")
-                self.set_status(
-                    f"{record.display.rendered}\nThe output could not be captured: {error}"
-                )
+                self.announce(f"The output could not be captured: {error}")
                 return
             text = render_capture(captured, self.services.capture_redactions)
             await self.advance_to(
-                InspectScreen(
-                    f"{record.display.rendered}\nOutput. Press escape to go back.",
-                    text or "This session has produced no output yet.",
-                )
+                InspectScreen(text or "This session has produced no output yet.")
             )
 
 
@@ -378,16 +400,22 @@ class InspectScreen(ChoiceScreen):
     """This session's captured output, on the scrollable pane rather than in the list."""
 
     position = "INSPECT"
+    status = "Output. Press escape to go back."
+    #: "Output", not the session's name: the detail one level down the stack already carries
+    #: that, and a trail that repeats its own last entry says nothing twice.
+    crumb = "Output"
 
-    def __init__(self, status: str, output: str) -> None:
+    def __init__(self, output: str) -> None:
         super().__init__()
-        self._status_text = status
+        # The session's name used to be the other half of this constructor, prepended to a
+        # two-line status. It is gone rather than moved: the detail one level down the stack
+        # names the session in its own crumb, so passing it here would have been carrying a
+        # value only to render it twice.
         self._output_text = output
 
     async def populate(self) -> None:
         self.hide_entry()
         self.show_choices(())
-        self.set_status(self._status_text)
         self.show_output(self._output_text)
 
 

@@ -122,8 +122,18 @@ hidden, so a keystroke meant for somewhere else does not discard it. Ctrl+Q is d
 not among them: quit means leave, and an app that refuses to close until an entry is cleared
 would be the worse answer. It does take unsaved work with it.
 
-A launch that raises, or one whose session never reaches readiness, returns to Review with
-the reason and attaches to nothing.
+The surface has three places to say something and each one says a different kind of thing. The
+header carries a breadcrumb — `Projects › infra/existing › claude › Review` — which is where
+you are and what you chose to get there. Below it is a single line of status: what to do here,
+or the result you still need, such as the attach command for a session that did not come up.
+It is exactly one line high, so the list beneath it never moves as a message changes. Anything
+that did not happen — a stop that raised, an agent that cannot be launched, a project the
+catalogue no longer has — is a notification in the corner instead, because it is about the
+action you just took rather than about the position you are standing on, which outlives it.
+
+A launch that raises, or one whose session never reaches readiness, returns to Review, reports
+the reason, and attaches to nothing. Where the session's pane may still exist, the attach
+command that reaches it stays on the status line rather than expiring with the notification.
 
 Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates
 under the configured development root, further restricted to those the project identity rule also
