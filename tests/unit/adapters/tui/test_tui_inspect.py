@@ -62,15 +62,15 @@ def _context(launcher: _Listing, capture=None, redactions: tuple[str, ...] = ())
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 def _output(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#output").content)
+    return str(app.screen.query_one("#output").content)
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [option.id for option in app.query_one("#choices", OptionList).options]
+    return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _capturing(text: str):
@@ -232,12 +232,12 @@ async def test_leaving_inspect_by_any_route_restores_the_list() -> None:
         await pilot.pause()
         await app._resolve_detail("inspect")
         await pilot.pause()
-        assert app.query_one("#choices").display is False
+        assert app.screen.query_one("#choices").display is False
 
         await pilot.press("ctrl+s")
         await pilot.pause()
-        choices_visible = app.query_one("#choices").display
-        output_visible = app.query_one("#output-pane").display
+        choices_visible = app.screen.query_one("#choices").display
+        output_visible = app.screen.query_one("#output-pane").display
         step = app._step
 
     assert step is Step.SESSIONS

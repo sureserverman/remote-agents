@@ -91,11 +91,11 @@ async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> No
 
     async with app.run_test() as pilot:
         if step_setup == "profiles":
-            app._choose_project("opaque-existing")
+            await app.screen.choose("opaque-existing")
         elif step_setup == "review":
-            app._choose_project("opaque-existing")
-            app._choose_profile("claude")
-            app._submit_label("")
+            await app.screen.choose("opaque-existing")
+            await app.screen.choose("claude")
+            app.screen.submit("")
         elif step_setup == "areas":
             await app._show_areas()
         await pilot.pause()

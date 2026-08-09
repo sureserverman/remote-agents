@@ -88,15 +88,34 @@ def _context(**overrides: object) -> TuiContext:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
+    return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [option.id for option in app.query_one("#choices", OptionList).options]
+    return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
+
+
+async def _choose(app: RemoteAgentsTui, pilot, key: str) -> None:
+    """Select a row on whatever screen is showing.
+
+    The wizard positions are screens now, so "which handler acts on this key" is answered by
+    what is on top of the stack rather than by a field the test would have to set. Pausing
+    after each choice is what lets the pushed screen mount before the next assertion reads
+    it — `app.screen` is the *active* screen, and `App.query_one` resolves against the stack
+    bottom, so a read taken too early would report the previous position.
+    """
+    await app.screen.choose(key)
+    await pilot.pause()
+
+
+async def _submit_label(app: RemoteAgentsTui, pilot, value: str) -> None:
+    """Type a label and press enter, as `LabelScreen` receives it from its own input."""
+    app.screen.submit(value)
+    await pilot.pause()
 
 
 async def test_the_project_list_shows_registered_before_unregistered_with_its_group() -> None:
@@ -116,7 +135,7 @@ async def test_typing_filters_the_project_list_one_character_at_a_time() -> None
         for character in "other":
             await pilot.press(character)
         await pilot.pause()
-        typed = app.query_one("#filter").value
+        typed = app.screen.query_one("#filter").value
         rows = _rows(app)
 
     assert typed == "other"
@@ -127,7 +146,7 @@ async def test_the_agent_list_names_every_curated_profile_with_its_blocking_reas
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
+        await _choose(app, pilot, "opaque-existing")
         await pilot.pause()
         rows = _rows(app)
 
@@ -139,8 +158,8 @@ async def test_an_unavailable_agent_cannot_be_chosen() -> None:
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("cursor-agent")
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "cursor-agent")
         await pilot.pause()
         status = _status(app)
 
@@ -154,9 +173,9 @@ async def test_review_names_the_project_agent_and_label_before_any_launch() -> N
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("nightly run")
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "nightly run")
         await pilot.pause()
         status = _status(app)
         keys = _keys(app)
@@ -173,9 +192,9 @@ async def test_an_empty_label_is_skipped_rather_than_rejected(value: str) -> Non
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label(value)
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, value)
         await pilot.pause()
         status = _status(app)
 
@@ -186,9 +205,9 @@ async def test_a_label_beyond_the_configured_bound_is_refused() -> None:
     app = RemoteAgentsTui(_context(max_label_length=10))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("x" * 11)
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "x" * 11)
         await pilot.pause()
         status = _status(app)
 
@@ -200,10 +219,10 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("")
-        await app._resolve_review(_CANCEL)
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "")
+        await _choose(app, pilot, _CANCEL)
         await pilot.pause()
         rows = _rows(app)
 
@@ -211,14 +230,35 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
     assert rows == ["infra/existing  [Registered]", "dev-area/other-thing  [Unregistered]"]
 
 
-async def test_back_at_review_restores_the_agent_choice() -> None:
+async def test_back_from_review_walks_out_through_the_label_to_the_agent_choice() -> None:
+    """Back goes to the position it was reached from, one step at a time.
+
+    **This is a deliberate navigation change, not an incidental one, and it removes TWO
+    shortcuts rather than one.** The hand-rolled chain sent Back at Review straight to the
+    agent list, skipping the label — so an owner who mistyped a label could not go back and
+    fix it, only re-pick the agent and retype. It *also* sent Escape at the label straight to
+    the project list, skipping the agent choice, because `LABEL` was lumped into `_TEXT_STEPS`
+    with the add-project name entry. On a real stack Back means "the screen I came from", so
+    both jumps become one level each. No affordance is added or removed and every position
+    stays reachable; what changes is that neither shortcut survives.
+
+    Both legs are asserted below — the Review→Label pop, then the Label→Profiles pop — so
+    reinstating either shortcut fails here rather than passing on the destination alone.
+    """
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("")
-        await app._resolve_review(_BACK)
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "")
+        assert _keys(app)[:1] == ["launch"], "expected the review before walking back from it"
+
+        await _choose(app, pilot, _BACK)
+        assert app.screen.query_one("#filter").has_focus, (
+            "back from the review must restore the label entry, not skip past it"
+        )
+
+        await app.action_back()
         await pilot.pause()
         rows = _rows(app)
 
@@ -229,11 +269,11 @@ async def test_confirming_issues_one_launch_carrying_the_chosen_label() -> None:
     launcher = FakeLauncher()
     app = RemoteAgentsTui(_context(launcher=launcher))
 
-    async with app.run_test():
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("nightly")
-        await app._resolve_review("launch")
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "nightly")
+        await _choose(app, pilot, "launch")
 
     assert len(launcher.commands) == 1
     command = launcher.commands[0]
@@ -248,11 +288,11 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
     keys = []
     for _ in range(2):
         app = RemoteAgentsTui(_context(launcher=launcher))
-        async with app.run_test():
-            app._choose_project("opaque-existing")
-            app._choose_profile("claude")
-            app._submit_label("")
-            await app._resolve_review("launch")
+        async with app.run_test() as pilot:
+            await _choose(app, pilot, "opaque-existing")
+            await _choose(app, pilot, "claude")
+            await _submit_label(app, pilot, "")
+            await _choose(app, pilot, "launch")
     keys = [command.idempotency_key for command in launcher.commands]
 
     assert len(set(keys)) == 2
@@ -263,10 +303,10 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("")
-        await app._resolve_review("launch")
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "")
+        await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
         keys = _keys(app)
@@ -404,23 +444,24 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        assert app.query_one("#filter").has_focus
+        assert app.screen.query_one("#filter").has_focus
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#choices").has_focus and app.query_one("#choices").highlighted == 0
+        choices = app.screen.query_one("#choices")
+        assert choices.has_focus and choices.highlighted == 0
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#choices").has_focus
+        assert app.screen.query_one("#choices").has_focus
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#filter").has_focus
+        assert app.screen.query_one("#filter").has_focus
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#choices").has_focus
+        assert app.screen.query_one("#choices").has_focus
 
 
 async def test_the_add_project_binding_opens_the_area_list() -> None:
@@ -431,7 +472,7 @@ async def test_the_add_project_binding_opens_the_area_list() -> None:
         await pilot.pause()
 
         assert _keys(app)[:2] == ["dev-area", "infra"]
-        assert app.query_one("#choices").has_focus
+        assert app.screen.query_one("#choices").has_focus
 
 
 async def test_the_refresh_binding_re_reads_the_catalogue() -> None:
@@ -454,9 +495,9 @@ async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#filter").has_focus
+        assert app.screen.query_one("#filter").has_focus
 
-        app.query_one("#filter").value = "typed-name"
+        app.screen.query_one("#filter").value = "typed-name"
         await pilot.press("enter")
         await pilot.pause()
 
@@ -504,10 +545,10 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
     app = RemoteAgentsTui(_context(launcher=Exploding()))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("")
-        await app._resolve_review("launch")
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "")
+        await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
 
@@ -520,10 +561,10 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
     app = RemoteAgentsTui(_context(launcher=FakeLauncher(state=SessionState.FAILED)))
 
     async with app.run_test() as pilot:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
-        app._submit_label("")
-        await app._resolve_review("launch")
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "claude")
+        await _submit_label(app, pilot, "")
+        await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
 

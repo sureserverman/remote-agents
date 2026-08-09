@@ -107,7 +107,7 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
     that too — so an unstripped comparison is never equal, and this helper would report that
     no cursor was drawn on every screen rather than failing on its own bug.
     """
-    choices = app.query_one("#choices", OptionList)
+    choices = app.screen.query_one("#choices", OptionList)
     rows = [str(option.prompt) for option in choices.options]
     cursor = choices.get_visual_style(
         "option-list--option", "option-list--option-highlighted"
@@ -124,6 +124,16 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
     return (marked[0] if marked else None), rows
 
 
+def _position(app: RemoteAgentsTui) -> str:
+    """The name of the position on screen, whichever mechanism still owns it.
+
+    Stage 2 moves the positions onto screens a few at a time, so both answers are live for
+    the length of the stage: an extracted screen declares its own `position`, and what is
+    left reports through `Step`. Task 2.4 deletes the second half with the enum.
+    """
+    return getattr(app.screen, "position", "") or app._step.name
+
+
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
     await app._show_sessions()
     await app._show_detail(str(_SESSION_ID))
@@ -131,9 +141,11 @@ async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
 
 
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
-    app._choose_project("opaque-existing")
-    app._choose_profile("claude")
-    app._submit_label("nightly run")
+    # Through each screen's own handler, so the cursor under test is the one the real
+    # navigation leaves behind rather than one a directly-built screen happens to draw.
+    await app.screen.choose("opaque-existing")
+    await app.screen.choose("claude")
+    app.screen.submit("nightly run")
 
 
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
@@ -157,7 +169,7 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         await pilot.pause()
         await drive(app)
         await settle(app, pilot)
-        assert app._step is step
+        assert _position(app) == step.name
         marked, rows = _highlighted(app)
         assert marked is not None, (
             f"{step.name} drew no cursor at all; rows were {rows}. The owner cannot see "
@@ -172,7 +184,7 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         # `render_line` paints the highlight by comparing `highlighted` to the row index, so
         # "the drawn row and the reactive agree" is true by construction and proves nothing.
         # Landing on the wrong row is the failure this catches, and it is reachable.
-        choices = app.query_one("#choices", OptionList)
+        choices = app.screen.query_one("#choices", OptionList)
         assert choices.highlighted is not None
         assert rows[choices.highlighted] == expected
 
@@ -228,22 +240,22 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        app._fill((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=2)
-        superseded = app._resting_generation
+        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=2)
+        superseded = app.screen._resting_generation
         await pilot.pause()
 
-        app._fill((("x", "one"), ("y", "two")), highlight=0)
+        app.screen.show_choices((("x", "one"), ("y", "two")), highlight=0)
         await pilot.pause()
-        current = app._resting_generation
+        current = app.screen._resting_generation
         assert current != superseded, "each fill must take its own generation"
 
-        choices = app.query_one("#choices", OptionList)
+        choices = app.screen.query_one("#choices", OptionList)
         marked_before, rows = _highlighted(app)
         assert rows == ["one", "two"]
 
         # The superseded fill's index (2) clamps onto the two-row list at row 1 -- "two",
         # the row it must not reach.
-        app._rest_cursor(choices, 2, superseded)
+        app.screen._rest_cursor(choices, 2, superseded)
         await pilot.pause()
         marked_after, _ = _highlighted(app)
         assert marked_after == marked_before == "one", (
@@ -251,7 +263,7 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         )
 
         # The current generation is still honoured, so the guard blocks staleness only.
-        app._rest_cursor(choices, 1, current)
+        app.screen._rest_cursor(choices, 1, current)
         await pilot.pause()
         marked_current, _ = _highlighted(app)
         assert marked_current == "two", "the guard must not block the newest fill"

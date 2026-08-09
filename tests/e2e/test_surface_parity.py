@@ -141,7 +141,7 @@ def _app(state: SessionState = SessionState.RUNNING) -> tuple[RemoteAgentsTui, _
 
 
 def _choices(app: RemoteAgentsTui) -> OptionList:
-    return app.query_one("#choices", OptionList)
+    return app.screen.query_one("#choices", OptionList)
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
@@ -149,7 +149,7 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 def _keys(app: RemoteAgentsTui) -> list[str | None]:
@@ -170,7 +170,7 @@ async def _choose(app, pilot, key: str) -> None:
     assert key in _keys(app), f"the surface offers no {key!r} entry to select"
     choices = _choices(app)
     index = choices.get_option_index(key)
-    await app.on_option_list_option_selected(
+    await app.screen.on_option_list_option_selected(
         OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
     )
     await pilot.pause()
@@ -241,7 +241,7 @@ async def _probe_inspect(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "inspect")
     assert app._step is Step.INSPECT
-    assert "Claude Code ready" in str(app.query_one("#output").content)
+    assert "Claude Code ready" in str(app.screen.query_one("#output").content)
 
 
 async def _probe_resume(app, launcher, pilot) -> None:

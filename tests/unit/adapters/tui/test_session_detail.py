@@ -60,7 +60,7 @@ def _context(launcher: _Listing) -> TuiContext:
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 # ENDED is deliberately unreachable in detail: it is filtered from the listing, so there is

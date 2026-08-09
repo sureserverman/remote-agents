@@ -72,11 +72,11 @@ def _context(launcher: _RecordingLauncher) -> TuiContext:
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [option.id for option in app.query_one("#choices", OptionList).options]
+    return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 @pytest.mark.parametrize("state", list(SessionState))
@@ -230,7 +230,7 @@ async def test_a_failed_toggle_does_not_leave_the_cursor_on_the_button_that_fail
         assert len(launcher.issued) == 1
 
         keys = _keys(app)
-        resting = keys[app.query_one("#choices").highlighted] if keys else None
+        resting = keys[app.screen.query_one("#choices").highlighted] if keys else None
         await pilot.press("enter")
         await pilot.pause()
 

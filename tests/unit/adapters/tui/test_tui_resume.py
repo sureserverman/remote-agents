@@ -117,15 +117,15 @@ def _capable(*profiles: str) -> tuple[ProfileResumeCapability, ...]:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
+    return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _keys(app: RemoteAgentsTui) -> list[str]:
-    return [option.id for option in app.query_one("#choices", OptionList).options]
+    return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 async def test_resume_is_offered_when_a_conversation_service_is_wired() -> None:

@@ -76,11 +76,11 @@ def _context(launcher: _Listing) -> TuiContext:
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
-    return [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
+    return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
 
 def _status(app: RemoteAgentsTui) -> str:
-    return str(app.query_one("#status").content)
+    return str(app.screen.query_one("#status").content)
 
 
 async def test_sessions_lists_one_row_per_managed_session() -> None:

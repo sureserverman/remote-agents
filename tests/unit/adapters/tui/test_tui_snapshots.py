@@ -115,7 +115,7 @@ async def settle(app, pilot, *, tries: int = 20) -> None:
 
     for _ in range(tries):
         await pilot.pause()
-        choices = app.query_one("#choices", OptionList)
+        choices = app.screen.query_one("#choices", OptionList)
         if not choices.options:
             return
         if choices.highlighted is not None:
@@ -232,7 +232,7 @@ def _assert_snapshot(app: RemoteAgentsTui, name: str) -> None:
     # Pin the cursor before capturing. Setting this reactive pauses the blink timer and
     # forces the cursor visible, so a screen with a focused input renders identically
     # whether the capture lands 10ms or 10s after focus.
-    for entry in app.query(Input):
+    for entry in app.screen.query(Input):
         entry.cursor_blink = False
     # A fixed title rather than the app's own: the title is hashed into the SVG's element
     # ids and rendered into its header, so deriving it from app state would couple every
@@ -255,18 +255,33 @@ def _assert_snapshot(app: RemoteAgentsTui, name: str) -> None:
         )
 
 
-async def _drive(app: RemoteAgentsTui, step: Step) -> None:
+def _position(app: RemoteAgentsTui) -> str:
+    """The name of the position on screen, whichever mechanism still owns it.
+
+    Stage 2 moves the 16 positions onto screens a few at a time, so for the length of the
+    stage both answers are live: an extracted screen declares its own `position`, and what
+    is left reports through `Step`. Task 2.4 deletes the second half of this expression along
+    with the enum, and the baselines keep their names across the whole move.
+    """
+    return getattr(app.screen, "position", "") or app._step.name
+
+
+async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
     """Put the app in `step`, using the same private entry points the sibling tests use."""
     if step is Step.PROJECTS:
         return
-    if step is Step.PROFILES:
-        app._choose_project("opaque-existing")
-        return
-    if step in {Step.LABEL, Step.REVIEW}:
-        app._choose_project("opaque-existing")
-        app._choose_profile("claude")
+    if step in {Step.PROFILES, Step.LABEL, Step.REVIEW}:
+        # Through the screens' own handlers, so the baseline captures what the navigation
+        # actually builds rather than a screen assembled directly by the test.
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        if step is Step.PROFILES:
+            return
+        await app.screen.choose("claude")
+        await pilot.pause()
         if step is Step.REVIEW:
-            app._submit_label("nightly run")
+            app.screen.submit("nightly run")
+            await pilot.pause()
         return
     if step in {Step.AREAS, Step.NAME, Step.PROJECT_REVIEW}:
         await app._show_areas()
@@ -324,9 +339,9 @@ async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
         # to be set early enough for the pump to have applied it by the time we export.
         app.theme = _THEME
         await pilot.pause()
-        await _drive(app, step)
+        await _drive(app, pilot, step)
         await settle(app, pilot)
-        assert app._step is step, f"drove to {app._step}, expected {step}"
+        assert _position(app) == step.name, f"drove to {_position(app)}, expected {step.name}"
         _assert_snapshot(app, step.name)
 
 

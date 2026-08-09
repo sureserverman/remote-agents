@@ -232,7 +232,7 @@ async def test_a_stop_with_an_unresolvable_profile_fails_closed(
             await pilot.pause()
             await app._resolve_detail("graceful")
             await pilot.pause()
-            status = str(app.query_one("#status").content)
+            status = str(app.screen.query_one("#status").content)
 
         assert gateway.keys == [], "an unresolvable profile must send nothing to the pane"
         final = await service.list_sessions()

@@ -68,7 +68,7 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            app.query_one("#filter").value = "brand-new"
+            app.screen.query_one("#filter").value = "brand-new"
             await pilot.press("enter")
             await pilot.pause()
             assert not (dev_root / "infra" / "brand-new").exists()
@@ -87,10 +87,10 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            app.query_one("#filter").value = "first run"
+            app.screen.query_one("#filter").value = "first run"
             await pilot.press("enter")
             await pilot.pause()
-            assert "brand-new" in str(app.query_one("#status").content)
+            assert "brand-new" in str(app.screen.query_one("#status").content)
 
             await pilot.press("up")
             await pilot.press("enter")

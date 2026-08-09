@@ -108,7 +108,15 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
         # the same question asked of the same artifact: what the detail view actually put on
         # screen. Reading `_detail_entries` or `available_actions` here instead would satisfy
         # every assertion below vacuously, for every state, while catching nothing.
-        rows = [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
+        #
+        # Read off `app.screen` rather than `app` since the surface gained a real screen
+        # stack. That is a strengthening, not a workaround: `App.query_one` resolves against
+        # the *bottom* of the stack, so with the detail pushed on top the old spelling would
+        # have returned the project list's rows — every state would render zero actions and
+        # the equality below would hold vacuously for the states whose policy set is empty.
+        # `app.screen` is the position actually on screen, which is what this file asks about.
+        choices = app.screen.query_one("#choices", OptionList)
+        rows = [str(option.prompt) for option in choices.options]
     return {_LABEL_TO_ACTION[row] for row in rows if row in _LABEL_TO_ACTION}
 
 

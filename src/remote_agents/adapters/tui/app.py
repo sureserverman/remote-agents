@@ -5,21 +5,29 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TypeVar
+from typing import TypeVar, cast
 
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, OptionList, Static
-from textual.widgets.option_list import Option
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.model import (
+    _BACK,
+    _CANCEL,
+    _NEXT,
+    _PREVIOUS,
+    AttachRequest,
+    LaunchSelection,
+    label_or_error,
+    selectable_area,
+)
+from remote_agents.adapters.tui.screens import ALL_SCREENS, LegacyScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
@@ -30,7 +38,7 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery
 from remote_agents.application.project_admin import CreateProjectCommand
-from remote_agents.application.project_catalog import CatalogProject, search_catalogue
+from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -51,9 +59,30 @@ from remote_agents.ports.terminal_text import sanitize_terminal_text
 _LOG = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
+# Re-exported so importers that predate the `model` split keep working, and because these
+# are part of this module's published surface: tests and the composition root both take
+# `AttachRequest` from here.
+__all__ = [
+    "ALL_SCREENS",
+    "AttachRequest",
+    "LaunchSelection",
+    "ProfileChoice",
+    "RemoteAgentsTui",
+    "Step",
+    "TuiContext",
+    "label_or_error",
+    "run_local_terminal",
+    "selectable_area",
+]
+
 
 class Step(StrEnum):
-    """The wizard positions, each deciding which handler may act on an event."""
+    """The wizard positions this stage has not extracted into screens yet.
+
+    Shrinking, not growing: the four launch positions are `screens/launch.py` now, and their
+    members stay here only because the snapshot baselines and the remaining dispatch chain
+    still name them. Task 2.4 deletes the enum outright.
+    """
 
     PROJECTS = "projects"
     PROFILES = "profiles"
@@ -73,65 +102,10 @@ class Step(StrEnum):
     RESUME_CONFIRM = "resume-confirm"
 
 
-_TEXT_STEPS = frozenset({Step.LABEL, Step.NAME})
+_TEXT_STEPS = frozenset({Step.NAME})
 _RESUME_PAGE_SIZE = 10
 _INSPECT_MAX_LINES = 2000
 _INSPECT_MAX_BYTES = 512 * 1024
-_NEXT = "\x00next"
-_PREVIOUS = "\x00previous"
-_BACK = "\x00back"
-_CANCEL = "\x00cancel"
-
-
-@dataclass(frozen=True, slots=True)
-class LaunchSelection:
-    """What the wizard has gathered so far, and nothing the surface has not been given."""
-
-    project: CatalogProject | None = None
-    profile: ProfileChoice | None = None
-    label: str | None = None
-
-    def review(self) -> str:
-        project = self.project.name if self.project else "?"
-        area = self.project.area if self.project else "?"
-        profile = self.profile.profile_id if self.profile else "?"
-        label = self.label or "none"
-        return f"Project: {area}/{project}\nAgent: {profile}\nLabel: {label}"
-
-
-@dataclass(frozen=True, slots=True)
-class AttachRequest:
-    """The one command the app hands back to its caller after a ready launch."""
-
-    session_id: str
-    argv: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if not self.session_id or not self.argv:
-            raise ValueError("an attach request needs a session and a command")
-
-    @property
-    def command(self) -> str:
-        return " ".join(self.argv)
-
-
-def label_or_error(value: str, limit: int) -> str | None:
-    """Normalize an optional session label under the configured bound."""
-    normalized = " ".join(value.split())
-    if not normalized:
-        return None
-    if len(normalized) > limit or any(not character.isprintable() for character in normalized):
-        raise ValueError(f"use a visible label of up to {limit} characters")
-    return normalized
-
-
-def selectable_area(value: str) -> bool:
-    """Offer an existing directory only when the project identity rule also accepts it."""
-    try:
-        ProjectIdentity(area=value, name=value)
-    except ValueError:
-        return False
-    return True
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
@@ -157,7 +131,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         super().__init__()
         self._services = context
         self._catalogue = context.catalogue
-        self._selection = LaunchSelection()
+        self.selection = LaunchSelection()
         self._step = Step.PROJECTS
         self._area: str | None = None
         self._name: str | None = None
@@ -168,51 +142,72 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._resume_page = 1
         self._resume_page_count = 1
         self._resume_choice: object | None = None
-        self._status = "Choose a project."
-        # Bumped by every `_fill`; a deferred cursor placement carries the value it was
-        # scheduled with and stands down if a later fill has superseded it.
-        self._resting_generation = 0
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical(id="body"):
-            # `markup=False` on both Statics for the reason given at `#choices` below, and it
-            # is the same defect: these two sinks receive the same untrusted strings by
-            # a different route. `#status` is handed the conversation description
-            # (`_resolve_resume_conversation`) and `record.display.rendered`, which
-            # interpolates the owner's custom label; `#output` is handed the session's raw
-            # captured pane output, which `sanitize_terminal_text` filters for control
-            # sequences and NUL but not for brackets. Both raised `MarkupError` on an
-            # unbalanced bracket — an agent's own output could take down the screen showing it.
-            yield Static(self._status, id="status", markup=False)
-            yield Input(placeholder="Filter projects", id="filter")
-            # `markup=False` because row text is displayed, never interpreted. Three sources
-            # reach the rows that console markup would otherwise consume or act on: the
-            # project list's `[Registered]` tag, which vanished outright; the owner's own
-            # session label; and the conversation description, which is echoed from the
-            # agent's own output — where `[link=…]` is a live hyperlink directive and an
-            # unbalanced bracket raises `MarkupError`, taking the screen down rather than
-            # mangling it. Set once here rather than escaped at each call site so a fourth
-            # source cannot arrive unescaped, which is how all three of these went unnoticed.
-            #
-            # It has to be *here* and not on the rows: `OptionList` renders each `Option`
-            # with `visualize(self, option.prompt, markup=self._markup)`, so the flag lives
-            # on the widget and `Option` has no `markup` argument at all. Passing it to
-            # `Option` would be a `TypeError`; forgetting it here is silent.
-            yield OptionList(id="choices", markup=False)
-            with VerticalScroll(id="output-pane"):
-                yield Static("", id="output", markup=False)
-        yield Footer()
+    def get_default_screen(self) -> Screen[None]:
+        """The project list, installed as the bottom of the stack rather than pushed.
 
-    def on_mount(self) -> None:
-        self.query_one("#output-pane").display = False
-        self._show_projects()
+        `pop_screen` raises `ScreenStackError` on the last screen, so making the resting
+        position the *default* screen is what turns "a back path must never empty the stack"
+        from a rule every screen has to observe into something the stack cannot do.
+        """
+        return ProjectsScreen()
 
-    # Rendering -----------------------------------------------------------------
+    # Shared state screens read ---------------------------------------------------
+
+    @property
+    def services(self) -> TuiContext:
+        return self._services
+
+    @property
+    def catalogue(self) -> tuple[CatalogProject, ...]:
+        return self._catalogue
+
+    @property
+    def busy(self) -> bool:
+        """Whether an action is mid-flight and no other may start."""
+        return self._busy
+
+    @property
+    def body(self) -> ChoiceScreen:
+        """The active screen, typed as the body every position renders."""
+        return cast(ChoiceScreen, self.screen)
+
+    def return_to_projects(self) -> None:
+        """Unwind to the resting position, whatever the owner had pushed on top of it."""
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        self._step = Step.PROJECTS
+        self._area = None
+        self._name = None
+        screen = self.screen
+        if isinstance(screen, ProjectsScreen):
+            screen.render_projects()
+
+    # Rendering -------------------------------------------------------------------
+    #
+    # These four delegate to the active screen. They are what remains of the app-owned
+    # rendering the extracted screens took over, kept only for the `Step` positions still
+    # hosted on `LegacyScreen`; Task 2.4 deletes them with it.
 
     def _set_status(self, text: str) -> None:
-        self._status = text
-        self.query_one("#status", Static).update(text)
+        self.body.set_status(text)
+
+    def _fill(
+        self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
+    ) -> None:
+        self.body.show_choices(entries, focus=focus, highlight=highlight)
+
+    def _text_entry(self, placeholder: str) -> None:
+        self.body.text_entry(placeholder)
+
+    def _hide_entry(self) -> None:
+        self.body.hide_entry()
+
+    def _show_output(self, text: str) -> None:
+        self.body.show_output(text)
+
+    def _hide_output(self) -> None:
+        self.body.hide_output()
 
     async def _in_thread(self, work: Callable[[], _T], *, group: str) -> _T:
         """Run one blocking call on a worker thread and return what it returned.
@@ -264,178 +259,56 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         return await self.push_screen_wait(screen)
 
-    @staticmethod
-    def _unique_by_key(entries: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
-        """Drop a repeated key, keeping the first, so a duplicate cannot take the screen down.
+    # The transitional bridge -----------------------------------------------------
 
-        `OptionList.add_options` raises `DuplicateID` when two options in one batch share an
-        `id` (`_option_list.py:379-382`), and it raises *within* a single call rather than only
-        against options already added. The widget this replaced tolerated a repeated key
-        silently — it was a plain attribute with no uniqueness rule — so the migration turned
-        "renders an ambiguous list" into "raises uncaught inside `_fill`".
+    async def _enter_legacy(self) -> None:
+        """Make the transitional host the active screen, without stacking two of them.
 
-        That matters at exactly one call site today and it is the one fed by data this app does
-        not own: `_show_resume_conversations` keys its rows on `ConversationReference`s built by
-        the agent adapters from on-disk provider state. Its `try/except` covers the catalogue
-        await, not the `_fill` below it, so a provider reporting one conversation twice on a
-        page would crash the screen. Every other caller keys on ids this app controls.
-
-        Deduplicating here rather than at that one site because `_fill` is the single choke
-        point every row set passes through, so a future screen fed by another external source
-        cannot reintroduce the crash by forgetting a guard. Keeping the first occurrence
-        preserves the old behaviour's outcome: under the previous widget both rows rendered and
-        selecting either dispatched the same key, so one row and the same key is the closer
-        match to what the owner used to get — and strictly better than an exception.
-
-        The drop is logged rather than silent: a page that lost a row is a provider bug worth
-        being able to find, and a silent dedup would hide it exactly as the crash would.
+        Every position still driven by `Step` rests directly on the project list, which is
+        what the back paths those positions already had assert. Unwinding first is therefore
+        the faithful translation of the old behaviour, not a simplification of it: entering
+        the sessions view from three levels into the launch wizard used to *replace* the
+        position rather than descend from it.
         """
-        seen: set[str] = set()
-        unique: list[tuple[str, str]] = []
-        for key, text in entries:
-            if key in seen:
-                _LOG.warning("dropped a repeated row key from the surface: %r", key)
-                continue
-            seen.add(key)
-            unique.append((key, text))
-        return tuple(unique)
-
-    def _fill(
-        self, entries: tuple[tuple[str, str], ...], *, focus: bool = True, highlight: int = 0
-    ) -> None:
-        """Render the choices, and take the keyboard only when the list is the next decision.
-
-        Refilling while the owner is typing a filter must leave the keyboard where it is, or
-        every character after the first lands on the list instead of the query.
-        """
-        # Restoring here rather than in each exit route: the inspect screen swaps the list
-        # for a scrollable output pane, and every other screen renders through _fill, so
-        # this is the one place that cannot be forgotten by a new navigation path.
-        self._hide_output()
-        self._resting_generation += 1
-        choices = self.query_one("#choices", OptionList)
-        choices.clear_options()
-        entries = self._unique_by_key(entries)
-        # The key is the `Option`'s own `id`, which is what the selection message carries
-        # back as `option_id`. It replaces the attribute this used to bolt onto each mounted
-        # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and
-        # row identity is first-class rather than monkey-patched.
-        choices.add_options(Option(text, id=key) for key, text in entries)
-        if entries and focus:
-            resting = min(highlight, len(entries) - 1)
-            # Set twice, deliberately. Here, so the cursor is correct the instant `_fill`
-            # returns — a keypress arriving before the next refresh must still land on the
-            # resting row, which is what keeps a stray enter harmless. Unlike the mounted
-            # rows this replaced, `add_options` populates the option list synchronously, so
-            # this assignment alone already both decides the enter and draws the cursor:
-            # `render_line` compares `self.highlighted` against the row it is painting.
-            choices.highlighted = resting
-            choices.focus()
-            # And again after the refresh, for what this assignment cannot do yet: the widget
-            # may still have no `scrollable_content_region` (it is un-hidden a few lines above,
-            # and a fresh screen has not laid out), so `watch_highlighted`'s
-            # `scroll_to_highlight` finds no line for the index and returns without scrolling.
-            # A resting row below the fold would therefore be highlighted but off screen.
-            self.call_after_refresh(self._rest_cursor, choices, resting, self._resting_generation)
-
-    def _rest_cursor(self, choices: OptionList, index: int, generation: int) -> None:
-        """Re-assert the cursor on `index` once the list has a laid-out region to scroll in.
-
-        `generation` is what makes this safe to defer. The index was computed against the
-        entries of one particular fill, and `OptionList.validate_highlighted` *clamps* rather
-        than rejects, so a callback that outlived its screen would silently rest the cursor on
-        some unrelated row of whatever list is showing now — on a destructive confirm, that
-        is the DEC-007 mitigation this method exists to restore, quietly undone.
-
-        **Corrected after review:** an earlier version of this paragraph claimed no path
-        reached that "because every `_fill` caller awaits fully between fills", and that
-        Stage 2's move to workers was what would make it reachable. That was wrong when it
-        was written, not merely overtaken. `_show_areas` and the catalogue refresh already
-        awaited off the event loop through the raw thread offload these workers replaced,
-        and an `await` yields to the pump identically either way — so a second fill could
-        already interleave. Stage 2 changed the mechanism, not the reachability.
-
-        Note what this guard does and does not cover: it protects the *deferred cursor
-        placement* only. The `_fill` call in `_show_areas` and `action_refresh` runs
-        synchronously when the worker resolves and can still repaint a screen the owner has
-        since navigated away from — BL-016, which the screen rewrite closes structurally.
-
-        The highlight is cleared first because `_fill` has usually already assigned this exact
-        value, and a reactive assigned its current value notifies nothing — so without the
-        clear `watch_highlighted` would not run a second time and the deferred pass would
-        achieve nothing at all. What that second run is *for* has changed with the widget:
-        the drawn cursor no longer depends on it (`render_line` reads `highlighted` directly,
-        so the value `_fill` set is already on screen), but `scroll_to_highlight` does, and
-        that is the part `_fill` is too early to complete.
-
-        `watch_highlighted` returns immediately on `None`, so the clear posts nothing —
-        subscribers see one `OptionHighlighted` per fill, not a None-then-real pair.
-        """
-        if generation != self._resting_generation or not choices.options:
+        if isinstance(self.screen, LegacyScreen):
             return
-        choices.highlighted = None
-        choices.highlighted = index
+        while len(self.screen_stack) > 1:
+            self.pop_screen()
+        await self.push_screen(LegacyScreen())
 
-    def _text_entry(self, placeholder: str) -> None:
-        """Hand the keyboard to the input, which only the text steps ever use."""
-        self._fill(())
-        entry = self.query_one("#filter", Input)
-        entry.display = True
-        entry.value = ""
-        entry.placeholder = placeholder
-        entry.focus()
+    def _show_projects(self) -> None:
+        self.return_to_projects()
 
-    def _hide_entry(self) -> None:
-        entry = self.query_one("#filter", Input)
-        entry.value = ""
-        entry.display = False
+    async def legacy_choose(self, key: str) -> None:
+        """Dispatch a chosen row for the positions `Step` still owns."""
+        if self._step is Step.AREAS:
+            await self._choose_area(key)
+        elif self._step is Step.PROJECT_REVIEW:
+            await self._resolve_project_review(key)
+        elif self._step is Step.SESSIONS:
+            await self._show_detail(key)
+        elif self._step is Step.SESSION_DETAIL:
+            await self._resolve_detail(key)
+        elif self._step is Step.FORCE_CONFIRM:
+            await self._resolve_force_confirm(key)
+        elif self._step is Step.REMOTE_CONTROL_CONFIRM:
+            await self._resolve_remote_control(key)
+        elif self._step is Step.RESUME_PROJECTS:
+            await self._resolve_resume_project(key)
+        elif self._step is Step.RESUME_PROFILES:
+            await self._resolve_resume_profile(key)
+        elif self._step is Step.RESUME_CONVERSATIONS:
+            await self._resolve_resume_conversation(key)
+        elif self._step is Step.RESUME_CONFIRM:
+            await self._resolve_resume_confirm(key)
 
-    def _show_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
-        self._step = Step.PROJECTS
-        self._area = None
-        self._name = None
-        entry = self.query_one("#filter", Input)
-        entry.display = True
-        entry.placeholder = "Filter projects"
-        projects = search_catalogue(self._catalogue, query) if query else self._catalogue
-        self._set_status(
-            f"Choose a project. {len(projects)} available. "
-            "Type to filter, then press enter for the list."
-        )
-        self._fill(
-            tuple(
-                (project.opaque_id, f"{project.area}/{project.name}  [{project.group}]")
-                for project in projects
-            ),
-            focus=False,
-        )
-        if not keep_focus:
-            entry.value = ""
-            entry.focus()
-
-    def _show_profiles(self) -> None:
-        self._step = Step.PROFILES
-        self._hide_entry()
-        self._set_status("Choose an agent.")
-        self._fill(
-            tuple(
-                (
-                    profile.profile_id,
-                    profile.profile_id
-                    if profile.available
-                    else f"{profile.profile_id}  (unavailable: {profile.reason})",
-                )
-                for profile in self._services.profiles
-            )
-        )
-
-    def _show_review(self) -> None:
-        self._step = Step.REVIEW
-        self._hide_entry()
-        self._set_status(f"Review\n{self._selection.review()}")
-        self._fill((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
+    def legacy_submit(self, value: str) -> None:
+        """Accept typed text for the one text position `Step` still owns."""
+        if self._step is Step.NAME:
+            self._submit_name(value)
 
     async def _show_areas(self) -> None:
+        await self._enter_legacy()
         self._step = Step.AREAS
         self._hide_entry()
         try:
@@ -459,99 +332,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._hide_entry()
         self._set_status(f"Review new project\nArea: {self._area}\nName: {self._name}")
         self._fill((("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
-
-    # Interaction ---------------------------------------------------------------
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if self._step is Step.PROJECTS:
-            self._show_projects(event.value, keep_focus=True)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if self._step is Step.NAME:
-            self._submit_name(event.value)
-        elif self._step is Step.LABEL:
-            self._submit_label(event.value)
-        elif self._step is Step.PROJECTS:
-            self._enter_project_list()
-
-    def _enter_project_list(self) -> None:
-        """Move from the filter into the filtered list, so arrows and enter can pick."""
-        choices = self.query_one("#choices", OptionList)
-        if choices.options:
-            choices.highlighted = 0
-            choices.focus()
-
-    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        # Every row `_fill` builds carries its key as the option's id, so a `None` here means
-        # a row this app did not construct — refuse it rather than dispatch on it.
-        key = event.option_id
-        if key is None or self._busy:
-            return
-        if self._step is Step.PROJECTS:
-            self._choose_project(key)
-        elif self._step is Step.PROFILES:
-            self._choose_profile(key)
-        elif self._step is Step.REVIEW:
-            await self._resolve_review(key)
-        elif self._step is Step.AREAS:
-            await self._choose_area(key)
-        elif self._step is Step.PROJECT_REVIEW:
-            await self._resolve_project_review(key)
-        elif self._step is Step.SESSIONS:
-            await self._show_detail(key)
-        elif self._step is Step.SESSION_DETAIL:
-            await self._resolve_detail(key)
-        elif self._step is Step.FORCE_CONFIRM:
-            await self._resolve_force_confirm(key)
-        elif self._step is Step.REMOTE_CONTROL_CONFIRM:
-            await self._resolve_remote_control(key)
-        elif self._step is Step.RESUME_PROJECTS:
-            await self._resolve_resume_project(key)
-        elif self._step is Step.RESUME_PROFILES:
-            await self._resolve_resume_profile(key)
-        elif self._step is Step.RESUME_CONVERSATIONS:
-            await self._resolve_resume_conversation(key)
-        elif self._step is Step.RESUME_CONFIRM:
-            await self._resolve_resume_confirm(key)
-
-    def _choose_project(self, opaque_id: str) -> None:
-        project = next((item for item in self._catalogue if item.opaque_id == opaque_id), None)
-        if project is None:
-            self._set_status("That project is no longer available. Refresh and try again.")
-            return
-        self._selection = replace(LaunchSelection(), project=project)
-        self._show_profiles()
-
-    def _choose_profile(self, profile_id: str) -> None:
-        profile = next(
-            (item for item in self._services.profiles if item.profile_id == profile_id), None
-        )
-        if profile is None or not profile.available:
-            reason = profile.reason if profile is not None else "unknown profile"
-            self._set_status(f"That agent cannot be launched here: {reason}")
-            return
-        self._selection = replace(self._selection, profile=profile)
-        self._step = Step.LABEL
-        self._set_status("Enter an optional label, then press enter. Leave empty to skip.")
-        self._text_entry("Optional label")
-
-    def _submit_label(self, value: str) -> None:
-        try:
-            label = label_or_error(value, self._services.max_label_length)
-        except ValueError as error:
-            self._set_status(str(error))
-            return
-        self._selection = replace(self._selection, label=label)
-        self._show_review()
-
-    async def _resolve_review(self, key: str) -> None:
-        if key == _BACK:
-            self._show_profiles()
-        elif key == _CANCEL:
-            self._selection = LaunchSelection()
-            self._show_projects()
-        elif key == "launch":
-            await self._launch()
 
     async def _choose_area(self, area: str) -> None:
         if area == _CANCEL:
@@ -605,7 +385,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # Actions -------------------------------------------------------------------
 
     async def action_back(self) -> None:
+        """Leave the current position for the one it was reached from.
+
+        For an extracted screen this is the stack itself — pop, and the screen beneath is by
+        construction where the owner came from. The chain below survives only for the
+        positions still hosted on `LegacyScreen`, which repaint one host in place and so have
+        no stack to pop.
+        """
         if self._busy:
+            return
+        if not isinstance(self.screen, LegacyScreen):
+            if len(self.screen_stack) > 1:
+                self.pop_screen()
             return
         if self._step in {Step.RESUME_PROJECTS, Step.RESUME_PROFILES}:
             self._show_projects()
@@ -622,10 +413,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 await self._show_detail(self._detail_id)
         elif self._step is Step.SESSION_DETAIL:
             await self._show_sessions()
-        elif self._step in {Step.PROFILES, Step.AREAS, Step.SESSIONS}:
+        elif self._step in {Step.AREAS, Step.SESSIONS}:
             self._show_projects()
-        elif self._step is Step.REVIEW:
-            self._show_profiles()
         elif self._step is Step.PROJECT_REVIEW:
             await self._show_areas()
         elif self._step in _TEXT_STEPS:
@@ -662,6 +451,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         failed here may have become ready since, and listing a stale FAILED would send the
         owner to fix something that already works.
         """
+        await self._enter_legacy()
         self._step = Step.SESSIONS
         self._hide_entry()
         try:
@@ -684,6 +474,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         The record is looked up again rather than trusted from the list: the store has two
         writers, so a session can be stopped elsewhere while this list is on screen.
         """
+        await self._enter_legacy()
         self._step = Step.SESSION_DETAIL
         self._hide_entry()
         try:
@@ -763,21 +554,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._set_status(f"{record.display.rendered}\nOutput. Press escape to go back.")
         self._show_output(text or "This session has produced no output yet.")
 
-    def _show_output(self, text: str) -> None:
-        self.query_one("#output-pane").display = True
-        self.query_one("#choices").display = False
-        self.query_one("#output", Static).update(text)
-
-    def _hide_output(self) -> None:
-        self.query_one("#output-pane").display = False
-        self.query_one("#choices").display = True
-
     # Resume ---------------------------------------------------------------------
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
         if self._busy or self._services.conversations is None:
             return
+        await self._enter_legacy()
         self._resume_project = None
         self._resume_profile = None
         self._resume_choice = None
@@ -1217,11 +1000,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # but there is nothing left to reach, inspect, or stop.
         return tuple(record for record in records if record.state is not SessionState.ENDED)
 
-    async def _launch(self) -> None:
-        project, profile = self._selection.project, self._selection.profile
+    async def launch(self) -> str | None:
+        """Issue the gathered launch, and return what to say if it did not take.
+
+        Returning the message rather than rendering it keeps the screen that owns the
+        review in charge of its own rows: a failure has to leave the cursor somewhere
+        deliberate, and only the review screen knows where that is.
+        """
+        project, profile = self.selection.project, self.selection.profile
         if project is None or profile is None:
-            self._show_projects()
-            return
+            self.return_to_projects()
+            return None
         self._busy = True
         self._set_status("Launching…")
         try:
@@ -1230,28 +1019,25 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     ProjectId(project.opaque_id),
                     ProfileId(profile.profile_id),
                     _idempotency_key(),
-                    self._selection.label,
+                    self.selection.label,
                 )
             )
         except Exception as error:
             _LOG.exception("launch failed")
-            self._show_review()
-            self._set_status(f"The session was not started: {error}\n{self._selection.review()}")
-            return
+            return f"The session was not started: {error}\n{self.selection.review()}"
         finally:
             self._busy = False
         if record.state is SessionState.FAILED:
-            self._show_review()
-            self._set_status(
+            return (
                 "The session did not become ready, but its pane may still exist. Reach it "
                 "with:\n"
                 f"{' '.join(self._services.attach_argv(str(record.session_id)))}\n"
                 "Check this host before retrying, or a second session will run alongside it.\n"
-                f"{self._selection.review()}"
+                f"{self.selection.review()}"
             )
-            return
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        return None
 
 
 def _conversation_row(summary: ConversationSummary) -> str:

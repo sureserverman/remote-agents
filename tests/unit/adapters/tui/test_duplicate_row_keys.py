@@ -34,7 +34,7 @@ async def test_a_repeated_key_renders_one_row_instead_of_raising() -> None:
         # twice produces after `_show_resume_conversations` maps it to `str(item.reference)`.
         app._fill((("same", "First"), ("same", "Second"), ("other", "Third")))
         await pilot.pause()
-        choices = app.query_one("#choices", OptionList)
+        choices = app.screen.query_one("#choices", OptionList)
         assert [option.id for option in choices.options] == ["same", "other"]
         assert [str(option.prompt) for option in choices.options] == ["First", "Third"]
 
@@ -50,7 +50,8 @@ async def test_the_first_occurrence_is_the_one_kept() -> None:
         await settle(app, pilot)
         app._fill((("dup", "kept"), ("dup", "dropped")))
         await pilot.pause()
-        prompts = [str(option.prompt) for option in app.query_one("#choices", OptionList).options]
+        choices = app.screen.query_one("#choices", OptionList)
+        prompts = [str(option.prompt) for option in choices.options]
         assert prompts == ["kept"]
 
 
@@ -80,7 +81,7 @@ async def test_the_resting_cursor_still_lands_on_a_real_row_after_a_drop() -> No
         await settle(app, pilot)
         app._fill((("a", "A"), ("b", "B"), ("a", "A again")), highlight=2)
         await pilot.pause()
-        choices = app.query_one("#choices", OptionList)
+        choices = app.screen.query_one("#choices", OptionList)
         assert choices.highlighted is not None
         assert choices.highlighted < len(choices.options)
         assert str(choices.get_option_at_index(choices.highlighted).prompt) == "B"
