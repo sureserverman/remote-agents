@@ -54,7 +54,7 @@ import pytest
 from textual.widgets import Input
 from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -87,6 +87,30 @@ _SIZE = (100, 30)
 # configuration into the net.
 _THEME = "textual-dark"
 
+# The sixteen positions, by the name each screen declares and each baseline is committed
+# under. A literal tuple rather than a derived one on purpose: deriving it from `ALL_SCREENS`
+# would make the suite agree with the code by construction, so a position that lost its
+# baseline would stop being compared instead of failing. `test_every_position_has_a_baseline`
+# below is what ties this list back to the registry.
+_POSITIONS = (
+    "PROJECTS",
+    "PROFILES",
+    "LABEL",
+    "REVIEW",
+    "AREAS",
+    "NAME",
+    "PROJECT_REVIEW",
+    "SESSIONS",
+    "SESSION_DETAIL",
+    "FORCE_CONFIRM",
+    "REMOTE_CONTROL_CONFIRM",
+    "INSPECT",
+    "RESUME_PROJECTS",
+    "RESUME_PROFILES",
+    "RESUME_CONVERSATIONS",
+    "RESUME_CONFIRM",
+)
+
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered")
 _SESSION_ID = SessionId.new()
@@ -95,7 +119,7 @@ _SESSION_ID = SessionId.new()
 async def settle(app, pilot, *, tries: int = 20) -> None:
     """Pump until the cursor has been drawn on a row, then let the caller capture.
 
-    `_fill` schedules a second cursor pass via `call_after_refresh`, so the screen is not
+    `show_choices` schedules a second cursor pass via `call_after_refresh`, so the screen is not
     final the instant the driving coroutine returns. On most screens one `pause()` covers it.
     On AREAS and PROJECT_REVIEW it did not reliably: those two are the only screens whose
     entry path crosses a worker thread (`available_areas`, `creator.create`), and that extra
@@ -105,11 +129,11 @@ async def settle(app, pilot, *, tries: int = 20) -> None:
     Waiting on the condition rather than adding another `pause()` or a sleep: the thing being
     waited for is "the highlight has been applied", so that is what this asks about. With
     `OptionList` that is a single reactive on the widget rather than a flag on a mounted row
-    per option — `_fill` sets it synchronously now, so this usually returns on the first
+    per option — `show_choices` sets it synchronously now, so this usually returns on the first
     pause, but it still waits on the real condition and nothing here is wall-clock dependent.
 
     The two early returns are the screens that legitimately never highlight: a list with no
-    rows, and a `_fill(..., focus=False)` one such as PROJECTS, where the keyboard stays in
+    rows, and a `show_choices(..., focus=False)` one such as PROJECTS, where the keyboard stays in
     the filter and the list is deliberately left without a cursor.
     """
     from textual.widgets import OptionList
@@ -256,59 +280,54 @@ def _assert_snapshot(app: RemoteAgentsTui, name: str) -> None:
         )
 
 
-async def _drive(app: RemoteAgentsTui, pilot, step: Step) -> None:
+async def _drive(app: RemoteAgentsTui, pilot, step: str) -> None:
     """Put the app in `step`, using the same private entry points the sibling tests use."""
-    if step is Step.PROJECTS:
+    if step == "PROJECTS":
         return
-    if step in {Step.PROFILES, Step.LABEL, Step.REVIEW}:
+    if step in {"PROFILES", "LABEL", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
         await pilot.pause()
-        if step is Step.PROFILES:
+        if step == "PROFILES":
             return
         await app.screen.choose("claude")
         await pilot.pause()
-        if step is Step.REVIEW:
+        if step == "REVIEW":
             app.screen.submit("nightly run")
             await pilot.pause()
         return
-    if step in {Step.AREAS, Step.NAME, Step.PROJECT_REVIEW}:
+    if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
         await app.show_areas()
-        if step is Step.AREAS:
+        if step == "AREAS":
             return
         await app.screen.choose("infra")
-        if step is Step.NAME:
+        if step == "NAME":
             return
         app.screen.submit("new-project")
         return
-    if step is Step.SESSIONS:
+    if step == "SESSIONS":
         await app.show_sessions()
         return
-    if step in {
-        Step.SESSION_DETAIL,
-        Step.FORCE_CONFIRM,
-        Step.REMOTE_CONTROL_CONFIRM,
-        Step.INSPECT,
-    }:
+    if step in {"SESSION_DETAIL", "FORCE_CONFIRM", "REMOTE_CONTROL_CONFIRM", "INSPECT"}:
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
-        if step is Step.FORCE_CONFIRM:
-            await app.confirm_force()
-        elif step is Step.REMOTE_CONTROL_CONFIRM:
-            await app.confirm_remote_control()
-        elif step is Step.INSPECT:
+        if step == "FORCE_CONFIRM":
+            await app.screen.confirm_force()
+        elif step == "REMOTE_CONTROL_CONFIRM":
+            await app.screen.confirm_remote_control()
+        elif step == "INSPECT":
             await app.screen.show_inspect()
         return
     # The four resume positions, each one step further into the same flow.
     await app.action_resume()
-    if step is Step.RESUME_PROJECTS:
+    if step == "RESUME_PROJECTS":
         return
     await app.screen.choose("opaque-existing")
-    if step is Step.RESUME_PROFILES:
+    if step == "RESUME_PROFILES":
         return
     await app.screen.choose("claude")
-    if step is Step.RESUME_CONVERSATIONS:
+    if step == "RESUME_CONVERSATIONS":
         return
     await app.screen.choose(str(_REFERENCE))
 
@@ -320,8 +339,8 @@ def _neutral_colour_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-@pytest.mark.parametrize("step", list(Step), ids=lambda s: s.name)
-async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
+@pytest.mark.parametrize("step", _POSITIONS)
+async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
     """Each of the 16 positions renders exactly what its committed baseline shows."""
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=_SIZE) as pilot:
@@ -331,8 +350,8 @@ async def test_every_wizard_position_matches_its_baseline(step: Step) -> None:
         await pilot.pause()
         await _drive(app, pilot, step)
         await settle(app, pilot)
-        assert position(app) == step.name, f"drove to {position(app)}, expected {step.name}"
-        _assert_snapshot(app, step.name)
+        assert position(app) == step, f"drove to {position(app)}, expected {step}"
+        _assert_snapshot(app, step)
 
 
 async def test_a_missing_baseline_fails_rather_than_being_written() -> None:

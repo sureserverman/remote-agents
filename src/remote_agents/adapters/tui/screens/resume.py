@@ -128,7 +128,7 @@ class ResumeProfilesScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         if key == _BACK:
-            self.app.pop_screen()
+            await self.tui.go_back()
             return
         if not any(profile.profile_id == key for profile in self.services.profiles):
             # Defence in depth, matching the launch picker: the rows here are already
@@ -190,7 +190,7 @@ class ResumeConversationsScreen(ChoiceScreen):
         if conversations is None:
             return
         if key == _BACK:
-            self.app.pop_screen()
+            await self.tui.go_back()
             return
         if key in {_NEXT, _PREVIOUS}:
             await self.turn_page(1 if key == _NEXT else -1)
@@ -254,7 +254,7 @@ class ResumeConfirmScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         if key != "resume-confirm":
-            self.app.pop_screen()
+            await self.tui.go_back()
             return
         await self.tui.issue_resume(self, self.project, self.profile, self.resolved)
 

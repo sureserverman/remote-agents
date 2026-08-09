@@ -11,8 +11,8 @@ handler's `finally`, and what refuses the second stop is `_stop` re-reading the 
 re-checking the policy. Both are covered below, and they are labelled for which is which.
 
 Neither mechanism protects **launch or resume** under queued delivery: both end in
-`self.exit(...)` without changing `_step`, so the second enter finds the same screen and a
-cleared flag and issues again. Two fast enters on Review start two managed sessions. That is
+`self.exit(...)` without leaving the position, so the second enter finds the same screen
+and a cleared flag and issues again. Two fast enters on Review start two managed sessions. That is
 a live defect, pre-existing and outside this plan's blast radius — BL-015.
 
 Whatever the mechanism, cancel-and-restart is wrong for a destructive action: it would mean
@@ -178,7 +178,7 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
 
     This matters, and getting it wrong is how the first draft of this file reported a bug
     that does not exist. The guard is **not** uniformly placed: `_stop` checks `_busy`
-    itself, but the launch and `_resolve_project_review` only *set* it and rely on the
+    itself, but the launch and the project creation only *set* it and rely on the
     selection handler to have refused the second event. Calling those resolvers directly
     therefore walks straight past the protection and issues two commands.
 
@@ -201,7 +201,7 @@ async def _select(app: RemoteAgentsTui, key: str) -> None:
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    await app.confirm_force()
+    await app.screen.confirm_force()
 
 
 @pytest.mark.parametrize(
@@ -223,11 +223,11 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
         await pilot.pause()
 
         if resolve == "force-confirm":
-            await app.confirm_force()
+            await app.screen.confirm_force()
             await pilot.pause()
-            first = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
+            first = asyncio.create_task(app.screen.choose("force-confirm"))
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
-            second = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
+            second = asyncio.create_task(app.screen.choose("force-confirm"))
         else:
             first = asyncio.create_task(app.screen.choose(resolve))
             await asyncio.wait_for(launcher.started.wait(), timeout=5)
@@ -245,9 +245,9 @@ async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> N
     """The `_busy` guard at `on_option_list_option_selected`, exercised by concurrent delivery.
 
     Named for the mechanism, not for a guarantee the surface does not give. Under **queued**
-    delivery — what two fast enters actually produce — this flow issues twice: `_launch`
+    delivery — what two fast enters actually produce — this flow issues twice: the launch
     clears `_busy` in a `finally` that runs before `self.exit(...)`, and it never changes
-    `_step`, so the second enter finds the same screen and an open guard. Verified, and
+    the position, so the second enter finds the same screen and an open guard. Verified, and
     recorded as BL-015. This test pins the concurrent path only.
     """
     launcher = _SlowLauncher()
@@ -418,13 +418,13 @@ async def test_the_step_is_unchanged_by_a_dropped_keypress() -> None:
         await pilot.pause()
         await _drive_to_force_confirm(app)
         await pilot.pause()
-        first = asyncio.create_task(app.resolve_force_confirm("force-confirm"))
+        first = asyncio.create_task(app.screen.choose("force-confirm"))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
         assert position(app) == "FORCE_CONFIRM"
         # Bounded on purpose. This await is the *dropped* second press, so it must return
         # promptly; if a regression lets it through to the launcher it would block on
         # `release` instead, and an unbounded await would hang the run rather than fail it.
-        await asyncio.wait_for(app.resolve_force_confirm("force-confirm"), timeout=5)
+        await asyncio.wait_for(app.screen.choose("force-confirm"), timeout=5)
         launcher.release.set()
         await first
         assert launcher.issued == ["force"]
@@ -519,12 +519,12 @@ async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
     """One of the two flows Task 2.3 scoped and the first version never exercised.
 
     Remote control also survives *queued* delivery, unlike launch and resume, because
-    `_resolve_remote_control` moves `_step` back to SESSION_DETAIL before returning — so the
+    the remote-control change returns to the session detail before finishing — so the
     second enter lands on a screen where that key means nothing. This test covers the
     concurrent path; the step change covers the other.
 
-    Routed through `_select` rather than the resolver, because `_resolve_remote_control` —
-    like `_launch` and `_resolve_project_review` — only *sets* `_busy` and never reads it.
+    Routed through `_select` rather than the resolver, because the remote-control change —
+    like the launch and the project creation — only *sets* the busy flag and never reads it.
     An earlier attempt asserted against the resolver directly and failed for exactly that
     reason, which is the same lesson `_select`'s own docstring records.
     """
@@ -534,7 +534,7 @@ async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
         await pilot.pause()
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
-        await app.confirm_remote_control()
+        await app.screen.confirm_remote_control()
         await settle(app, pilot)
 
         first = asyncio.create_task(_select(app, "remote-control-active"))
@@ -553,7 +553,7 @@ async def test_a_concurrent_second_resume_is_refused_by_the_handler_guard() -> N
     """The other flow Task 2.3 scoped, on the concurrent path only.
 
     Same caveat as launch, and for the same structural reason: resume ends in `self.exit(...)`
-    without changing `_step`, so queued delivery issues twice (BL-015). An earlier version of
+    without leaving the position, so queued delivery issues twice (BL-015). An earlier version of
     this test was additionally *named* for the queued model while using concurrent tasks.
 
     The conversation is a real `ResolvedConversation`, not a stand-in. An earlier version

@@ -122,7 +122,7 @@ async def test_confirming_issues_the_command_with_a_tui_idempotency_key() -> Non
         await pilot.pause()
         await app.screen.choose("remote-control")
         await pilot.pause()
-        await app.resolve_remote_control("remote-control-active")
+        await app.screen.choose("remote-control-active")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -142,7 +142,7 @@ async def test_the_returned_state_is_surfaced() -> None:
         await pilot.pause()
         await app.screen.choose("remote-control")
         await pilot.pause()
-        await app.resolve_remote_control("remote-control-active")
+        await app.screen.choose("remote-control-active")
         await pilot.pause()
         status = _status(app)
 
@@ -177,7 +177,7 @@ async def test_a_failure_reports_itself_and_does_not_claim_a_state() -> None:
         await pilot.pause()
         await app.screen.choose("remote-control")
         await pilot.pause()
-        await app.resolve_remote_control("remote-control-active")
+        await app.screen.choose("remote-control-active")
         await pilot.pause()
         status = _status(app)
 

@@ -9,13 +9,12 @@ import pytest
 from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import (
-    _BACK,
-    _CANCEL,
     AttachRequest,
     RemoteAgentsTui,
     label_or_error,
 )
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.model import _BACK, _CANCEL
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
@@ -237,9 +236,9 @@ async def test_back_from_review_walks_out_through_the_label_to_the_agent_choice(
     shortcuts rather than one.** The hand-rolled chain sent Back at Review straight to the
     agent list, skipping the label — so an owner who mistyped a label could not go back and
     fix it, only re-pick the agent and retype. It *also* sent Escape at the label straight to
-    the project list, skipping the agent choice, because `LABEL` was lumped into `_TEXT_STEPS`
-    with the add-project name entry. On a real stack Back means "the screen I came from", so
-    both jumps become one level each. No affordance is added or removed and every position
+    the project list, skipping the agent choice, because the label was grouped with the
+    add-project name entry as a text position. On a real stack Back means "the screen I came
+    from", so both jumps become one level each. No affordance is added or removed and every position
     stays reachable; what changes is that neither shortcut survives.
 
     Both legs are asserted below — the Review→Label pop, then the Label→Profiles pop — so
@@ -542,7 +541,8 @@ async def test_back_out_of_the_add_project_flow_stops_at_every_position() -> Non
 
     **A deliberate navigation change, the same pair Task 2.1 removed from the launch wizard.**
     The hand-rolled chain sent Escape at the name entry straight to the project list, skipping
-    the area choice, because `NAME` was lumped into `_TEXT_STEPS` with the launch label; and it
+    the area choice, because the name entry was grouped with the launch label as a text
+    position; and it
     sent Back at the review straight to the area list, skipping the name — so an owner who
     mistyped a project name could not correct it, only start the flow again. On a real stack
     each is one level.

@@ -101,6 +101,21 @@ class ChoiceScreen(Screen[None]):
     async def populate(self) -> None:
         """Render this screen's rows. Overridden by every concrete screen."""
 
+    async def on_reveal(self) -> None:
+        """Re-read whatever this screen shows, because it just became active again.
+
+        Called by `RemoteAgentsTui.go_back` after the screen above this one is popped, so a
+        position whose content can go stale while the owner is elsewhere gets a fresh read on
+        the way back — which is what the hand-rolled chain did by re-running the whole
+        `_show_*` on every back path.
+
+        An explicit hook rather than Textual's `ScreenResume`, because `go_back` can *await*
+        this one. A resume handler runs on the pump after the pop returns, which would put
+        the re-read outside the busy guard a stop is still holding — the window in which a
+        keypress acts on a screen the owner is no longer looking at. Screens with nothing to
+        re-read leave it as this no-op.
+        """
+
     # Rendering -----------------------------------------------------------------
 
     @property
@@ -265,6 +280,20 @@ class ChoiceScreen(Screen[None]):
         if key is None or self.tui.busy:
             return
         await self.choose(key)
+
+    async def after_command(self) -> None:
+        """What this screen does once a command it asked for has landed.
+
+        The default is to re-read in place, which is right for the session detail issuing a
+        graceful stop: the owner stays where they are and the rows are redrawn from the
+        store. A confirmation overrides it to leave itself instead, revealing the position
+        beneath — which re-reads through `on_reveal` on the way back.
+
+        A hook rather than a test on the stack inside `stop`, because "am I a position the
+        owner should stay on after this?" is the screen's own question. An earlier version
+        guessed it from stack depth and popped the detail out from under a graceful stop.
+        """
+        await self.on_reveal()
 
     async def choose(self, key: str) -> None:
         """Act on the row the owner selected. Overridden by every concrete screen."""

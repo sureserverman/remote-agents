@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from enum import StrEnum
 from typing import TypeVar, cast
 
 from textual import work
@@ -17,7 +16,6 @@ from textual.worker import WorkerCancelled, WorkerFailed
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.model import (
     _BACK,
-    _CANCEL,
     AttachRequest,
     LaunchSelection,
     age,
@@ -49,7 +47,6 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.application.session_actions import (
     CLEANUP,
-    FORCE,
     GRACEFUL,
     available_actions,
     explain_state,
@@ -71,7 +68,6 @@ __all__ = [
     "LaunchSelection",
     "ProfileChoice",
     "RemoteAgentsTui",
-    "Step",
     "TuiContext",
     "age",
     "conversation_row",
@@ -80,34 +76,6 @@ __all__ = [
     "selectable_area",
     "session_row",
 ]
-
-
-class Step(StrEnum):
-    """The wizard positions this stage has not extracted into screens yet.
-
-    Shrinking, not growing. Fourteen of the sixteen members are now screens and are kept here
-    only because the committed snapshot baselines still name them. What still *drives*
-    anything is the two confirmations, which `SessionDetailScreen` repaints in place exactly
-    as the surface does today; Task 2.4 gives those a screen of their own and deletes this
-    enum, and Stage 3 turns them into modals.
-    """
-
-    PROJECTS = "projects"
-    PROFILES = "profiles"
-    LABEL = "label"
-    REVIEW = "review"
-    AREAS = "areas"
-    NAME = "name"
-    PROJECT_REVIEW = "project-review"
-    SESSIONS = "sessions"
-    SESSION_DETAIL = "session-detail"
-    FORCE_CONFIRM = "force-confirm"
-    REMOTE_CONTROL_CONFIRM = "remote-control-confirm"
-    INSPECT = "inspect"
-    RESUME_PROJECTS = "resume-projects"
-    RESUME_PROFILES = "resume-profiles"
-    RESUME_CONVERSATIONS = "resume-conversations"
-    RESUME_CONFIRM = "resume-confirm"
 
 
 _RESUME_PAGE_SIZE = 10
@@ -137,7 +105,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._services = context
         self._catalogue = context.catalogue
         self.selection = LaunchSelection()
-        self._step = Step.PROJECTS
         self._busy = False
 
     def get_default_screen(self) -> Screen[None]:
@@ -168,43 +135,37 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._busy = busy
 
     @property
-    def step(self) -> Step:
-        """Which position the remaining step machine believes it is on.
-
-        Read by exactly one place now: `SessionDetailScreen`, for the two confirmations it
-        still repaints in place. Task 2.4 takes it with them.
-        """
-        return self._step
-
-    @step.setter
-    def step(self, step: Step) -> None:
-        self._step = step
-
-    @property
     def body(self) -> ChoiceScreen:
         """The active screen, typed as the body every position renders."""
         return cast(ChoiceScreen, self.screen)
-
-    @property
-    def detail_session(self) -> str | None:
-        """The session the detail on screen was opened for, if a detail is on screen.
-
-        This replaces the `_detail_id` field the app used to carry. Reading it off the screen
-        rather than off the app is what makes a stale value impossible: the id and the screen
-        rendering it are now the same object's state, so navigating away cannot leave one
-        behind for a later action to pick up.
-        """
-        screen = self.screen
-        return screen.session_value if isinstance(screen, SessionDetailScreen) else None
 
     def return_to_projects(self) -> None:
         """Unwind to the resting position, whatever the owner had pushed on top of it."""
         while len(self.screen_stack) > 1:
             self.pop_screen()
-        self._step = Step.PROJECTS
         screen = self.screen
         if isinstance(screen, ProjectsScreen):
             screen.render_projects()
+
+    async def go_back(self) -> None:
+        """Pop one position, and let the screen it reveals re-read what it shows.
+
+        The single pop in the surface. Routing every back path through it is what lets the
+        refresh be *awaited*: a screen that becomes visible again gets its `on_reveal` before
+        this returns, so a caller holding the busy guard still holds it while the revealed
+        rows are redrawn. Textual's own `ScreenResume` would run after the pop returned,
+        which is outside that guard.
+
+        A pop is refused rather than raising when the resting position is all that is left:
+        `pop_screen` raises `ScreenStackError` on the last screen, and escape at rest is
+        meant to be inert.
+        """
+        if len(self.screen_stack) <= 1:
+            return
+        self.pop_screen()
+        revealed = self.screen
+        if isinstance(revealed, ChoiceScreen):
+            await revealed.on_reveal()
 
     async def switch_flow(self, screen: Screen[None]) -> None:
         """Leave whatever flow is open and start another one from the resting position.
@@ -275,22 +236,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_back(self) -> None:
         """Leave the current position for the one it was reached from.
 
-        For an extracted screen this is the stack itself — pop, and the screen beneath is by
-        construction where the owner came from. One exception remains and Stage 3 removes it:
-        the two confirmations are still repainted onto the session detail, so leaving one
-        means redrawing the detail rather than popping away from it.
+        The stack is the whole answer now — pop, and the screen beneath is by construction
+        where the owner came from. There are no exceptions left: the last two, the destructive
+        confirmations, are screens of their own as of this task.
         """
         if self._busy:
             return
-        screen = self.screen
-        if isinstance(screen, SessionDetailScreen) and self._step in {
-            Step.FORCE_CONFIRM,
-            Step.REMOTE_CONTROL_CONFIRM,
-        }:
-            await screen.render_detail()
-            return
-        if len(self.screen_stack) > 1:
-            self.pop_screen()
+        await self.go_back()
 
     async def action_refresh(self) -> None:
         """Re-read the catalogue, so a project another process created becomes selectable."""
@@ -388,67 +340,25 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session_id = str(record.session_id)
         self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
-    # The destructive path, still repainted onto the session detail until Stage 3 ---------
+    # The destructive path ---------------------------------------------------------
+    #
+    # The two confirmations are `screens/confirm.py` now, so what is left here is the part
+    # that talks to the service: re-read, re-check, issue once, and refresh whatever screen
+    # asked. Stage 3 changes how the *answer* is obtained — `ModalScreen[bool]` through
+    # `push_screen_wait` — and nothing in this section moves with it.
 
-    async def confirm_remote_control(self) -> None:
-        """Ask before changing a live pane's control mode, re-checking the policy first."""
-        session_value = self.detail_session
-        if session_value is None:
-            return
-        # Guarded across the read, not just around the command. Without this, `action_back`
-        # sees an open guard and a step that has not flipped yet, so a plain Escape during
-        # the await pops the detail — and the confirmation then paints its rows onto
-        # whatever screen was underneath it. `stop` has always held the guard for this
-        # reason; building the dialog needs it just as much now that leaving the position
-        # means leaving the *screen*.
-        self._busy = True
-        try:
-            record = await self.current_record(session_value)
-        finally:
-            self._busy = False
-        if record is None:
-            self.body.set_status("That session is no longer available.")
-            return
-        if not remote_control_available(record):
-            self.body.set_status(
-                f"{record.display.rendered}\n"
-                "Remote Control is not available for this session.\n"
-                f"{explain_state(record.state)}"
-            )
-            return
-        self._step = Step.REMOTE_CONTROL_CONFIRM
-        self.body.hide_entry()
-        self.body.set_status(
-            f"Claude Remote Control for {record.display.rendered}\n"
-            "Enabling lets this session be driven remotely; disabling returns it to local "
-            "control only."
-        )
-        self.body.show_choices(
-            (
-                (_CANCEL, "Cancel"),
-                ("remote-control-active", "Enable Remote Control"),
-                ("remote-control-inactive", "Disable Remote Control"),
-            )
-        )
-
-    async def resolve_remote_control(self, key: str) -> None:
-        desired = {
-            "remote-control-active": RemoteControlState.ACTIVE,
-            "remote-control-inactive": RemoteControlState.INACTIVE,
-        }.get(key)
-        session_value = self.detail_session
-        if desired is None or session_value is None:
-            if session_value is not None:
-                await self.show_detail(session_value)
-            return
+    async def set_remote_control(
+        self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen
+    ) -> None:
+        """Change one session's control mode, after re-reading and re-checking the policy."""
         self._busy = True
         try:
             record = await self.current_record(session_value)
             if record is None:
-                self.body.set_status("That session is no longer available.")
+                screen.set_status("That session is no longer available.")
                 return
             if not remote_control_available(record):
-                self.body.set_status("Remote Control is no longer available for this session.")
+                screen.set_status("Remote Control is no longer available for this session.")
                 return
             state = await self._services.launcher.set_remote_control(
                 RemoteControlCommand(record.session_id, desired, _idempotency_key())
@@ -457,81 +367,45 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
             # button that just failed, or a second enter re-issues it as a blind retry.
-            self.body.show_choices(((_BACK, "Back"),))
-            self.body.set_status(
+            screen.show_choices(((_BACK, "Back"),))
+            screen.set_status(
                 f"Remote Control was not changed: {error}\n"
                 "Go back and open the session again to see its current state."
             )
             return
         else:
-            # Held for the same reason as `stop`'s refresh: nothing else may run until
-            # the result is on screen. These calls are synchronous today, so the window
-            # is empty — the guard is here so it stays empty if one of them ever awaits.
-            self._step = Step.SESSION_DETAIL
+            # Held for the same reason as `stop`'s refresh: nothing else may run until the
+            # result is on screen, and leaving the confirmation awaits the detail's re-read.
+            await screen.after_command()
+            # Deliberately `self.body` and not `screen`: `after_command` has just left the
+            # confirmation, so the position now showing is the detail beneath it, and that is
+            # where the new control mode belongs. `screen` at this point is the popped dialog.
             self.body.set_status(f"{record.display.rendered}\nRemote Control: {state.value}")
-            self.body.show_choices(self.body.detail_entries(record))  # type: ignore[attr-defined]
         finally:
             self._busy = False
 
-    async def confirm_force(self) -> None:
-        """Ask a second time, on its own position, with abort as the resting choice.
-
-        Force kills a running agent and cannot be undone, so it is deliberately not
-        reachable by repeating whatever keystroke opened the detail: the abort entry is
-        first and highlighted, and confirming means moving to a different row on purpose.
-        """
-        session_value = self.detail_session
-        if session_value is None:
-            return
-        # Guarded for the reason given on `confirm_remote_control`: an Escape landing inside
-        # this read would otherwise pop the detail and leave the force confirmation painted
-        # onto the screen beneath it.
-        self._busy = True
-        try:
-            record = await self.current_record(session_value)
-        finally:
-            self._busy = False
-        if record is None:
-            self.body.set_status("That session is no longer available.")
-            return
-        self._step = Step.FORCE_CONFIRM
-        self.body.hide_entry()
-        self.body.set_status(
-            f"Force stop {record.display.rendered}?\n"
-            "This kills the agent immediately and cannot be undone. Any work it has not "
-            "saved is lost.\n"
-            f"{explain_state(record.state)}"
-        )
-        self.body.show_choices(((_CANCEL, "Cancel"), ("force-confirm", "Yes, force stop it")))
-
-    async def resolve_force_confirm(self, key: str) -> None:
-        if key == "force-confirm":
-            await self.stop(FORCE)
-            return
-        # Anything else -- cancel, back, or an unrecognized key -- aborts without issuing.
-        session_value = self.detail_session
-        if session_value is not None:
-            await self.show_detail(session_value)
-
-    async def stop(self, action: str) -> None:
+    async def stop(self, action: str, session_value: str, screen: ChoiceScreen) -> None:
         """Issue one stop, after re-reading the record and re-checking the policy.
 
         The policy is consulted again here rather than trusted from the rendered entry: the
         session may have moved on since the list was drawn, and an action that was legal
         then can be illegal now. The service would refuse it anyway — this keeps the owner
-        from seeing an exception instead of an explanation.
+        from seeing an exception instead of an explanation. This re-read-and-recheck is
+        DEC-007's fourth mitigation and it is why a stale row cannot issue a stale command.
+
+        `screen` is whichever position asked — the detail for a graceful or a cleanup, the
+        force confirmation for a force — so a failure reports where the owner is looking.
         """
-        session_value = self.detail_session
-        if session_value is None or self._busy:
+        if self._busy:
             return
         self._busy = True
         try:
             record = await self.current_record(session_value)
             if record is None:
-                self.body.set_status("That session is no longer available.")
+                screen.set_status("That session is no longer available.")
                 return
             if action not in available_actions(record.state):
-                self.body.set_status(
+                screen.set_status(
                     f"{record.display.rendered}\n"
                     f"{_ACTION_LABELS[action]} is no longer available for this session.\n"
                     f"{explain_state(record.state)}"
@@ -543,19 +417,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Move the cursor off the confirm button before reporting. A failed force
             # leaves the owner resting on "Yes, force stop it", so without this a second
             # enter re-issues the kill as a retry nobody deliberately chose.
-            self.body.show_choices(((_BACK, "Back"),))
-            self.body.set_status(
+            screen.show_choices(((_BACK, "Back"),))
+            screen.set_status(
                 f"{_ACTION_LABELS[action]} did not complete: {error}\n"
                 "The session was left as it is. Go back and open it again to see its "
                 "current state, then retry if you still want to."
             )
             return
         else:
-            # Inside the guard on purpose. `_busy` means "no other action may run until
-            # this one's result is on screen" — and the redraw awaits, so releasing first
-            # leaves a window where the position has flipped but the list still holds the
-            # previous screen's entries.
-            await self.show_detail(session_value)
+            # Inside the guard on purpose. `_busy` means "no other action may run until this
+            # one's result is on screen", and both branches await a re-read, so releasing
+            # first would leave a window where the command has landed but the rows still
+            # describe the session as it was.
+            await screen.after_command()
         finally:
             self._busy = False
 

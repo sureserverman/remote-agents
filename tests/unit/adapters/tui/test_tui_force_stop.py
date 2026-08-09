@@ -21,6 +21,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
@@ -164,7 +165,7 @@ async def test_only_the_second_confirmation_issues_the_force_stop() -> None:
         await app.screen.choose("force")
         await pilot.pause()
         assert launcher.issued == []
-        await app.resolve_force_confirm("force-confirm")
+        await app.screen.choose("force-confirm")
         await pilot.pause()
 
     assert len(launcher.issued) == 1
@@ -196,7 +197,7 @@ async def test_aborting_returns_to_a_detail_that_still_offers_force() -> None:
         await pilot.pause()
         await app.screen.choose("force")
         await pilot.pause()
-        await app.resolve_force_confirm("\x00cancel")
+        await app.screen.choose("\x00cancel")
         await pilot.pause()
         keys = _keys(app)
 
@@ -214,7 +215,7 @@ async def test_a_session_that_vanished_before_confirming_is_not_forced() -> None
         await app.screen.choose("force")
         await pilot.pause()
         launcher.records = ()
-        await app.resolve_force_confirm("force-confirm")
+        await app.screen.choose("force-confirm")
         await pilot.pause()
         status = _status(app)
 
@@ -340,3 +341,74 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
 
     assert resting != "force-confirm", "the cursor must not rest on the confirm button"
     assert len(launcher.issued) == 1, "a repeated enter re-issued the force stop"
+
+
+@pytest.mark.parametrize("confirm", ["confirm_force", "confirm_remote_control"])
+async def test_escape_cannot_detach_a_confirmation_from_the_session_it_describes(
+    confirm: str,
+) -> None:
+    """Escape fired while a confirmation is still reading its record must be refused.
+
+    Both confirmations re-read the session before they draw, and `action_back` runs on the
+    app's message pump while that read runs on the screen's — two tasks, genuinely
+    interleaved. Without the busy guard the Escape pops the session detail mid-read, and the
+    confirmation is then pushed onto whatever the pop revealed: a "Yes, force stop it" dialog
+    sitting above a position that is no longer showing the session it names.
+
+    The second failure is worse and is why this is parametrized over both. If the session
+    vanishes during that same window — the exact case the re-read exists to catch — the
+    "no longer available" report is written to a screen that has already been unmounted, and
+    `NoMatches` escapes out of the path whose whole job is to report trouble without losing
+    the app.
+
+    Both were live regressions caught in review, not hypotheticals.
+    """
+    import asyncio
+
+    record = _record()
+
+    @dataclass(slots=True)
+    class _SlowReads:
+        records: tuple[SessionRecord, ...] = ()
+        issued: list[object] = field(default_factory=list)
+
+        async def refresh_readiness(self):
+            return self.records
+
+        async def list_sessions(self):
+            # Wide enough that the Escape below lands inside the read rather than after it.
+            await asyncio.sleep(0.03)
+            return self.records
+
+        async def copy_attach(self, _session_id):
+            return None
+
+        async def force_stop(self, command):
+            self.issued.append(command)
+
+        async def set_remote_control(self, command):
+            self.issued.append(command)
+            return RemoteControlState.ACTIVE
+
+    launcher = _SlowReads((record,))
+    app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
+
+    async def _escape_during() -> None:
+        await asyncio.sleep(0.005)
+        await app.action_back()
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        detail = app.screen
+
+        await asyncio.gather(getattr(detail, confirm)(), _escape_during())
+        await pilot.pause()
+
+        # The confirmation sits directly on the detail it was built from — not on whatever
+        # an interleaved Escape would otherwise have revealed.
+        assert app.screen_stack[-2] is detail, (
+            f"the {confirm} dialog was pushed onto "
+            f"{type(app.screen_stack[-2]).__name__}, not the session detail it describes"
+        )
+        assert launcher.issued == [], "reaching the confirmation must issue nothing"

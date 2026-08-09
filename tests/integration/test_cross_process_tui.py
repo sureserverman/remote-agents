@@ -266,7 +266,7 @@ async def test_force_stop_from_the_terminal_also_crosses_the_process_boundary(
             await pilot.pause()
             await app.screen.choose("force")
             await pilot.pause()
-            await app.resolve_force_confirm("force-confirm")
+            await app.screen.choose("force-confirm")
             await pilot.pause()
 
         final = await service.list_sessions()

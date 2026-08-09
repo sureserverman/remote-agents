@@ -12,6 +12,10 @@ therefore imported from `.base` by whoever needs it, never from here.
 
 from __future__ import annotations
 
+from remote_agents.adapters.tui.screens.confirm import (
+    ForceConfirmScreen,
+    RemoteControlConfirmScreen,
+)
 from remote_agents.adapters.tui.screens.launch import (
     LabelScreen,
     ProfilesScreen,
@@ -35,9 +39,8 @@ from remote_agents.adapters.tui.screens.sessions import (
     SessionsScreen,
 )
 
-#: Every screen the owner can reach. Fourteen of the sixteen positions; the two destructive
-#: confirmations are still repainted onto the session detail and join this registry when
-#: Task 2.4 gives them a screen of their own.
+#: Every screen the owner can reach — all sixteen positions, one class each. Nothing is
+#: repainted in place any more, so this registry is the whole surface.
 ALL_SCREENS = (
     ProjectsScreen,
     ProfilesScreen,
@@ -53,17 +56,21 @@ ALL_SCREENS = (
     ResumeProfilesScreen,
     ResumeConversationsScreen,
     ResumeConfirmScreen,
+    ForceConfirmScreen,
+    RemoteControlConfirmScreen,
 )
 
 __all__ = [
     "ALL_SCREENS",
     "AreasScreen",
+    "ForceConfirmScreen",
     "InspectScreen",
     "LabelScreen",
     "NameScreen",
     "ProfilesScreen",
     "ProjectReviewScreen",
     "ProjectsScreen",
+    "RemoteControlConfirmScreen",
     "ResumeConfirmScreen",
     "ResumeConversationsScreen",
     "ResumeProfilesScreen",

@@ -3,7 +3,7 @@
 DEC-007 accepts that a second surface can destroy a session, and one of the mitigations it
 names is that a destructive confirm opens with the abort under the cursor: "the abort entry
 is first and highlighted, and confirming means moving to a different row on purpose"
-(`adapters/tui/app.py`, `_confirm_force`).
+(`adapters/tui/screens/sessions.py`, `SessionDetailScreen.confirm_force`).
 
 Only the first half of that was true. `_fill` set the cursor index in the same synchronous
 pass that appended the rows, so the highlight was never applied to a mounted child — the
@@ -36,7 +36,7 @@ from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui, Step
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -128,7 +128,7 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
 async def _drive_to_force_confirm(app: RemoteAgentsTui) -> None:
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    await app.confirm_force()
+    await app.screen.confirm_force()
 
 
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
@@ -139,6 +139,12 @@ async def _drive_to_review(app: RemoteAgentsTui) -> None:
     app.screen.submit("nightly run")
 
 
+async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> None:
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
+    await app.screen.confirm_remote_control()
+
+
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     await app.show_areas()
     await app.screen.choose("infra")
@@ -147,9 +153,19 @@ async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
 
 # Each entry is a position whose resting row must be the one that mutates nothing.
 _RESTING = (
-    pytest.param(_drive_to_force_confirm, "Cancel", Step.FORCE_CONFIRM, id="force-confirm"),
-    pytest.param(_drive_to_review, "Back", Step.REVIEW, id="review"),
-    pytest.param(_drive_to_project_review, "Back", Step.PROJECT_REVIEW, id="project-review"),
+    pytest.param(_drive_to_force_confirm, "Cancel", "FORCE_CONFIRM", id="force-confirm"),
+    # The second destructive confirm. Added because DEC-007's abort-rests-under-the-cursor
+    # mitigation was only ever checked here on the force path, so the Remote Control confirm
+    # had its row order asserted but never the cursor actually painted on it — which is the
+    # exact distinction this file exists to draw.
+    pytest.param(
+        _drive_to_remote_control_confirm,
+        "Cancel",
+        "REMOTE_CONTROL_CONFIRM",
+        id="remote-control-confirm",
+    ),
+    pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
+    pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
 )
 
 
@@ -160,14 +176,14 @@ async def test_the_resting_cursor_is_drawn_on_the_non_mutating_row(drive, expect
         await pilot.pause()
         await drive(app)
         await settle(app, pilot)
-        assert position(app) == step.name
+        assert position(app) == step
         marked, rows = _highlighted(app)
         assert marked is not None, (
-            f"{step.name} drew no cursor at all; rows were {rows}. The owner cannot see "
+            f"{step} drew no cursor at all; rows were {rows}. The owner cannot see "
             f"which row an enter would activate."
         )
         assert marked == expected, (
-            f"{step.name} rests on {marked!r}, not the non-mutating {expected!r}. Rows were {rows}."
+            f"{step} rests on {marked!r}, not the non-mutating {expected!r}. Rows were {rows}."
         )
         # The row an enter would activate, tied to the row the owner can see. `action_select`
         # reads `highlighted`, so this is the *enter target*, and asserting it against

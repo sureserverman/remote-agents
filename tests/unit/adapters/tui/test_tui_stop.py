@@ -215,32 +215,40 @@ async def test_a_session_that_vanished_before_the_stop_is_not_stopped() -> None:
 
 
 async def test_the_busy_guard_is_held_until_the_post_stop_refresh_completes() -> None:
-    """`_busy` must mean "no other action can run until this one's result is on screen".
+    """`busy` must mean "no other action can run until this one's result is on screen".
 
-    Releasing it before the refresh leaves a window where the step has already flipped but
-    the list still holds the previous screen's entries, so a keypress in that window acts
-    on a screen the owner is no longer looking at.
+    Releasing it before the refresh leaves a window where the command has landed but the rows
+    still describe the session as it was, so a keypress in that window acts on a screen the
+    owner is no longer really looking at.
+
+    Watched on the detail screen's own re-read rather than on an app method: the refresh is
+    `SessionDetailScreen.render_detail` now, reached either directly or through `go_back`'s
+    reveal, and pinning it here is what keeps the guarantee attached to the thing that
+    actually redraws.
     """
     record = _record(SessionState.RUNNING)
     launcher = _RecordingLauncher((record,))
     observed: list[bool] = []
 
-    class _Watching(RemoteAgentsTui):
-        async def show_detail(self, session_value: str) -> None:
-            observed.append(self._busy)
-            await super().show_detail(session_value)
-
-    app = _Watching(_context(launcher))
+    app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
-        observed.clear()
+
+        detail = app.screen
+        original = detail.render_detail
+
+        async def _watched() -> None:
+            observed.append(app.busy)
+            await original()
+
+        detail.render_detail = _watched  # type: ignore[method-assign]
         await app.screen.choose("graceful")
         await pilot.pause()
 
     assert observed, "the post-stop refresh must happen"
-    assert all(observed), "_busy was released before the refreshed screen was drawn"
+    assert all(observed), "busy was released before the refreshed screen was drawn"
 
 
 async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:

@@ -5,12 +5,11 @@ fields — is `SessionDetailScreen.session_value` here, so the detail cannot be 
 session the screen was not opened with, and no other flow can leave a stale id behind for it
 to read.
 
-`SessionDetailScreen` still carries a little of the step machine, and only for the two
-confirmation positions Stage 3 replaces with real modals. That is deliberate and bounded:
-those confirmations are what DEC-007 rests on, the plan gives them their own stage, and
-repainting them onto this screen is exactly what the surface does today — so nothing about
-the confirmation path changes here. Stage 3 deletes that coupling along with the two `Step`
-members it reads.
+The two destructive confirmations are no longer repainted onto this screen: they are
+`screens/confirm.py`, pushed and popped like any other position, which is what let the step
+machine be deleted. They are still ordinary `Screen`s — Stage 3 turns them into
+`ModalScreen[bool]` answered through `push_screen_wait`, which is what buys DEC-007 the
+guarantee that an app-level binding cannot walk away from an unanswered confirmation.
 """
 
 from __future__ import annotations
@@ -19,6 +18,10 @@ import logging
 
 from remote_agents.adapters.tui.model import _BACK, session_row
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.adapters.tui.screens.confirm import (
+    ForceConfirmScreen,
+    RemoteControlConfirmScreen,
+)
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -42,23 +45,19 @@ class SessionsScreen(ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
+        await self.reload()
 
-    async def on_screen_resume(self) -> None:
-        """Re-read readiness, then list what the shared store actually holds.
+    async def on_reveal(self) -> None:
+        """Re-read on the way back from a detail, as the hand-rolled chain did."""
+        await self.reload()
 
-        On `ScreenResume` rather than on mount, because this fires both when the screen is
-        pushed and when it becomes active again after the detail above it is popped — which
-        is what preserves the behaviour the hand-rolled chain had, where Back from a detail
-        re-entered the list through a fresh read. A pop alone would have left the owner
-        looking at a list built before whatever they had just done to it.
+    async def reload(self) -> None:
+        """Refresh readiness, then list what the shared store actually holds.
 
         Readiness is refreshed first for the same reason the bot does it: a launch that
         failed here may have become ready since, and listing a stale FAILED would send the
         owner to fix something that already works.
         """
-        await self.reload()
-
-    async def reload(self) -> None:
         try:
             records = await self.tui.load_sessions()
         except Exception as error:
@@ -86,28 +85,17 @@ class SessionDetailScreen(ChoiceScreen):
         super().__init__()
         self.session_value = session_value
 
-    @property
-    def position(self) -> str:  # type: ignore[override]
-        """Which of the three positions this screen is currently showing.
-
-        A property rather than the plain class attribute the other screens use, because until
-        Stage 3 this one screen hosts the two confirmation positions as well as the detail.
-        Reporting a fixed "SESSION_DETAIL" would make the committed baselines for the two
-        confirms compare against a position the test never actually reached.
-        """
-        return self.tui.step.name
+    position = "SESSION_DETAIL"
 
     async def populate(self) -> None:
         self.hide_entry()
+        await self.render_detail()
 
-    async def on_screen_resume(self) -> None:
-        """Draw the detail on entry, and re-draw it on the way back from Inspect.
+    async def on_reveal(self) -> None:
+        """Re-read on the way back from Inspect or a confirmation.
 
-        On `ScreenResume` rather than in `populate` for the same reason `SessionsScreen`
-        loads there: it fires both on push and when the screen above is popped. The chain
-        this replaces re-ran the whole detail when Escape left Inspect, so a session whose
-        state moved while the owner was reading its output came back to a refreshed screen.
-        A bare pop would have returned them to the render from before they left.
+        The chain this replaces re-ran the whole detail whenever Escape left one of those,
+        so a session whose state moved while the owner was elsewhere came back refreshed.
         """
         await self.render_detail()
 
@@ -117,10 +105,7 @@ class SessionDetailScreen(ChoiceScreen):
         The record is looked up again rather than trusted from the list: the store has two
         writers, so a session can be stopped elsewhere while this list is on screen.
         """
-        from remote_agents.adapters.tui.app import Step
-
         tui = self.tui
-        tui.step = Step.SESSION_DETAIL
         try:
             record = await tui.current_record(self.session_value)
         except Exception as error:
@@ -154,42 +139,68 @@ class SessionDetailScreen(ChoiceScreen):
         return tuple(entries)
 
     async def choose(self, key: str) -> None:
-        """Act on a row, for whichever of the three positions is showing.
-
-        The `Step` read is the transitional coupling this module's docstring names: the two
-        confirmations are still repainted onto this screen rather than pushed as modals, so
-        which resolver owns a row still depends on which of them is showing. Stage 3 removes
-        both branches with the members they read.
-        """
-        from remote_agents.adapters.tui.app import Step
-
-        tui = self.tui
-        if tui.step is Step.FORCE_CONFIRM:
-            await tui.resolve_force_confirm(key)
-            return
-        if tui.step is Step.REMOTE_CONTROL_CONFIRM:
-            await tui.resolve_remote_control(key)
-            return
-        await self.resolve_detail(key)
-
-    async def resolve_detail(self, key: str) -> None:
         if key == _BACK:
-            self.app.pop_screen()
+            await self.tui.go_back()
         elif key == "attach":
             await self.show_attach()
         elif key == "inspect":
             await self.show_inspect()
         elif key == "remote-control":
-            await self.tui.confirm_remote_control()
+            await self.confirm_remote_control()
         elif key == FORCE:
-            await self.tui.confirm_force()
+            await self.confirm_force()
         elif key in ACTION_LABELS and key != FORCE:
             # The `key != FORCE` is redundant with the branch above and deliberately kept:
             # FORCE is a member of ACTION_LABELS, so without it the only thing stopping a
             # single keypress from force-stopping is the *order* of these two branches.
             # Restructuring this chain into a dispatch table would silently remove the
             # confirmation step, and no existing test asserts the ordering itself.
-            await self.tui.stop(key)
+            await self.tui.stop(key, self.session_value, self)
+
+    async def confirm_force(self) -> None:
+        """Re-read the record, then hand the decision to its own screen.
+
+        Guarded across both the read and the push, and this guard is load-bearing twice over.
+        `action_back` runs on the app's pump while this runs on the screen's, so without it an
+        Escape landing inside the read pops *this* screen — and then the confirmation is
+        pushed onto whatever the pop revealed, describing a session the position beneath it is
+        no longer showing. Worse, the `set_status` below would be called on a screen that has
+        already been unmounted, raising `NoMatches` out of the very path that exists to report
+        a vanished session without losing the app.
+        """
+        tui = self.tui
+        tui.set_busy(True)
+        try:
+            record = await tui.current_record(self.session_value)
+            if record is None:
+                self.set_status("That session is no longer available.")
+                return
+            await self.app.push_screen(ForceConfirmScreen(self.session_value, record))
+        finally:
+            tui.set_busy(False)
+
+    async def confirm_remote_control(self) -> None:
+        """Ask before changing a live pane's control mode, re-checking the policy first.
+
+        Guarded for the reason given on `confirm_force`.
+        """
+        tui = self.tui
+        tui.set_busy(True)
+        try:
+            record = await tui.current_record(self.session_value)
+            if record is None:
+                self.set_status("That session is no longer available.")
+                return
+            if not remote_control_available(record):
+                self.set_status(
+                    f"{record.display.rendered}\n"
+                    "Remote Control is not available for this session.\n"
+                    f"{explain_state(record.state)}"
+                )
+                return
+            await self.app.push_screen(RemoteControlConfirmScreen(self.session_value, record))
+        finally:
+            tui.set_busy(False)
 
     async def show_attach(self) -> None:
         """Render the command that reaches this pane, or say why there is none.

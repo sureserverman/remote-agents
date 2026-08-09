@@ -147,7 +147,7 @@ class ReviewScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         if key == _BACK:
-            self.app.pop_screen()
+            await self.tui.go_back()
         elif key == _CANCEL:
             self.tui.selection = LaunchSelection()
             self.tui.return_to_projects()
