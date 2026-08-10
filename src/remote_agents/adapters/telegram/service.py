@@ -1715,17 +1715,6 @@ def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[But
     return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
 
 
-def _label(value: str) -> str:
-    normalized = " ".join(value.split())
-    if (
-        not normalized
-        or len(normalized) > 40
-        or any(not character.isprintable() for character in value)
-    ):
-        raise ValueError("label is invalid")
-    return normalized
-
-
 def _session_row_label(record: SessionRecord) -> str:
     return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
 

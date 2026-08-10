@@ -169,6 +169,46 @@ class SQLiteSessionStore:
             ),
         )
 
+    async def set_label(self, session_id: SessionId, label: str | None) -> SessionRecord:
+        """Rename a session, or clear its name, by rewriting the identity it already stores.
+
+        The label is the optional fifth part of `display_identity`, not a column of its own, so
+        this is an UPDATE of an existing column rather than a migration. `SessionDisplayIdentity`
+        re-validates on construction, which is what makes the write safe: an invalid label
+        raises here, before the UPDATE, so a rejected rename leaves the row exactly as it was.
+
+        Raises `KeyError` for a session that is not stored. Answering "renamed" for a session
+        that does not exist would let a stale button report success against nothing — the same
+        fail-dangerous default the stop path removed.
+        """
+        current = await self.get(session_id)
+        if current is None:
+            raise KeyError(f"unknown session: {session_id}")
+        display = SessionDisplayIdentity(
+            current.display.project_slug,
+            current.display.agent_label,
+            current.display.mode,
+            current.display.sequence,
+            label,
+        )
+        updated = SessionRecord(
+            current.session_id,
+            current.project_id,
+            current.profile_id,
+            display,
+            current.state,
+            current.created_at,
+            current.resume_profile_id,
+            current.resume_source_id,
+            current.terminal_reason,
+        )
+        with self._connection:
+            self._connection.execute(
+                "UPDATE sessions SET display_identity = ? WHERE session_id = ?",
+                (display.rendered, str(session_id)),
+            )
+        return updated
+
     async def claim_idempotency_key(self, key: str) -> bool:
         """Atomically claim a callback key without creating a fake session event."""
         with self._connection:

@@ -13,7 +13,7 @@ from remote_agents.adapters.tui.context import ProfileChoice
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
 from remote_agents.domain.conversations import ConversationSummary
-from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.models import SessionRecord, normalize_label
 from remote_agents.domain.projects import ProjectIdentity
 
 # Row keys for choices that are navigation rather than data. The NUL prefix is what keeps
@@ -78,13 +78,21 @@ class AttachRequest:
 
 
 def label_or_error(value: str, limit: int) -> str | None:
-    """Normalize an optional session label under the configured bound."""
-    normalized = " ".join(value.split())
-    if not normalized:
+    """Normalize an optional session label under the configured bound.
+
+    The rule itself is `domain.models.normalize_label`; what this adds is the *optional* part.
+    A blank field means "no label" on a form the owner may simply leave alone, so blank returns
+    `None` here rather than raising — the one place the two differ, and the reason this wrapper
+    exists at all instead of the screens calling the domain directly.
+    """
+    if not value.strip():
         return None
-    if len(normalized) > limit or any(not character.isprintable() for character in normalized):
-        raise ValueError(f"use a visible label of up to {limit} characters")
-    return normalized
+    try:
+        return normalize_label(value, max_length=limit)
+    except ValueError as error:
+        # The domain states the rule; this surface states it in the words its form uses, and
+        # the bound quoted is the host's configured one rather than the domain ceiling.
+        raise ValueError(f"use a visible label of up to {limit} characters") from error
 
 
 def selectable_area(value: str) -> bool:

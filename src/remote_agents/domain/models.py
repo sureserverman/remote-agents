@@ -9,6 +9,38 @@ from enum import StrEnum
 from string import ascii_lowercase, digits
 from uuid import UUID, uuid4
 
+MAX_LABEL_LENGTH = 40
+"""The hard bound on a session label. A host may configure something smaller, never larger.
+
+`config.py` clamps `limits.max_label_length` to 1..40, so this is the ceiling rather than a
+default that a setting could raise past.
+"""
+
+
+def normalize_label(value: str, *, max_length: int = MAX_LABEL_LENGTH) -> str:
+    """Return the stored form of an owner-supplied session label, or raise.
+
+    One rule, for both surfaces and for both moments a label can be set — at launch, and later
+    from a session's own menu. It existed twice before: the Telegram adapter carried a private
+    `_label`, and this module re-derived the same normalization inline. Two copies of a
+    validation rule is one copy plus a future divergence, and the divergence is silent because
+    both accept the common case.
+
+    Whitespace is collapsed rather than merely stripped: `"a  b"` and `"a b"` are the same name
+    to a reader, and storing the difference makes two sessions that look identical compare as
+    though they are not. Empty-after-normalization is rejected because the rendered identity
+    joins its parts on `" · "`, and a blank fifth part produces a row that reads back as a
+    five-part identity carrying no label.
+    """
+    normalized = " ".join(value.split())
+    if not normalized:
+        raise ValueError("a session label must contain at least one visible character")
+    if len(normalized) > max_length:
+        raise ValueError(f"a session label must be at most {max_length} characters")
+    if any(not character.isprintable() for character in normalized):
+        raise ValueError("a session label must contain only printable characters")
+    return normalized
+
 
 class SessionState(StrEnum):
     """Persisted lifecycle states for a managed session."""
@@ -110,14 +142,7 @@ class SessionDisplayIdentity:
             ):
                 raise ValueError(f"{name} must be a non-empty single token")
         if self.custom_label is not None:
-            normalized = " ".join(self.custom_label.split())
-            if (
-                not normalized
-                or len(normalized) > 40
-                or any(not character.isprintable() for character in normalized)
-            ):
-                raise ValueError("custom label must contain 1 to 40 visible characters")
-            object.__setattr__(self, "custom_label", normalized)
+            object.__setattr__(self, "custom_label", normalize_label(self.custom_label))
 
     @property
     def rendered(self) -> str:
