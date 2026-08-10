@@ -183,6 +183,18 @@ class LiveView:
             self._owed_prunes.add(retired)
         return message_id
 
+    async def discard(self, bot, message_id: int) -> None:
+        """Take a message out of the chat, and answer for why it was allowed to go.
+
+        Exactly two things qualify, and the rule is worth stating because deletion is the
+        one irreversible thing this adapter does. A message may be discarded when it is a
+        **superseded screen of ours**, or an **input of the owner's that has been consumed**
+        — a command that has been answered, a reply that has been read. Nothing else: not a
+        message the bot did not send and the owner did not just send, and never anything the
+        owner might still be reading.
+        """
+        await self._delete(bot, message_id)
+
     async def _delete(self, bot, message_id: int) -> None:
         try:
             await bot.delete_message(chat_id=self._chat_id, message_id=message_id)

@@ -215,7 +215,27 @@ class PrivateBotBoundary:
         if not self.permits(update) or update.effective_message is None:
             return
         self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-        self._bind_sent(await update.effective_message.reply_text(**(await self._home_reply())))
+        await self._answer_command(update.effective_message, await self._home_reply())
+
+    async def _answer_command(self, message, arguments: dict[str, object]) -> None:
+        """Draw a command's answer into the live view and take the command back out of the chat.
+
+        Render first, delete second. If the render fails, the owner still has the message
+        they sent and can see that nothing answered it; the other order would consume the
+        command and leave the chat silent about what happened to it. A delete that fails
+        after a successful render is the harmless direction — the screen is right and one
+        stale command line survives — which is why `discard` swallows it.
+
+        A command used to `reply_text`, which is what made the chat a transcript: four
+        commands meant four screens, and since Stage 1 every one of them kept working
+        buttons.
+
+        Takes the message rather than the update because every caller has already narrowed
+        it, and a second check here would be a branch no test could ever reach.
+        """
+        bot = message.get_bot()
+        await self.view.render(bot, arguments)
+        await self.view.discard(bot, message.message_id)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Accept bounded local catalogue search or a session label while explicitly requested."""
@@ -294,19 +314,16 @@ class PrivateBotBoundary:
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
-            self._bind_sent(
-                await update.effective_message.reply_text(
-                    **_reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
-                )
+            await self._answer_command(
+                update.effective_message,
+                _reply_arguments(self._projects_reply(self.catalogue, view_id="all")),
             )
 
     async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
-            self._bind_sent(
-                await update.effective_message.reply_text(
-                    **_reply_arguments(await self._sessions_reply())
-                )
+            await self._answer_command(
+                update.effective_message, _reply_arguments(await self._sessions_reply())
             )
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -341,10 +358,8 @@ class PrivateBotBoundary:
             f"<b>{ACTION_LABELS[FORCE]}</b> kills a session that cannot exit, and asks for "
             "confirmation before it does.",
         ]
-        self._bind_sent(
-            await update.effective_message.reply_text(
-                **_reply_arguments(self._message("\n".join(lines)))
-            )
+        await self._answer_command(
+            update.effective_message, _reply_arguments(self._message("\n".join(lines)))
         )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

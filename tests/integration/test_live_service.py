@@ -597,8 +597,13 @@ class _Message:
     def __init__(self, text: str | None = None, message_id: int = 1) -> None:
         self.replies: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
+        self.deletions: list[int] = []
         self.text = text
         self.message_id = message_id
+        self.bot = _MessageBot(self)
+
+    def get_bot(self) -> _MessageBot:
+        return self.bot
 
     async def reply_text(self, text: str | None = None, **kwargs: object) -> _Message:
         if text is not None:
@@ -615,6 +620,33 @@ class _Message:
                 "protect_content": kwargs.get("protect_content", False),
             }
         )
+
+
+class _MessageBot:
+    """The same surface, for an update that arrived as a message rather than a press.
+
+    Both a send and an edit land in the owning double's `replies`, because from a test's
+    point of view they are the same event — this screen was drawn in answer to this update.
+    Which of the two Telegram performed depends only on whether an anchor already existed.
+    """
+
+    def __init__(self, owner: _Message) -> None:
+        self._owner = owner
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        kwargs.pop("chat_id", None)
+        self._owner.replies.append(kwargs)
+        # The doubles share one message id: this chat has one live view, so a send answers
+        # with the same id every later edit will address.
+        return _Message(message_id=self._owner.message_id)
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        kwargs.pop("chat_id", None)
+        kwargs.pop("message_id", None)
+        self._owner.replies.append(kwargs)
+
+    async def delete_message(self, **kwargs: object) -> None:
+        self._owner.deletions.append(int(kwargs["message_id"]))
 
 
 class _Bot:
@@ -952,11 +984,13 @@ async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):
+    carrier = callback if callback is not None else message
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=7),
         effective_chat=SimpleNamespace(id=11, type="private"),
         effective_message=message,
         callback_query=callback,
+        get_bot=lambda: carrier.get_bot(),
     )
 
 
