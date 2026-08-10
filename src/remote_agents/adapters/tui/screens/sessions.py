@@ -210,6 +210,16 @@ class SessionsScreen(ChoiceScreen):
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     async def choose(self, key: str) -> None:
+        if key == _BACK:
+            # BL-020's other instance. `report_store_failure` renders a lone `_BACK` row onto
+            # the screen whose read failed; this method used to route every key to
+            # `show_detail`, so choosing it asked the store for a session called `\x00back`
+            # and answered "That session is no longer available" — the wrong cause, on the
+            # path that runs when something is already broken. The shared handler now catches
+            # this before `choose` is reached; the branch is here because `choose` is also
+            # called directly, and because a screen should be able to answer for its own rows.
+            await self.tui.go_back()
+            return
         await self.tui.show_detail(key)
 
 

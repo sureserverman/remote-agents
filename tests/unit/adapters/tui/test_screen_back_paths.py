@@ -234,3 +234,55 @@ async def test_escape_reaches_the_resting_position_without_emptying_the_stack(
         await pilot.pause()
         assert len(app.screen_stack) == 1
         assert isinstance(app.screen, ProjectsScreen)
+
+
+async def test_the_error_path_back_row_goes_back_from_any_screen_it_lands_on() -> None:
+    """BL-020, decided once instead of per screen.
+
+    `report_store_failure` and `fetch_page` both render a lone `_BACK`-keyed row onto
+    *whichever* position's read failed, and that can be any of them. Six screens had grown a
+    matching branch in `choose` and three had not, so on those three the row was treated as
+    data: the sessions list asked the store for a session called `\\x00back`, the project list
+    answered "That project is no longer available. Refresh and try again." Dead ends
+    reporting a cause that is not the cause, on the path that runs when something is already
+    broken.
+
+    Driven on `ProfilesScreen`, and the choice of screen is the test. Six screens carry
+    their own `_BACK` branch and would pass this on their own; the agent list is one of the
+    three that never did, so it fails unless the *shared* handler catches the key. Verified
+    by mutation: deleting the interception from `on_option_list_option_selected` turns this
+    red, while an earlier draft driven on the sessions list stayed green through the same
+    deletion because that screen answers for itself.
+
+    Driven through the real selection message rather than by calling `choose`, because the
+    interception lives in the message handler.
+    """
+    from textual.widgets import OptionList
+
+    from remote_agents.adapters.tui.model import _BACK
+
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        # Two deep, so there is somewhere to go back *to* and the pop is observable.
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        depth_before = len(app.screen_stack)
+        position_before = app.screen.position
+
+        # Exactly what a failed read renders.
+        app.screen.show_choices(((_BACK, "Back"),))
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 0
+        await pilot.press("enter")
+        await pilot.pause()
+
+        depth_after = len(app.screen_stack)
+        position_after = app.screen.position
+
+    assert position_before == "PROFILES"
+    assert depth_after == depth_before - 1, (
+        f"choosing the error-path Back row did not pop the screen: {position_after}"
+    )
+    assert position_after == "PROJECTS"

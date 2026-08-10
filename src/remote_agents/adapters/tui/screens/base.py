@@ -21,7 +21,7 @@ from textual.validation import ValidationResult, Validator
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from remote_agents.adapters.tui.model import _EMPTY
+from remote_agents.adapters.tui.model import _BACK, _EMPTY
 
 if TYPE_CHECKING:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -891,6 +891,30 @@ class ChoiceScreen(Screen[None]):
         # here means a row this app did not construct — refuse it rather than dispatch on it.
         key = event.option_id
         if key is None or self.tui.busy:
+            return
+        if key == _BACK:
+            # **Handled here, once, because the failure paths render this row onto screens
+            # that never asked for it.** `report_store_failure` and `fetch_page` both draw a
+            # lone `_BACK` row onto whichever position's read failed — which can be any of
+            # them — and a screen whose `choose` did not know about the key treated it as
+            # data: the sessions list asked the store for a session called `\x00back`, the
+            # project list answered "That project is no longer available. Refresh and try
+            # again." Dead ends, on the path that runs when something is already broken, each
+            # reporting a cause that is not the cause. Six screens had grown the same
+            # three-line branch and three had not; BL-020 records the shape and says decide
+            # once, which is what this is.
+            #
+            # The per-screen `_BACK` branches stay rather than being deleted as dead code,
+            # and not out of caution: `choose` is called directly, by tests and by
+            # `after_command`, without passing through this handler at all. Removing them
+            # would make this the *only* route to Back, which is a narrower guarantee than
+            # the one being added.
+            #
+            # Only `_BACK`. `_CANCEL` is *not* uniform — every screen that renders it means
+            # "unwind to the project list" except `ResumeConfirmScreen`, where Cancel means
+            # go back one step — so hoisting it here would quietly change a confirmation's
+            # answer. It stays with the screens that know what they mean by it.
+            await self.tui.go_back()
             return
         await self.choose(key)
 
