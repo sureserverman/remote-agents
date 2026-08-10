@@ -168,6 +168,18 @@ def _a_session(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     )
 
 
+def _another_session() -> SessionRecord:
+    """A second session that outlives the one being stopped, so the landing has rows."""
+    return SessionRecord(
+        SessionId(UUID(int=8)),
+        ProjectId("a" * 24),
+        ProfileId("claude"),
+        SessionDisplayIdentity("Demo", "Claude", "regular", 2),
+        SessionState.RUNNING,
+        datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+
 def _labels(rendered) -> list[str]:
     return [button.text for row in rendered.keyboard for button in row]
 
@@ -182,7 +194,7 @@ async def test_a_clean_stop_lands_on_list_naming_what_ended() -> None:
     record = _a_session()
     boundary = _stopped_boundary()  # it ended, so it is no longer listed
 
-    rendered = await boundary._stop_outcome_reply("graceful", record)
+    rendered = await boundary._stop_outcome_landing("graceful", record)
 
     assert rendered.text.startswith("Stopped Demo · Claude · regular · #1\n")
     assert "The session has ended." in rendered.text
@@ -204,7 +216,7 @@ async def test_a_graceful_timeout_lands_on_list_with_its_words_unchanged() -> No
     record = _a_session()
     boundary = _stopped_boundary(record)  # the stop did not take, so it is still listed
 
-    rendered = await boundary._stop_outcome_reply("graceful", record, failure)
+    rendered = await boundary._stop_outcome_landing("graceful", record, failure)
 
     assert rendered.text.startswith("Demo · Claude · regular · #1 is still running\n")
     assert escape(failure.summary) in rendered.text
@@ -225,7 +237,7 @@ async def test_a_stop_that_failed_for_a_departed_session_lands_on_list_with_its_
     record = _a_session()
     boundary = _stopped_boundary()  # gone from the list, while the stop reported failure
 
-    rendered = await boundary._stop_outcome_reply("graceful", record, failure)
+    rendered = await boundary._stop_outcome_landing("graceful", record, failure)
 
     assert rendered.text.startswith("Demo · Claude · regular · #1 is no longer listed\n")
     assert escape(failure.summary) in rendered.text
@@ -246,7 +258,114 @@ async def test_a_stop_outcome_lands_on_list_with_the_session_name_escaped() -> N
         datetime(2026, 8, 10, tzinfo=UTC),
     )
 
-    rendered = await _stopped_boundary()._stop_outcome_reply("graceful", record)
+    rendered = await _stopped_boundary()._stop_outcome_landing("graceful", record)
 
     assert "&lt;b&gt;Demo&lt;/b&gt;" in rendered.text
     assert "<b>Demo</b>" not in rendered.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "lead"),
+    [
+        ("graceful", "Stopped Demo · Claude · regular · #1"),
+        ("cleanup", "Cleaned up Demo · Claude · regular · #1"),
+        ("force", "Force stopped Demo · Claude · regular · #1"),
+    ],
+)
+async def test_every_stop_action_lands_on_list_with_its_own_lead_line(action, lead) -> None:
+    """All three end the same way and say different things, which is the point.
+
+    A shared landing with a shared sentence would report a cleanup as a stop; the actions
+    remove different things and the owner is told which one ran.
+    """
+    record = _a_session()
+
+    ended_alone = await _stopped_boundary()._stop_outcome_landing(action, record)
+    # And again with a survivor on the list, so the lead line is checked over rows as well as
+    # over the empty state — the two branches of `_sessions_reply` render the notice
+    # separately, and only one of them was covered when this was written.
+    with_survivor = await _stopped_boundary(_another_session())._stop_outcome_landing(
+        action, record
+    )
+
+    assert ended_alone.text.startswith(f"{lead}\n")
+    assert "Nothing is running." in ended_alone.text
+    assert with_survivor.text.startswith(f"{lead}\n")
+    assert "Sessions 1/1" in with_survivor.text
+    assert "Back" not in _labels(ended_alone)
+    assert "Back" not in _labels(with_survivor)
+
+
+class _MovedOnLauncher:
+    """Lists the session in a state that no longer matches the one its token was offered at."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.stopped: list[str] = []
+
+    async def list_sessions(self):
+        return [self.record]
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def graceful_stop(self, _command):
+        self.stopped.append("graceful")
+        return a_clean_stop()
+
+
+@pytest.mark.asyncio
+async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> None:
+    """The fourth outcome, and the only one that reports something the owner did not cause.
+
+    The token was offered against RUNNING; by the time the thumb landed the session was
+    PRESERVED, so the controller refuses to dispatch. It used to say "Open the list again to
+    see where it is now" over a Back button — an instruction to navigate to the screen the
+    owner now arrives on, so only the half that says what happened survives.
+    """
+    offered = _a_session(SessionState.RUNNING)
+    moved_on = _a_session(SessionState.PRESERVED)
+    launcher = _MovedOnLauncher(moved_on)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    token = boundary.stops.offer(
+        offered.session_id, offered.profile_id, SessionState.RUNNING, "graceful", 7, 11
+    )
+    assert token is not None
+    boundary.callbacks.bind_pending(11, 1)
+
+    reply = await boundary._stop_reply("graceful", token, 1)
+
+    assert launcher.stopped == [], "a refused stop dispatches nothing"
+    assert reply["text"].startswith("That session moved on before this could run")
+    assert "Open the list again" not in reply["text"]
+    assert "Sessions 1/1" in reply["text"]
+    labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+    assert "Back" not in labels
+
+
+@pytest.mark.asyncio
+async def test_force_confirms_before_anything_lands_on_list() -> None:
+    """Nothing above moves the one screen that stands in front of an irreversible action.
+
+    Cancel first and on its own row, so the destructive button is not the one the thumb is
+    already resting near — and force still confirms rather than landing anywhere.
+    """
+    record = _a_session()
+    boundary = _stopped_boundary(record)
+    token = boundary.stops.offer(record.session_id, record.profile_id, record.state, "force", 7, 11)
+    assert token is not None
+    boundary.callbacks.bind_pending(11, 1)
+
+    reply = await boundary._stop_reply("force", token, 1)
+
+    assert "Force stop" in reply["text"]
+    assert "cannot be undone" in reply["text"]
+    rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
+    assert rows[0] == ["Cancel"]
+    assert rows[1] == ["Force stop"]

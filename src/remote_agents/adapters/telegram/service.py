@@ -1090,17 +1090,20 @@ class PrivateBotBoundary:
             await self.stops.execute(request, self.launcher, record) if record is not None else None
         )
         if result is None or not result.dispatched:
+            # Lands on the list like every other outcome. Covers both halves of the guard:
+            # the session moved on between the offer and the press, or its record is gone
+            # entirely. The second sentence this used to carry — "Open the list again to see
+            # where it is now." — was an instruction to navigate somewhere the owner now
+            # already is, so the refusal keeps only the half that says what happened.
             return _reply_arguments(
-                self._message(
-                    "That session moved on before this could run, so nothing was done.\n"
-                    "Open the list again to see where it is now.",
-                    back=self._callback("sessions.open", "sessions"),
+                await self._sessions_reply(
+                    notice="That session moved on before this could run, so nothing was done."
                 )
             )
         # `request.action` rather than the pressed one: a confirmed force arrives under an
         # adapter-internal action name, and the outcome is reported in the domain's terms.
         return _reply_arguments(
-            await self._stop_outcome_reply(request.action, record, result.failure)
+            await self._stop_outcome_landing(request.action, record, result.failure)
         )
 
     async def _force_confirm_reply(self, token: str, message_id: int) -> RenderedMessage:
@@ -1152,7 +1155,7 @@ class PrivateBotBoundary:
             ),
         )
 
-    async def _stop_outcome_reply(
+    async def _stop_outcome_landing(
         self, action: str, record: SessionRecord, failure: StopFailure | None = None
     ) -> RenderedMessage:
         """Report what the session actually did, named, as the lead line of the session list.
