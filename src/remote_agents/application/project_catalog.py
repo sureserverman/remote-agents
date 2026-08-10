@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
+
+_SECONDS_PER_DAY = 86_400.0
 
 
 class ProjectLike(Protocol):
     path: Path
     name: str
     area: str
+
+
+class ProjectUsageLike(Protocol):
+    """One project's launch history, as the session store reports it.
+
+    Structural on purpose: application may not import adapters, so the store's
+    concrete record type is matched by shape rather than by name. ``project_id``
+    is compared as ``str`` so a bare string and a ``ProjectId`` both join against
+    ``CatalogProject.opaque_id``.
+    """
+
+    project_id: object
+    session_count: int
+    last_used_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +82,32 @@ def search_catalogue(catalogue: Iterable[CatalogProject], query: str) -> tuple[C
     )
 
 
+def rank_by_recent_use(
+    catalogue: Iterable[CatalogProject],
+    usage: Mapping[str, ProjectUsageLike] | Iterable[ProjectUsageLike],
+    now: datetime,
+    *,
+    half_life_days: float = 14.0,
+) -> tuple[CatalogProject, ...]:
+    """Rank by launches whose weight halves every ``half_life_days``.
+
+    The owner wants the projects they are working on *now* at the top, so a
+    handful of launches yesterday must outrank a heavy burst from last year
+    instead of a lifetime total deciding the order forever.
+
+    ``now`` is an argument and nothing here reads a clock or a store: the same
+    inputs must rank identically in a test, in a replay, and in a live request.
+    """
+    if half_life_days <= 0:
+        raise ValueError("half_life_days must be positive")
+    scores = _usage_scores(usage, now, half_life_days)
+    # sorted() is stable, so equal scores keep the registered-first, then
+    # area/name order build_catalogue already established; ranking must never
+    # invent a second tie-break of its own. Usage for a project missing from the
+    # catalogue (deleted or unregistered) is simply never looked up.
+    return tuple(sorted(catalogue, key=lambda project: -scores.get(project.opaque_id, 0.0)))
+
+
 def paginate_catalogue(
     catalogue: Iterable[CatalogProject],
     page: int,
@@ -81,6 +124,23 @@ def paginate_catalogue(
         raise ValueError("page is out of range")
     start = (page - 1) * page_size
     return CataloguePage(projects[start : start + page_size], page, page_count, registry_error)
+
+
+def _usage_scores(
+    usage: Mapping[str, ProjectUsageLike] | Iterable[ProjectUsageLike],
+    now: datetime,
+    half_life_days: float,
+) -> dict[str, float]:
+    """Decay each project's session count by the age of its most recent session."""
+    records = usage.values() if isinstance(usage, Mapping) else usage
+    scores: dict[str, float] = {}
+    for record in records:
+        elapsed = (now - record.last_used_at).total_seconds() / _SECONDS_PER_DAY
+        # A clock-skewed future timestamp must not score above a genuine launch
+        # made this second, so age floors at zero rather than amplifying.
+        age_days = max(0.0, elapsed)
+        scores[str(record.project_id)] = record.session_count * 0.5 ** (age_days / half_life_days)
+    return scores
 
 
 def _entry(project: ProjectLike, group: str, canonical: Path) -> CatalogProject:
