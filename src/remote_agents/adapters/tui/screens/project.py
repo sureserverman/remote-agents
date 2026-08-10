@@ -43,7 +43,14 @@ class AreasScreen(ChoiceScreen):
             offered = await self.tui.in_thread(self.services.creator.available_areas, group="areas")
         except Exception as error:
             _LOG.exception("listing areas failed")
-            self.set_status("Press escape to return to the project list.")
+            # States the failure rather than pointing at the exit, for the reason recorded on
+            # `report_store_failure`: the toast carrying the why expires, and this region is
+            # what is left.
+            self.set_status(
+                "The development root could not be read. Press escape to return to the "
+                "project list.",
+                severity="error",
+            )
             self.announce(f"The development root could not be read: {error}")
             # Through `entries`, unlike the sibling branch six lines below, and deliberately:
             # this is a *failed read*, not an empty one. Routing it through `trailing=` would

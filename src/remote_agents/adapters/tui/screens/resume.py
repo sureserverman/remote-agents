@@ -115,7 +115,11 @@ class ResumeProjectsScreen(ChoiceScreen):
                 capabilities = await conversations.capabilities()
             except Exception as error:
                 _LOG.exception("resume capabilities failed")
-                self.set_status("Press escape to return to the project list.")
+                self.set_status(
+                    "Resume is unavailable on this host. Press escape to return to the "
+                    "project list.",
+                    severity="error",
+                )
                 self.announce(f"Resume is unavailable: {error}")
                 self.show_choices(((_BACK, "Back"),))
                 return

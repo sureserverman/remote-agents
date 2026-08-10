@@ -628,7 +628,15 @@ async def test_the_interval_actually_fires_without_being_called_by_hand() -> Non
             after_open = launcher.refreshed
 
             launcher.records = (_record(), _record())
-            await pilot.pause(0.2)
+            # A bounded poll, not a fixed wait. A single `pause(0.2)` against a 0.05s interval
+            # is a 4x margin, and this project has already been bitten twice by exactly that
+            # shape — a margin that holds on an idle machine and fails under load. The ceiling
+            # is generous because it is only reached on failure; the loop exits as soon as the
+            # timer has fired *and* its result has reached the rows.
+            deadline = 100
+            while deadline and (launcher.refreshed <= after_open or len(_rows(app)) != 2):
+                await pilot.pause(0.02)
+                deadline -= 1
             fired = launcher.refreshed
             rows = _rows(app)
     finally:

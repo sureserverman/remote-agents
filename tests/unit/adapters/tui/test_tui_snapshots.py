@@ -37,6 +37,20 @@ flake on a machine that is merely configured differently:
    under either rendering, so the pinning that makes these files deterministic is the same
    thing that makes them blind to the change. A future task that alters how a *young* age
    renders will move all of them at once.
+
+**Two more holes in this net, disclosed because a green suite here reads as "the surface is
+unchanged" and for these it means nothing of the kind.** Sub-plan 4's colour-token work also
+moved no baseline, and not for a benign reason: `$foreground` on `#status` is already the
+default, `$surface` on the output pane equals the screen's own background, `$text-muted`
+reaches only a disabled empty-state row, and `$error`/`$warning` reach only a severity none
+of these sixteen captures sets. Deleting that whole CSS block would leave every file here
+identical. `test_status_region.py` carries the assertion instead — it resolves the rendered
+colour under two themes that genuinely differ and requires them to differ, which a hex
+literal cannot satisfy.
+
+The second hole is the same shape: **no baseline renders an empty list**, so the empty-state
+rows added in sub-plan 4 are covered by `test_empty_states.py` alone. Both gaps were found by
+a gate evaluator reading the diff rather than by anything in this file.
 5. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =

@@ -777,7 +777,22 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if target is None or not target.showing:
             return
         target.show_choices(((_BACK, "Back"),))
-        target.set_status("Press escape to return to the project list.")
+        # **The status states the failure, it does not merely point at the exit.** It read
+        # "Press escape to return to the project list." — a sentence that reports nothing —
+        # while the *why* went to a toast that expires after 20 seconds. A gate evaluator
+        # drove this and found that once the toast had gone, an unreadable store was
+        # distinguishable from an ordinary empty list only by the *absence* of the empty-state
+        # row. The two better-behaved paths in this surface already do it this way: a launch
+        # that produced nothing leaves "Nothing was started." on screen.
+        #
+        # The severity is honest here for the same reason it is refused on a bare navigation
+        # instruction: these words name the condition, so an owner under NO_COLOR reads it
+        # from the sentence and the colour only makes it quicker to find.
+        target.set_status(
+            "The managed sessions could not be read. Press escape to return to the "
+            "project list.",
+            severity="error",
+        )
         target.announce(f"The managed sessions could not be read: {error}")
 
     async def current_record(self, session_value: str) -> SessionRecord | None:

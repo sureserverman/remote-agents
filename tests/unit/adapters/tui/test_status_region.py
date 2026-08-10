@@ -506,10 +506,16 @@ async def test_severity_is_never_the_only_signal() -> None:
     judgment half belongs to the gate's reader, and this narrows what they have to read.
     """
     import ast
-    from pathlib import Path
 
+    # `_SURFACE_ROOT`, not a relative path. The first version of this line read
+    # `Path("src/remote_agents/adapters/tui")`, which resolves against the *cwd*: run from
+    # anywhere but the repo root the glob yields nothing, `offenders` is empty, and the check
+    # reports green having read no files at all. This file already had an absolute root and a
+    # test guarding the older sweep against exactly that — the new check was the one left out.
     offenders: list[str] = []
-    for source in Path("src/remote_agents/adapters/tui").rglob("*.py"):
+    swept = 0
+    for source in sorted(_SURFACE_ROOT.rglob("*.py")):
+        swept += 1
         tree = ast.parse(source.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -530,4 +536,92 @@ async def test_severity_is_never_the_only_signal() -> None:
             if isinstance(message, ast.Constant) and not str(message.value).strip():
                 offenders.append(f"{source}:{node.lineno}")
 
+    assert swept >= 5, (
+        f"the sweep read {swept} files under {_SURFACE_ROOT}; it found nothing to check"
+    )
     assert offenders == [], f"a severity-coloured status with no words: {offenders}"
+
+
+async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() -> None:
+    """Nothing in the committed visual net would notice if the colour block were deleted.
+
+    A gate evaluator pointed this out and it is exactly right: `$foreground` on `#status` is
+    already the default, `$surface` on the output pane equals the screen's own background,
+    `$text-muted` reaches only a disabled row no baseline renders, and `$error`/`$warning`
+    reach only a severity no baseline sets. So the sixteen SVGs — this repo's only assertion
+    about what the owner *sees* — are silent about the whole change.
+
+    This is that assertion. It resolves the rendered colour under two themes and requires
+    them to differ, which is the property a design-system token has and a hex literal does
+    not: a literal would render identically under both and fail here.
+    """
+    from textual.widgets import Static
+
+    app = RemoteAgentsTui(_context())
+    seen: dict[str, tuple[int, int, int]] = {}
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        region = screen.query_one("#status", Static)
+        # `textual-dark` and `textual-light` were the obvious pair and are the wrong one:
+        # both define `error` as the same `#ba3c5b`, so a hex literal would have passed. These
+        # two genuinely differ (`#ba3c5b` against gruvbox's `#fb4934`), which is what makes
+        # the assertion below able to fail.
+        for theme in ("textual-dark", "gruvbox"):
+            app.theme = theme
+            screen.set_status("The managed sessions could not be read.", severity="error")
+            await pilot.pause()
+            colour = region.styles.color
+            seen[theme] = (colour.r, colour.g, colour.b)
+
+        # And the neutral case must not be wearing the error colour.
+        app.theme = "textual-dark"
+        screen.set_status("Choose a project.")
+        await pilot.pause()
+        neutral = region.styles.color
+        neutral_rgb = (neutral.r, neutral.g, neutral.b)
+
+    assert seen["textual-dark"] != seen["gruvbox"], (
+        f"the error colour is theme-independent, so it is a literal, not a token: {seen}"
+    )
+    assert neutral_rgb != seen["textual-dark"], (
+        "a neutral status renders in the error colour"
+    )
+
+
+async def test_a_failed_read_still_says_what_failed_after_its_toast_has_gone() -> None:
+    """The toast expires; the status region is what is left, and it used to report nothing.
+
+    A gate evaluator drove this: with `_FAILURE_TIMEOUT` at 20 seconds, an unreadable store
+    left `Press escape to return to the project list.` on screen — a sentence naming no
+    condition — and after the toast had gone it was distinguishable from an ordinary empty
+    list only by the *absence* of the empty-state row. The surface's own better paths already
+    did this correctly: a launch that produced nothing leaves "Nothing was started." up.
+
+    Asserted on the status text rather than on the toast, deliberately: the toast is the half
+    with a lifetime, so a test that read it would pass on exactly the arrangement that failed.
+    """
+    from textual.widgets import Static
+
+    class _Unreadable:
+        async def refresh_readiness(self):
+            raise RuntimeError("database is locked")
+
+        async def list_sessions(self):
+            raise RuntimeError("database is locked")
+
+        async def copy_attach(self, _session_id):
+            return None
+
+    app = RemoteAgentsTui(_context(launcher=_Unreadable()))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await pilot.pause()
+        region = app.screen.query_one("#status", Static)
+        said = str(region.content)
+        marked = region.has_class("-error")
+
+    assert "could not be read" in said, f"the status named no condition: {said!r}"
+    assert marked, "a status that reports a failure is not marked as one"
