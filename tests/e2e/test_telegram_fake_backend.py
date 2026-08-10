@@ -537,6 +537,31 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
     assert "Stop and close" in chat.bot_messages[0].text, chat.bot_messages[0].text[:120]
 
 
+@pytest.mark.asyncio
+async def test_a_message_the_bot_never_asked_for_is_left_where_the_owner_put_it() -> None:
+    """The negative half of the single-screen rule, and the only one stated as a prohibition.
+
+    Deletion is permitted for a superseded screen of ours, a consumed input of the owner's,
+    and an unanswered question of ours — and for nothing else. Unsolicited owner chatter is
+    the "nothing else": deleting it would tidy the chat and would be the adapter removing a
+    message it never acted on. Today that rests entirely on `text()` returning early when no
+    step is open, which is a single line nothing was pinning; a future handler that starts
+    consuming stray input would satisfy every other test in this file.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+
+    await boundary.text(chat.message_update("just thinking out loud"), None)
+
+    assert [message.text for message in chat.owner_messages] == ["just thinking out loud"], (
+        "a message the bot never asked for and never answered is not ours to delete"
+    )
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.bot_messages[0].message_id == anchor, "and it did not redraw over the silence"
+
+
 async def _open_a_search(chat: FakeChat, boundary: PrivateBotBoundary, anchor: int) -> None:
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Launch")), None)
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Search")), None)

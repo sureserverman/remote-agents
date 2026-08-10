@@ -19,8 +19,9 @@ message, the live view, which every screen re-renders.
 
 ## What was verified unattended on this host
 
-**The whole suite, clean.** `.venv/bin/python -m pytest -q` reports `1452 passed, 27 skipped in
-297.86s`, re-run at close-out. *(The earlier figure recorded here, `1451 passed, 14 skipped`,
+**The whole suite, clean.** `.venv/bin/python -m pytest -q` reports `1454 passed, 27 skipped in
+301.16s`, re-run after the close-out review's fixes (it read `1452 passed, 27 skipped` before
+the two tests those fixes added). *(The earlier figure recorded here, `1451 passed, 14 skipped`,
 was a six-directory scoped run — `tests/unit`, `tests/contract`, `tests/security`,
 `tests/architecture`, `tests/integration`, `tests/e2e` — described as "the whole suite". It was
 accurate for its scope but the label was wrong. The difference is entirely `tests/live`, which
@@ -36,9 +37,18 @@ boundary over a temporary database, mints a token, **closes that connection**, c
 boundary over the same file, and resolves the token — which is what `bootstrap.main` does across
 a restart. A token back-dated four hundred days still resolves.
 
-**The claim is still one-shot, and now durable.** Twenty real connections race
-`adopt_anchor` on one chat and exactly one is told it won; `claim_mutation` is a single
-`UPDATE … WHERE claimed = 0` whose rowcount decides, so a second process cannot service a repeat.
+**The claim is still one-shot, and now durable.** *(Corrected at close-out — the sentence
+here previously read "Twenty real connections race `adopt_anchor`", which merged two tests
+into one and credited the weaker with the stronger's property.)* Two separate tests, and the
+difference between them is the whole point: twenty real connections adopt the anchor
+**sequentially** and only the first is told it won (`tests/integration/sqlite/test_chat_view.py:60`,
+whose own docstring says it proves durability across connections and *not* atomicity), while
+eight connections released together by a `threading.Barrier` genuinely race it
+(`:75`). `claim_mutation` now has the same pair: the sequential two-connection test at
+`tests/integration/sqlite/test_callback_state.py:52`, and a new eight-way barrier race at
+`:70` — added at close-out, because the atomic `UPDATE … WHERE claimed = 0` was previously
+argued from its SQL rather than demonstrated under contention, and it is what stands between
+DEC-005's second writer and a double-executed stop.
 
 **The chat holds one screen.** A twelve-interaction journey through the fake Telegram backend —
 home, launch, search, answering the search, a profile, home, sessions, a session's detail, an

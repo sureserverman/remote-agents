@@ -1,3 +1,5 @@
+import threading
+
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.database import open_database
 
@@ -65,6 +67,47 @@ def test_a_mutation_is_claimed_once_across_two_connections_to_one_database(tmp_p
     assert minting.claim_mutation(token, **scope) is True
     assert competing.claim_mutation(token, **scope) is False
     assert competing.resolve(token, **scope) is not None
+
+
+def test_concurrent_connections_cannot_both_claim_one_mutation(tmp_path) -> None:
+    """The atomicity property for the claim, which the sequential test above cannot reach.
+
+    Its sibling proves the claim is not a Python attribute; it cannot distinguish an atomic
+    `UPDATE … WHERE claimed = 0` from `if not claimed(): mark_claimed()`, because nothing
+    ever interleaves. Here the connections are released together by a barrier so their
+    read-then-write windows genuinely overlap — which is what DEC-005's second writer does.
+    Mirrors `test_chat_view.py`'s adopt race; each thread opens its own connection, since a
+    `sqlite3` connection belongs to the thread that made it.
+
+    Two claims both returning True is a stop or a launch serviced twice, which is the exact
+    guarantee DEC-008 rests on.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    minting = SQLiteCallbackStateStore(open_database(path))
+    token = minting.create("launch.profile", "p|claude", _OWNER, _CHAT, _MESSAGE, mutation=True)
+    scope = {"owner_id": _OWNER, "chat_id": _CHAT, "message_id": _MESSAGE}
+    claimants = 8
+    ready = threading.Barrier(claimants)
+    won: list[bool] = []
+    guard = threading.Lock()
+
+    def claim() -> None:
+        store = SQLiteCallbackStateStore(open_database(path))
+        ready.wait(timeout=10)
+        outcome = store.claim_mutation(token, **scope)
+        with guard:
+            won.append(outcome)
+
+    threads = [threading.Thread(target=claim) for _ in range(claimants)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert won.count(True) == 1, (
+        "two connections both told they claimed the mutation is a double-executed action"
+    )
+    assert len(won) == claimants
 
 
 def test_a_read_only_token_can_never_be_claimed(tmp_path) -> None:

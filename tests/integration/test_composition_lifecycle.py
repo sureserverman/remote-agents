@@ -119,6 +119,7 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     one gets the old defect back silently, with every test still green. This pins the line.
     """
     from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+    from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.adapters.sqlite.migrations import MIGRATIONS
     from remote_agents.bootstrap import _private_boundary
@@ -140,3 +141,9 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
         connection.close()
 
     assert isinstance(composition.boundary.callbacks, SQLiteCallbackStateStore)
+    # Both halves of the durable pair, not just the one. `callbacks` and `anchors` are the
+    # only two boundary fields that fall back to an in-memory store when the wiring is
+    # dropped, and a fallback is silent — the suite stayed green with `anchors` deleted from
+    # `bootstrap`, which is the restart defect back: a forgotten anchor sends a second live
+    # view and leaves the first above it, still holding buttons that resolve.
+    assert isinstance(composition.boundary.anchors, SQLiteChatViewStore)

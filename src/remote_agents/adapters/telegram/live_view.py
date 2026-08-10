@@ -220,13 +220,20 @@ class LiveView:
     async def discard(self, bot, message_id: int) -> bool:
         """Take a message out of the chat, and answer for why it was allowed to go.
 
-        Exactly three things qualify, and the rule is worth stating because deletion is the
-        one irreversible thing this adapter does. A message may be discarded when it is a
+        Four things qualify, and the rule is worth stating because deletion is the one
+        irreversible thing this adapter does. A message may be discarded when it is a
         **superseded screen of ours**; an **input of the owner's that has been consumed** — a
-        command that has been answered, a reply that has been read; or a **question of ours
+        command that has been answered, a reply that has been read; a **question of ours
         that nobody is going to answer**, an input box for a step the owner has walked away
-        from. Nothing else: not a message the bot did not send and the owner did not just
-        send, and never anything the owner might still be reading.
+        from; or a **captured document of ours the owner has navigated away from**, released
+        when they leave the session it came out of. Nothing else: not a message the bot did
+        not send and the owner did not just send, and never anything the owner might still
+        be reading.
+
+        The fourth was left out when this rule was first written, which made a docstring
+        bounding an irreversible operation narrower than the operation — the released
+        capture is ours and superseded, so it always belonged to the first category in
+        spirit, but a rule that says "exactly three" and permits four is not a rule.
 
         Answers whether the message is actually gone. A caller tracking a message it must
         eventually remove needs to know the difference between "deleted" and "refused" —
