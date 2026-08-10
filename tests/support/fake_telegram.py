@@ -175,11 +175,46 @@ class FakeCallbackQuery:
         self.alerts.append(show_alert)
 
 
+class LoneMessageBot:
+    """A bot for a double that models one message rather than a whole chat.
+
+    For the tests that assert on what a handler *sent*, not on what the chat is left
+    holding. A send and an edit both land in the owner's `replies`, because from such a
+    test's point of view they are the same event — this screen was drawn in answer to this
+    update — and which one Telegram performed depends only on whether an anchor existed.
+
+    Use `FakeChat` instead whenever the claim is about the chat; only that one can count
+    what survived.
+    """
+
+    def __init__(self, owner: object) -> None:
+        self._owner = owner
+
+    async def send_message(self, **kwargs: object) -> SimpleNamespace:
+        kwargs.pop("chat_id", None)
+        self._owner.replies.append(kwargs)
+        return SimpleNamespace(message_id=self._owner.message_id)
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        kwargs.pop("chat_id", None)
+        kwargs.pop("message_id", None)
+        self._owner.replies.append(kwargs)
+
+    async def delete_message(self, **kwargs: object) -> None:
+        self._owner.deletions.append(int(kwargs["message_id"]))
+
+
 class FakeBot:
     """Telegram's message surface, refusing what Telegram refuses."""
 
     def __init__(self, chat: FakeChat) -> None:
         self._chat = chat
+        self.send_error: Exception | None = None
+        """Force every send to fail — a rate limit, a 5xx, a dropped connection.
+
+        Ordering rules only have consequences when something fails, so a harness that can
+        only succeed cannot tell a safe order from an unsafe one.
+        """
         self.edit_error: Exception | None = None
         """Force the next and every subsequent edit to be refused.
 
@@ -194,6 +229,8 @@ class FakeBot:
 
     async def send_message(self, *, chat_id: int, text: str, **kwargs: object) -> Sent:
         self._require_chat(chat_id)
+        if self.send_error is not None:
+            raise self.send_error
         return self._chat._add("bot", text, reply_markup=kwargs.get("reply_markup"))
 
     async def edit_message_text(

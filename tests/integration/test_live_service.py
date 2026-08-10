@@ -249,7 +249,7 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     await boundary.callback(_trusted_update(callback=awaiting_search), None)
     assert awaiting_search.edits[0]["text"] == "Reply below with a project name."
     assert (
-        awaiting_search.message.replies[0]["reply_markup"].input_field_placeholder == "Project name"
+        awaiting_search.sends[0]["reply_markup"].input_field_placeholder == "Project name"
     )
 
     result = _Message("verse")
@@ -266,7 +266,7 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     await boundary.callback(_trusted_update(callback=awaiting_label), None)
     assert awaiting_label.edits[0]["text"] == "Reply below with an optional session label."
     assert (
-        awaiting_label.message.replies[0]["reply_markup"].input_field_placeholder
+        awaiting_label.sends[0]["reply_markup"].input_field_placeholder
         == "Optional session label"
     )
 

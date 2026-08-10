@@ -141,6 +141,27 @@ _PROJECT_PICKERS = {
         instruction="Select the project for the prior conversation.",
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _TextEntry:
+    """One guided text step: what is being asked, what for, and where the input box is.
+
+    The input box's message id lives here rather than in a second dictionary keyed the same
+    way, because it has exactly the same lifetime as the request — created when the step
+    opens, dead when the step is answered or abandoned.
+
+    Process-local, like the request itself, and deliberately so: a restart mid-entry has
+    already forgotten *what was being asked*, so remembering where the box was would buy
+    nothing. The orphaned box is the visible half of a state that was lost either way,
+    and the owner's way out of it is any command, which redraws the live view.
+    """
+
+    action: str
+    entity_id: str
+    input_message_id: int = 0
+
+
 _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
     "cleanup": "Cleaning up the session…",
@@ -174,7 +195,7 @@ class PrivateBotBoundary:
     anchors: ChatViewPort = field(default_factory=ChatViewStore)
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
-    _awaiting_text: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
+    _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _labels: dict[str, str] = field(default_factory=dict)
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
@@ -238,78 +259,103 @@ class PrivateBotBoundary:
         await self.view.discard(bot, message.message_id)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Accept bounded local catalogue search or a session label while explicitly requested."""
+        """Accept bounded local catalogue search or a session label while explicitly requested.
+
+        Every path here ends the same way: the answer is drawn into the live view, and the
+        question and the answer both leave the chat. What used to happen instead is that
+        each reply added two more messages — the owner's, and a fresh screen — so a search
+        that took three attempts left seven things behind it.
+        """
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        request = self._awaiting_text.get((self.owner_user_id, self.owner_chat_id))
-        if request is None:
+        entry = self._awaiting_text.get(self._entry_key)
+        if entry is None:
             return
-        value = update.effective_message.text or ""
-        action, entity_id = request
+        message = update.effective_message
+        bot = message.get_bot()
+        value = message.text or ""
         if value.casefold() in {"cancel", "back"}:
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._bind_sent(await update.effective_message.reply_text(**(await self._home_reply())))
+            await self._finish_entry(bot, entry, message, await self._home_reply())
             return
-        if action in _SEARCH_ACTIONS:
+        if entry.action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
             if not projects:
-                await update.effective_message.reply_text(
-                    **self._guided_text_reply(action, "No projects found. Try another name.")
-                )
+                await self._ask_again(bot, entry, message, "No projects found. Try another name.")
                 return
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
             # The search returns to the flow it was opened from, so a project picked here
             # resumes a conversation rather than silently starting a fresh session.
-            self._bind_sent(
-                await update.effective_message.reply_text(
-                    **_reply_arguments(
-                        self._projects_reply(
-                            projects, view_id="search", flow=_SEARCH_ACTIONS[action]
-                        )
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(
+                    self._projects_reply(
+                        projects, view_id="search", flow=_SEARCH_ACTIONS[entry.action]
                     )
-                )
+                ),
             )
             return
-        if action == "project.name":
+        if entry.action == "project.name":
             try:
-                identity = ProjectIdentity(area=entity_id, name=value.strip())
+                identity = ProjectIdentity(area=entry.entity_id, name=value.strip())
             except ValueError as error:
-                await update.effective_message.reply_text(
-                    **self._guided_text_reply("project.name", str(error))
-                )
+                await self._ask_again(bot, entry, message, str(error))
                 return
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._bind_sent(
-                await update.effective_message.reply_text(
-                    **_reply_arguments(self._project_review_reply(identity))
-                )
+            await self._finish_entry(
+                bot, entry, message, _reply_arguments(self._project_review_reply(identity))
             )
             return
         if value.casefold() == "skip":
-            self._labels.pop(entity_id, None)
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._bind_sent(
-                await update.effective_message.reply_text(
-                    **_reply_arguments(self._confirm_reply(entity_id))
+            self._labels.pop(entry.entity_id, None)
+        else:
+            try:
+                self._labels[entry.entity_id] = _label(value)
+            except ValueError:
+                await self._ask_again(
+                    bot, entry, message, "Use a visible label of up to 40 characters."
                 )
-            )
-            return
-        try:
-            self._labels[entity_id] = _label(value)
-        except ValueError:
-            await update.effective_message.reply_text(
-                **self._guided_text_reply(
-                    "launch.label", "Use a visible label of up to 40 characters."
-                )
-            )
-            return
-        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-        self._bind_sent(
-            await update.effective_message.reply_text(
-                **_reply_arguments(self._confirm_reply(entity_id))
-            )
+                return
+        await self._finish_entry(
+            bot, entry, message, _reply_arguments(self._confirm_reply(entry.entity_id))
         )
+
+    @property
+    def _entry_key(self) -> tuple[int, int]:
+        return (self.owner_user_id, self.owner_chat_id)
+
+    async def _finish_entry(self, bot, entry: _TextEntry, message, arguments) -> None:
+        """Draw the answer, then take the question and the answer out of the chat.
+
+        Render first for the same reason a command does: if the screen cannot be drawn, the
+        owner keeps what they typed and can see that nothing came of it.
+        """
+        await self.view.render(bot, arguments)
+        self._awaiting_text.pop(self._entry_key, None)
+        await self._clear_entry(bot, entry, message)
+
+    async def _ask_again(self, bot, entry: _TextEntry, message, notice: str) -> None:
+        """Refuse a value and ask again, without leaving the refusal or the old question.
+
+        A rejected attempt is still a consumed input — it was read, judged, and answered —
+        so it goes, and the box it replied to goes with it. What replaces them is one new
+        box, so three failed attempts cost the chat exactly what one does.
+
+        Ask before clearing, the same order `_finish_entry` uses and for the same reason. If
+        the new box cannot be sent, the owner keeps the old one and what they typed, and can
+        try again; clearing first would leave them with no way to answer a step the service
+        still believes is open. The cost is that both boxes exist for one call, which nobody
+        can see.
+        """
+        asked = await self.view.send_apart(bot, self._guided_text_reply(entry.action, notice))
+        await self._clear_entry(bot, entry, message)
+        self._awaiting_text[self._entry_key] = replace(entry, input_message_id=asked)
+
+    async def _clear_entry(self, bot, entry: _TextEntry, message) -> None:
+        """Take the owner's answer, and the box it replied to, back out of the chat."""
+        await self.view.discard(bot, message.message_id)
+        if entry.input_message_id:
+            await self.view.discard(bot, entry.input_message_id)
 
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
@@ -925,10 +971,19 @@ class PrivateBotBoundary:
         return inspect_capture(captured.encode())
 
     async def _begin_guided_text_entry(self, query, action: str, entity_id: str) -> None:
-        entry = "project.name" if action == "project.area" else action
-        self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (entry, entity_id)
-        await self._render(query, _reply_arguments(self._message(_entry_instruction(entry))))
-        await query.message.reply_text(**self._guided_text_reply(entry))
+        """Ask for a value: the instruction in the live view, the input box beside it.
+
+        The split is not a style choice. `ForceReply` cannot be attached to a message being
+        *edited* while it carries an inline keyboard — Telegram answers `Inline keyboard
+        expected` — so the input box has to be its own message, and its id is remembered so it
+        can be taken back out once it has been answered.
+        """
+        # A str, unlike the `_TextEntry` that `entry` names everywhere else in this class.
+        entry_action = "project.name" if action == "project.area" else action
+        bot = query.get_bot()
+        await self._render(query, _reply_arguments(self._message(_entry_instruction(entry_action))))
+        asked = await self.view.send_apart(bot, self._guided_text_reply(entry_action))
+        self._awaiting_text[self._entry_key] = _TextEntry(entry_action, entity_id, asked)
 
     def _pending_notice(self, action: str) -> str | None:
         """What to show while `action` runs, or None when it answers fast enough not to.

@@ -117,6 +117,19 @@ def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
     )
 
 
+def _button(message, label: str) -> str:
+    """The callback token behind a button, found by its label rather than its position.
+
+    Rows move as screens gain and lose actions, and an index that silently points at
+    `Back` produces a test that passes by doing nothing.
+    """
+    for row in message.reply_markup.inline_keyboard:
+        for button in row:
+            if button.text == label:
+                return button.callback_data
+    raise AssertionError(f"no {label!r} button in {message.text!r}")
+
+
 @pytest.mark.asyncio
 async def test_commands_render_in_place_and_leave_the_chat_holding_one_screen() -> None:
     """Four commands used to mean four screens, each keeping working buttons since Stage 1.
@@ -222,7 +235,115 @@ async def test_a_command_screens_buttons_work_after_its_anchor_was_re_sent() -> 
     chat.bot.edit_error = None
     anchor = chat.bot_messages[0]
 
-    token = anchor.reply_markup.inline_keyboard[0][0].callback_data
+    token = _button(anchor, "Launch")
     state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=anchor.message_id)
 
     assert state is not None, "a button drawn on the re-sent screen must answer from it"
+
+
+@pytest.mark.asyncio
+async def test_guided_entry_leaves_the_live_view_and_nothing_else() -> None:
+    """A search costs the chat one prompt while it is open, and nothing once it is answered.
+
+    Both halves matter. The prompt has to be its own message — a `ForceReply` cannot ride
+    on an edit of a message carrying an inline keyboard — and it has to leave again, or the
+    chat keeps an input box for a question already answered.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    launch = _button(chat.bot_messages[0], "Launch")
+    await boundary.callback(chat.press(launch), None)
+    search = _button(chat.messages[anchor], "Search")
+
+    await boundary.callback(chat.press(search), None)
+
+    prompts = [message for message in chat.bot_messages if message.message_id != anchor]
+    assert len(prompts) == 1, "the input box is one extra message, sent rather than edited in"
+    assert prompts[0].reply_markup.input_field_placeholder == "Project name"
+    assert chat.messages[anchor].text == "Reply below with a project name."
+
+    await boundary.text(chat.message_update("Demo"), None)
+
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == [], "the answer is consumed, not kept"
+    assert chat.bot_messages[0].message_id == anchor
+    assert "Demo" in str(chat.messages[anchor].reply_markup.inline_keyboard[0][0].text)
+
+
+@pytest.mark.asyncio
+async def test_guided_entry_that_is_refused_re_asks_without_accumulating() -> None:
+    """Three failed attempts must cost the chat exactly what one does."""
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    launch = _button(chat.bot_messages[0], "Launch")
+    await boundary.callback(chat.press(launch), None)
+    search = _button(chat.messages[anchor], "Search")
+    await boundary.callback(chat.press(search), None)
+
+    for attempt in ("nothing-like-this", "still-nothing", "nope"):
+        await boundary.text(chat.message_update(attempt), None)
+        assert len(chat.bot_messages) == 2, chat.transcript()
+        assert chat.owner_messages == [], chat.transcript()
+
+    box = next(message for message in chat.bot_messages if message.message_id != anchor)
+    assert "No projects found" in box.text
+    # The placeholder is the only thing that carries *which* step is being re-asked: the
+    # notice text is the same string whatever action produced it, so without this a wrong
+    # action threaded into the retry would serve a session-label box for a project search
+    # and every other assertion here would still pass.
+    assert box.reply_markup.input_field_placeholder == "Project name"
+
+    await boundary.text(chat.message_update("Demo"), None)
+
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_guided_entry_cancelled_returns_home_and_takes_the_input_box_with_it() -> None:
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    launch = _button(chat.bot_messages[0], "Launch")
+    await boundary.callback(chat.press(launch), None)
+    search = _button(chat.messages[anchor], "Search")
+    await boundary.callback(chat.press(search), None)
+
+    await boundary.text(chat.message_update("cancel"), None)
+
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+    assert chat.messages[anchor].text.startswith("<b>Remote agents</b>")
+
+
+@pytest.mark.asyncio
+async def test_a_re_ask_that_cannot_be_sent_leaves_the_owner_a_way_to_answer() -> None:
+    """The reason the new box is sent before the old one is taken away.
+
+    If Telegram refuses the send — a rate limit, a 5xx — clearing first would leave the
+    owner with no input box, nothing they typed, and a step the service still believes is
+    open: no way forward except a command. Asking first costs one duplicated box for the
+    length of a call and nothing if it succeeds.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.bot_messages[0], "Launch")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Search")), None)
+    box = next(message for message in chat.bot_messages if message.message_id != anchor)
+    chat.bot.send_error = BadRequest("Too Many Requests")
+
+    with pytest.raises(BadRequest):
+        await boundary.text(chat.message_update("nothing-like-this"), None)
+
+    assert box.message_id in chat.messages, "the owner still has an input box to answer"
+    assert [message.text for message in chat.owner_messages] == ["nothing-like-this"], (
+        "and still has what they typed, rather than losing both to a failed re-ask"
+    )
+    assert boundary._awaiting_text[(7, 11)].input_message_id == box.message_id

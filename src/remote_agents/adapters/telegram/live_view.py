@@ -183,6 +183,24 @@ class LiveView:
             self._owed_prunes.add(retired)
         return message_id
 
+    async def send_apart(self, bot, arguments: dict[str, object]) -> int:
+        """Send a message that is deliberately *not* the live view, and answer its id.
+
+        Two things need this and nothing else should. A `ForceReply` cannot ride on an edit
+        of a message carrying an inline keyboard — Telegram answers `Inline keyboard
+        expected` — so a guided step's input box has to be its own message. And a captured
+        document is a document; it cannot be a screen.
+
+        It binds no tokens, which is the part worth being careful about: a `ForceReply` and
+        a document are the only two things sent this way and neither carries an inline
+        keyboard, so there is nothing of theirs to bind — while calling `bind_pending` here
+        would hand them the live view's freshly minted tokens instead.
+
+        Whatever this sends is the caller's to `discard` once it has served its purpose.
+        """
+        message = await bot.send_message(chat_id=self._chat_id, **arguments)
+        return int(message.message_id)
+
     async def discard(self, bot, message_id: int) -> None:
         """Take a message out of the chat, and answer for why it was allowed to go.
 

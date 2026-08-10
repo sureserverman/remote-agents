@@ -7,12 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fake_telegram import LoneMessageBot
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.application.project_admin import ProjectCreationService
@@ -34,9 +35,15 @@ projects:
 
 
 class FakeMessage:
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", message_id: int = 1) -> None:
         self.text = text
+        self.message_id = message_id
         self.replies: list[dict[str, object]] = []
+        self.deletions: list[int] = []
+        self.bot = LoneMessageBot(self)
+
+    def get_bot(self) -> LoneMessageBot:
+        return self.bot
 
     async def reply_text(self, **arguments: object) -> None:
         self.replies.append(arguments)
@@ -107,15 +114,21 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
 
         areas = await boundary._reply_for("project.open", "areas")
         assert ("infra", _callback_for(areas, "infra")) in _buttons(areas)
-        boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+        boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
         entry = FakeMessage("brand-new")
         await boundary.text(FakeUpdate(entry), None)
         review = entry.replies[-1]
         assert "brand-new" in str(review["text"])
         assert not (dev_root / "infra" / "brand-new").exists()
 
+        # The token was drawn on the live view, so the press has to come from it. This
+        # used to be pressed with message_id=0 and match anyway, because the double's
+        # `reply_text` answered None, nothing ever bound the token, and UNBOUND is 0.
         created = await boundary._reply_for(
-            "project.confirm", "infra|brand-new", token=_callback_for(review, "Create")
+            "project.confirm",
+            "infra|brand-new",
+            token=_callback_for(review, "Create"),
+            message_id=entry.message_id,
         )
 
         assert "Project created" in str(created["text"])

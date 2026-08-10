@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fake_telegram import LoneMessageBot
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -42,9 +43,15 @@ class FakeCreator:
 class FakeMessage:
     """Capture what the boundary would send without touching Telegram."""
 
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", message_id: int = 1) -> None:
         self.text = text
+        self.message_id = message_id
         self.replies: list[dict[str, object]] = []
+        self.deletions: list[int] = []
+        self.bot = LoneMessageBot(self)
+
+    def get_bot(self) -> LoneMessageBot:
+        return self.bot
 
     async def reply_text(self, **arguments: object) -> None:
         self.replies.append(arguments)
@@ -127,19 +134,22 @@ async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> No
 async def test_a_name_outside_the_slug_rule_is_refused_before_any_effect(name: str) -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, name)
 
     assert "lowercase letters" in str(rendered["text"])
     assert creator.commands == []
-    assert boundary._awaiting_text[(OWNER, CHAT)] == ("project.name", "infra")
+    still_asking = boundary._awaiting_text[(OWNER, CHAT)]
+    assert (still_asking.action, still_asking.entity_id) == ("project.name", "infra"), (
+        "a refused name leaves the step open; only the prompt it replied to is replaced"
+    )
 
 
 async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, "new-project")
 
@@ -155,7 +165,7 @@ async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
 async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, reply)
 
@@ -250,7 +260,7 @@ async def test_add_project_actions_are_inert_without_a_creator() -> None:
 async def test_name_entry_ignores_a_sender_who_is_not_the_owner() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
     message = FakeMessage("new-project")
 
     await boundary.text(FakeUpdate(message, user_id=OWNER + 1), None)
