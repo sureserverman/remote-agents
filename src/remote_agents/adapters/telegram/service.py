@@ -1155,7 +1155,13 @@ class PrivateBotBoundary:
     async def _stop_outcome_reply(
         self, action: str, record: SessionRecord, failure: StopFailure | None = None
     ) -> RenderedMessage:
-        """Report what the session actually did, named, rather than that a command ran.
+        """Report what the session actually did, named, as the lead line of the session list.
+
+        The outcome used to be a screen of its own whose only exits were `Back` and `Home`,
+        which left the owner one dead end away from the list they almost always wanted next.
+        It is now the notice on that list: the same words, over the rows they describe. The
+        wording is plain text rather than markup because `_sessions_reply` escapes the notice
+        once — see `_notice_line` — and that is also what keeps `failure`'s words intact.
 
         A graceful stop that times out leaves the session RUNNING and removes nothing, so
         "completed" would have been false for the one outcome the owner most needs to act
@@ -1173,10 +1179,11 @@ class PrivateBotBoundary:
         The words come from `application.session_actions`, which is where the local surface
         takes them from too — DEC-007 wants the two surfaces to agree about what a stop did,
         and being handed the same sentence is the cheapest form of agreeing. They are escaped
-        despite being ours because `stop_failure`'s fallback interpolates the raw `detail` the
-        terminal adapter reported, which this module does not author.
+        despite being ours — now by the notice rather than here — because `stop_failure`'s
+        fallback interpolates the raw `detail` the terminal adapter reported, which this
+        module does not author.
         """
-        subject = escape(record.display.rendered)
+        subject = record.display.rendered
         session_value = str(record.session_id)
         current = await self._record(session_value)
         if current is not None:
@@ -1189,18 +1196,18 @@ class PrivateBotBoundary:
             # reached at all, this branch is a session that outlived a command that claimed to
             # end it, and telling that operator to wait for a graceful exit would be a guess.
             said = (
-                f"{escape(failure.summary)} {escape(failure.remedy)}"
+                f"{failure.summary} {failure.remedy}"
                 if failure is not None
                 else (
                     "Nothing was removed and it was left as it is.\n"
                     "Open it again to see where it is now."
                 )
             )
-            return self._message(
-                f"<b>{subject} is still running</b>\n{said}",
-                ((Button("Open session", self._callback("session.detail", session_value)),),),
-                back=self._callback("sessions.open", "sessions"),
-            )
+            # The session is still listed, so the row the owner needs is on the screen they
+            # are about to land on. That is what replaced the "Open session" button this
+            # branch used to carry: a list they can act from beats a screen about one session
+            # they then have to leave.
+            return await self._sessions_reply(notice=f"{subject} is still running\n{said}")
         if failure is not None:
             # The session has left the list, but the stop still reported that it did not take
             # effect — the other writer DEC-005 permits ended it in the window between the two.
@@ -1208,21 +1215,19 @@ class PrivateBotBoundary:
             # was to stop inferring the outcome from the record, and "Stopped X" over an
             # observation that says nothing was stopped is the reading DEC-006 forbids. Found
             # by the Stage 2 gate's evaluator and its second pass independently.
-            return self._message(
-                f"<b>{subject} is no longer listed</b>\n"
-                f"{escape(failure.summary)} {escape(failure.remedy)}",
-                back=self._callback("sessions.open", "sessions"),
+            return await self._sessions_reply(
+                notice=f"{subject} is no longer listed\n{failure.summary} {failure.remedy}"
             )
         endings = {
             "graceful": (
-                f"<b>Stopped {subject}</b>\n"
+                f"Stopped {subject}\n"
                 "The session has ended. Its pane is gone, so its output is no longer there "
                 "to inspect."
             ),
-            "cleanup": f"<b>Cleaned up {subject}</b>\nThe session has ended and its pane is gone.",
-            "force": f"<b>Force stopped {subject}</b>\nThe session has ended.",
+            "cleanup": f"Cleaned up {subject}\nThe session has ended and its pane is gone.",
+            "force": f"Force stopped {subject}\nThe session has ended.",
         }
-        return self._message(endings[action], back=self._callback("sessions.open", "sessions"))
+        return await self._sessions_reply(notice=endings[action])
 
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:

@@ -918,11 +918,16 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
 
     assert "is still running" in reply["text"]
     assert "did not exit in time" in reply["text"]
-    assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
-        "Open session",
-        "Back",
-        "Home",
-    ]
+    # The outcome now leads the session list rather than a screen of its own. The session is
+    # still listed precisely because the stop did not take, so the row the owner needs to act
+    # on is already under the notice — which is what the "Open session" button was for, and
+    # why this keyboard no longer carries it or the Back that led out of that dead end.
+    assert "Sessions 1/1" in reply["text"]
+    labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+    assert labels[-2:] == ["Refresh", "Home"]
+    assert "Back" not in labels
+    assert "Open session" not in labels
+    assert labels[0].startswith("Demo"), "the session that would not stop is on the list"
 
 
 def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
