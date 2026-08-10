@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +33,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.session_store import ProjectUsage
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -460,6 +461,78 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
 
     assert main(["serve", "--config", str(config)], serve_runner=serve) == 0
     assert received == [TelegramSecrets("token", 7, 11)]
+
+
+def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
+    tmp_path, monkeypatch
+) -> None:
+    """The catalogue is ranked at startup, not on the first Refresh the owner happens to press.
+
+    The composition hands the catalogue over in registry order and the ranking is applied on
+    refresh, so this is the difference between "Launch opens with your most-used project first"
+    and "…after you press Refresh". It shipped as the latter: every ranking test called
+    `refresh_catalogue()` itself, so none of them could see that nothing else did.
+
+    Asserted against the boundary the serve runner is *handed*, which is the last point before
+    Telegram gets it.
+    """
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        encoding="utf-8",
+    )
+    older = CatalogProject("a" * 24, "older", "tests", "Registered")
+    newer = CatalogProject("b" * 24, "newer", "tests", "Registered")
+
+    class _UsageLauncher:
+        async def project_usage(self):
+            return [
+                ProjectUsage(
+                    ProjectId(older.opaque_id), 40, datetime.now(UTC) - timedelta(days=400)
+                ),
+                ProjectUsage(ProjectId(newer.opaque_id), 2, datetime.now(UTC) - timedelta(days=1)),
+            ]
+
+        async def list_sessions(self):
+            return []
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(older, newer),
+        catalogue_source=lambda: (older, newer),
+        launcher=_UsageLauncher(),
+    )
+    served: list[tuple[str, ...]] = []
+
+    async def serve(_secrets: TelegramSecrets, handed: PrivateBotBoundary) -> None:
+        served.append(tuple(project.name for project in handed.catalogue))
+
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.load_secrets", lambda: TelegramSecrets("token", 7, 11)
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.ProductionPaths.for_home",
+        lambda _home: _Paths(tmp_path / "sessions.sqlite3"),
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._private_boundary",
+        lambda _config, _connection, _paths: ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler()
+        ),
+    )
+    assert boundary.catalogue == (older, newer), "registry order before serve runs"
+
+    assert main(["serve", "--config", str(config)], serve_runner=serve) == 0
+
+    assert served == [("newer", "older")], "ranked before the runner ever saw it"
 
 
 def test_telegram_ui_audit_reads_only_the_private_environment_file(

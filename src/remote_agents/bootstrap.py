@@ -159,6 +159,13 @@ async def _serve_with_reconciliation(
     signal handling out of the polling boundary. That is a larger change to the shutdown
     path than this repair warrants.
     """
+    # Rank before the first screen can be drawn. The composition hands the catalogue over in
+    # registry order and the ranking is applied on refresh, so without this every start and
+    # restart served an unranked Launch, Resume and search until the owner happened to press
+    # Refresh — the common case, and the first thing an acceptance run looks at. It lives here
+    # rather than inside the long-poll runner because `main` lets a test substitute the runner,
+    # which makes this line reachable by a test; the runner is not.
+    await composition.boundary.refresh_catalogue()
     await _reconcile_quietly(composition)
     periodic = asyncio.create_task(_reconcile_periodically(composition, interval))
     try:

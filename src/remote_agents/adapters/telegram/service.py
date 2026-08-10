@@ -1640,11 +1640,6 @@ async def run_private_bot(
 ) -> None:
     """Long-poll the approved bot until SIGTERM/SIGINT, refusing a competing webhook."""
     boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
-    # Rank before the first screen is ever drawn. The composition hands over the catalogue in
-    # registry order, and ranking happens on refresh — so without this, every start and every
-    # restart served an unranked Launch and Resume until the owner happened to press Refresh,
-    # which is both the common case and the one an acceptance run would look at first.
-    await boundary.refresh_catalogue()
     # Sequential update handling is load-bearing rather than incidental: a render mints its
     # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
     # unbound token in the chat. Two renders in flight at once would let one screen's buttons
