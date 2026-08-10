@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+UNBOUND = 0
+"""The message id of a token whose message does not exist yet.
+
+A keyboard is built before it is sent, so a token cannot know its message at mint time.
+It is created unbound and bound once the send or edit returns — Telegram numbers messages
+from one, so no real message can collide with this.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class CallbackState:
@@ -39,20 +47,15 @@ class CallbackStatePort(Protocol):
         entity_id: str,
         owner_id: int,
         chat_id: int,
-        message_id: int,
+        message_id: int = UNBOUND,
         *,
         mutation: bool = False,
     ) -> str: ...
+    def bind_pending(self, chat_id: int, message_id: int) -> int: ...
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> CallbackState | None: ...
     def claim_mutation(
-        self, token: str, *, owner_id: int, chat_id: int, message_id: int
-    ) -> bool: ...
-    def confirm_force(
-        self, token: str, *, owner_id: int, chat_id: int, message_id: int
-    ) -> bool: ...
-    def force_confirmed(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> bool: ...
     def prune_for_message(self, chat_id: int, message_id: int) -> int: ...

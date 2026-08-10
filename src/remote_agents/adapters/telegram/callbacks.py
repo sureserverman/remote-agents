@@ -2,39 +2,41 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
 
+from remote_agents.ports.callback_state import UNBOUND, CallbackState
 
-@dataclass(frozen=True, slots=True)
-class CallbackState:
-    action: str
-    entity_id: str
-    owner_id: int
-    chat_id: int
-    view_revision: int
-    expires_at: datetime
-    mutation: bool
+_LOG = logging.getLogger(__name__)
 
 
 class CallbackStateStore:
-    """Hold all callback meaning locally; the Telegram token is an unguessable lookup key."""
+    """Hold all callback meaning locally; the Telegram token is an unguessable lookup key.
 
-    def __init__(
-        self,
-        *,
-        now: Callable[[], datetime] = lambda: datetime.now(UTC),
-        ttl: timedelta = timedelta(minutes=15),
-        limit: int = 4096,
-    ) -> None:
-        if ttl <= timedelta():
-            raise ValueError("callback state TTL must be positive")
+    The in-memory sibling of
+    :class:`~remote_agents.adapters.sqlite.callback_state_store.SQLiteCallbackStateStore`,
+    for a composition with no database behind it. Both implement `CallbackStatePort`, and
+    the service composes the durable one — a button that dies on restart was the defect
+    this pair exists to remove, and only the durable half actually removes it.
+
+    Two things this deliberately no longer has, and the third that replaces them:
+
+    - **No TTL.** A token was valid for fifteen minutes; now it is valid for as long as the
+      message it was drawn on. Age is never a reason to refuse a press.
+    - **No chat-global view revision.** One counter per chat meant any newer screen killed
+      every button on every older message, seconds after they were drawn.
+    - **Message scoping instead of both.** A token belongs to one message. A screen that is
+      gone takes its tokens with it (`prune_for_message`), so a stale view is not detected
+      after the fact — it stops existing.
+
+    Replay safety is unchanged and now rests entirely on `claim_mutation`, which still
+    admits exactly one caller per mutating token (DEC-008: the repeat is dropped).
+    """
+
+    def __init__(self, *, limit: int = 20_000) -> None:
         if limit < 1:
             raise ValueError("callback state capacity must be positive")
-        self._now = now
-        self._ttl = ttl
         self._limit = limit
         self._states: dict[str, CallbackState] = {}
         self._claimed: set[str] = set()
@@ -45,62 +47,87 @@ class CallbackStateStore:
         entity_id: str,
         owner_id: int,
         chat_id: int,
-        view_revision: int,
+        message_id: int = UNBOUND,
         *,
         mutation: bool = False,
     ) -> str:
-        if not action or not entity_id or view_revision < 0:
-            raise ValueError("callback state must contain a safe action, entity, and revision")
-        self._discard_expired()
-        if len(self._states) >= self._limit:
-            raise ValueError("callback state capacity is full")
+        if not action or not entity_id or message_id < 0:
+            raise ValueError("callback state must contain a safe action, entity, and message")
+        self._evict_over_capacity()
         token = f"c1_{secrets.token_urlsafe(18)}"
         self._states[token] = CallbackState(
-            action,
-            entity_id,
-            owner_id,
-            chat_id,
-            view_revision,
-            self._now() + self._ttl,
-            mutation,
+            token, action, entity_id, owner_id, chat_id, message_id, mutation
         )
         return token
 
+    def bind_pending(self, chat_id: int, message_id: int) -> int:
+        """Attach this chat's freshly minted tokens to the message that now carries them."""
+        if message_id <= UNBOUND:
+            raise ValueError("a bound callback message must be a real Telegram message")
+        pending = [
+            token
+            for token, state in self._states.items()
+            if state.chat_id == chat_id and state.message_id == UNBOUND
+        ]
+        for token in pending:
+            self._states[token] = replace(self._states[token], message_id=message_id)
+        return len(pending)
+
     def resolve(
-        self, token: str, *, owner_id: int, chat_id: int, view_revision: int
+        self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> CallbackState | None:
-        self._discard_expired()
         state = self._states.get(token)
         if (
             state is None
-            or self._now() >= state.expires_at
             or owner_id != state.owner_id
             or chat_id != state.chat_id
-            or view_revision != state.view_revision
+            or message_id != state.message_id
         ):
             return None
         return state
 
-    def claim_mutation(
-        self, token: str, *, owner_id: int, chat_id: int, view_revision: int
-    ) -> bool:
-        state = self.resolve(token, owner_id=owner_id, chat_id=chat_id, view_revision=view_revision)
+    def claim_mutation(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
+        state = self.resolve(token, owner_id=owner_id, chat_id=chat_id, message_id=message_id)
         if state is None or not state.mutation or token in self._claimed:
             return False
         self._claimed.add(token)
         return True
 
-    @property
-    def active_count(self) -> int:
-        """Expose the number of live callback states for bounded-resource verification."""
+    def prune_for_message(self, chat_id: int, message_id: int) -> int:
+        """Discard the tokens of a message that no longer exists, and report how many."""
+        doomed = [
+            token
+            for token, state in self._states.items()
+            if state.chat_id == chat_id and state.message_id == message_id
+        ]
+        for token in doomed:
+            self._discard(token)
+        return len(doomed)
 
-        self._discard_expired()
+    def active_count(self) -> int:
+        """Expose the number of live callback states for bounded-resource verification.
+
+        A method rather than the property this used to be, so both implementations of
+        `CallbackStatePort` are callable the same way — a durable store cannot make this a
+        property without hiding a query behind an attribute access.
+        """
+
         return len(self._states)
 
-    def _discard_expired(self) -> None:
-        expired_tokens = [
-            token for token, state in self._states.items() if self._now() >= state.expires_at
-        ]
-        for token in expired_tokens:
-            del self._states[token]
-            self._claimed.discard(token)
+    def _evict_over_capacity(self) -> None:
+        """Keep the store bounded by size, since it is no longer bounded by time.
+
+        Refusing to mint once full — the previous behaviour — turns a full store into a dead
+        keyboard. Evicting the oldest degrades the only thing that can be degraded: a button
+        nobody has pressed in twenty thousand renders.
+        """
+        surplus = len(self._states) - self._limit + 1
+        if surplus <= 0:
+            return
+        for token in list(self._states)[:surplus]:
+            self._discard(token)
+        _LOG.info("evicted %d callback states over the %d capacity", surplus, self._limit)
+
+    def _discard(self, token: str) -> None:
+        del self._states[token]
+        self._claimed.discard(token)

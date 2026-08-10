@@ -47,11 +47,13 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
         for button in row
         if button.text == "Enable Remote Control"
     )
-    state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=1)
+    boundary.callbacks.bind_pending(11, 1)
+    state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
     assert state is not None and state.action == "remote.control"
     confirmation = await boundary._remote_control_confirm_reply(state.entity_id)
+    boundary.callbacks.bind_pending(11, 1)
     result = await boundary._remote_control_reply(
-        state.entity_id, confirmation.keyboard[0][0].callback_data
+        state.entity_id, confirmation.keyboard[0][0].callback_data, 1
     )
 
     assert "Remote Control: active" in result["text"]

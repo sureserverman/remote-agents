@@ -66,7 +66,6 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             message_id INTEGER NOT NULL,
             mutation INTEGER NOT NULL,
             claimed INTEGER NOT NULL DEFAULT 0,
-            force_confirmed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         );
         CREATE INDEX callback_states_message ON callback_states(chat_id, message_id);

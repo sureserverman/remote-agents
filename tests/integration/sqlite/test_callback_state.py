@@ -74,19 +74,6 @@ def test_a_read_only_token_can_never_be_claimed(tmp_path) -> None:
     assert store.claim_mutation(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is False
 
 
-def test_force_confirmation_is_durable_and_only_for_a_force_token(tmp_path) -> None:
-    store = _store(tmp_path)
-    scope = {"owner_id": _OWNER, "chat_id": _CHAT, "message_id": _MESSAGE}
-    force = store.create("force", "session:claude", _OWNER, _CHAT, _MESSAGE, mutation=True)
-    graceful = store.create("graceful", "session:claude", _OWNER, _CHAT, _MESSAGE, mutation=True)
-
-    assert store.force_confirmed(force, **scope) is False
-    assert store.confirm_force(force, **scope) is True
-    assert store.force_confirmed(force, **scope) is True
-    assert store.confirm_force(graceful, **scope) is False
-    assert store.force_confirmed(graceful, **scope) is False
-
-
 def test_creating_a_token_rejects_an_unsafe_descriptor(tmp_path) -> None:
     store = _store(tmp_path)
 

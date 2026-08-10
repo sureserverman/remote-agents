@@ -100,7 +100,6 @@ def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks
         "message_id",
         "mutation",
         "claimed",
-        "force_confirmed",
         "created_at",
     ]
     view_columns = [row[1] for row in connection.execute("PRAGMA table_info(chat_views)")]

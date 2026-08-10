@@ -23,24 +23,24 @@ async def test_confirmation_revalidates_and_submits_one_typed_command() -> None:
     projects = [CatalogProject("a" * 24, "opaque-editor", "writing", "Registered")]
     profiles = [ProfileAvailability("claude-remote", True)]
     launcher = FakeLauncher()
+    callbacks = CallbackStateStore()
     confirmation = LaunchConfirmation(
-        lambda: tuple(projects), lambda: tuple(profiles), CallbackStateStore(), launcher
+        lambda: tuple(projects), lambda: tuple(profiles), callbacks, launcher
     )
 
     preview = confirmation.preview(
-        LaunchRequest("a" * 24, "claude-remote", "план"), owner_id=7, chat_id=11, view_revision=1
+        LaunchRequest("a" * 24, "claude-remote", "план"), owner_id=7, chat_id=11
     )
+    callbacks.bind_pending(11, 1)
 
     assert preview.project_name == "opaque-editor"
     assert preview.area == "writing"
     assert preview.group == "Registered"
     assert preview.profile_label == "Claude Remote"
     assert preview.label == "план"
-    assert await confirmation.submit(
-        preview.callback_token, owner_id=7, chat_id=11, view_revision=1
-    )
+    assert await confirmation.submit(preview.callback_token, owner_id=7, chat_id=11, message_id=1)
     assert not await confirmation.submit(
-        preview.callback_token, owner_id=7, chat_id=11, view_revision=1
+        preview.callback_token, owner_id=7, chat_id=11, message_id=1
     )
     assert [(str(item.project_id), str(item.profile_id)) for item in launcher.commands] == [
         ("a" * 24, "claude-remote")
@@ -53,16 +53,16 @@ async def test_stale_or_revalidated_request_never_calls_the_application() -> Non
     projects = [CatalogProject("a" * 24, "opaque-editor", "writing", "Registered")]
     profiles = [ProfileAvailability("claude", True)]
     launcher = FakeLauncher()
+    callbacks = CallbackStateStore()
     confirmation = LaunchConfirmation(
-        lambda: tuple(projects), lambda: tuple(profiles), CallbackStateStore(), launcher
+        lambda: tuple(projects), lambda: tuple(profiles), callbacks, launcher
     )
-    preview = confirmation.preview(
-        LaunchRequest("a" * 24, "claude", None), owner_id=7, chat_id=11, view_revision=2
-    )
+    preview = confirmation.preview(LaunchRequest("a" * 24, "claude", None), owner_id=7, chat_id=11)
+    callbacks.bind_pending(11, 1)
     projects.clear()
 
     assert not await confirmation.submit(
-        preview.callback_token, owner_id=7, chat_id=11, view_revision=2
+        preview.callback_token, owner_id=7, chat_id=11, message_id=1
     )
     assert launcher.commands == []
 
@@ -75,12 +75,12 @@ async def test_duplicate_names_remain_distinguishable_and_profile_changes_block_
     ]
     profiles = [ProfileAvailability("claude", True)]
     launcher = FakeLauncher()
+    callbacks = CallbackStateStore()
     confirmation = LaunchConfirmation(
-        lambda: tuple(projects), lambda: tuple(profiles), CallbackStateStore(), launcher
+        lambda: tuple(projects), lambda: tuple(profiles), callbacks, launcher
     )
-    preview = confirmation.preview(
-        LaunchRequest("b" * 24, "claude", None), owner_id=7, chat_id=11, view_revision=3
-    )
+    preview = confirmation.preview(LaunchRequest("b" * 24, "claude", None), owner_id=7, chat_id=11)
+    callbacks.bind_pending(11, 1)
     profiles[0] = ProfileAvailability("claude", False, "version changed")
 
     assert (preview.project_name, preview.area, preview.group) == (
@@ -89,6 +89,6 @@ async def test_duplicate_names_remain_distinguishable_and_profile_changes_block_
         "Unregistered",
     )
     assert not await confirmation.submit(
-        preview.callback_token, owner_id=7, chat_id=11, view_revision=3
+        preview.callback_token, owner_id=7, chat_id=11, message_id=1
     )
     assert launcher.commands == []

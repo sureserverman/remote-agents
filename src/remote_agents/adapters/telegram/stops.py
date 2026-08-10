@@ -4,10 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.application.commands import CleanupCommand, ForceStopCommand, GracefulStopCommand
-from remote_agents.application.session_actions import StopFailure, available_actions, stop_failure
+from remote_agents.application.session_actions import (
+    FORCE,
+    StopFailure,
+    available_actions,
+    stop_failure,
+)
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.ports.callback_state import CallbackStatePort
+
+CONFIRMED_FORCE = "force.confirmed"
+"""The action a force stop carries once its confirmation screen has been read.
+
+Adapter-internal, and deliberately not a member of `available_actions`: the application layer
+decides whether a force is permitted, this name only records which of the two presses this is.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,9 +75,26 @@ _NOT_DISPATCHED = StopResult(False)
 
 
 class StopController:
-    def __init__(self, callbacks: CallbackStateStore) -> None:
+    """Mint and claim the tokens behind the approved destructive actions.
+
+    **Every token is minted unbound.** A keyboard is built before the message that will carry
+    it exists — and, when a screen is redrawn in place, before the render that replaces the
+    previous keyboard has pruned it. Minting a stop token already bound to the message being
+    edited put it in exactly the set that render was about to discard, so the stop buttons
+    were destroyed by the same pass that drew them and answered every press with a redraw.
+    Found by review, reproduced end-to-end, and the reason `offer` takes no message id at all
+    rather than being trusted to pass the right one.
+
+    **Confirming a force stop is a second token, not a flag on the first.** The confirmation
+    screen used to re-offer the token the owner had just pressed, which cannot survive a
+    render of the same message for the reason above; and a durable "confirmed" column had the
+    same problem one layer down. A press that has been confirmed is now simply a press of a
+    *different action*, so the two steps cannot be confused, nothing has to be remembered
+    between them, and a restart in the middle loses neither.
+    """
+
+    def __init__(self, callbacks: CallbackStatePort) -> None:
         self._callbacks = callbacks
-        self._force_confirmed: set[str] = set()
 
     def offer(
         self,
@@ -75,37 +104,47 @@ class StopController:
         action: str,
         owner_id: int,
         chat_id: int,
-        view_revision: int,
     ) -> str | None:
+        """Offer one policy-permitted action, unbound until its screen is delivered."""
         if action not in available_actions(state):
             return None
         return self._callbacks.create(
-            action, f"{session_id}:{profile_id}", owner_id, chat_id, view_revision, mutation=True
+            action, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
         )
 
-    def confirm_force(self, token: str, owner_id: int, chat_id: int, view_revision: int) -> bool:
-        state = self._callbacks.resolve(
-            token, owner_id=owner_id, chat_id=chat_id, view_revision=view_revision
-        )
-        if state is None or state.action != "force":
-            return False
-        self._force_confirmed.add(token)
-        return True
+    def offer_confirmed_force(
+        self,
+        session_id: SessionId,
+        profile_id: ProfileId,
+        state: SessionState,
+        owner_id: int,
+        chat_id: int,
+    ) -> str | None:
+        """Mint the button the force confirmation screen carries, and only that button.
 
-    def claim(
-        self, token: str, owner_id: int, chat_id: int, view_revision: int
-    ) -> StopRequest | None:
-        state = self._callbacks.resolve(
-            token, owner_id=owner_id, chat_id=chat_id, view_revision=view_revision
+        `CONFIRMED_FORCE` is an adapter-internal action: `available_actions` is still the sole
+        authority on whether a force is permitted at all (DEC-007), and it is re-asked here.
+        """
+        if FORCE not in available_actions(state):
+            return None
+        return self._callbacks.create(
+            CONFIRMED_FORCE, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
         )
-        if state is None or (state.action == "force" and token not in self._force_confirmed):
+
+    def claim(self, token: str, owner_id: int, chat_id: int, message_id: int) -> StopRequest | None:
+        """Claim a token that may actually run, which an unconfirmed force never is."""
+        state = self._callbacks.resolve(
+            token, owner_id=owner_id, chat_id=chat_id, message_id=message_id
+        )
+        if state is None or state.action == FORCE:
             return None
         if not self._callbacks.claim_mutation(
-            token, owner_id=owner_id, chat_id=chat_id, view_revision=view_revision
+            token, owner_id=owner_id, chat_id=chat_id, message_id=message_id
         ):
             return None
         session_value, profile_value = state.entity_id.split(":", maxsplit=1)
-        return StopRequest(state.action, SessionId.parse(session_value), ProfileId(profile_value))
+        action = FORCE if state.action == CONFIRMED_FORCE else state.action
+        return StopRequest(action, SessionId.parse(session_value), ProfileId(profile_value))
 
     async def execute(self, request: StopRequest, service: object, record: object) -> StopResult:
         """Recheck the current record, dispatch one typed command, and report what it did.

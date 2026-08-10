@@ -89,7 +89,8 @@ async def test_resume_picker_is_opaque_paginated_and_requires_one_confirmation()
     profiles = await boundary._resume_profiles_reply(project.opaque_id)
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
     selection = catalogue.keyboard[0][0].callback_data
-    selection_state = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, view_revision=1)
+    boundary.callbacks.bind_pending(11, 1)
+    selection_state = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
 
     assert "Cursor Agent (structured_catalogue_unavailable)" in profiles.text
     assert selection_state is not None and selection_state.action == "resume.select"
@@ -97,13 +98,14 @@ async def test_resume_picker_is_opaque_paginated_and_requires_one_confirmation()
 
     confirmation = await boundary._resume_confirm_reply(selection_state.entity_id)
     token = confirmation.keyboard[0][0].callback_data
-    result = await boundary._resume_reply(selection_state.entity_id, token)
+    boundary.callbacks.bind_pending(11, 1)
+    result = await boundary._resume_reply(selection_state.entity_id, token, 1)
 
     assert "Session resumed" in result["text"]
     assert len(launcher.commands) == 1
     assert launcher.commands[0].conversation == resolved
-    expired = await boundary._resume_reply(selection_state.entity_id, token)
-    assert expired["text"] == "That request has expired."
+    replayed = await boundary._resume_reply(selection_state.entity_id, token, 1)
+    assert replayed["text"] == "That action has already run."
 
 
 async def test_resume_picker_renders_a_bounded_provider_title_without_its_source_id() -> None:

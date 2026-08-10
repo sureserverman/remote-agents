@@ -113,12 +113,14 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
         catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
         launcher=launcher,
     )
-    boundary._view_revisions[(7, 11)] = 1
     token = boundary.stops.offer(
-        record.session_id, record.profile_id, record.state, "graceful", 7, 11, 1
+        record.session_id, record.profile_id, record.state, "graceful", 7, 11
     )
     assert token is not None, "the bot offered no graceful stop, so nothing was exercised"
-    reply = await boundary._stop_reply("graceful", token)
+    # The token is minted unbound, exactly as a real render mints it; delivering the screen
+    # is what makes it pressable.
+    boundary.callbacks.bind_pending(11, 100)
+    reply = await boundary._stop_reply("graceful", token, 100)
     assert launcher.issued, "the bot never issued the stop, so this asserts nothing about it"
     return unescape(str(reply["text"]))
 

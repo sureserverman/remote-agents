@@ -47,8 +47,9 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
 
         stop = StopController(callbacks)
-        token = stop.offer(record.session_id, record.profile_id, record.state, "graceful", 7, 11, 2)
+        token = stop.offer(record.session_id, record.profile_id, record.state, "graceful", 7, 11)
         assert token is not None
+        callbacks.bind_pending(11, 2)
         request = stop.claim(token, 7, 11, 2)
         assert request is not None
         assert (await stop.execute(request, service, record)).dispatched
@@ -64,10 +65,18 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
             LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "force-path")
         )
         force = StopController(callbacks)
-        token = force.offer(
-            command.session_id, command.profile_id, command.state, "force", 7, 11, 4
+        # The confirmation is a second token carrying a second action, not a flag on the
+        # first: a token re-offered onto the same message cannot survive that message's
+        # next render.
+        assert (
+            force.offer(command.session_id, command.profile_id, command.state, "force", 7, 11)
+            is not None
         )
-        assert token is not None and force.confirm_force(token, 7, 11, 4)
+        token = force.offer_confirmed_force(
+            command.session_id, command.profile_id, command.state, 7, 11
+        )
+        assert token is not None
+        callbacks.bind_pending(11, 4)
         request = force.claim(token, 7, 11, 4)
         assert request is not None
         assert (await force.execute(request, service, command)).dispatched

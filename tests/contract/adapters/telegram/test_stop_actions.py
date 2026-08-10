@@ -33,12 +33,14 @@ class Record:
 
 
 def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -> None:
-    controller = StopController(CallbackStateStore())
+    callbacks = CallbackStateStore()
+    controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
     graceful = controller.offer(
-        session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11, 1
+        session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11
     )
-    force = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "force", 7, 11, 1)
+    force = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "force", 7, 11)
+    callbacks.bind_pending(11, 1)
 
     claimed = controller.claim(graceful, 7, 11, 1)
     assert claimed is not None
@@ -48,10 +50,17 @@ def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -
         ProfileId("claude"),
     )
     assert controller.claim(graceful, 7, 11, 1) is None
+    # An unconfirmed force is not claimable at all: it only opens the confirmation screen,
+    # whose own button is a separate token carrying a separate action.
     assert controller.claim(force, 7, 11, 1) is None
-    assert controller.confirm_force(force, 7, 11, 1)
-    claimed_force = controller.claim(force, 7, 11, 1)
+    confirmed = controller.offer_confirmed_force(
+        session, ProfileId("claude"), SessionState.RUNNING, 7, 11
+    )
+    assert confirmed is not None
+    callbacks.bind_pending(11, 1)
+    claimed_force = controller.claim(confirmed, 7, 11, 1)
     assert claimed_force is not None and claimed_force.action == "force"
+    assert controller.claim(confirmed, 7, 11, 1) is None
 
 
 def test_cleanup_only_exists_for_preserved_sessions() -> None:
@@ -59,23 +68,26 @@ def test_cleanup_only_exists_for_preserved_sessions() -> None:
     session = SessionId(UUID(int=1))
 
     assert (
-        controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "cleanup", 7, 11, 1)
+        controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "cleanup", 7, 11)
         is None
     )
-    assert controller.offer(
-        session, ProfileId("claude"), SessionState.PRESERVED, "cleanup", 7, 11, 1
-    )
+    assert controller.offer(session, ProfileId("claude"), SessionState.PRESERVED, "cleanup", 7, 11)
 
 
 @pytest.mark.asyncio
 async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup() -> None:
-    controller = StopController(CallbackStateStore())
+    callbacks = CallbackStateStore()
+    controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
-    token = controller.offer(session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11, 1)
+    token = controller.offer(session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11)
 
     assert token is not None
-    assert controller.confirm_force(token, 7, 11, 1)
-    request = controller.claim(token, 7, 11, 1)
+    confirmed = controller.offer_confirmed_force(
+        session, ProfileId("codex"), SessionState.FAILED, 7, 11
+    )
+    assert confirmed is not None
+    callbacks.bind_pending(11, 1)
+    request = controller.claim(confirmed, 7, 11, 1)
     assert request is not None
     service = FakeService()
 
@@ -88,11 +100,11 @@ async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup()
 
 @pytest.mark.asyncio
 async def test_claimed_action_rechecks_current_state_before_typed_service_dispatch() -> None:
-    controller = StopController(CallbackStateStore())
+    callbacks = CallbackStateStore()
+    controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
-    token = controller.offer(
-        session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11, 1
-    )
+    token = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    callbacks.bind_pending(11, 1)
     assert token is not None
     claimed = controller.claim(token, 7, 11, 1)
     assert claimed is not None

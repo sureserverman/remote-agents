@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 from datetime import UTC, datetime
 
-from remote_agents.ports.callback_state import CallbackState
+from remote_agents.ports.callback_state import UNBOUND, CallbackState
 
 _LOG = logging.getLogger(__name__)
 _COLUMNS = "token, action, entity_id, owner_id, chat_id, message_id, mutation"
@@ -39,7 +39,7 @@ class SQLiteCallbackStateStore:
         entity_id: str,
         owner_id: int,
         chat_id: int,
-        message_id: int,
+        message_id: int = UNBOUND,
         *,
         mutation: bool = False,
     ) -> str:
@@ -49,8 +49,8 @@ class SQLiteCallbackStateStore:
         token = f"c1_{secrets.token_urlsafe(18)}"
         with self._connection:
             self._connection.execute(
-                f"INSERT INTO callback_states({_COLUMNS}, claimed, force_confirmed, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
+                f"INSERT INTO callback_states({_COLUMNS}, claimed, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
                 (
                     token,
                     action,
@@ -63,6 +63,23 @@ class SQLiteCallbackStateStore:
                 ),
             )
         return token
+
+    def bind_pending(self, chat_id: int, message_id: int) -> int:
+        """Attach this chat's freshly minted tokens to the message that now carries them.
+
+        Called once the send or edit has returned a message id. Anything still unbound in
+        this chat belongs to the screen just delivered: a render mints its keyboard and
+        delivers it before any other render can run, so there is no second unbound set to
+        confuse it with.
+        """
+        if message_id <= UNBOUND:
+            raise ValueError("a bound callback message must be a real Telegram message")
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE callback_states SET message_id = ? WHERE chat_id = ? AND message_id = ?",
+                (message_id, chat_id, UNBOUND),
+            )
+        return cursor.rowcount
 
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
@@ -95,25 +112,6 @@ class SQLiteCallbackStateStore:
                 (token, owner_id, chat_id, message_id),
             )
         return cursor.rowcount == 1
-
-    def confirm_force(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
-        """Record that a force stop's confirmation screen was reached for this exact token."""
-        with self._connection:
-            cursor = self._connection.execute(
-                "UPDATE callback_states SET force_confirmed = 1 "
-                "WHERE token = ? AND owner_id = ? AND chat_id = ? AND message_id = ? "
-                "AND action = 'force'",
-                (token, owner_id, chat_id, message_id),
-            )
-        return cursor.rowcount == 1
-
-    def force_confirmed(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
-        row = self._connection.execute(
-            "SELECT force_confirmed FROM callback_states "
-            "WHERE token = ? AND owner_id = ? AND chat_id = ? AND message_id = ?",
-            (token, owner_id, chat_id, message_id),
-        ).fetchone()
-        return bool(row is not None and row[0])
 
     def prune_for_message(self, chat_id: int, message_id: int) -> int:
         """Discard the tokens of a message that no longer exists, and report how many.

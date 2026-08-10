@@ -39,8 +39,10 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
 async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_stop() -> None:
     session = SessionId(UUID(int=1))
     inspection = inspect_capture(b"ready\n")
-    stops = StopController(CallbackStateStore())
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11, 1)
+    callbacks = CallbackStateStore()
+    stops = StopController(callbacks)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    callbacks.bind_pending(11, 1)
 
     assert inspection.text == "ready"
     assert token is not None
@@ -51,7 +53,7 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
 def test_fake_journey_contract_covers_commands_recovery_and_oversized_inspection() -> None:
     """Keep the owner journey discoverable without requiring a live Telegram account."""
     owner_commands = ("/launch", "/sessions", "/help")
-    expired = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, view_revision=1)
+    expired = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, message_id=1)
     attachment = inspect_capture(("x" * 30).encode(), telegram_limit=20)
 
     assert owner_commands == ("/launch", "/sessions", "/help")
@@ -81,8 +83,10 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
             self.called = True
             return a_clean_stop()
 
-    stops = StopController(CallbackStateStore())
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11, 1)
+    callbacks = CallbackStateStore()
+    stops = StopController(callbacks)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    callbacks.bind_pending(11, 1)
     assert token is not None
     request = stops.claim(token, 7, 11, 1)
     assert request is not None

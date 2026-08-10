@@ -17,6 +17,7 @@ from remote_agents.adapters.telegram.service import (
     _sync_owner_metadata,
     audit_bot_metadata,
 )
+from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
@@ -124,7 +125,9 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
-    assert callback.answers == [None, "This view has expired."]
+    # The first press replaced this message's keyboard, which pruned the token it came from
+    # -- so the second press of the same button is a race, answered and redrawn.
+    assert callback.answers == [None, "That screen has moved on."]
     assert callback.edits[1]["text"].startswith("<b>Remote agents</b>")
 
 
@@ -170,12 +173,11 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
         profiles=(ProfileAvailability("cursor-agent", True),),
         launcher=launcher,
     )
-    boundary._view_revisions[(7, 11)] = 1
     token = boundary.callbacks.create(
         "launch.confirm", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token)
+    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
 
     assert "Session did not become ready" in reply["text"]
     assert "never approved remotely" in reply["text"]
@@ -312,7 +314,8 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     launcher.records = [session]
     boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id))
+    detail = await boundary._detail_reply(str(session.session_id), 1)
+    boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
         for row in detail.keyboard
@@ -347,7 +350,8 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
     launcher.records = [session]
     boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id))
+    detail = await boundary._detail_reply(str(session.session_id), 1)
+    boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
         for row in detail.keyboard
@@ -580,15 +584,25 @@ class _Launcher:
 
 
 class _Message:
-    def __init__(self, text: str | None = None) -> None:
+    """One chat message, with the id the boundary binds its keyboard to.
+
+    `reply_text` answers with a message rather than None because the boundary now uses what
+    Telegram returns: a keyboard is minted before it is sent, so the send is what tells the
+    store which message carries it. The doubles share one id, which is the shape this chat
+    actually has — one live view.
+    """
+
+    def __init__(self, text: str | None = None, message_id: int = 1) -> None:
         self.replies: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
         self.text = text
+        self.message_id = message_id
 
-    async def reply_text(self, text: str | None = None, **kwargs: object) -> None:
+    async def reply_text(self, text: str | None = None, **kwargs: object) -> _Message:
         if text is not None:
             kwargs["text"] = text
         self.replies.append(kwargs)
+        return self
 
     async def reply_document(self, **kwargs: object) -> None:
         document = kwargs["document"]
@@ -673,7 +687,6 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     Both flows now share one renderer; only the action each button carries differs.
     """
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(94))
-    boundary._view_revisions[(7, 11)] = 1
 
     resume = boundary._resume_projects_reply()
     launch = boundary._projects_reply(boundary.catalogue, view_id="all")
@@ -690,13 +703,13 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
     """A project chosen after paging or searching must still resume, never launch."""
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
-    boundary._view_revisions[(7, 11)] = 1
     boundary._resume_projects_reply()
 
     second = boundary._project_page_reply("all|2", flow="resume")
 
     def _action(token: str) -> str | None:
-        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=1)
+        boundary.callbacks.bind_pending(11, 1)
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
         return None if state is None else state.action
 
     assert second.text.startswith("<b>Resume 2/3</b>")
@@ -707,18 +720,17 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
-    boundary._view_revisions[(7, 11)] = 1
     boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
     # silently answered with the launch flow's results.
     assert boundary._project_page_reply("search|2", flow="resume").text == (
-        "That project view has expired."
+        "That project list is no longer open. Open Launch again."
     )
 
 
 def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:
-    """A boundary holding `records`, with its view revision pinned for token minting."""
+    """A boundary holding `records`, ready to render and be pressed."""
     launcher = _Launcher()
     launcher.records = list(records)
     boundary = PrivateBotBoundary(
@@ -727,7 +739,6 @@ def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launch
         catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
         launcher=launcher,
     )
-    boundary._view_revisions[(7, 11)] = 1
     return boundary, launcher
 
 
@@ -752,10 +763,10 @@ async def test_refresh_is_reachable_from_the_two_screens_whose_answer_goes_stale
 
     home = await boundary._home_reply()
     sessions = await boundary._sessions_reply()
-    revision = boundary._view_revisions[(7, 11)]
 
     def _resolved_action(token: str) -> str | None:
-        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=revision)
+        boundary.callbacks.bind_pending(11, 1)
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
         return None if state is None else state.action
 
     home_refresh = next(
@@ -803,10 +814,11 @@ async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_k
     # The name the bot shows carries the catalogue's project name, not the opaque slug.
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "force", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "force", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("force", token)
+    reply = await boundary._stop_reply("force", token, 1)
 
     rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
     assert subject in reply["text"]
@@ -821,10 +833,11 @@ async def test_a_completed_stop_names_the_session_and_what_became_of_its_output(
     boundary, launcher = _stop_boundary(running)
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert launcher.stopped == ["graceful"]
     assert subject in reply["text"]
@@ -839,10 +852,11 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     boundary, launcher = _stop_boundary(running)
     launcher.leave_running = True
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert "is still running" in reply["text"]
     assert "did not exit in time" in reply["text"]
@@ -856,13 +870,13 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
 def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
     boundary = PrivateBotBoundary(7, 11)
 
-    assert boundary._pending_notice("graceful", "c1_token") is not None
-    assert boundary._pending_notice("launch.confirm", "c1_token") is not None
-    assert boundary._pending_notice("session.detail", "c1_token") is None
-    # A first press on force only opens the confirmation, so nothing is running yet.
-    assert boundary._pending_notice("force", "c1_token") is None
-    boundary._force_confirmed.add("c1_token")
-    assert boundary._pending_notice("force", "c1_token") is not None
+    assert boundary._pending_notice("graceful") is not None
+    assert boundary._pending_notice("launch.confirm") is not None
+    assert boundary._pending_notice("session.detail") is None
+    # A first press on force only opens the confirmation, so nothing is running yet — and
+    # that is now readable from the action alone, with no confirmation state to consult.
+    assert boundary._pending_notice("force") is None
+    assert boundary._pending_notice(CONFIRMED_FORCE) is not None
 
 
 @pytest.mark.asyncio
@@ -871,9 +885,10 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, _ = _stop_boundary(running)
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
     callback = _Callback(token)
+    boundary.callbacks.bind_pending(11, callback.message.message_id)
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
@@ -886,14 +901,21 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
 
 
 @pytest.mark.asyncio
-async def test_an_expired_view_alerts_rather_than_silently_jumping_home() -> None:
+async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -> None:
+    """Nothing expires any more, so the modal alert that said so is gone with it.
+
+    A token only fails to resolve when the keyboard that drew it has already been replaced
+    on this message — a thumb racing a redraw. That earns a toast and a redraw, not a modal
+    telling the owner their view died.
+    """
     boundary, _ = _stop_boundary()
     callback = _Callback("c1_never_issued")
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
-    assert callback.answers == ["This view has expired."]
-    assert callback.alerts == [True]
+    assert callback.answers == ["That screen has moved on."]
+    assert callback.alerts == [False]
+    assert "Remote agents" in str(callback.edits[0]["text"])
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):
@@ -946,10 +968,90 @@ async def test_the_bot_names_which_cause_left_the_session_running(
     launcher.leave_running = True
     launcher.graceful_detail = detail
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert names in reply["text"], reply["text"]
     assert denies not in reply["text"], reply["text"]
+
+
+# The render pipeline itself -- the gap that hid two dead-button defects ------------------
+
+
+def _press(callback: _Callback) -> _Callback:
+    """The next press, on the same message the last render edited."""
+    return callback
+
+
+@pytest.mark.asyncio
+async def test_a_stop_button_survives_the_render_that_drew_it() -> None:
+    """Drive a *mutating* action through `callback()`, which no stop test used to do.
+
+    Every other stop test calls `_detail_reply`/`_stop_reply` directly, so none of them ran
+    the edit-prune-bind pipeline — and a review found that stop tokens were minted already
+    bound to the message being redrawn, so the prune step destroyed them in the very pass
+    that drew them. Every stop button in the live bot was dead, and the whole suite was green.
+    This presses one, the way a phone does.
+    """
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    boundary.callbacks.bind_pending(11, sessions.message.message_id)
+
+    await boundary.callback(_trusted_update(callback=sessions), None)
+    row = _Callback(_edited_button(sessions, 0))
+    await boundary.callback(_trusted_update(callback=row), None)
+    graceful = _Callback(_edited_button(row, -1, text="Stop and close"))
+    await boundary.callback(_trusted_update(callback=graceful), None)
+
+    assert graceful.answers == ["Stopping the session — waiting for the agent to exit…"], (
+        "the stop button did not resolve, so the press did nothing"
+    )
+    assert launcher.stopped == ["graceful"], "the stop never reached the application"
+
+
+@pytest.mark.asyncio
+async def test_the_force_confirmation_button_survives_the_render_that_drew_it() -> None:
+    """The second press must reach the kill; the confirmation screen is a re-render."""
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    boundary.callbacks.bind_pending(11, sessions.message.message_id)
+
+    await boundary.callback(_trusted_update(callback=sessions), None)
+    row = _Callback(_edited_button(sessions, 0))
+    await boundary.callback(_trusted_update(callback=row), None)
+    force = _Callback(_edited_button(row, -1, text="Force stop"))
+    await boundary.callback(_trusted_update(callback=force), None)
+
+    assert "Force stop" in str(force.edits[0]["text"]) and "cannot be undone" in str(
+        force.edits[0]["text"]
+    )
+    confirmed = _Callback(_edited_button(force, 0, text="Force stop"))
+    await boundary.callback(_trusted_update(callback=confirmed), None)
+
+    assert confirmed.answers == ["Force stopping the session…"]
+    assert launcher.stopped == ["force"], "the confirmed force never reached the application"
+
+
+def _button(reply: dict[str, object], text: str) -> str:
+    return next(
+        button.callback_data
+        for row in reply["reply_markup"].inline_keyboard
+        for button in row
+        if button.text == text
+    )
+
+
+def _edited_button(callback: _Callback, index: int, *, text: str | None = None) -> str:
+    keyboard = callback.edits[-1]["reply_markup"].inline_keyboard
+    if text is not None:
+        return next(
+            button.callback_data for row in keyboard for button in row if button.text == text
+        )
+    return keyboard[index][0].callback_data

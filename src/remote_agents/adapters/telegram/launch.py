@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.callback_state import CallbackStatePort
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +36,7 @@ class LaunchConfirmation:
         self,
         projects: Callable[[], tuple[CatalogProject, ...]],
         profiles: Callable[[], tuple[ProfileAvailability, ...]],
-        callbacks: CallbackStateStore,
+        callbacks: CallbackStatePort,
         launcher: object,
     ) -> None:
         self._projects = projects
@@ -45,19 +45,18 @@ class LaunchConfirmation:
         self._launch: Callable[[LaunchCommand], Awaitable[object]] = launcher.launch
         self._requests: dict[str, LaunchRequest] = {}
 
-    def preview(
-        self, request: LaunchRequest, *, owner_id: int, chat_id: int, view_revision: int
-    ) -> LaunchPreview:
+    def preview(self, request: LaunchRequest, *, owner_id: int, chat_id: int) -> LaunchPreview:
         _validate_label(request.label)
         project, profile = self._resolve_request(request)
         if project is None or profile is None:
             raise ValueError("launch request is no longer available")
+        # Unbound, like every other mint: a token bound at mint time lands in the set the
+        # render that draws it is about to prune. See StopController for the reproduction.
         token = self._callbacks.create(
             "launch.confirm",
             request.project_opaque_id,
             owner_id,
             chat_id,
-            view_revision,
             mutation=True,
         )
         self._requests[token] = request
@@ -70,10 +69,10 @@ class LaunchConfirmation:
             token,
         )
 
-    async def submit(self, token: str, *, owner_id: int, chat_id: int, view_revision: int) -> bool:
+    async def submit(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
         request = self._requests.get(token)
         if request is None or not self._callbacks.claim_mutation(
-            token, owner_id=owner_id, chat_id=chat_id, view_revision=view_revision
+            token, owner_id=owner_id, chat_id=chat_id, message_id=message_id
         ):
             return False
         project, profile = self._resolve_request(request)
