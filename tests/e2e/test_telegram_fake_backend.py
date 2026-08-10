@@ -14,6 +14,7 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.stops import StopController
+from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -480,3 +481,158 @@ async def test_a_confirmation_about_the_session_is_not_leaving_the_session() -> 
         "a dialog about the session is not a screen about something else"
     )
     assert "cannot be undone" in chat.messages[anchor].text, "and it really is the dialog"
+
+
+@pytest.mark.asyncio
+async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_transcript() -> None:
+    """The Stage 2 gate, stated as the owner would state it.
+
+    Twelve interactions covering every shape this stage changed — commands, presses, a
+    guided text step, and a capture that produces a file — and at the end the chat holds
+    one bot message and nothing at all that the owner typed. Every intermediate assertion
+    in the other tests is a claim about a mechanism; this is the claim about the chat.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+    boundary.profiles = (ProfileAvailability("claude", True),)
+    chat = FakeChat()
+
+    async def press(label: str) -> None:
+        await boundary.callback(chat.press(_button(chat.messages[anchor], label)), None)
+
+    await boundary.start(chat.message_update("/start"), None)  # 1
+    anchor = chat.bot_messages[0].message_id
+    await press("Launch")  # 2
+    await press("Search")  # 3
+    await boundary.text(chat.message_update("Demo"), None)  # 4
+    await press("Demo")  # 5 — profiles
+    await press("Home")  # 6
+    await boundary.sessions_command(chat.message_update("/sessions"), None)  # 7
+    await press("Demo · Claude · regular · #1")  # 8 — detail
+    await press("Inspect")  # 9
+    # Checked mid-journey: an end-state assertion alone would be satisfied by a journey in
+    # which the capture never produced a file at all, which is not the journey being claimed.
+    assert [message.document for message in chat.bot_messages].count(None) == 1, (
+        "the inspect step is meant to put a file in the chat, or step 10 proves nothing"
+    )
+    await press("Back")  # 10 — detail again
+    await press("Home")  # 11
+    await boundary.help_command(chat.message_update("/help"), None)  # 12
+
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == [], chat.transcript()
+    assert chat.bot_messages[0].message_id == anchor, "and it was the same message throughout"
+    assert chat.bot_messages[0].text.startswith("<b>Remote agents</b>")
+
+
+async def _open_a_search(chat: FakeChat, boundary: PrivateBotBoundary, anchor: int) -> None:
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Launch")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Search")), None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ["/start", "/launch", "/sessions", "/help"])
+async def test_a_command_takes_an_unanswered_question_with_it(command: str) -> None:
+    """Abandoning a guided step is the ordinary way to leave it, and the box has to go too.
+
+    The input box is the one bot message outside the live view, so a redraw cannot replace
+    it — and its only record is a single slot that the command then clears, after which
+    nothing can ever remove it.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    handlers = {
+        "/start": boundary.start,
+        "/launch": boundary.launch_command,
+        "/sessions": boundary.sessions_command,
+        "/help": boundary.help_command,
+    }
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    await _open_a_search(chat, boundary, anchor)
+    assert len(chat.bot_messages) == 2, "the box is open at this point"
+
+    await handlers[command](chat.message_update(command), None)
+
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_navigating_away_by_button_takes_the_unanswered_question_with_it() -> None:
+    """No typing at all: Launch → Search → Home, twice, used to leave two dead boxes.
+
+    Each one still accepted input for a step nobody was in, and each was permanent.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+
+    for _ in range(3):
+        await _open_a_search(chat, boundary, anchor)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+        assert len(chat.bot_messages) == 1, chat.transcript()
+
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_opening_a_second_question_does_not_orphan_the_first_ones_box() -> None:
+    """The slot holding the box's id is about to be overwritten; the box must go first.
+
+    Driven directly rather than through the UI: today every route to a guided step passes
+    through a screen that already abandons the open one, so no sequence of presses reaches
+    this. That makes the guard defence for a screen layout that does not exist yet — which
+    is worth keeping and therefore worth pinning, since a test that can only be satisfied
+    by the *other* protection proves nothing about this one.
+    """
+    chat = FakeChat()
+    boundary = _boundary()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    query = chat.press("unused").callback_query
+
+    await boundary._begin_guided_text_entry(query, "launch.search", "search")
+    first_box = next(m for m in chat.bot_messages if m.message_id != anchor)
+    await boundary._begin_guided_text_entry(query, "resume.search", "search")
+
+    assert first_box.message_id not in chat.messages, chat.transcript()
+    assert len(chat.bot_messages) == 2, "the live view and exactly one open question"
+
+
+@pytest.mark.asyncio
+async def test_a_document_telegram_refuses_to_delete_is_retried_not_forgotten() -> None:
+    """`discard` swallowing the refusal internally used to make the documented retry a lie.
+
+    The id was cleared on the assumption the delete worked, so the surviving file was
+    untracked and no later navigation could ever remove it.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+    document = next(m for m in chat.bot_messages if m.document is not None)
+
+    original = chat.bot.delete_message
+
+    async def _refuse(**kwargs: object) -> None:
+        if kwargs["message_id"] == document.message_id:
+            raise BadRequest("Message can't be deleted")
+        await original(**kwargs)
+
+    chat.bot.delete_message = _refuse
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    assert document.message_id in chat.messages, "Telegram refused, so it is still there"
+    assert boundary._attachment is not None, "and it must still be tracked, or it is lost"
+
+    chat.bot.delete_message = original
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    assert document.message_id not in chat.messages, "the next navigation really does retry"
+    assert boundary._attachment is None

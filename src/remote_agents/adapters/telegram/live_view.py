@@ -31,6 +31,9 @@ def _is_uneditable(error: BadRequest) -> bool:
     return any(refusal in message for refusal in _UNEDITABLE)
 
 
+_ALREADY_GONE = "message to delete not found"
+"""Telegram's answer to deleting something that is not there — which is the wanted state."""
+
 _UNMODIFIED = "Message is not modified"
 """Telegram's answer to an edit whose content is byte-identical to what is already there.
 
@@ -214,7 +217,7 @@ class LiveView:
         message = await bot.send_document(chat_id=self._chat_id, **arguments)
         return int(message.message_id)
 
-    async def discard(self, bot, message_id: int) -> None:
+    async def discard(self, bot, message_id: int) -> bool:
         """Take a message out of the chat, and answer for why it was allowed to go.
 
         Exactly two things qualify, and the rule is worth stating because deletion is the
@@ -223,16 +226,28 @@ class LiveView:
         — a command that has been answered, a reply that has been read. Nothing else: not a
         message the bot did not send and the owner did not just send, and never anything the
         owner might still be reading.
-        """
-        await self._delete(bot, message_id)
 
-    async def _delete(self, bot, message_id: int) -> None:
+        Answers whether the message is actually gone. A caller tracking a message it must
+        eventually remove needs to know the difference between "deleted" and "refused" —
+        without it, the only record of a surviving message is dropped on the assumption it
+        worked, and nothing can ever try again.
+        """
+        return await self._delete(bot, message_id)
+
+    async def _delete(self, bot, message_id: int) -> bool:
         try:
             await bot.delete_message(chat_id=self._chat_id, message_id=message_id)
         except BadRequest as error:
-            # The message being unreachable is the same fact that refused the edit; there is
-            # nothing to recover and nothing the owner needs told.
-            _LOG.debug("retired live view %d was already gone: %s", message_id, error)
+            if _ALREADY_GONE in str(error).casefold():
+                # Gone is what was wanted; something else got there first.
+                _LOG.debug("message %d was already gone", message_id)
+                return True
+            # Not the same thing at all: Telegram still has it and will not remove it, so
+            # the message stays in the chat. Worth saying out loud — this is the only place
+            # a surviving message is ever reported.
+            _LOG.warning("Telegram refused to delete message %d: %s", message_id, error)
+            return False
+        return True
 
     async def _send(self, bot, arguments: dict[str, object], *, retire: bool = True) -> int:
         message = await bot.send_message(chat_id=self._chat_id, **arguments)

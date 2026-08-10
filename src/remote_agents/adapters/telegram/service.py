@@ -106,6 +106,8 @@ _ENTRY_INSTRUCTIONS = {
     "project.name": "Reply below with the new project name.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
+_TEXT_ENTRY_ACTIONS = frozenset({"launch.search", "resume.search", "launch.label", "project.area"})
+"""The actions that open a guided step, and so the only ones that may leave a box open."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,10 +154,14 @@ class _TextEntry:
     way, because it has exactly the same lifetime as the request — created when the step
     opens, dead when the step is answered or abandoned.
 
-    Process-local, like the request itself, and deliberately so: a restart mid-entry has
-    already forgotten *what was being asked*, so remembering where the box was would buy
-    nothing. The orphaned box is the visible half of a state that was lost either way,
-    and the owner's way out of it is any command, which redraws the live view.
+    Process-local, like the request itself. **Accepted cost, stated plainly because it is
+    the one hole left in this stage's invariant:** a restart between opening a step and
+    answering it forgets both what was asked and where the box is, and the Bot API gives no
+    way to enumerate a chat, so nothing can find that box again. It stays until the owner
+    removes it by hand. Every in-process way of abandoning a step — any command, any button
+    that navigates away, opening another step — does take it with it; only a restart in
+    that window does not. Closing it properly means giving this id the same durable home
+    the anchor already has, which is a schema change this stage did not carry.
     """
 
     action: str
@@ -237,7 +243,6 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
         await self._answer_command(update.effective_message, await self._home_reply())
 
     async def _answer_command(self, message, arguments: dict[str, object]) -> None:
@@ -259,6 +264,7 @@ class PrivateBotBoundary:
         bot = message.get_bot()
         await self.view.render(bot, arguments)
         await self._release_attachment(bot, None)
+        await self._abandon_entry(bot)
         await self.view.discard(bot, message.message_id)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -354,6 +360,20 @@ class PrivateBotBoundary:
         asked = await self.view.send_apart(bot, self._guided_text_reply(entry.action, notice))
         await self._clear_entry(bot, entry, message)
         self._awaiting_text[self._entry_key] = replace(entry, input_message_id=asked)
+
+    async def _abandon_entry(self, bot) -> None:
+        """Take an unanswered question out of the chat when the owner moves on.
+
+        The input box is the one bot message deliberately outside the live view, so it is
+        the one thing a redraw cannot replace: navigating away used to leave it sitting
+        under the new screen, still accepting input for a step nobody was in — and its only
+        record, a single slot, was then overwritten by the next step or cleared by the next
+        command, so nothing could ever remove it again. Two abandoned searches and the chat
+        is a transcript, which is the state this stage exists to remove.
+        """
+        entry = self._awaiting_text.pop(self._entry_key, None)
+        if entry is not None and entry.input_message_id:
+            await self.view.discard(bot, entry.input_message_id)
 
     async def _clear_entry(self, bot, entry: _TextEntry, message) -> None:
         """Take the owner's answer, and the box it replied to, back out of the chat."""
@@ -455,10 +475,12 @@ class PrivateBotBoundary:
             # the try, so an unexpected failure lands on the recovery screen below rather
             # than leaving a cleared spinner and nothing drawn.
             await self._release_attachment(query.get_bot(), state.entity_id)
+            if state.action not in _TEXT_ENTRY_ACTIONS:
+                await self._abandon_entry(query.get_bot())
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
-            if state.action in {"launch.search", "resume.search", "launch.label", "project.area"}:
+            if state.action in _TEXT_ENTRY_ACTIONS:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
             if pending is not None:
@@ -994,7 +1016,7 @@ class PrivateBotBoundary:
         if showing is not None and self._attachment[0] == _session_scope(showing):
             return
         try:
-            await self.view.discard(bot, self._attachment[1])
+            removed = await self.view.discard(bot, self._attachment[1])
         except TelegramError:
             # Housekeeping must never cost the owner the screen they pressed for. The
             # document stays and the next navigation tries again — the alternative is a
@@ -1002,7 +1024,8 @@ class PrivateBotBoundary:
             # to remove.
             _LOG.warning("could not remove the captured document; leaving it in the chat")
             return
-        self._attachment = None
+        if removed:
+            self._attachment = None
 
     async def _inspection_result(self, session_value: str):
         if self.capture is None:
@@ -1027,6 +1050,9 @@ class PrivateBotBoundary:
         # A str, unlike the `_TextEntry` that `entry` names everywhere else in this class.
         entry_action = "project.name" if action == "project.area" else action
         bot = query.get_bot()
+        # A step opened while another is still open would otherwise overwrite the only
+        # record of the first one's box.
+        await self._abandon_entry(bot)
         await self._render(query, _reply_arguments(self._message(_entry_instruction(entry_action))))
         asked = await self.view.send_apart(bot, self._guided_text_reply(entry_action))
         self._awaiting_text[self._entry_key] = _TextEntry(entry_action, entity_id, asked)
@@ -1507,7 +1533,9 @@ async def run_private_bot(
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))
     application.add_handler(CommandHandler("help", boundary.help_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, boundary.text))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE, boundary.text)
+    )
     stopping = asyncio.Event()
     _install_stop_signals(stopping)
     await application.initialize()
