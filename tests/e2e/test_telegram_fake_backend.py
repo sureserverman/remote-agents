@@ -412,6 +412,92 @@ async def test_inspect_document_is_its_own_message_and_goes_when_the_session_doe
 
 
 @pytest.mark.asyncio
+async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> None:
+    """The recovery screen is the last one a stop could strand the owner on.
+
+    It is drawn when the action raises *after* its pending notice replaced the keyboard, so
+    the owner is looking at a message with no buttons on it. It used to answer with Back and
+    Home and the same "Open it again to see where it is now" that the refusal branch had
+    already dropped for pointing at the screen the owner arrives on.
+    """
+    session = _a_running_session()
+    boundary = _boundary(session)
+
+    class _FailingLauncher:
+        async def list_sessions(self):
+            return [session]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+        async def graceful_stop(self, _command):
+            raise RuntimeError("the terminal went away mid-stop")
+
+    boundary.launcher = _FailingLauncher()
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Stop and close")), None)
+
+    screen = chat.messages[anchor]
+    assert screen.text.startswith("That action did not complete")
+    assert "Open it again" not in screen.text
+    assert "Sessions 1/1" in screen.text, "it landed on the list, which still holds the session"
+    labels = [button.text for row in screen.reply_markup.inline_keyboard for button in row]
+    assert "Back" not in labels
+    assert len(chat.bot_messages) == 1, chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_stopping_an_inspected_session_takes_its_document_with_it() -> None:
+    """Stopping a session is leaving it, so the file it produced goes too.
+
+    `_release_attachment` is told what the next screen is *about*, and every action could
+    answer that with the id it carries — right up until a stop stopped drawing a screen about
+    its own session and started drawing the list. The id still said "this session", so the
+    document was retained on behalf of a session that had just left the chat's only screen.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+
+    stopped: list[str] = []
+
+    class _StoppingLauncher:
+        async def list_sessions(self):
+            return [] if stopped else [session]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+        async def graceful_stop(self, _command):
+            stopped.append("graceful")
+            return a_clean_stop(session.session_id)
+
+    boundary.launcher = _StoppingLauncher()
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+    documents = [message for message in chat.bot_messages if message.document is not None]
+    assert len(documents) == 1, chat.transcript()
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Stop and close")), None)
+
+    assert stopped == ["graceful"], "the stop has to have actually run, or this proves nothing"
+    assert chat.messages[anchor].text.startswith("Stopped "), chat.messages[anchor].text[:80]
+    assert documents[0].message_id not in chat.messages, chat.transcript()
+    assert len(chat.bot_messages) == 1, "the live view alone — the file left with its session"
+
+
+@pytest.mark.asyncio
 async def test_a_capture_small_enough_to_read_leaves_no_file_behind() -> None:
     """Only an oversized capture becomes a document; a short one is just the screen."""
     session = _a_running_session()

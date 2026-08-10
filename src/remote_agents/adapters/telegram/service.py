@@ -61,6 +61,7 @@ from remote_agents.application.project_catalog import (
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
+    CLEANUP,
     FORCE,
     GRACEFUL,
     StopFailure,
@@ -176,6 +177,15 @@ _PENDING_NOTICES = {
     "launch.confirm": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
 }
+
+#: The actions that draw the **session list** rather than a screen about their own session.
+#: `_release_attachment` is told what the next screen is about, and every other action can
+#: answer that with the entity it carries. These cannot: they carry a session id and then
+#: land somewhere that is not about it, so a captured document would be retained on behalf
+#: of a session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it
+#: draws the confirmation, which *is* about that session.
+_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+
 """The actions that make the owner wait, and what to show them while they do.
 
 Each of these reaches a terminal and then polls it: a launch waits for its profile's
@@ -474,7 +484,8 @@ class PrivateBotBoundary:
             # Whatever this press draws, it answers "is that session still on screen". Inside
             # the try, so an unexpected failure lands on the recovery screen below rather
             # than leaving a cleared spinner and nothing drawn.
-            await self._release_attachment(query.get_bot(), state.entity_id)
+            showing = None if state.action in _LIST_LANDING_ACTIONS else state.entity_id
+            await self._release_attachment(query.get_bot(), showing)
             if state.action not in _TEXT_ENTRY_ACTIONS:
                 await self._abandon_entry(query.get_bot())
             if state.action == "session.inspect":
@@ -510,10 +521,8 @@ class PrivateBotBoundary:
             await self._render(
                 query,
                 _reply_arguments(
-                    self._message(
-                        "That action did not complete, and the session was left as it is.\n"
-                        "Open it again to see where it is now.",
-                        back=self._callback("sessions.open", "sessions"),
+                    await self._sessions_reply(
+                        notice="That action did not complete, and the session was left as it is."
                     )
                 ),
             )
@@ -1084,7 +1093,12 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._force_confirm_reply(token, message_id))
         request = self.stops.claim(token, self.owner_user_id, self.owner_chat_id, message_id)
         if request is None or self.launcher is None:
-            return _reply_arguments(self._message("That action has already run."))
+            # DEC-008 drops the repeat rather than servicing it; where the *answer* is drawn
+            # is a separate question, and it lands on the list like every other stop outcome
+            # rather than on the one Home-only screen a stop button could still reach.
+            return _reply_arguments(
+                await self._sessions_reply(notice="That action has already run.")
+            )
         record = await self._record(str(request.session_id))
         result = (
             await self.stops.execute(request, self.launcher, record) if record is not None else None

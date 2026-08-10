@@ -305,13 +305,14 @@ class _MovedOnLauncher:
         self.stopped: list[str] = []
 
     async def list_sessions(self):
-        return [self.record]
+        return [] if self.record is None else [self.record]
 
     async def refresh_readiness(self) -> None:
         return None
 
     async def graceful_stop(self, _command):
         self.stopped.append("graceful")
+        self.record = None
         return a_clean_stop()
 
 
@@ -369,3 +370,35 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
     rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
     assert rows[0] == ["Cancel"]
     assert rows[1] == ["Force stop"]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_screen() -> None:
+    """DEC-008 drops the repeat; where the answer is *drawn* is a separate question.
+
+    The repeat is still not serviced — that is what the claim guarantees and it is unchanged.
+    What changed is that saying so no longer costs the owner the screen: this was the last
+    Home-only dead end a stop button could reach.
+    """
+    record = _a_session()
+    launcher = _MovedOnLauncher(record)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    token = boundary.stops.offer(
+        record.session_id, record.profile_id, record.state, "graceful", 7, 11
+    )
+    assert token is not None
+    boundary.callbacks.bind_pending(11, 1)
+
+    first = await boundary._stop_reply("graceful", token, 1)
+    second = await boundary._stop_reply("graceful", token, 1)
+
+    assert launcher.stopped == ["graceful"], "the repeat was dropped, not serviced twice"
+    assert first["text"].startswith("Stopped ")
+    assert second["text"].startswith("That action has already run.")
+    labels = [button.text for row in second["reply_markup"].inline_keyboard for button in row]
+    assert labels[-2:] == ["Refresh", "Home"], "it answers on the list, not on a lone Home"
