@@ -55,9 +55,9 @@ Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, 
    and offers Cancel before the kill. Cancel it once, then confirm it.
 7. With more sessions than one page holds, page through Sessions with Previous and Next, and
    verify Refresh redraws the page you are on rather than returning Home.
-8. Restart `remote-agents.service`, press an expired pre-restart button, and verify that it
-   alerts that the view expired and replaces it with a fresh Home. Verify the remaining managed
-   session has the same identity.
+8. Restart `remote-agents.service`, press a button drawn before the restart, and verify that it
+   still works: it renders the screen it names rather than reporting anything. Verify the
+   remaining managed session has the same identity.
 9. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
 10. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
@@ -74,6 +74,15 @@ Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, 
     and verify nothing was created or appended. Repeat and confirm, then verify that the new
     project is selectable from Launch without restarting the service, and that a second create
     with the same area and name is refused.
+
+The bot keeps one message in the chat and edits it, so a restart normally leaves nothing behind.
+One case does need the owner. If the service restarts between a reply prompt being sent and the
+owner answering it, that input box is a second message and nothing is left running to remove it;
+the Bot API cannot enumerate a chat, so it cannot be found afterwards either. Delete it by hand.
+Messages the owner sends unprompted are left in place rather than deleted, which is deliberate:
+only the command messages the bot answers are removed. Telegram also stops permitting an edit 48
+hours after a message was sent; when it refuses, the live view is re-sent as a new message and the
+old one deleted, so an old chat occasionally shows the view move rather than change in place.
 
 For the auditable host-local profile trace, run:
 

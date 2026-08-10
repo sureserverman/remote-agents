@@ -52,7 +52,12 @@ managed sessions. `/help` names the actions this deployment actually offers. Sea
 optional-label entry use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
 leaving an input step stranded. Review shows the project, agent, and label before creating a
 session. Ended records remain in local SQLite history but do not clutter the Telegram list.
-After a service restart or an expired button, Telegram replaces the old view with a fresh Home.
+The chat holds one bot message. Every screen is that message being re-rendered, a command is
+answered by redrawing it and deleting the command itself, and a reply prompt's input box is a
+second message that goes away once it is answered or abandoned. A button does not expire: its
+token is stored in SQLite and is valid for the message it was drawn on rather than for a clock,
+so one drawn before a service restart still works after it. Replacing a screen prunes the tokens
+it drew, so a press that lands after a redraw says the screen has moved on and shows Home.
 
 Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
 `Refresh` on the two views whose answer goes stale on its own — Home's counts and the sessions
