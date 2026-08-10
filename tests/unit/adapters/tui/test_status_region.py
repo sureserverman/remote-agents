@@ -467,3 +467,67 @@ async def test_leaving_a_flow_shortens_the_trail_again() -> None:
 
     assert deep == "Projects › infra/existing › claude"
     assert back == "Projects › infra/existing"
+
+
+async def test_a_failure_status_carries_its_severity_as_a_design_system_class() -> None:
+    """`$error` from the theme, not a colour literal, so it resolves in light and dark alike."""
+    from textual.widgets import Static
+
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        screen = app.screen
+        screen.set_status("The development root could not be read.", severity="error")
+        await pilot.pause()
+        region = screen.query_one("#status", Static)
+        errored = region.has_class("-error")
+
+        screen.set_status("Choose a project.", severity="information")
+        await pilot.pause()
+        cleared = region.has_class("-error")
+
+    assert errored, "a failure status was not marked as one"
+    assert not cleared, "the severity outlived the message it belonged to"
+
+
+async def test_severity_is_never_the_only_signal() -> None:
+    """The judgment a colour cannot carry: under NO_COLOR the words are all that is left.
+
+    Every call site in this package that passes a non-default severity is checked to be
+    saying what went wrong in words too — asserted over the source rather than over one
+    example, because the rule is about the set of call sites and a new one is exactly what
+    would break it.
+
+    **What this cannot check, stated rather than implied.** For a literal message it verifies
+    there are words. For a computed one — `failure.status`, an f-string — it verifies only
+    that a message is passed at all, because whether that value reads as an explanation is
+    not a property of the syntax tree. It catches `set_status("", severity="error")` and
+    `set_status(severity="error")`; it cannot catch a variable holding an empty string. The
+    judgment half belongs to the gate's reader, and this narrows what they have to read.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for source in Path("src/remote_agents/adapters/tui").rglob("*.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            attribute = getattr(node.func, "attr", None)
+            if attribute != "set_status":
+                continue
+            severities = [kw for kw in node.keywords if kw.arg == "severity"]
+            if not severities:
+                continue
+            value = severities[0].value
+            if isinstance(value, ast.Constant) and value.value == "information":
+                continue
+            message = node.args[0] if node.args else None
+            if not isinstance(message, ast.Constant | ast.JoinedStr | ast.Name | ast.Attribute):
+                offenders.append(f"{source}:{node.lineno}")
+                continue
+            if isinstance(message, ast.Constant) and not str(message.value).strip():
+                offenders.append(f"{source}:{node.lineno}")
+
+    assert offenders == [], f"a severity-coloured status with no words: {offenders}"

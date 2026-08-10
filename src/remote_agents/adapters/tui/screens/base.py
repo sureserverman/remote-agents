@@ -189,11 +189,14 @@ class ChoiceScreen(Screen[None]):
         """Set the chrome this screen asked for, then let it fill itself.
 
         A template method rather than an overridable `on_mount`, so a screen cannot forget
-        the chrome by defining its own handler — the output pane in particular starts hidden
-        on every screen and used to be reset from a single place in the app.
+        the chrome by defining its own handler.
+
+        The output pane used to be hidden here, imperatively, on every screen. It is now
+        hidden by the app's CSS and revealed by a class — so the default is declared once in
+        the stylesheet instead of being re-established by whichever method happened to run,
+        and a screen that never calls `show_output` needs no line of code to stay on the list.
         """
         self.show_breadcrumb()
-        self.query_one("#output-pane").display = False
         entry = self.query_one("#filter", Input)
         entry.display = self.filter_placeholder is not None
         if self.status:
@@ -543,7 +546,7 @@ class ChoiceScreen(Screen[None]):
         """
         self.sub_title = self.breadcrumb
 
-    def set_status(self, text: str) -> None:
+    def set_status(self, text: str, *, severity: SeverityLevel = "information") -> None:
         """Say, in one line, what to do here or what just happened.
 
         One line is a *contract*, not a suggestion the CSS enforces: `#status` is one line
@@ -554,13 +557,36 @@ class ChoiceScreen(Screen[None]):
         newline. The runtime guard is what catches the values a static check cannot see: an
         exception's `str()` carries newlines from the library that raised it, and every
         failure path in this surface interpolates one.
+
+        `severity` colours the region from the design system — `$error`, `$warning` — rather
+        than from a literal, so it resolves per theme instead of assuming a dark one.
+
+        **Colour is the second signal here and never the only one, and that bounds which
+        callers may pass a severity at all.** A terminal under `NO_COLOR`, a monochrome
+        profile, and a colour-blind reader all get the same characters and different
+        palettes, so a status whose severity lived in its colour would say nothing to any of
+        them.
+
+        The rule that follows is sharper than "add colour to the failure paths", and it was
+        learned by breaking it: this method was first wired into every path that *followed* a
+        failure, which painted `Press escape to return to the project list.` red. That
+        sentence reports nothing. Driven under `NO_COLOR` and under the ANSI theme, the whole
+        surface then said only where to go next, in three renderings that looked identical —
+        severity by colour alone, which is precisely what this region must not do.
+
+        So: pass a severity only when **this string** names the condition. The region split
+        sub-plan 3 built means most failure paths deliberately put the *why* in a toast and
+        the *what next* here, and those keep the neutral colour they have always had.
         """
         if not self.showing:
             return
         if "\n" in text:
             _LOG.warning("a multi-line status was truncated to its first line: %r", text)
             text = text.split("\n", 1)[0]
-        self.query_one("#status", Static).update(text)
+        region = self.query_one("#status", Static)
+        region.set_class(severity == "error", "-error")
+        region.set_class(severity == "warning", "-warning")
+        region.update(text)
 
     async def refuse(
         self, message: str | None = None, *, severity: SeverityLevel = "warning"
@@ -814,8 +840,10 @@ class ChoiceScreen(Screen[None]):
     def show_output(self, text: str) -> None:
         if not self.showing:
             return
-        self.query_one("#output-pane").display = True
-        self.query_one("#choices").display = False
+        # One class, two rules. The pane appearing and the list disappearing are the same
+        # fact — this screen is showing output — and asserting it twice imperatively is how
+        # they could ever have disagreed.
+        self.add_class("-showing-output")
         # `load_text` rather than the `text` setter only to say plainly that this replaces the
         # document and clears the edit history; the setter is documented as an alias for it.
         output = self.query_one("#output", TextArea)
@@ -839,8 +867,7 @@ class ChoiceScreen(Screen[None]):
     def hide_output(self) -> None:
         if not self.showing:
             return
-        self.query_one("#output-pane").display = False
-        self.query_one("#choices").display = True
+        self.remove_class("-showing-output")
 
     # Interaction ---------------------------------------------------------------
 

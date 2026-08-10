@@ -351,5 +351,15 @@ class ReviewScreen(ChoiceScreen):
                 # enter cannot re-issue a launch nobody deliberately chose. It also resets
                 # this screen's status, which is why the failure's own status is set after.
                 self.render_review()
+                # Deliberately *not* severity-coloured, and this is the closest call of the
+                # five sites considered — a reviewer flagged it as one a later reader may
+                # reasonably reopen. `failure.status` is the half the owner may still need in
+                # a minute: the attach command, or where to go next. Some values of it do
+                # report a condition ("Nothing was started"), which is the argument for
+                # colouring it; against that, the *why* already goes to a toast under the
+                # region split sub-plan 3 built, and colouring a string whose content varies
+                # would mean the same region is sometimes an explanation and sometimes an
+                # instruction, in the same colour. Left neutral until the split itself is
+                # revisited, rather than decided one call site at a time.
                 self.set_status(failure.status)
                 self.announce(failure.explanation)

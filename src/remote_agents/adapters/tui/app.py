@@ -37,6 +37,7 @@ from remote_agents.adapters.tui.screens import (
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
+from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
@@ -104,9 +105,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     CSS = """
     Screen { layout: vertical; }
     #body { height: 1fr; }
-    ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; }
+    ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; color: $foreground; }
+    /* Severity from the design system, so it resolves per theme rather than assuming a dark
+       one — and always as the *second* signal: every caller that sets a severity has already
+       said what went wrong in words, because a reader under NO_COLOR gets the words only. */
+    ChoiceScreen #status.-error { color: $error; }
+    ChoiceScreen #status.-warning { color: $warning; }
     ChoiceScreen OptionList { height: 1fr; }
-    ChoiceScreen #output { height: 1fr; padding: 0 1; border: none; }
+    /* The empty-state row reads as an absence rather than as a choice. `$text-muted` from
+       the design system, not a grey literal — and it is the *second* signal here too: the
+       row is a disabled `Option`, so it is unselectable whatever the palette does. */
+    ChoiceScreen OptionList > .option-list--option-disabled { color: $text-muted; }
+
+    /* Which of the two bodies a screen shows is a *state*, declared once here, rather than
+       four imperative `display =` assignments spread across `on_mount`, `show_output` and
+       `hide_output`. Every screen starts on the list; a screen that has output adds the
+       class and the pair swaps. */
+    ChoiceScreen #output-pane { display: none; background: $surface; }
+    ChoiceScreen.-showing-output #output-pane { display: block; }
+    ChoiceScreen.-showing-output #choices { display: none; }
+    ChoiceScreen #output { height: 1fr; padding: 0 1; border: none; background: $surface; }
     """
     # `border: none` on `#output` because it is a `TextArea` now, and `TextArea.DEFAULT_CSS`
     # draws `border: tall $border-blurred` — a box the `Static` it replaced never drew, which
@@ -128,6 +146,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     #: rather than left to default: `App.title` falls back to the class name, so the header
     #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.
     TITLE = "Remote Agents"
+    #: The system commands stay — Textual's own (theme, quit, keys, maximize, screenshot) and
+    #: none of them touches a session. `NavigationCommands` adds this app's three flow jumps
+    #: and nothing else; DEC-007 is why, and `screens/palette.py` carries the argument.
+    COMMANDS = App.COMMANDS | {NavigationCommands}
     # Every one of these is answered per screen by `ChoiceScreen.check_action`, which hides
     # the ones that would do nothing here. The tooltips say what the key does *to the thing
     # the owner is looking at*, because the labels alone were ambiguous in the one way that

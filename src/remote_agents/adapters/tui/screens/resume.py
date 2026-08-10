@@ -272,7 +272,9 @@ class ResumeConversationsScreen(ChoiceScreen):
     def render_page(self) -> None:
         page = self.page
         if page.unavailable_reason is not None:
-            self.set_status(f"Conversations are unavailable: {page.unavailable_reason}")
+            self.set_status(
+                f"Conversations are unavailable: {page.unavailable_reason}", severity="warning"
+            )
             self.show_choices(((_BACK, "Back"),))
             return
         if not page.conversations:
