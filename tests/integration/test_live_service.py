@@ -9,6 +9,8 @@ import pytest
 from stop_results import a_clean_stop, a_stop_that_did_not_take
 from telegram.error import BadRequest
 
+from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.service import (
     _BOT_DESCRIPTION,
     _BOT_SHORT_DESCRIPTION,
@@ -1055,3 +1057,28 @@ def _edited_button(callback: _Callback, index: int, *, text: str | None = None) 
             button.callback_data for row in keyboard for button in row if button.text == text
         )
     return keyboard[index][0].callback_data
+
+
+@pytest.mark.asyncio
+async def test_a_button_drawn_before_a_restart_still_works_after_one(tmp_path) -> None:
+    """The reported defect, end to end: a new composition over the same database.
+
+    The first connection is **closed** before the second is opened, which is what
+    `bootstrap.main()` actually does across a restart — sharing one handle would prove only
+    that two objects can read one open file, and would survive a store that never persisted
+    anything at all.
+    """
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    before = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(connection))
+    message = _Message()
+    await before.start(_trusted_update(message=message), None)
+    sessions = _button(message.replies[0], "Sessions")
+    connection.close()
+
+    after = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(open_database(database)))
+    callback = _Callback(sessions)
+    await after.callback(_trusted_update(callback=callback), None)
+
+    assert callback.answers == [None], "the restarted service refused a button it had drawn"
+    assert "Sessions" in str(callback.edits[0]["text"])

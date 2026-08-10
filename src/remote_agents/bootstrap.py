@@ -28,6 +28,7 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
     open_database,
@@ -387,6 +388,9 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         PrivateBotBoundary(
             secrets.owner_user_id,
             secrets.owner_chat_id,
+            # The durable store, not the in-memory default: a restart used to void every
+            # button in the chat, and only this half of the pair actually fixes that.
+            callbacks=SQLiteCallbackStateStore(connection),
             catalogue=catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,

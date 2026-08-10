@@ -84,3 +84,65 @@ def test_creating_a_token_rejects_an_unsafe_descriptor(tmp_path) -> None:
         except ValueError:
             continue
         raise AssertionError(f"accepted an unsafe callback descriptor: {action!r} {entity_id!r}")
+
+
+def test_a_message_that_is_gone_takes_exactly_its_own_tokens_with_it(tmp_path) -> None:
+    """The retention rule that replaced the TTL: tokens die with their screen, not on a clock."""
+    store = _store(tmp_path)
+    doomed = [store.create("nav.home", "home", _OWNER, _CHAT, _MESSAGE) for _ in range(3)]
+    survivor = store.create("nav.home", "home", _OWNER, _CHAT, _MESSAGE + 1)
+    other_chat = store.create("nav.home", "home", _OWNER, _CHAT + 1, _MESSAGE)
+
+    assert store.prune_for_message(_CHAT, _MESSAGE) == 3
+
+    for token in doomed:
+        assert store.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is None
+    assert store.resolve(survivor, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE + 1)
+    assert store.resolve(other_chat, owner_id=_OWNER, chat_id=_CHAT + 1, message_id=_MESSAGE)
+    assert store.active_count() == 2
+
+
+def test_capacity_is_bounded_by_size_now_that_it_is_not_bounded_by_time(tmp_path, caplog) -> None:
+    """Without a TTL nothing else reaps the table, so the cap is the only bound left.
+
+    The oldest go rather than the newest being refused: a refusal renders a keyboard whose
+    buttons were never created, which is the failure the previous store actually had.
+    """
+    limit = 20
+    store = _store(tmp_path, limit=limit)
+    tokens = [store.create("nav.home", "home", _OWNER, _CHAT, _MESSAGE) for _ in range(limit + 5)]
+
+    assert store.active_count() <= limit
+    assert all(
+        store.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is not None
+        for token in tokens[-limit:]
+    )
+    assert store.resolve(tokens[0], owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is None
+
+
+def test_an_eviction_pass_logs_once_however_many_tokens_it_discards(tmp_path, caplog) -> None:
+    """Creating one at a time evicts one at a time, which cannot tell the two shapes apart.
+
+    A steady trickle logs once per pass *and* once per token — the same count either way — so
+    a regression moving the log inside the delete loop would pass a test written that way.
+    The table is therefore pushed several rows past capacity behind the store's back, and the
+    one `create` that notices has to answer for all of them in a single line.
+    """
+    limit = 10
+    store = _store(tmp_path, limit=limit)
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    with connection:
+        connection.executemany(
+            "INSERT INTO callback_states(token, action, entity_id, owner_id, chat_id, "
+            "message_id, mutation, claimed, created_at) VALUES (?, 'nav.home', 'home', ?, ?, "
+            "?, 0, 0, '2026-01-01T00:00:00+00:00')",
+            [(f"c1_seed{index}", _OWNER, _CHAT, _MESSAGE) for index in range(limit + 4)],
+        )
+
+    with caplog.at_level("INFO"):
+        store.create("nav.home", "home", _OWNER, _CHAT, _MESSAGE)
+
+    evictions = [record for record in caplog.records if "evicted" in record.message]
+    assert len(evictions) == 1, "one pass discarding five tokens must not log five times"
+    assert "evicted 5 " in evictions[0].message
+    assert store.active_count() == limit
