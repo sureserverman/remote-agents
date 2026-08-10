@@ -11,6 +11,26 @@ from remote_agents.ports.chat_view import ChatViewPort
 
 _LOG = logging.getLogger(__name__)
 
+_UNEDITABLE = (
+    "message can't be edited",
+    "message to edit not found",
+    "message_id_invalid",
+)
+"""Telegram's ways of saying this particular message can no longer be written to.
+
+`editMessageText` is documented to work for 48 hours, and since Stage 1 a token outlives its
+message's editable life by design — so these are the expected end of a long-lived screen,
+answered by moving the view rather than by an error. Every *other* `BadRequest` is a real
+fault and still propagates: an unclosed HTML entity in the text, a keyboard past Telegram's
+button limit. A bot blocked from its chat raises `Forbidden`, which this never catches at all.
+"""
+
+
+def _is_uneditable(error: BadRequest) -> bool:
+    message = str(error).casefold()
+    return any(refusal in message for refusal in _UNEDITABLE)
+
+
 _UNMODIFIED = "Message is not modified"
 """Telegram's answer to an edit whose content is byte-identical to what is already there.
 
@@ -40,6 +60,18 @@ class ChatViewStore:
             raise ValueError("a live view must be anchored to a real Telegram message")
         self._anchors[chat_id] = message_id
 
+    def adopt_anchor(self, chat_id: int, message_id: int) -> bool:
+        if message_id <= 0:
+            raise ValueError("a live view must be anchored to a real Telegram message")
+        if chat_id in self._anchors:
+            # False even when the stored anchor is this very id. SQLite's `DO NOTHING`
+            # cannot tell "conflicted with the same value" from "conflicted with a
+            # different one", and a port whose two implementations answer differently is
+            # worse than one that answers the narrower thing consistently.
+            return False
+        self._anchors[chat_id] = message_id
+        return True
+
 
 class LiveView:
     """The chat's single screen, and the owner of every token drawn on it.
@@ -61,6 +93,17 @@ class LiveView:
         self._chat_id = chat_id
         self._callbacks = callbacks
         self._anchors = anchors
+        self._owed_prunes: set[int] = set()
+        """Retired messages whose tokens an interstitial re-send could not discard yet.
+
+        A set rather than one id, so a second interstitial re-send before the first has been
+        collected cannot silently drop the first. Every retiring render drains the whole set.
+
+        Process-local on purpose: a prune is owed only between an interstitial and the
+        render that answers it, and a restart inside that window has already lost the action
+        itself. Anything this drops is inert — the message it belonged to is deleted, so no
+        button carries those tokens — and the store's size cap collects it.
+        """
 
     @property
     def chat_id(self) -> int:
@@ -81,10 +124,11 @@ class LiveView:
         It never *moves* a recorded anchor. A press arriving from some older message would
         otherwise walk the live view backwards onto a screen this stage exists to have
         deleted, which is a worse answer than leaving the anchor where the last render put
-        it.
+        it. That condition is the store's to enforce in one statement — DEC-005 permits a
+        second writer, and asking then writing would let the loser overwrite the winner.
         """
-        if message_id > 0 and self._anchors.anchor(self._chat_id) is None:
-            self._anchors.record_anchor(self._chat_id, message_id)
+        if message_id > 0:
+            self._anchors.adopt_anchor(self._chat_id, message_id)
 
     async def render(self, bot, arguments: dict[str, object], *, retire: bool = True) -> int:
         """Draw `arguments` as the chat's live view, and answer which message that is.
@@ -101,16 +145,51 @@ class LiveView:
         try:
             await bot.edit_message_text(chat_id=self._chat_id, message_id=anchor, **arguments)
         except BadRequest as error:
-            if _UNMODIFIED not in str(error):
+            if _UNMODIFIED in str(error):
+                # Nothing changed on screen, so nothing on screen may stop resolving: the
+                # keyboard the owner is looking at is still the one bound to this message,
+                # and pruning it here would kill the buttons this render was trying to
+                # preserve.
+                _LOG.debug("live view render changed nothing; the screen already says this")
+                return anchor
+            if not _is_uneditable(error):
                 raise
-            # Nothing changed on screen, so nothing on screen may stop resolving: the
-            # keyboard the owner is looking at is still the one bound to this message, and
-            # pruning it here would kill the buttons this render was trying to preserve.
-            _LOG.debug("live view render changed nothing; the screen already says this")
-            return anchor
+            return await self._resend(bot, arguments, retired=anchor, retire=retire)
         if retire:
             self._retire(anchor)
         return anchor
+
+    async def _resend(
+        self, bot, arguments: dict[str, object], *, retired: int, retire: bool
+    ) -> int:
+        """Answer an edit Telegram will not perform by moving the live view to a new message.
+
+        `editMessageText` stops working 48 hours after a message was sent, and since Stage 1
+        a button outlives that by design — so this is a reachable path, not a defensive one.
+        The owner never learns it happened: they pressed a button and a screen appeared.
+        """
+        _LOG.info("live view message %d can no longer be edited; re-sending it", retired)
+        message_id = await self._send(bot, arguments, retire=retire)
+        await self._delete(bot, retired)
+        if retire:
+            self._drain_owed()
+            self._callbacks.prune_for_message(self._chat_id, retired)
+        else:
+            # An interstitial: the token the owner just pressed is bound to `retired` and
+            # its action has not been claimed yet, so pruning now is what makes a stop
+            # resolve, show its wait screen, and never happen. Every retiring render drains
+            # this, including one that is itself a re-send — which is why the drain is a
+            # shared step rather than a line inside `_retire`.
+            self._owed_prunes.add(retired)
+        return message_id
+
+    async def _delete(self, bot, message_id: int) -> None:
+        try:
+            await bot.delete_message(chat_id=self._chat_id, message_id=message_id)
+        except BadRequest as error:
+            # The message being unreachable is the same fact that refused the edit; there is
+            # nothing to recover and nothing the owner needs told.
+            _LOG.debug("retired live view %d was already gone: %s", message_id, error)
 
     async def _send(self, bot, arguments: dict[str, object], *, retire: bool = True) -> int:
         message = await bot.send_message(chat_id=self._chat_id, **arguments)
@@ -123,5 +202,17 @@ class LiveView:
         return message_id
 
     def _retire(self, message_id: int) -> None:
+        self._drain_owed()
         self._callbacks.prune_for_message(self._chat_id, message_id)
         self._callbacks.bind_pending(self._chat_id, message_id)
+
+    def _drain_owed(self) -> None:
+        """Discard the tokens of every message an interstitial re-send could not retire.
+
+        Called from both places a render finishes retiring — the ordinary edit and a
+        re-send that is itself retiring. Living in only the first is how a deferred prune
+        gets skipped exactly when two refusals arrive in a row.
+        """
+        for message_id in self._owed_prunes:
+            self._callbacks.prune_for_message(self._chat_id, message_id)
+        self._owed_prunes.clear()

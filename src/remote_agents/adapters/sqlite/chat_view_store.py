@@ -37,3 +37,20 @@ class SQLiteChatViewStore:
                 "updated_at = excluded.updated_at",
                 (chat_id, message_id, datetime.now(UTC).isoformat()),
             )
+
+    def adopt_anchor(self, chat_id: int, message_id: int) -> bool:
+        """Claim the anchor for a chat that has none, in one statement.
+
+        `DO NOTHING` is what makes this safe under DEC-005's second writer: the conditional
+        lives in SQLite rather than between two of our round trips, so the loser of the race
+        is told it lost instead of silently overwriting the winner.
+        """
+        if message_id <= 0:
+            raise ValueError("a live view must be anchored to a real Telegram message")
+        with self._connection:
+            cursor = self._connection.execute(
+                "INSERT INTO chat_views(chat_id, message_id, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(chat_id) DO NOTHING",
+                (chat_id, message_id, datetime.now(UTC).isoformat()),
+            )
+        return cursor.rowcount == 1
