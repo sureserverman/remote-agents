@@ -767,20 +767,30 @@ class PrivateBotBoundary:
             )
         )
 
-    async def _sessions_reply(self, page: int = 1) -> RenderedMessage:
+    async def _sessions_reply(self, page: int = 1, *, notice: str | None = None) -> RenderedMessage:
         """Render one page of managed sessions, newest page navigation last.
 
         This list is unbounded in a way the project list is not — every launch adds a row
         and only reconciliation takes one away — so it pages for the same reason: a keyboard
         tall enough to push the message off the screen is unusable on a phone, and Telegram
         caps the buttons one keyboard may carry.
+
+        `notice` is the lead line an action that *ended somewhere else* leaves here — the
+        outcome of a stop, which now lands on this list rather than on a screen of its own.
+        It is escaped because it carries wording derived from a `StopFailure`, and it is
+        rendered above the heading rather than below it so the owner reads what happened
+        before they read the list it happened to.
+
+        It reaches the empty branch too. Stopping the last running session is exactly when
+        the list is empty, so a notice that only the populated branch rendered would be
+        dropped precisely when it mattered most.
         """
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
         if not records:
             return self._message(
-                "<b>Sessions</b>\nNothing is running.",
+                f"{self._notice_line(notice)}<b>Sessions</b>\nNothing is running.",
                 ((Button("Launch", self._callback("launch.open", "projects")),),),
                 refresh=self._callback("sessions.page", "1"),
             )
@@ -804,10 +814,19 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         return self._message(
-            f"<b>Sessions {index}/{page_count}</b>",
+            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>",
             tuple(buttons),
             refresh=self._callback("sessions.page", str(index)),
         )
+
+    @staticmethod
+    def _notice_line(notice: str | None) -> str:
+        """The lead line, or nothing at all — never an empty line where a notice would be.
+
+        `None` has to render byte-identically to the screen before this parameter existed,
+        or every test pinning the sessions list becomes a test of this function instead.
+        """
+        return "" if notice is None else f"{escape(notice)}\n"
 
     async def _detail_reply(self, session_value: str, message_id: int = 0) -> RenderedMessage:
         record = await self._record(session_value)
