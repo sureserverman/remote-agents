@@ -16,6 +16,7 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.stops import StopController
+from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.commands import LaunchCommand
@@ -153,6 +154,63 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
         assert "Nothing is running." in reply["text"], "the list it lands on no longer holds it"
         labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
         assert "Back" not in labels
+    finally:
+        for record in await service.list_sessions():
+            try:
+                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+            except RuntimeError:
+                pass
+
+
+async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: Path) -> None:
+    """One press starts a session, and it is READY and unnamed on the list that follows.
+
+    The contract test proves exactly one LaunchCommand is issued. This proves the command
+    reaches a real process: a fake agent under an isolated tmux server, its readiness marker
+    observed, its row in real SQLite. Between them they cover "one press" and "a session",
+    which is the whole of the request and neither test covers alone.
+    """
+    project_path = tmp_path / "dev" / "opaque-editor"
+    project_path.mkdir(parents=True)
+    catalogue = build_catalogue((RegisteredProject(project_path, "opaque-editor", "writing"),), ())
+    project = catalogue[0]
+    terminal, gateway = _terminal(tmp_path, ProjectId(project.opaque_id))
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
+    )
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=catalogue,
+        profiles=(ProfileAvailability("claude", True),),
+        launcher=service,
+    )
+
+    try:
+        # The agent button's own token, minted by the screen that draws it and claimed by the
+        # press — the mutation that used to sit on the review screen.
+        profiles = await boundary._reply_for("launch.project", project.opaque_id)
+        token = next(
+            button.callback_data
+            for row in profiles["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "Claude"
+        )
+
+        launched = await boundary._reply_for(
+            "launch.profile", f"{project.opaque_id}|claude", token=token
+        )
+
+        assert "Session created" in str(launched["text"])
+        records = await service.list_sessions()
+        assert [record.state for record in records] == [SessionState.RUNNING]
+        assert records[0].display.custom_label is None, "one press launches, it does not name"
+        assert inspect_capture(await _capture(gateway, records[0].session_id)).text.startswith(
+            "READY"
+        )
+        listed = await boundary._sessions_reply()
+        assert "Sessions 1/1" in listed.text
+        assert "opaque-editor" in listed.keyboard[0][0].text
     finally:
         for record in await service.list_sessions():
             try:
