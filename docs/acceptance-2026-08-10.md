@@ -1,7 +1,7 @@
 # Acceptance: a button that never expires, and a chat that holds one screen
 
 Date: 2026-08-10
-Release: (pending — bumped at sub-plan close-out)
+Release: 0.7.0
 Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-01-durable-callbacks-and-live-view-plan.md`
 
 > **Status: RUN AND ACCEPTED, 2026-08-10.** Step 1 was performed from the working session and
