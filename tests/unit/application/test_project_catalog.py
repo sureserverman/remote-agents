@@ -139,7 +139,9 @@ def test_rank_breaks_ties_on_registered_first_then_alphabetical_order(tmp_path: 
     )
     now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     launched = now - timedelta(days=2)
-    usage = {entry.opaque_id: Usage(entry.opaque_id, 5, launched) for entry in reversed(catalogue)}
+    # Reversed on purpose: equal scores must fall back to the catalogue's own order, so the
+    # order usage happens to arrive in must not influence the result.
+    usage = [Usage(entry.opaque_id, 5, launched) for entry in reversed(catalogue)]
 
     ranked = rank_by_recent_use(catalogue, usage, now, half_life_days=14)
 

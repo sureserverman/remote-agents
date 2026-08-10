@@ -53,25 +53,31 @@ Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, 
    output, verify the separate UTF-8 `session-output.txt` attachment and that Telegram refuses
    to forward it.
 5. Stop and close one session. Verify the screen shows what it is waiting for while the agent
-   exits, then names the session, says its output is gone, and that it reaches ENDED in that
-   single action with its pane gone from `tmux -L remote-agents list-panes -a`.
+   exits, then **lands on the session list** with "Stopped <session>" as its lead line above the
+   remaining rows — not on a screen of its own, and with no Back button — and that the session
+   reaches ENDED in that single action with its pane gone from
+   `tmux -L remote-agents list-panes -a`. Stopping the *last* running session should still show
+   the outcome, above an empty list.
 6. For a separate active session, use Force stop and verify the confirmation names the session
    and offers Cancel before the kill. Cancel it once, then confirm it.
 7. With more sessions than one page holds, page through Sessions with Previous and Next, and
    verify Refresh redraws the page you are on rather than returning Home.
-8. Restart `remote-agents.service`, press a button drawn before the restart, and verify that it
+8. Open Launch. The project you have launched from most recently is first, ahead of registry
+   order — including on the first Launch after a service restart, with no Refresh pressed
+   beforehand. Confirm Resume and a search that matches both projects agree with it.
+9. Restart `remote-agents.service`, press a button drawn before the restart, and verify that it
    still works: it renders the screen it names rather than reporting anything. Verify the
    remaining managed session has the same identity.
-9. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
+10. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
-10. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
+11. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
     Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
     share the resulting Remote Control URL or a pane capture outside the owner workflow.
-11. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
+12. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
     provider title or resume description when supplied, never a provider ID. The bot does not
     scan, control, or adopt arbitrary local agent processes; use only provider-catalogued
     conversations to create a new managed session.
-12. Open Add Project. The area buttons must name only eligible existing directories under the
+13. Open Add Project. The area buttons must name only eligible existing directories under the
     configured `dev_root`, excluding hidden ones, `archive`, and `archives`. Enter a rejected name
     such as `New Thing` and confirm it is refused with no directory created, then enter a valid
     name and confirm that Review shows the area and the name before the mutation. Cancel at Review
@@ -292,9 +298,11 @@ session is not recorded as stopped, rather than claiming a stop that never happe
 Both surfaces now say so, and say which of two things went wrong, because the two have nothing
 to do with each other. "The stop was never sent" is this case — no profile could be resolved on
 this host, so no exit sequence was signalled, and `doctor --profiles` is where the answer is.
-"The agent did not exit in time" is the other one — the sequence was sent and the agent was
-still running when the wait ran out, which is the agent's behaviour and not this host's
-configuration. Until that distinction was added, the detail simply re-rendered the session as
+"The agent did not exit in time" is the other one — the sequence was sent and no clean exit was
+seen before the wait ran out, which is about the agent rather than this host's configuration. The
+wording is deliberately "no clean exit was seen" rather than "the agent was still running": a pane
+destroyed mid-wait lands here too, and claiming it is still running would be more than the
+observation supports. Until that distinction was added, the detail simply re-rendered the session as
 RUNNING and the bot asserted the timeout wording for both, so this paragraph was the only place
 an operator could learn the first case existed. It is no longer load-bearing in that way, which
 is the point; check `doctor --profiles` when the surface tells you the stop was never sent.

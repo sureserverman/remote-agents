@@ -268,10 +268,12 @@ class PrivateBotBoundary:
     async def _ranked(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
         """Order the catalogue by recent use, or leave it exactly as it came.
 
-        A launcher that cannot report usage is not an error and not a degraded mode — it is
-        the composition the tests and the TUI-less deployments use — so the unranked catalogue
-        is the honest answer rather than an empty one. `now` is read here, at the one place
-        that has a reason to know the time; `rank_by_recent_use` stays pure.
+        A launcher that cannot report usage is not an error: the unranked catalogue is the
+        honest answer rather than an empty one. Every real composition wires `SessionService`,
+        which does report usage (`bootstrap.py`), so in practice this branch is reached only
+        by a boundary built without a launcher and by test doubles that do not model usage —
+        which is most of them. `now` is read here, at the one place with a reason to know the
+        time; `rank_by_recent_use` stays pure.
         """
         usage = getattr(self.launcher, "project_usage", None)
         if usage is None:
@@ -367,7 +369,13 @@ class PrivateBotBoundary:
             )
             return
         if entry.action == "session.rename":
-            if self.launcher is None:
+            # `getattr`, not just a None check: `launcher` is duck-typed, and a composition
+            # wiring one without `rename` would otherwise raise mid-step — leaving the input
+            # box open and every later reply re-raising, which is exactly the failure Stage 2's
+            # Critical was. Production wires `SessionService`, so this is latent; latent is
+            # what the last one was too.
+            rename = getattr(self.launcher, "rename", None)
+            if rename is None:
                 await self._finish_entry(
                     bot, entry, message, _reply_arguments(self._message("Renaming is unavailable."))
                 )
@@ -393,7 +401,7 @@ class PrivateBotBoundary:
                 )
                 return
             try:
-                await self.launcher.rename(SessionId.parse(entry.entity_id), label)
+                await rename(SessionId.parse(entry.entity_id), label)
             except (SessionNotFoundError, KeyError):
                 # The session ended under the owner while the box was open. Its detail screen
                 # is gone too, so the list is the only honest place to land.
@@ -1632,6 +1640,11 @@ async def run_private_bot(
 ) -> None:
     """Long-poll the approved bot until SIGTERM/SIGINT, refusing a competing webhook."""
     boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
+    # Rank before the first screen is ever drawn. The composition hands over the catalogue in
+    # registry order, and ranking happens on refresh — so without this, every start and every
+    # restart served an unranked Launch and Resume until the owner happened to press Refresh,
+    # which is both the common case and the one an acceptance run would look at first.
+    await boundary.refresh_catalogue()
     # Sequential update handling is load-bearing rather than incidental: a render mints its
     # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
     # unbound token in the chat. Two renders in flight at once would let one screen's buttons

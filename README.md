@@ -53,6 +53,11 @@ project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` in
 leaving an input step stranded. Choosing an agent launches the session immediately — there is no
 review step and no label to supply first — and a session is named afterwards, or never, with
 `Rename` on its own detail screen. Ended records remain in local SQLite history but do not clutter the Telegram list.
+Ending a session returns to the session list with the outcome as its lead line, rather than to a
+screen of its own — so the next thing the owner wants is already on screen. Both project pickers,
+and search results, put recently-used projects first, weighted so that recent launches outrank a
+larger burst from long ago.
+
 The chat holds one bot message. Every screen is that message being re-rendered, a command is
 answered by redrawing it and deleting the command itself, and a reply prompt's input box is a
 second message that goes away once it is answered or abandoned. A button does not expire: its
@@ -76,8 +81,8 @@ remains for a session whose pane died on its own, which is preserved for inspect
 close it. Force stop names the session and what will be lost, offers Cancel first, and is for a
 live session that cannot exit gracefully. Each of them reports what the session actually did, and
 a graceful stop that did not take effect says which of two unrelated things went wrong: the stop
-was never sent, because no agent profile could be resolved on this host, or the agent was still
-running when the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
+was never sent, because no agent profile could be resolved on this host, or no clean exit was
+seen before the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
 forced, and both surfaces use the same words for them. The bot never relays arbitrary commands,
 agent text, shell access, or approval responses.
 
@@ -103,7 +108,8 @@ uv run --locked remote-agents tui
 
 `remote-agents tui` carries the same session actions the bot carries, driven from this host instead
 of from Telegram, and one the bot has no way to offer: it hands this terminal to a session's tmux
-pane. It reads the same private configuration the service reads, defaulting to
+pane. The traffic is not all one way — the bot can rename a running session and the local surface
+cannot, though it can name one at launch, which the bot no longer does. It reads the same private configuration the service reads, defaulting to
 `~/.config/remote-agents/config.toml`, and it opens the same SQLite store, refusing a
 `database_path` outside the private state directory exactly as `serve` does. It drives that store
 itself, so none of what follows needs Telegram credentials or a running user service: launch,

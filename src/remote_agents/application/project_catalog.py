@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
+
+from remote_agents.ports.session_store import ProjectUsage
 
 _SECONDS_PER_DAY = 86_400.0
 
@@ -16,20 +18,6 @@ class ProjectLike(Protocol):
     path: Path
     name: str
     area: str
-
-
-class ProjectUsageLike(Protocol):
-    """One project's launch history, as the session store reports it.
-
-    Structural on purpose: application may not import adapters, so the store's
-    concrete record type is matched by shape rather than by name. ``project_id``
-    is compared as ``str`` so a bare string and a ``ProjectId`` both join against
-    ``CatalogProject.opaque_id``.
-    """
-
-    project_id: object
-    session_count: int
-    last_used_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +72,7 @@ def search_catalogue(catalogue: Iterable[CatalogProject], query: str) -> tuple[C
 
 def rank_by_recent_use(
     catalogue: Iterable[CatalogProject],
-    usage: Mapping[str, ProjectUsageLike] | Iterable[ProjectUsageLike],
+    usage: Iterable[ProjectUsage],
     now: datetime,
     *,
     half_life_days: float = 14.0,
@@ -127,14 +115,13 @@ def paginate_catalogue(
 
 
 def _usage_scores(
-    usage: Mapping[str, ProjectUsageLike] | Iterable[ProjectUsageLike],
+    usage: Iterable[ProjectUsage],
     now: datetime,
     half_life_days: float,
 ) -> dict[str, float]:
     """Decay each project's session count by the age of its most recent session."""
-    records = usage.values() if isinstance(usage, Mapping) else usage
     scores: dict[str, float] = {}
-    for record in records:
+    for record in usage:
         elapsed = (now - record.last_used_at).total_seconds() / _SECONDS_PER_DAY
         # A clock-skewed future timestamp must not score above a genuine launch
         # made this second, so age floors at zero rather than amplifying.

@@ -217,3 +217,62 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
                 await gateway.mutate("kill-session", f"ra-{record.session_id}")
             except RuntimeError:
                 pass
+
+
+async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_path: Path) -> None:
+    """The seam, end to end: a real launch must be visible to the ranking.
+
+    Every other ranking test hand-builds `ProjectUsage` with an `opaque_id` copied from the
+    catalogue, which proves the ranking arithmetic and proves nothing about the join. The join
+    is `str(ProjectUsage.project_id) == CatalogProject.opaque_id`, and it holds only because
+    the launch path wraps the opaque id as a `ProjectId` before storing it. If that ever
+    stopped being true the catalogue would quietly fall back to registry order with every
+    existing test green — an unranked list that looks exactly like a correctly ranked one.
+
+    So this launches through the real service into real SQLite, and asserts the boundary's own
+    refresh picks it up.
+    """
+    first = tmp_path / "dev" / "alpha"
+    second = tmp_path / "dev" / "opaque-editor"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    catalogue = build_catalogue(
+        (
+            RegisteredProject(first, "alpha", "writing"),
+            RegisteredProject(second, "opaque-editor", "writing"),
+        ),
+        (),
+    )
+    beta = next(project for project in catalogue if project.name == "opaque-editor")
+    # `_terminal` maps exactly one project id to `dev/opaque-editor`, so the project being
+    # launched is the one named for it; `alpha` is registered first and is never launched.
+    terminal, gateway = _terminal(tmp_path, ProjectId(beta.opaque_id))
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
+    )
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=catalogue,
+        catalogue_source=lambda: catalogue,
+        profiles=(ProfileAvailability("claude", True),),
+        launcher=service,
+    )
+    assert [project.name for project in boundary.catalogue] == ["alpha", "opaque-editor"]
+
+    try:
+        await service.launch(
+            LaunchCommand(ProjectId(beta.opaque_id), ProfileId("claude"), "rank-path")
+        )
+
+        await boundary.refresh_catalogue()
+
+        assert [project.name for project in boundary.catalogue] == ["opaque-editor", "alpha"], (
+            "the project just launched from must lead the list it was launched from"
+        )
+    finally:
+        for record in await service.list_sessions():
+            try:
+                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+            except RuntimeError:
+                pass
