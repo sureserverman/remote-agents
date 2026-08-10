@@ -134,7 +134,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
 
 @pytest.mark.asyncio
-async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> None:
+async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repeat() -> None:
     launcher = _Launcher()
     boundary = PrivateBotBoundary(
         7,
@@ -152,15 +152,20 @@ async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> 
     profiles = _Callback(project)
     await boundary.callback(_trusted_update(callback=profiles), None)
     profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    confirmation = _Callback(profile)
-    await boundary.callback(_trusted_update(callback=confirmation), None)
-    confirm = confirmation.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    submitted = _Callback(confirm)
-    await boundary.callback(_trusted_update(callback=submitted), None)
+    launched = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=launched), None)
 
+    # Three presses from Home, not five: choosing the agent starts the session, and there is
+    # no review screen between the choice and the launch.
     assert len(launcher.commands) == 1
     assert str(launcher.commands[0].project_id) == "a" * 24
     assert str(launcher.commands[0].profile_id) == "claude"
+    assert launcher.commands[0].label is None, "a launch is unnamed; naming it comes later"
+
+    # DEC-008: the same button pressed again is dropped, never serviced into a second session.
+    await boundary.callback(_trusted_update(callback=_Callback(profile)), None)
+
+    assert len(launcher.commands) == 1, "a second press must not start a second session"
 
 
 @pytest.mark.asyncio
@@ -176,7 +181,7 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
         launcher=launcher,
     )
     token = boundary.callbacks.create(
-        "launch.confirm", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
+        "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
     )
 
     reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
@@ -227,7 +232,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
 
 @pytest.mark.asyncio
-async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> None:
+async def test_private_bot_boundary_searches_projects_and_launches_from_a_result() -> None:
     launcher = _Launcher()
     boundary = PrivateBotBoundary(
         7,
@@ -257,24 +262,13 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     profiles = _Callback(project)
     await boundary.callback(_trusted_update(callback=profiles), None)
     profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    confirmation = _Callback(profile)
-    await boundary.callback(_trusted_update(callback=confirmation), None)
-    label = confirmation.edits[0]["reply_markup"].inline_keyboard[1][0].callback_data
-    awaiting_label = _Callback(label)
-    await boundary.callback(_trusted_update(callback=awaiting_label), None)
-    assert awaiting_label.edits[0]["text"] == "Reply below with an optional session label."
-    assert (
-        awaiting_label.sends[0]["reply_markup"].input_field_placeholder == "Optional session label"
-    )
+    launched = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=launched), None)
 
-    labelled = _Message("  review  ")
-    await boundary.text(_trusted_update(message=labelled), None)
-    confirm = labelled.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    submitted = _Callback(confirm)
-    await boundary.callback(_trusted_update(callback=submitted), None)
-
+    # The search still reaches a launch; what it no longer reaches is a label step. Naming a
+    # session moved to the session's own menu, so a launch arrives unnamed.
     assert str(launcher.commands[0].project_id) == "b" * 24
-    assert launcher.commands[0].label == "review"
+    assert launcher.commands[0].label is None
 
 
 @pytest.mark.asyncio
@@ -934,7 +928,9 @@ def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> Non
     boundary = PrivateBotBoundary(7, 11)
 
     assert boundary._pending_notice("graceful") is not None
-    assert boundary._pending_notice("launch.confirm") is not None
+    # Selecting the agent is the launch now, so the wait it causes is announced there.
+    assert boundary._pending_notice("launch.profile") is not None
+    assert boundary._pending_notice("launch.confirm") is None, "the review step is gone"
     assert boundary._pending_notice("session.detail") is None
     # A first press on force only opens the confirmation, so nothing is running yet — and
     # that is now readable from the action alone, with no confirmation state to consult.

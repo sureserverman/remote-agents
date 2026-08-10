@@ -107,7 +107,7 @@ _ENTRY_INSTRUCTIONS = {
     "project.name": "Reply below with the new project name.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
-_TEXT_ENTRY_ACTIONS = frozenset({"launch.search", "resume.search", "launch.label", "project.area"})
+_TEXT_ENTRY_ACTIONS = frozenset({"launch.search", "resume.search", "project.area"})
 """The actions that open a guided step, and so the only ones that may leave a box open."""
 
 
@@ -174,7 +174,7 @@ _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
     "cleanup": "Cleaning up the session…",
     CONFIRMED_FORCE: "Force stopping the session…",
-    "launch.confirm": "Launching — waiting for the agent to become ready…",
+    "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
 }
 """The actions that make the owner wait, and what to show them while they do.
@@ -214,7 +214,6 @@ class PrivateBotBoundary:
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
-    _labels: dict[str, str] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
@@ -326,19 +325,10 @@ class PrivateBotBoundary:
                 bot, entry, message, _reply_arguments(self._project_review_reply(identity))
             )
             return
-        if value.casefold() == "skip":
-            self._labels.pop(entry.entity_id, None)
-        else:
-            try:
-                self._labels[entry.entity_id] = _label(value)
-            except ValueError:
-                await self._ask_again(
-                    bot, entry, message, "Use a visible label of up to 40 characters."
-                )
-                return
-        await self._finish_entry(
-            bot, entry, message, _reply_arguments(self._confirm_reply(entry.entity_id))
-        )
+        # Every remaining text step returns above. A step that reaches here is one whose
+        # action was added to `_TEXT_ENTRY_ACTIONS` without a branch to answer it, which would
+        # otherwise consume the owner's reply and draw nothing.
+        raise AssertionError(f"no text handler for {entry.action!r}")
 
     @property
     def _entry_key(self) -> tuple[int, int]:
@@ -562,8 +552,6 @@ class PrivateBotBoundary:
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
             return await self._home_reply(refresh=action == "nav.refresh")
-        if action == "launch.confirm":
-            return await self._launch_reply(entity_id, token, message_id)
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token, message_id)
         if action == "remote.confirm":
@@ -581,7 +569,7 @@ class PrivateBotBoundary:
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
-            return _reply_arguments(self._confirm_reply(entity_id))
+            return await self._launch_reply(entity_id, token, message_id)
         if action == "sessions.open":
             return _reply_arguments(await self._sessions_reply())
         if action == "sessions.page":
@@ -632,7 +620,9 @@ class PrivateBotBoundary:
                 ProjectId(project_id),
                 ProfileId(profile_id),
                 token,
-                self._labels.pop(entity_id, None),
+                # No label at launch: choosing the agent starts the session, and naming it is
+                # a later, optional act from the session's own menu (Task 2.3).
+                None,
             )
         )
         if record is None:
@@ -1471,7 +1461,13 @@ class PrivateBotBoundary:
         buttons = tuple(
             Button(
                 _profile_name(profile.profile_id),
-                self._callback("launch.profile", f"{project_id}|{profile.profile_id}"),
+                # The mutation is claimed here rather than on a review screen that no longer
+                # exists. DEC-008 is what makes one press safe: a second press of the same
+                # button is dropped by the one-shot claim, never serviced into a second
+                # session, and Sub-plan 1 made that claim durable rather than process-local.
+                self._callback(
+                    "launch.profile", f"{project_id}|{profile.profile_id}", mutation=True
+                ),
             )
             for profile in self.profiles
             if profile.available
@@ -1479,27 +1475,6 @@ class PrivateBotBoundary:
         return self._message(
             "<b>Select an agent</b>",
             _button_rows(buttons) + ((Button("Back", self._callback("launch.open", "projects")),),),
-        )
-
-    def _confirm_reply(self, entity_id: str) -> RenderedMessage:
-        project_id, profile_id = _split_launch(entity_id)
-        if not any(project.opaque_id == project_id for project in self.catalogue):
-            return self._message("The project is no longer available.")
-        if not any(
-            profile.profile_id == profile_id and profile.available for profile in self.profiles
-        ):
-            return self._message("That agent is unavailable.")
-        project = next(project for project in self.catalogue if project.opaque_id == project_id)
-        label = self._labels.get(entity_id)
-        return self._message(
-            f"<b>Review launch</b>\nProject: {escape(project.name)}\n"
-            f"Agent: {_profile_name(profile_id)}\nLabel: {escape(label) if label else 'None'}",
-            (
-                (Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),
-                (Button("Add label", self._callback("launch.label", entity_id)),),
-                (Button("Back", self._callback("launch.project", project_id)),),
-                (Button("Cancel", self._callback("nav.home", "home")),),
-            ),
         )
 
     def _message(

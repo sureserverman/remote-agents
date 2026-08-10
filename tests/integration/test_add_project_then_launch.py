@@ -140,10 +140,11 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
             project.opaque_id for project in boundary.catalogue if project.name == "brand-new"
         )
         assert any(data == _callback_for(projects, "brand-new") for _, data in _buttons(projects))
-        await boundary._reply_for("launch.project", opaque)
-        confirm = await boundary._reply_for("launch.profile", f"{opaque}|claude")
+        profiles = await boundary._reply_for("launch.project", opaque)
+        # The agent button carries the mutation now: pressing it is the launch, with no
+        # review screen in between.
         launched = await boundary._reply_for(
-            "launch.confirm", f"{opaque}|claude", token=_callback_for(confirm, "Launch")
+            "launch.profile", f"{opaque}|claude", token=_callback_for(profiles, "Claude")
         )
 
         assert "Session created" in str(launched["text"])

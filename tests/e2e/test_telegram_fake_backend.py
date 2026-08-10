@@ -444,7 +444,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
     # Minted straight onto the anchor rather than walked to through the wizard: the wizard is
     # Stage 2's subject and is about to change, while what this pins -- the except branch --
     # is not.
-    token = boundary._callback("launch.confirm", f"{'a' * 24}|claude", mutation=True)
+    token = boundary._callback("launch.profile", f"{'a' * 24}|claude", mutation=True)
     boundary.callbacks.bind_pending(11, anchor)
 
     await boundary.callback(chat.press(token, on=anchor), None)
