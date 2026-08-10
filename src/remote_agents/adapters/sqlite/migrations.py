@@ -51,6 +51,32 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         4,
         "",
     ),
+    # Callback tokens carry no expires_at: a token is valid for as long as the message it was
+    # drawn on, so (chat_id, message_id) scopes validity instead of a clock, and retention is
+    # bounded by message life and by size rather than by a TTL sweep.
+    (
+        5,
+        """
+        CREATE TABLE callback_states (
+            token TEXT PRIMARY KEY,
+            action TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            owner_id INTEGER NOT NULL,
+            chat_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            mutation INTEGER NOT NULL,
+            claimed INTEGER NOT NULL DEFAULT 0,
+            force_confirmed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX callback_states_message ON callback_states(chat_id, message_id);
+        CREATE TABLE chat_views (
+            chat_id INTEGER PRIMARY KEY,
+            message_id INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
 
 
