@@ -399,6 +399,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             catalogue=catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
+            max_label_length=config.max_label_length,
             launcher=SessionService(store, terminal),
             conversations=conversations,
             creator=_project_creator(config),

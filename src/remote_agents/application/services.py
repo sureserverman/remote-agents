@@ -130,6 +130,18 @@ class SessionService:
                         await self._store.record_event(current.session_id, LifecycleEvent.READY)
             return tuple(await self._store.list())
 
+    async def rename(self, session_id: SessionId, label: str | None) -> SessionRecord:
+        """Name a running session, or clear its name. Metadata only — nothing is signalled.
+
+        Under the session lock like every other mutation of a record, so a rename cannot
+        interleave with a stop walking the same row to ENDED. It deliberately does not check
+        the state: naming an ended session is harmless and the list still shows it until
+        reconciliation removes it, so refusing would be a rule with nothing behind it.
+        """
+        async with self._locks.for_session(session_id):
+            await self._require_session(session_id)
+            return await self._store.set_label(session_id, label)
+
     async def inspect(self, query: InspectQuery) -> TerminalObservation | None:
         return await self._terminal.inspect(query.session_id)
 

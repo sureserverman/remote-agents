@@ -118,6 +118,162 @@ def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
     )
 
 
+class _RenamingLauncher:
+    """Holds one record and applies renames to it, so the detail can be re-read after one."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.renames: list[str | None] = []
+        self.missing = False
+
+    async def list_sessions(self):
+        return [] if self.missing else [self.record]
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def rename(self, session_id, label):
+        if self.missing:
+            raise KeyError(session_id)
+        self.renames.append(label)
+        display = SessionDisplayIdentity(
+            self.record.display.project_slug,
+            self.record.display.agent_label,
+            self.record.display.mode,
+            self.record.display.sequence,
+            label,
+        )
+        self.record = SessionRecord(
+            self.record.session_id,
+            self.record.project_id,
+            self.record.profile_id,
+            display,
+            self.record.state,
+            self.record.created_at,
+        )
+        return self.record
+
+
+def _renameable(record: SessionRecord) -> tuple[PrivateBotBoundary, _RenamingLauncher]:
+    launcher = _RenamingLauncher(record)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    return boundary, launcher
+
+
+async def _open_rename(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Rename")), None)
+    return anchor
+
+
+@pytest.mark.asyncio
+async def test_rename_asks_in_a_box_beside_the_live_view_not_on_it() -> None:
+    """Sub-plan 1's rule, and the gotcha behind it.
+
+    `ForceReply` cannot ride on a message being edited while it carries an inline keyboard —
+    Telegram answers `Inline keyboard expected` — so the instruction goes into the live view
+    and the input box is a second message.
+    """
+    boundary, _ = _renameable(_a_running_session())
+    chat = FakeChat()
+
+    anchor = await _open_rename(chat, boundary)
+
+    assert chat.messages[anchor].text == "Reply below with a name for this session."
+    box = [message for message in chat.bot_messages if message.message_id != anchor]
+    assert len(box) == 1, chat.transcript()
+    assert box[0].reply_markup.input_field_placeholder == "Session name"
+
+
+@pytest.mark.asyncio
+async def test_rename_applies_the_new_name_and_redraws_the_detail() -> None:
+    """The answer is consumed: the box and the owner's reply both leave with it."""
+    boundary, launcher = _renameable(_a_running_session())
+    chat = FakeChat()
+    anchor = await _open_rename(chat, boundary)
+
+    await boundary.text(chat.message_update("  release   review  "), None)
+
+    assert launcher.renames == ["release review"], "collapsed whitespace, one call"
+    assert "release review" in chat.messages[anchor].text
+    assert "Rename" in [
+        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+    ], "it lands back on the session's own menu"
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == [], "the answer is consumed, not kept"
+
+
+@pytest.mark.asyncio
+async def test_rename_refuses_a_name_the_rule_rejects_without_calling_the_store() -> None:
+    """Re-asked in place rather than accepted and rejected downstream."""
+    boundary, launcher = _renameable(_a_running_session())
+    chat = FakeChat()
+    anchor = await _open_rename(chat, boundary)
+
+    await boundary.text(chat.message_update("x" * 41), None)
+
+    assert launcher.renames == [], "nothing invalid reaches the store"
+    box = [message for message in chat.bot_messages if message.message_id != anchor]
+    assert len(box) == 1, "still exactly one box open"
+    assert "up to 40 characters" in box[0].text
+    assert chat.owner_messages == [], chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_rename_skipped_leaves_the_session_exactly_as_it_was() -> None:
+    """Declining to name something is not the same intent as clearing its name."""
+    boundary, launcher = _renameable(_a_running_session())
+    chat = FakeChat()
+    anchor = await _open_rename(chat, boundary)
+
+    await boundary.text(chat.message_update("Skip"), None)
+
+    assert launcher.renames == [], "Skip must not reach the store at all"
+    assert "Rename" in [
+        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+    ]
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_rename_cancelled_leaves_the_session_and_takes_the_box_with_it() -> None:
+    boundary, launcher = _renameable(_a_running_session())
+    chat = FakeChat()
+    await _open_rename(chat, boundary)
+
+    await boundary.text(chat.message_update("Cancel"), None)
+
+    assert launcher.renames == []
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_rename_of_a_session_that_ended_under_the_owner_lands_on_the_list() -> None:
+    """The box outlives the session it was opened for; the detail behind it does not."""
+    boundary, launcher = _renameable(_a_running_session())
+    chat = FakeChat()
+    anchor = await _open_rename(chat, boundary)
+    launcher.missing = True
+
+    await boundary.text(chat.message_update("too late"), None)
+
+    assert chat.messages[anchor].text.startswith("That session is no longer available.")
+    assert "Nothing is running." in chat.messages[anchor].text
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
 def _button(message, label: str) -> str:
     """The callback token behind a button, found by its label rather than its position.
 

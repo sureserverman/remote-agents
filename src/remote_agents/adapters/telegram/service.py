@@ -71,7 +71,15 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.models import (
+    MAX_LABEL_LENGTH,
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+    normalize_label,
+)
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.callback_state import CallbackStatePort
@@ -100,14 +108,21 @@ _GUIDED_TEXT_ENTRY = {
         "Reply with the new project name. Send Cancel or Back to leave this step.",
         "New project name",
     ),
+    "session.rename": (
+        "Reply with a name for this session. Send Skip to clear it, or Cancel to leave it.",
+        "Session name",
+    ),
 }
 _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
     "resume.search": "Reply below with a project name.",
     "project.name": "Reply below with the new project name.",
+    "session.rename": "Reply below with a name for this session.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
-_TEXT_ENTRY_ACTIONS = frozenset({"launch.search", "resume.search", "project.area"})
+_TEXT_ENTRY_ACTIONS = frozenset(
+    {"launch.search", "resume.search", "project.area", "session.rename"}
+)
 """The actions that open a guided step, and so the only ones that may leave a box open."""
 
 
@@ -218,6 +233,10 @@ class PrivateBotBoundary:
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
     session_page_size: int = 8
+    #: The host's configured bound, which may be tighter than the domain ceiling but never
+    #: looser — `config.py` clamps the setting to 1..40. Defaulted so a boundary built without
+    #: a config (every test that does not care) still refuses what the domain would refuse.
+    max_label_length: int = MAX_LABEL_LENGTH
     catalogue_source: Callable[[], tuple[CatalogProject, ...]] | None = None
 
     def __post_init__(self) -> None:
@@ -323,6 +342,53 @@ class PrivateBotBoundary:
                 return
             await self._finish_entry(
                 bot, entry, message, _reply_arguments(self._project_review_reply(identity))
+            )
+            return
+        if entry.action == "session.rename":
+            if self.launcher is None:
+                await self._finish_entry(
+                    bot, entry, message, _reply_arguments(self._message("Renaming is unavailable."))
+                )
+                return
+            # "Skip" leaves the session as it is and closes the step. Clearing a name is a
+            # different intent from declining to set one, and the store supports it
+            # (`set_label(None)`) — but no screen offers it yet, so a step that quietly
+            # cleared on Skip would be the only way to lose a name and would do it by
+            # accident.
+            if value.casefold() == "skip":
+                await self._finish_entry(
+                    bot, entry, message, _reply_arguments(await self._detail_reply(entry.entity_id))
+                )
+                return
+            try:
+                label = normalize_label(value, max_length=self.max_label_length)
+            except ValueError:
+                await self._ask_again(
+                    bot,
+                    entry,
+                    message,
+                    f"Use a visible name of up to {self.max_label_length} characters.",
+                )
+                return
+            try:
+                await self.launcher.rename(SessionId.parse(entry.entity_id), label)
+            except KeyError:
+                # The session ended under the owner while the box was open. Its detail screen
+                # is gone too, so the list is the only honest place to land.
+                await self._finish_entry(
+                    bot,
+                    entry,
+                    message,
+                    _reply_arguments(
+                        await self._sessions_reply(notice="That session is no longer available.")
+                    ),
+                )
+                return
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(await self._detail_reply(entry.entity_id)),
             )
             return
         # Every remaining text step returns above. A step that reaches here is one whose
@@ -837,7 +903,12 @@ class PrivateBotBoundary:
                 "That session is no longer available.",
                 back=self._callback("sessions.open", "sessions"),
             )
-        buttons = [(Button("Inspect", self._callback("session.inspect", session_value)),)]
+        buttons = [
+            (Button("Inspect", self._callback("session.inspect", session_value)),),
+            # A full-width row of its own, like every other read-only action: renaming changes
+            # what the session is called and nothing about what it is doing.
+            (Button("Rename", self._callback("session.rename", session_value)),),
+        ]
         if await self._can_copy_attach(record):
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
