@@ -40,10 +40,14 @@ Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, 
 
 1. Open Launch and use Search to find a project by name. The reply prompt names the expected
    input; use Cancel or Back to leave it, and retry an empty or unmatched search.
-2. Select an agent, add an optional label or Skip it, and confirm that Review names the project,
-   agent, and label before Launch. Back restores the preceding choice; Cancel makes no mutation.
-3. Launch two sessions for the same project/profile, applying an optional label to one. Their
-   project, agent, mode, and sequence remain distinguishable.
+2. Select an agent. The session starts on that press — there is no review screen and no label
+   step in front of it — and the screen shows "Launching…" until the agent reports ready.
+   Press the same agent a second time while it starts: the repeat is dropped, not serviced,
+   and no second session appears.
+3. Launch two sessions for the same project/profile, then open one and use `Rename` to name it.
+   Send `Skip` to leave a session unnamed and `Cancel` to leave the step. Their project, agent,
+   mode, and sequence remain distinguishable whether or not either carries a name, and a name
+   set here also shows on the local surface, which reads the same store.
 4. Open Sessions, inspect one active session, and verify that inline output is bounded, escaped,
    and clean, and that Back returns to that session with its actions intact. For oversized
    output, verify the separate UTF-8 `session-output.txt` attachment and that Telegram refuses

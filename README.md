@@ -48,10 +48,11 @@ uv run --locked remote-agents doctor --json | python -m json.tool
 The configured owner sees only `/start`, `/launch`, `/sessions`, and `/help` in Telegram's
 command menu. `/start` opens a compact Home dashboard with active and preserved counts;
 `/launch` opens the paginated project list and `/sessions` opens the paginated list of current
-managed sessions. `/help` names the actions this deployment actually offers. Search and
-optional-label entry use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
-leaving an input step stranded. Review shows the project, agent, and label before creating a
-session. Ended records remain in local SQLite history but do not clutter the Telegram list.
+managed sessions. `/help` names the actions this deployment actually offers. Search, renaming, and
+project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
+leaving an input step stranded. Choosing an agent launches the session immediately — there is no
+review step and no label to supply first — and a session is named afterwards, or never, with
+`Rename` on its own detail screen. Ended records remain in local SQLite history but do not clutter the Telegram list.
 The chat holds one bot message. Every screen is that message being re-rendered, a command is
 answered by redrawing it and deleting the command itself, and a reply prompt's input box is a
 second message that goes away once it is answered or abandoned. A button does not expire: its

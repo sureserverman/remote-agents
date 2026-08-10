@@ -15,6 +15,7 @@ from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -134,7 +135,10 @@ class _RenamingLauncher:
 
     async def rename(self, session_id, label):
         if self.missing:
-            raise KeyError(session_id)
+            # The type `SessionService.rename` actually raises, via `_require_session`. It is
+            # a sibling of KeyError under LookupError, not a subclass — a double raising
+            # KeyError here left the adapter's recovery branch dead behind a green test.
+            raise SessionNotFoundError(str(session_id))
         self.renames.append(label)
         display = SessionDisplayIdentity(
             self.record.display.project_slug,

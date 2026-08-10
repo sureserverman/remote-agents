@@ -157,3 +157,66 @@ async def test_a_session_renamed_from_the_bot_reads_back_named_on_the_local_surf
     assert session_row((await reopened.list())[0]).startswith(
         "opaque-editor · claude · regular · #1 · release review · running · "
     )
+
+
+async def test_renaming_a_vanished_session_through_the_real_service_is_recoverable(
+    tmp_path,
+) -> None:
+    """The adapter's recovery branch, against the exception the real service actually raises.
+
+    `SessionService.rename` raises `SessionNotFoundError` from `_require_session`; the store
+    raises `KeyError`. They are siblings under `LookupError`, not one a subclass of the other,
+    so an adapter catching only one of them catches nothing on this path. That is not
+    hypothetical: it shipped, behind an e2e test whose double raised the wrong type. This test
+    exists because it wires the *real* service, which is the only way the mismatch is visible.
+    """
+    from fake_telegram import FakeChat
+
+    from remote_agents.adapters.telegram.service import PrivateBotBoundary
+    from remote_agents.application.project_catalog import CatalogProject
+    from remote_agents.application.services import SessionService
+
+    class _NoTerminal:
+        async def inspect(self, *_args, **_kwargs):
+            # The detail screen probes liveness to decide whether to offer Copy attach.
+            return None
+
+        async def confirm_ready(self, *_args, **_kwargs):
+            raise AssertionError("a rename must not reach the terminal")
+
+    store = _store(tmp_path)
+    await store.save(_record())
+    service = SessionService(store, _NoTerminal())
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("opaque-editor", "opaque-editor", "tests", "Registered"),),
+        launcher=service,
+    )
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    detail_button = next(
+        button.callback_data
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+        if button.text.startswith("opaque-editor")
+    )
+    await boundary.callback(chat.press(detail_button), None)
+    rename_button = next(
+        button.callback_data
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+        if button.text == "Rename"
+    )
+    await boundary.callback(chat.press(rename_button), None)
+
+    # The session leaves the store while the input box is open.
+    store._connection.execute("DELETE FROM sessions WHERE session_id = ?", (str(_SESSION),))
+    store._connection.commit()
+
+    await boundary.text(chat.message_update("too late"), None)
+
+    assert chat.messages[anchor].text.startswith("That session is no longer available.")
+    assert len(chat.bot_messages) == 1, "the input box left with the step"
+    assert chat.owner_messages == [], "and so did the answer nobody could apply"

@@ -51,7 +51,7 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
-from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -372,9 +372,16 @@ class PrivateBotBoundary:
                 return
             try:
                 await self.launcher.rename(SessionId.parse(entry.entity_id), label)
-            except KeyError:
+            except (SessionNotFoundError, KeyError):
                 # The session ended under the owner while the box was open. Its detail screen
                 # is gone too, so the list is the only honest place to land.
+                #
+                # Both types, and neither is redundant: `SessionService.rename` raises
+                # `SessionNotFoundError` from its own `_require_session`, while the store port
+                # raises `KeyError`. They are **siblings** under `LookupError`, not one a
+                # subclass of the other, so catching only `KeyError` caught nothing that this
+                # path can actually raise — which is how this branch shipped as dead code
+                # behind a green test whose double raised the wrong type.
                 await self._finish_entry(
                     bot,
                     entry,
@@ -483,7 +490,7 @@ class PrivateBotBoundary:
             lines.append("<b>Resume</b> continues a saved conversation in a new session.")
         lines.append(
             "<b>Sessions</b> lists what is running. Open one to read its output, copy an "
-            "attach command, or stop it."
+            "attach command, rename it, or stop it."
         )
         if self.creator is not None:
             lines.append("<b>Add Project</b> registers a new project to launch into.")

@@ -122,3 +122,36 @@ async def test_an_instant_launch_tells_the_owner_it_is_running() -> None:
         "Launching — waiting for the agent to become ready…"
     )
     assert boundary._pending_notice("launch.confirm") is None
+
+
+@pytest.mark.asyncio
+async def test_the_instant_launch_button_carries_a_one_shot_mutation_token() -> None:
+    """The guarantee itself, asserted where a regression can be seen.
+
+    The double-tap test above passes even with `mutation=True` removed from the agent button,
+    because production answers callbacks sequentially (`concurrent_updates(False)`): the first
+    press retires the message's keyboard and prunes its tokens, so the second press resolves
+    to nothing and the launch is dropped by *pruning* rather than by the claim. That is a real
+    protection and it is worth having — but it is not the one the stage rests on, and it does
+    not survive the cases pruning cannot reach: a redelivered update, two presses racing
+    across the window before the render lands, or a second process.
+
+    So this pins the property directly — the token behind the agent button is a mutation
+    token — and the claim below pins that a mutation is one-shot at the store, which is what
+    holds when pruning does not.
+    """
+    boundary, _ = _boundary()
+    chat = FakeChat()
+    await boundary.launch_command(chat.message_update("/launch"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    token = _button(chat.messages[anchor], "Claude")
+
+    state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=anchor)
+
+    assert state is not None
+    assert state.mutation is True, "the agent button must carry the one-shot, not a plain token"
+    assert boundary.callbacks.claim_mutation(token, owner_id=7, chat_id=11, message_id=anchor)
+    assert not boundary.callbacks.claim_mutation(
+        token, owner_id=7, chat_id=11, message_id=anchor
+    ), "a claimed mutation is never claimable twice, which is what survives a redelivery"
