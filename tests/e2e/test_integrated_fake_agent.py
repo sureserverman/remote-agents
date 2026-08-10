@@ -14,6 +14,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
+from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
@@ -109,3 +110,52 @@ def _terminal(tmp_path: Path, project_id: ProjectId) -> tuple[TmuxTerminal, Tmux
         {ProfileId("claude"): profile},
         startup_timeout=1,
     ), gateway
+
+
+async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) -> None:
+    """The goal of Stage 1, proved where nothing is faked but the agent itself.
+
+    The contract tests drive the renderer with a listing double; this one launches a real
+    process under tmux, stores it in real SQLite, presses the real stop token through the
+    real boundary, and reads the screen that comes back. What it pins is the join: the stop
+    ended the session, `_records()` omits an ENDED one, and the landing is therefore the list
+    without it — three separate behaviours whose agreement no single-layer test observes.
+    """
+    project_path = tmp_path / "dev" / "opaque-editor"
+    project_path.mkdir(parents=True)
+    catalogue = build_catalogue((RegisteredProject(project_path, "opaque-editor", "writing"),), ())
+    project = catalogue[0]
+    terminal, gateway = _terminal(tmp_path, ProjectId(project.opaque_id))
+    service = SessionService(
+        SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
+    )
+    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, launcher=service)
+
+    try:
+        record = await service.launch(
+            LaunchCommand(ProjectId(project.opaque_id), ProfileId("claude"), "stop-path")
+        )
+        assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
+        listed = await boundary._sessions_reply()
+        assert "Sessions 1/1" in listed.text, "it is on the list before the stop"
+
+        token = boundary.stops.offer(
+            record.session_id, record.profile_id, record.state, "graceful", 7, 11
+        )
+        assert token is not None
+        boundary.callbacks.bind_pending(11, 1)
+
+        reply = await boundary._stop_reply("graceful", token, 1)
+
+        assert (await service.list_sessions())[0].state is SessionState.ENDED
+        assert reply["text"].startswith("Stopped ")
+        assert "opaque-editor" in reply["text"]
+        assert "Nothing is running." in reply["text"], "the list it lands on no longer holds it"
+        labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+        assert "Back" not in labels
+    finally:
+        for record in await service.list_sessions():
+            try:
+                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+            except RuntimeError:
+                pass
