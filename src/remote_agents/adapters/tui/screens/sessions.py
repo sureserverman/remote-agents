@@ -79,6 +79,8 @@ class SessionsScreen(ChoiceScreen):
     def __init__(self) -> None:
         super().__init__()
         self._auto: Timer | None = None
+        #: Whether a listing read is already in flight on this screen, keyed or scheduled.
+        self._reading = False
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -123,21 +125,31 @@ class SessionsScreen(ChoiceScreen):
           unqualified refill would walk the owner's selection back to the top of the list on
           every tick, and on the tick they pressed enter it would open a different session's
           detail than the one they were looking at.
-        - **Never over work in flight.** A stop or a resume holds the busy guard; re-listing
-          underneath it would repaint the rows a confirmation was reasoning about.
+        - **Never over work in flight.** Two different guards, because the first version of
+          this docstring named only one and overclaimed it. `self.tui.busy` covers a mutating
+          command — but those are issued from the *detail* screen, which suspends this timer
+          by being pushed on top, so that check is the belt and the suspension is the braces.
+          What `busy` does not cover is this screen's own reads: Ctrl+R and `on_reveal` call
+          `reload`, which holds no guard at all, so a tick landing mid-refresh used to start a
+          second concurrent `load_sessions` — doubling the readiness probe on a host already
+          slow enough to make it overlap, with whichever draw finished last winning and
+          silently discarding the manual refresh's cursor reset. `_reading` closes that.
 
         A failed background read is logged and swallowed rather than announced. The owner did
         not ask for this read, and a store that is briefly unreadable would otherwise raise a
         toast every interval; Ctrl+R still reports the failure loudly, because that one *was*
         asked for.
         """
-        if not self.showing or self.tui.busy:
+        if not self.showing or self.tui.busy or self._reading:
             return
+        self._reading = True
         try:
             records = await self.tui.load_sessions()
         except Exception:
             _LOG.warning("the background session re-read failed", exc_info=True)
             return
+        finally:
+            self._reading = False
         self._draw_listing(records, keep_cursor=True)
 
     async def on_reveal(self) -> None:
@@ -155,24 +167,44 @@ class SessionsScreen(ChoiceScreen):
         await self.reload()
 
     async def reload(self) -> None:
-        """Refresh readiness, then list what the shared store actually holds.
+        """Refresh readiness, then list what the shared store actually holds — on request.
+
+        Sets `_reading` for its duration so the interval stands down rather than issuing a
+        second concurrent probe underneath a refresh the owner actually asked for. It does
+        not *check* the flag: a keyed re-read is the owner asking again, and refusing that
+        because a background tick happens to be in flight would be the surface ignoring them.
 
         Readiness is refreshed first for the same reason the bot does it: a launch that
         failed here may have become ready since, and listing a stale FAILED would send the
         owner to fix something that already works.
         """
+        self._reading = True
         try:
             async with self.awaiting("Reading the managed sessions…"):
                 records = await self.tui.load_sessions()
         except Exception as error:
             self.tui.report_store_failure(error, self)
             return
+        finally:
+            self._reading = False
         self._draw_listing(records)
 
     def _draw_listing(
         self, records: tuple[SessionRecord, ...], *, keep_cursor: bool = False
     ) -> None:
         """Draw a listing, optionally leaving the cursor on the row it was already on.
+
+        **Guarded on `showing`, and the guard is load-bearing rather than defensive.** Every
+        other render entry point in this class holds one, and this one reached around it: the
+        `keep_cursor` branch dereferences `#choices` directly, before any call that would have
+        checked. `_auto_reload` checks `showing` *before* awaiting the store, so a screen
+        popped during a slow read arrived here with its widgets already removed and
+        `query_one` raised `NoMatches` — inside a `Timer` callback, where `Timer._tick` hands
+        any exception to `App._handle_exception`, whose own docstring reads "Always results in
+        the app exiting". A background refresh nobody asked for could take the surface down,
+        and the window is widest exactly when the host is slow to answer a readiness probe,
+        which is when this feature is worth having. Reproduced before the fix:
+        `NoMatches: No nodes match '#choices' on SessionsScreen()`.
 
         Named `_draw_listing` and not `_render`, which is what it was called for exactly one
         test run: `Widget._render` exists, and overriding it with a different signature broke
@@ -184,6 +216,8 @@ class SessionsScreen(ChoiceScreen):
         the same store differently — which is the whole reason the interval does not simply
         call `reload`.
         """
+        if not self.showing:
+            return
         if not records:
             self.show_choices(())
             self.set_status("No managed sessions. Press escape to return to the project list.")

@@ -50,7 +50,7 @@ def test_the_units_do_not_compose() -> None:
 
 
 def test_a_record_stamped_in_the_future_reads_as_new_rather_than_negative() -> None:
-    """Two hosts, two clocks. `-3m ago` looks like a broken session; `0m ago` looks like a new one."""
+    """Two hosts, two clocks. `-3m ago` reads as a broken session; `0m ago` as a new one."""
     assert age(datetime.now(UTC) + timedelta(minutes=3)) == "0m ago"
 
 

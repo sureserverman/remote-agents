@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -44,9 +45,14 @@ class _Listing:
     records: tuple[SessionRecord, ...] = ()
     refreshed: int = 0
     list_error: Exception | None = None
+    #: Makes the store read slow enough for a navigation or a second read to interleave with
+    #: it, which is the only way the races in this file are reproducible at all.
+    read_delay: float = 0.0
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         self.refreshed += 1
+        if self.read_delay:
+            await asyncio.sleep(self.read_delay)
         return self.records
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
@@ -517,3 +523,123 @@ async def test_the_background_read_stands_down_while_a_command_is_in_flight() ->
         app._busy = False
 
     assert during == before, "the interval read the store while a command was in flight"
+
+
+async def test_the_background_read_does_not_draw_onto_its_own_corpse() -> None:
+    """The same shape as the keyed-read case above, pointed at the interval.
+
+    That test exists because this defect class was already known here; this one exists
+    because the new method reintroduced it and nothing pointed at it. `_auto_reload` checks
+    `showing` *before* awaiting the store, so a screen popped during a slow read reached
+    `_draw_listing` with its widgets gone — and the `keep_cursor` branch dereferences
+    `#choices` directly, so it raised `NoMatches`.
+
+    Inside a `Timer` callback that is not a caught error: `Timer._tick` hands any exception to
+    `App._handle_exception`, whose docstring reads "Always results in the app exiting". A
+    refresh nobody asked for could take the surface down, and the window is widest exactly
+    when the host is slow — which is when the auto-refresh earns its place.
+    """
+    launcher = _Listing((_record(), _record()), read_delay=0.03)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+
+        reading = asyncio.create_task(screen._auto_reload())
+        await asyncio.sleep(0.005)
+        await app.action_back()
+        await pilot.pause()
+
+        # The assertion is that awaiting this raises nothing at all.
+        await reading
+        still_alive = app.screen.position
+
+    assert still_alive == "PROJECTS"
+
+
+async def test_a_tick_landing_mid_refresh_does_not_start_a_second_read() -> None:
+    """Ctrl+R holds no busy guard, so `tui.busy` never protected this.
+
+    Two concurrent `load_sessions` calls double the tmux readiness probe on a host already
+    slow enough for them to overlap, and whichever draw lands last wins — silently discarding
+    the manual refresh's own cursor reset.
+    """
+    launcher = _Listing((_record(),), read_delay=0.03)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        launcher.refreshed = 0
+
+        manual = asyncio.create_task(screen.reload())
+        await asyncio.sleep(0.005)
+        await screen._auto_reload()
+        await manual
+        await pilot.pause()
+
+    assert launcher.refreshed == 1, (
+        f"the interval read the store underneath a manual refresh: {launcher.refreshed} reads"
+    )
+
+
+async def test_a_keyed_refresh_is_never_refused_because_a_tick_is_in_flight() -> None:
+    """The flag is one-directional on purpose: the owner asking again always wins."""
+    launcher = _Listing((_record(),), read_delay=0.02)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        launcher.refreshed = 0
+
+        background = asyncio.create_task(screen._auto_reload())
+        await asyncio.sleep(0.003)
+        await screen.refresh_contents()
+        await background
+        await pilot.pause()
+
+    assert launcher.refreshed == 2, "the owner's own Refresh was swallowed by a background tick"
+
+
+async def test_the_interval_actually_fires_without_being_called_by_hand() -> None:
+    """Everything else here drives `_auto_reload()` directly, which never proves it is wired.
+
+    A wrong interval — a unit typo, an off-by-1000 — would pass every other test in this file
+    while making the feature useless or punishing in production. This one lets the real
+    `Timer` created by `set_interval` fire on its own clock, with the interval patched down so
+    the test does not wait ten seconds for it.
+    """
+    import remote_agents.adapters.tui.screens.sessions as sessions_module
+
+    original = sessions_module._SESSIONS_AUTO_REFRESH
+    sessions_module._SESSIONS_AUTO_REFRESH = 0.05
+    try:
+        launcher = _Listing((_record(),))
+        app = RemoteAgentsTui(_context(launcher))
+
+        async with app.run_test() as pilot:
+            await app.action_sessions()
+            await pilot.pause()
+            after_open = launcher.refreshed
+
+            launcher.records = (_record(), _record())
+            await pilot.pause(0.2)
+            fired = launcher.refreshed
+            rows = _rows(app)
+    finally:
+        sessions_module._SESSIONS_AUTO_REFRESH = original
+
+    assert fired > after_open, "the scheduled callback never ran on its own"
+    assert len(rows) == 2, "the interval fired but its result never reached the rows"
+
+
+def test_the_configured_interval_is_a_sane_number_of_seconds() -> None:
+    """Pins the unit. The test above patches the value, so nothing else would notice a typo."""
+    from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH
+
+    assert 2.0 <= _SESSIONS_AUTO_REFRESH <= 60.0, _SESSIONS_AUTO_REFRESH
