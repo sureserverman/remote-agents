@@ -725,10 +725,12 @@ def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
-    # silently answered with the launch flow's results.
+    # silently answered with the launch flow's results. Only a search is refused: an "all"
+    # view is reconstructible from the catalogue and re-renders instead.
     assert boundary._project_page_reply("search|2", flow="resume").text == (
-        "That project list is no longer open. Open Launch again."
+        "That search is no longer open. Search again."
     )
+    assert boundary._project_page_reply("all|2", flow="resume").text.startswith("<b>Resume 2/3</b>")
 
 
 def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:

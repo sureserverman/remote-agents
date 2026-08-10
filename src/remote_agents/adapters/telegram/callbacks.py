@@ -31,7 +31,8 @@ class CallbackStateStore:
       after the fact — it stops existing.
 
     Replay safety is unchanged and now rests entirely on `claim_mutation`, which still
-    admits exactly one caller per mutating token (DEC-008: the repeat is dropped).
+    admits exactly one caller per mutating token (DEC-007's mitigation on this
+    surface: no repeated press destroys anything).
     """
 
     def __init__(self, *, limit: int = 20_000) -> None:

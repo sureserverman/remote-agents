@@ -37,7 +37,6 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.presenters import (
     Button,
-    NavigationCallbacks,
     RenderedMessage,
     render_home,
     render_message,
@@ -350,7 +349,11 @@ class PrivateBotBoundary:
         query = update.callback_query
         owner_id = self.owner_user_id
         chat_id = self.owner_chat_id
-        message_id = query.message.message_id if query.message is not None else 0
+        # Never 0: that is UNBOUND, and resolving against it would match every token minted
+        # for a screen that has not been delivered yet -- an authorization comparison whose
+        # fallback collides with a sentinel. -1 matches nothing, which is the honest answer
+        # for a press whose message the API did not give us.
+        message_id = query.message.message_id if query.message is not None else -1
         state = self.callbacks.resolve(
             query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
         )
@@ -425,7 +428,7 @@ class PrivateBotBoundary:
         """
         await query.edit_message_text(**arguments)
         message_id = query.message.message_id if query.message is not None else 0
-        if message_id:
+        if message_id > 0:
             self.callbacks.prune_for_message(self.owner_chat_id, message_id)
             self.callbacks.bind_pending(self.owner_chat_id, message_id)
 
@@ -440,7 +443,7 @@ class PrivateBotBoundary:
         records = await self._records()
         return _reply_arguments(
             render_home(
-                self._navigation_callbacks(),
+                refresh=self._callback("nav.refresh", "home"),
                 launch=self._callback("launch.open", "projects"),
                 resume=(self._callback("resume.open", "projects") if self.conversations else None),
                 sessions=self._callback("sessions.open", "sessions"),
@@ -502,6 +505,17 @@ class PrivateBotBoundary:
     async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
         if self.launcher is None:
             return _reply_arguments(self._message("Launching is unavailable."))
+        project_id, profile_id = _split_launch(entity_id)
+        # Re-derived before the claim, not after. The confirmation screen checked both when it
+        # drew the button, and a button now outlives the screen that drew it by any amount of
+        # time -- so claiming first would burn the one-shot on a project that has since left
+        # the catalogue and leave a FAILED row behind with no way to retry.
+        if not any(project.opaque_id == project_id for project in self.catalogue):
+            return _reply_arguments(self._message("The project is no longer available."))
+        if not any(
+            profile.profile_id == profile_id and profile.available for profile in self.profiles
+        ):
+            return _reply_arguments(self._message("That agent is unavailable."))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -509,7 +523,6 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        project_id, profile_id = _split_launch(entity_id)
         record = await self.launcher.launch(
             LaunchCommand(
                 ProjectId(project_id),
@@ -802,15 +815,20 @@ class PrivateBotBoundary:
     ) -> dict[str, object]:
         if self.launcher is None:
             return _reply_arguments(self._message("Remote Control is unavailable."))
+        session_value, separator, state_value = entity_id.partition("|")
+        if not separator:
+            return _reply_arguments(self._message("That Remote Control request is incomplete."))
+        # Re-read before the claim, for the reason `_launch_reply` gives: the session this
+        # button names may have ended since the screen was drawn, and spending the one-shot
+        # on it would answer the retry with "already run".
+        if await self._record(session_value) is None:
+            return _reply_arguments(self._message("That session is no longer available."))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
             message_id=message_id,
         ):
-            return _reply_arguments(self._message("That action has already run."))
-        session_value, separator, state_value = entity_id.partition("|")
-        if not separator:
             return _reply_arguments(self._message("That action has already run."))
         state = RemoteControlState(state_value)
         result = await self.launcher.set_remote_control(
@@ -1113,8 +1131,14 @@ class PrivateBotBoundary:
         except ValueError:
             return self._message("That project list is no longer open. Open Launch again.")
         projects = self._project_views.get(f"{flow}:{view_id}")
+        if projects is None and view_id == "all":
+            # The stored view is process-local, so a restart empties it while the button that
+            # reads it now survives. "all" is reconstructible -- it is the current catalogue --
+            # so paging re-renders rather than refusing, and only a search, whose query nobody
+            # kept, has to send the owner back.
+            projects = self.catalogue
         if projects is None:
-            return self._message("That project list is no longer open. Open Launch again.")
+            return self._message("That search is no longer open. Search again.")
         return self._projects_reply(projects, view_id=view_id, page=page, flow=flow)
 
     def _resume_projects_reply(self) -> RenderedMessage:
@@ -1331,15 +1355,6 @@ class PrivateBotBoundary:
             mutation=mutation,
         )
 
-    def _navigation_callbacks(self) -> NavigationCallbacks:
-        return NavigationCallbacks(
-            home=self._callback("nav.home", "home"),
-            back=self._callback("nav.home", "home"),
-            refresh=self._callback("nav.refresh", "home"),
-            previous=self._callback("nav.home", "home"),
-            next=self._callback("nav.home", "home"),
-        )
-
     def _guided_text_reply(self, action: str, text: str | None = None) -> dict[str, object]:
         instruction, placeholder = _GUIDED_TEXT_ENTRY.get(
             action, ("Reply with a label, or send Skip, Cancel, or Back.", "Optional session label")
@@ -1355,7 +1370,12 @@ async def run_private_bot(
 ) -> None:
     """Long-poll the approved bot until SIGTERM/SIGINT, refusing a competing webhook."""
     boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
-    application = ApplicationBuilder().token(secrets.bot_token).build()
+    # Sequential update handling is load-bearing rather than incidental: a render mints its
+    # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
+    # unbound token in the chat. Two renders in flight at once would let one screen's buttons
+    # be adopted by the other's message. This is python-telegram-bot's default; it is written
+    # out so a change made for throughput cannot quietly reopen that interleaving.
+    application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))

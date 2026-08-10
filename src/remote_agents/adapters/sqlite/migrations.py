@@ -51,9 +51,9 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         4,
         "",
     ),
-    # Callback tokens carry no expires_at: a token is valid for as long as the message it was
-    # drawn on, so (chat_id, message_id) scopes validity instead of a clock, and retention is
-    # bounded by message life and by size rather than by a TTL sweep.
+    # Callback tokens carry no expiry column: a token is valid for as long as the message it
+    # was drawn on, so (chat_id, message_id) scopes validity instead of a clock, and retention
+    # is bounded by message life and by size rather than by a timed sweep.
     (
         5,
         """

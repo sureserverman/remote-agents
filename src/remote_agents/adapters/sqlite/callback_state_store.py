@@ -101,8 +101,9 @@ class SQLiteCallbackStateStore:
         serializes writers, so the second caller — in this process or the other one DEC-005
         permits — matches no row and is refused. A `SELECT` then `UPDATE` would leave both
         callers reading `claimed = 0` and both proceeding, which is the double-launch and
-        double-stop this method exists to prevent (DEC-008: the repeat is dropped, never
-        serviced and never cancelled).
+        double-stop this method exists to prevent — DEC-007's "no repeated keypress
+        destroys anything" is the decision that binds this surface, and DEC-008 states the
+        same principle for the local one.
         """
         with self._connection:
             cursor = self._connection.execute(

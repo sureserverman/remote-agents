@@ -146,3 +146,19 @@ def test_an_eviction_pass_logs_once_however_many_tokens_it_discards(tmp_path, ca
     assert len(evictions) == 1, "one pass discarding five tokens must not log five times"
     assert "evicted 5 " in evictions[0].message
     assert store.active_count() == limit
+
+
+def test_binding_leaves_another_chats_pending_tokens_alone(tmp_path) -> None:
+    """Parity with the in-memory store, which had this test and the durable one did not.
+
+    A dropped `WHERE chat_id = ?` would let one chat's undelivered buttons be adopted by
+    another chat's message, and nothing in this suite would have noticed.
+    """
+    store = _store(tmp_path)
+    mine = store.create("nav.home", "home", _OWNER, _CHAT)
+    theirs = store.create("nav.home", "home", _OWNER, _CHAT + 1)
+
+    assert store.bind_pending(_CHAT, _MESSAGE) == 1
+
+    assert store.resolve(mine, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is not None
+    assert store.resolve(theirs, owner_id=_OWNER, chat_id=_CHAT + 1, message_id=_MESSAGE) is None

@@ -85,8 +85,8 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
 
 
 def render_home(
-    callbacks: NavigationCallbacks,
     *,
+    refresh: str,
     launch: str,
     sessions: str,
     active: int,
@@ -98,19 +98,24 @@ def render_home(
 
     The counts here are the one number on the dashboard that moves without the owner
     touching anything — a session can end, or a launch can become ready, while this screen
-    sits on their phone. `callbacks.refresh` used to be minted and then dropped on the floor
-    by this function, which left the bot with a live `nav.refresh` handler that no button in
-    the interface could reach, and an error message elsewhere telling the owner to refresh.
+    sits on their phone. `refresh` used to be minted and then dropped on the floor by this
+    function, which left the bot with a live `nav.refresh` handler that no button in the
+    interface could reach, and an error message elsewhere telling the owner to refresh.
+
+    It takes that one callback rather than a whole `NavigationCallbacks`, which obliged the
+    caller to mint five tokens for a screen that shows one. Four of them were minted, bound
+    to the message, and never rendered — free while tokens expired in fifteen minutes, and
+    real rows against a size-bounded store once they stopped expiring.
     """
 
-    _validate_callbacks(callbacks)
+    _validate_callback(refresh)
     return _message(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
         ((Button("Launch", launch),),)
         + (((Button("Resume", resume),),) if resume is not None else ())
         + ((Button("Sessions", sessions),),)
         + (((Button("Add Project", add_project),),) if add_project is not None else ())
-        + ((Button("Refresh", callbacks.refresh),),),
+        + ((Button("Refresh", refresh),),),
     )
 
 
@@ -200,9 +205,13 @@ def _validate_callbacks(callbacks: NavigationCallbacks) -> None:
         callbacks.previous,
         callbacks.next,
     ):
-        encoded = callback.encode("utf-8")
-        if not callback.startswith("c1_") or not 1 <= len(encoded) <= 64 or not callback.isascii():
-            raise ValueError("Telegram navigation callbacks must be opaque c1_ tokens")
+        _validate_callback(callback)
+
+
+def _validate_callback(callback: str) -> None:
+    encoded = callback.encode("utf-8")
+    if not callback.startswith("c1_") or not 1 <= len(encoded) <= 64 or not callback.isascii():
+        raise ValueError("Telegram navigation callbacks must be opaque c1_ tokens")
 
 
 def _utf16_units(text: str) -> int:

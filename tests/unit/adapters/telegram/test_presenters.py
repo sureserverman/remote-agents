@@ -25,10 +25,10 @@ CALLBACKS = NavigationCallbacks(
 
 def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
     first = render_home(
-        CALLBACKS, launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
+        refresh="c1_refresh", launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
     )
     second = render_home(
-        CALLBACKS, launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
+        refresh="c1_refresh", launch="c1_launch", sessions="c1_sessions", active=2, preserved=1
     )
 
     assert first == second
