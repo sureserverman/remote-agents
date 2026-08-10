@@ -23,7 +23,6 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -35,6 +34,7 @@ from telegram.ext import (
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
+from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
@@ -73,6 +73,7 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId, Session
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.callback_state import CallbackStatePort
+from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
@@ -170,7 +171,9 @@ class PrivateBotBoundary:
     creator: object | None = None
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     callbacks: CallbackStatePort = field(default_factory=CallbackStateStore)
+    anchors: ChatViewPort = field(default_factory=ChatViewStore)
     stops: StopController = field(init=False)
+    view: LiveView = field(init=False)
     _awaiting_text: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
     _labels: dict[str, str] = field(default_factory=dict)
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
@@ -180,6 +183,9 @@ class PrivateBotBoundary:
 
     def __post_init__(self) -> None:
         self.stops = StopController(self.callbacks)
+        self.view = LiveView(
+            chat_id=self.owner_chat_id, callbacks=self.callbacks, anchors=self.anchors
+        )
 
     async def refresh_catalogue(self) -> None:
         """Re-read the projects so one created at runtime becomes selectable immediately.
@@ -354,6 +360,16 @@ class PrivateBotBoundary:
         # fallback collides with a sentinel. -1 matches nothing, which is the honest answer
         # for a press whose message the API did not give us.
         message_id = query.message.message_id if query.message is not None else -1
+        # A callback query in this chat can only have come from an inline keyboard this bot
+        # sent, and `permits` has already established the chat. So the message it was
+        # pressed on is a screen of ours — enough to recover an anchor a composition never
+        # recorded, without waiting for the token to resolve.
+        #
+        # It is not yet true that it is the chat's *only* screen: until Task 2.3 moves the
+        # command handlers off `reply_text`, a command still adds a message. That is why
+        # this only fills an absent anchor and never moves a recorded one — adopting the
+        # pressed message would otherwise walk the live view backwards onto an older screen.
+        self.view.adopt(message_id)
         state = self.callbacks.resolve(
             query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
         )
@@ -365,11 +381,7 @@ class PrivateBotBoundary:
             # expiry used to raise. The words say what happened without claiming a deadline
             # that no longer exists.
             await query.answer("That screen has moved on.")
-            try:
-                await self._render(query, await self._home_reply())
-            except BadRequest as error:
-                if "Message is not modified" not in str(error):
-                    raise
+            await self._render(query, await self._home_reply())
             return
         pending = self._pending_notice(state.action)
         await query.answer(pending)
@@ -386,7 +398,9 @@ class PrivateBotBoundary:
                 # timeout would otherwise leave the previous screen sitting there, unchanged
                 # and unexplained, for up to twenty seconds. Show the wait, and drop the
                 # keyboard while it runs so the same button cannot be pressed twice.
-                await query.edit_message_text(**_reply_arguments(render_message(pending)))
+                # `retire=False`: the token being processed is bound to this very message,
+                # so a retiring render here would prune the action out from under itself.
+                await self._render(query, _reply_arguments(render_message(pending)), retire=False)
             await self._render(
                 query,
                 await self._reply_for(
@@ -396,9 +410,7 @@ class PrivateBotBoundary:
                     message_id=message_id,
                 ),
             )
-        except Exception as error:
-            if isinstance(error, BadRequest) and "Message is not modified" in str(error):
-                return
+        except Exception:
             if pending is None:
                 raise
             # The pending screen carries no buttons, so failing after it is drawn would
@@ -415,27 +427,25 @@ class PrivateBotBoundary:
                 ),
             )
 
-    async def _render(self, query, arguments: dict[str, object]) -> None:
-        """Draw a screen into the message the press came from, and re-own its buttons.
+    async def _render(self, query, arguments: dict[str, object], *, retire: bool = True) -> None:
+        """Draw a screen into this chat's live view, whichever message that currently is.
 
-        The order is load-bearing. A screen's tokens are minted unbound, so pruning the
-        message first discards exactly the keyboard being replaced and never the one about to
-        be drawn; binding then hands the new tokens to the message that now carries them.
+        Addressed by anchor rather than by the message the press came from. Those are the
+        same message in the ordinary case, and deliberately not the same one after a re-send
+        — the chat has one screen, so a render's target is a property of the chat rather
+        than of whatever update happened to trigger it.
 
-        Together those two lines are what replaced the chat-global revision counter, and they
-        are stricter than it was: only the keyboard actually on screen resolves, and it stays
-        resolvable for as long as it is on screen rather than for fifteen minutes.
+        `LiveView` owns the edit-then-prune-then-bind order and the no-op guard; what is
+        left here is telling it which bot to speak through.
         """
-        await query.edit_message_text(**arguments)
-        message_id = query.message.message_id if query.message is not None else 0
-        if message_id > 0:
-            self.callbacks.prune_for_message(self.owner_chat_id, message_id)
-            self.callbacks.bind_pending(self.owner_chat_id, message_id)
+        await self.view.render(query.get_bot(), arguments, retire=retire)
 
     def _bind_sent(self, message) -> None:
-        """Hand the tokens of a freshly sent screen to the message that carries them."""
-        if message is not None and getattr(message, "message_id", None):
-            self.callbacks.bind_pending(self.owner_chat_id, message.message_id)
+        """Adopt a freshly sent screen as the live view, and hand it its tokens."""
+        message_id = getattr(message, "message_id", None) if message is not None else None
+        if message_id:
+            self.anchors.record_anchor(self.owner_chat_id, message_id)
+            self.callbacks.bind_pending(self.owner_chat_id, message_id)
 
     async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
         if refresh:

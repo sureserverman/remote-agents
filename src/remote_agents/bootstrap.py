@@ -29,6 +29,7 @@ from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
     open_database,
@@ -391,6 +392,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # The durable store, not the in-memory default: a restart used to void every
             # button in the chat, and only this half of the pair actually fixes that.
             callbacks=SQLiteCallbackStateStore(connection),
+            # And the durable anchor for the same reason: a restart that forgot which
+            # message the live view is would send a second one and leave the first above it,
+            # still holding buttons that — since Stage 1 — still resolve.
+            anchors=SQLiteChatViewStore(connection),
             catalogue=catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,

@@ -617,6 +617,34 @@ class _Message:
         )
 
 
+class _Bot:
+    """The chat-addressed surface the live view speaks through.
+
+    Records into the lists the press it belongs to already exposes, so a test still reads
+    `callback.edits` however the render reached Telegram. What changed underneath is the
+    address: a screen is drawn into a message id in a chat rather than into whatever
+    message the update arrived on.
+    """
+
+    def __init__(self, owner: _Callback, *, first_id: int = 500) -> None:
+        self._owner = owner
+        self._next_id = first_id
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        if self._owner.edit_error is not None:
+            raise self._owner.edit_error
+        self._owner.edits.append(kwargs)
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        message = _Message(message_id=self._next_id)
+        self._next_id += 1
+        self._owner.sends.append(kwargs)
+        return message
+
+    async def delete_message(self, **kwargs: object) -> None:
+        self._owner.deletions.append(kwargs)
+
+
 class _Callback:
     def __init__(self, data: str, *, edit_error: Exception | None = None) -> None:
         self.data = data
@@ -624,16 +652,17 @@ class _Callback:
         self.answers: list[str | None] = []
         self.alerts: list[bool] = []
         self.edits: list[dict[str, object]] = []
+        self.sends: list[dict[str, object]] = []
+        self.deletions: list[dict[str, object]] = []
         self.message = _Message()
+        self.bot = _Bot(self)
+
+    def get_bot(self) -> _Bot:
+        return self.bot
 
     async def answer(self, text: str | None = None, *, show_alert: bool = False) -> None:
         self.answers.append(text)
         self.alerts.append(show_alert)
-
-    async def edit_message_text(self, **kwargs: object) -> None:
-        if self.edit_error is not None:
-            raise self.edit_error
-        self.edits.append(kwargs)
 
 
 class _MetadataBot:
