@@ -364,13 +364,13 @@ def _inspectable_boundary(record: SessionRecord, output: str) -> PrivateBotBound
     return boundary
 
 
-def _a_running_session() -> SessionRecord:
+def _a_running_session(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     return SessionRecord(
         SessionId(UUID(int=7)),
         ProjectId("a" * 24),
         ProfileId("claude"),
         SessionDisplayIdentity("Demo", "Claude", "regular", 1),
-        SessionState.RUNNING,
+        state,
         datetime(2026, 8, 10, tzinfo=UTC),
     )
 
@@ -409,6 +409,52 @@ async def test_inspect_document_is_its_own_message_and_goes_when_the_session_doe
     assert documents[0].message_id not in chat.messages, chat.transcript()
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None:
+    """The recovery branch is keyed on the pending notice, not on stops.
+
+    All five actions carrying a notice reach it -- the three stops, and launch and resume,
+    which wait on a profile's readiness marker. The change that moved this branch onto the
+    list was written about stops and applies to every one of them, so the other family is
+    pinned here rather than left to be discovered by whoever next makes a launch raise.
+    """
+    session = _a_running_session()
+    boundary = _boundary(session)
+
+    class _FailingLauncher:
+        async def list_sessions(self):
+            return [session]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+        async def launch(self, _command):
+            raise RuntimeError("the profile could not be started")
+
+    boundary.launcher = _FailingLauncher()
+    # The launch guard checks the curated availability set before it reaches the launcher, so
+    # without this the screen under test is "That agent is unavailable." and the except branch
+    # is never entered.
+    boundary.profiles = (ProfileAvailability("claude", True),)
+    chat = FakeChat()
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    # Minted straight onto the anchor rather than walked to through the wizard: the wizard is
+    # Stage 2's subject and is about to change, while what this pins -- the except branch --
+    # is not.
+    token = boundary._callback("launch.confirm", f"{'a' * 24}|claude", mutation=True)
+    boundary.callbacks.bind_pending(11, anchor)
+
+    await boundary.callback(chat.press(token, on=anchor), None)
+
+    screen = chat.messages[anchor]
+    assert screen.text.startswith("That action did not complete")
+    assert "Sessions 1/1" in screen.text, "it landed on the list, not on a dead end"
+    labels = [button.text for row in screen.reply_markup.inline_keyboard for button in row]
+    assert "Back" not in labels
+    assert len(chat.bot_messages) == 1, chat.transcript()
 
 
 @pytest.mark.asyncio
@@ -453,15 +499,31 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
 
 
 @pytest.mark.asyncio
-async def test_stopping_an_inspected_session_takes_its_document_with_it() -> None:
+@pytest.mark.parametrize(
+    ("state", "button", "confirm"),
+    [
+        (SessionState.RUNNING, "Stop and close", None),
+        (SessionState.PRESERVED, "Clean up", None),
+        (SessionState.RUNNING, "Force stop", "Force stop"),
+    ],
+)
+async def test_stopping_an_inspected_session_takes_its_document_with_it(
+    state, button, confirm
+) -> None:
     """Stopping a session is leaving it, so the file it produced goes too.
 
     `_release_attachment` is told what the next screen is *about*, and every action could
     answer that with the id it carries — right up until a stop stopped drawing a screen about
     its own session and started drawing the list. The id still said "this session", so the
     document was retained on behalf of a session that had just left the chat's only screen.
+
+    Parametrized over all three members of `_LIST_LANDING_ACTIONS`, because the fix is a set
+    and a set is only as good as its least-tested member: dropping `cleanup` or
+    `force.confirmed` from it would otherwise leave every test green. Force goes through its
+    confirmation, which is the screen that legitimately keeps the document — so this also
+    pins that the release happens on the confirmed press and not the first one.
     """
-    session = _a_running_session()
+    session = _a_running_session(state)
     boundary = _inspectable_boundary(session, "x" * 5000)
 
     stopped: list[str] = []
@@ -477,6 +539,12 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it() -> Non
             stopped.append("graceful")
             return a_clean_stop(session.session_id)
 
+        async def cleanup(self, _command) -> None:
+            stopped.append("cleanup")
+
+        async def force_stop(self, _command) -> None:
+            stopped.append("force")
+
     boundary.launcher = _StoppingLauncher()
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
@@ -489,10 +557,13 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it() -> Non
     assert len(documents) == 1, chat.transcript()
 
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Stop and close")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], button)), None)
+    if confirm is not None:
+        # The confirmation is about this session, so the document is still here.
+        assert documents[0].message_id in chat.messages, "the confirmation has not left it yet"
+        await boundary.callback(chat.press(_button(chat.messages[anchor], confirm)), None)
 
-    assert stopped == ["graceful"], "the stop has to have actually run, or this proves nothing"
-    assert chat.messages[anchor].text.startswith("Stopped "), chat.messages[anchor].text[:80]
+    assert stopped, "the stop has to have actually run, or this proves nothing"
     assert documents[0].message_id not in chat.messages, chat.transcript()
     assert len(chat.bot_messages) == 1, "the live view alone — the file left with its session"
 

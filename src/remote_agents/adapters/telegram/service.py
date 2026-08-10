@@ -177,15 +177,6 @@ _PENDING_NOTICES = {
     "launch.confirm": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
 }
-
-#: The actions that draw the **session list** rather than a screen about their own session.
-#: `_release_attachment` is told what the next screen is about, and every other action can
-#: answer that with the entity it carries. These cannot: they carry a session id and then
-#: land somewhere that is not about it, so a captured document would be retained on behalf
-#: of a session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it
-#: draws the confirmation, which *is* about that session.
-_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
-
 """The actions that make the owner wait, and what to show them while they do.
 
 Each of these reaches a terminal and then polls it: a launch waits for its profile's
@@ -193,6 +184,16 @@ readiness marker, a graceful stop waits for the pane to exit, and both are bound
 same startup timeout — twenty seconds in the deployed composition. Everything absent from
 this table answers from the store or from one tmux call, fast enough that a notice would
 flash and be gone.
+"""
+
+_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+"""The actions that draw the **session list** rather than a screen about their own session.
+
+`_release_attachment` is told what the next screen is about, and every other action can
+answer that with the entity it carries. These cannot: they carry a session id and then land
+somewhere that is not about it, so a captured document would be retained on behalf of a
+session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it draws
+the confirmation, which *is* about that session.
 """
 
 
