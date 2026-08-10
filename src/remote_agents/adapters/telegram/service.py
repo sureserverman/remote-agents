@@ -8,7 +8,7 @@ import logging
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from math import ceil
 
@@ -56,6 +56,7 @@ from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
+    rank_by_recent_use,
     search_catalogue,
 )
 from remote_agents.application.relative_time import age
@@ -250,11 +251,32 @@ class PrivateBotBoundary:
 
         The registry read and development-root walk run off the event loop, so refreshing
         never stalls unrelated Telegram interactions or tmux polling.
+
+        The recency ranking is applied **here**, once, rather than in either picker. Launch,
+        Resume and search all render `self.catalogue` — the two pickers share `_projects_reply`
+        and search filters the same tuple — so ordering it at the source reaches all three
+        without a ranking call per rendered row, and without either picker knowing that a
+        ranking exists. It is also why a session launched during the run changes the next
+        render's order: the usage read happens on the refresh that follows it.
         """
         if self.catalogue_source is None:
             return
-        self.catalogue = await asyncio.to_thread(self.catalogue_source)
+        catalogue = await asyncio.to_thread(self.catalogue_source)
+        self.catalogue = await self._ranked(catalogue)
         self._project_views.clear()
+
+    async def _ranked(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
+        """Order the catalogue by recent use, or leave it exactly as it came.
+
+        A launcher that cannot report usage is not an error and not a degraded mode — it is
+        the composition the tests and the TUI-less deployments use — so the unranked catalogue
+        is the honest answer rather than an empty one. `now` is read here, at the one place
+        that has a reason to know the time; `rank_by_recent_use` stays pure.
+        """
+        usage = getattr(self.launcher, "project_usage", None)
+        if usage is None:
+            return catalogue
+        return rank_by_recent_use(catalogue, await usage(), datetime.now(UTC))
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user
