@@ -133,3 +133,27 @@ async def test_renaming_a_session_that_is_not_stored_raises(tmp_path) -> None:
 
     with pytest.raises(KeyError):
         await store.set_label(SessionId.new(), "anything")
+
+
+async def test_a_session_renamed_from_the_bot_reads_back_named_on_the_local_surface(
+    tmp_path,
+) -> None:
+    """DEC-005 has two processes over one store, so a rename has to be a store fact.
+
+    The bot renames; the TUI is a different process reading the same rows and renders
+    `session_row`, which is built from the identity the store returns. Nothing is pushed
+    between the surfaces and nothing needs to be — but that is a claim about a join, and this
+    is where it is checked rather than assumed.
+    """
+    from remote_agents.adapters.tui.model import session_row
+
+    store = _store(tmp_path)
+    await store.save(_record())
+    assert "release review" not in session_row((await store.list())[0])
+
+    await store.set_label(_SESSION, "release review")
+
+    reopened = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
+    assert session_row((await reopened.list())[0]).startswith(
+        "opaque-editor · claude · regular · #1 · release review · running · "
+    )
