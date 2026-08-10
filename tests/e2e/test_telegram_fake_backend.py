@@ -155,7 +155,9 @@ async def test_commands_render_in_place_and_leave_the_chat_holding_one_screen() 
 
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == [], "a command the bot has answered is not part of the chat"
-    assert chat.bot_messages[0].text.startswith("<b>Remote agents</b>"), (
+    # Home and Help both open with the same heading, so a heading check would not tell
+    # which screen survived; "Stop and close" appears only on Help.
+    assert "Stop and close" in chat.bot_messages[0].text, (
         "the surviving screen is the last one asked for, not the first one drawn"
     )
 
@@ -491,6 +493,14 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
     guided text step, and a capture that produces a file — and at the end the chat holds
     one bot message and nothing at all that the owner typed. Every intermediate assertion
     in the other tests is a claim about a mechanism; this is the claim about the chat.
+
+    *Declared deviation from the gate's itemisation.* The gate lists the twelve as
+    `home → launch → search → profile → sessions → detail → inspect → back → home → help →
+    sessions → home`. Two differences, neither reducing coverage: a search is not one
+    interaction but two, since the box has to be answered before a project can be picked;
+    and the tail is `home → help` rather than `help → sessions → home`, because the claim
+    is about what the chat is left holding and `/help` exercises the command path the
+    trailing `sessions → home` would only repeat.
     """
     session = _a_running_session()
     boundary = _inspectable_boundary(session, "x" * 5000)
@@ -522,7 +532,9 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == [], chat.transcript()
     assert chat.bot_messages[0].message_id == anchor, "and it was the same message throughout"
-    assert chat.bot_messages[0].text.startswith("<b>Remote agents</b>")
+    # Home and Help both open with this heading, so the heading alone proves nothing about
+    # where the journey ended; "Stop and close" appears only on Help.
+    assert "Stop and close" in chat.bot_messages[0].text, chat.bot_messages[0].text[:120]
 
 
 async def _open_a_search(chat: FakeChat, boundary: PrivateBotBoundary, anchor: int) -> None:

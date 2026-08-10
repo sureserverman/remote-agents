@@ -450,10 +450,10 @@ class PrivateBotBoundary:
         # pressed on is a screen of ours — enough to recover an anchor a composition never
         # recorded, without waiting for the token to resolve.
         #
-        # It is not yet true that it is the chat's *only* screen: until Task 2.3 moves the
-        # command handlers off `reply_text`, a command still adds a message. That is why
-        # this only fills an absent anchor and never moves a recorded one — adopting the
-        # pressed message would otherwise walk the live view backwards onto an older screen.
+        # It only ever fills an *absent* anchor and never moves a recorded one. Adopting the
+        # pressed message unconditionally would walk the live view backwards onto an older
+        # screen — which is wrong whatever else is in the chat, so the rule outlives the
+        # transitional reason it was first written for.
         self.view.adopt(message_id)
         state = self.callbacks.resolve(
             query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
@@ -530,13 +530,6 @@ class PrivateBotBoundary:
         left here is telling it which bot to speak through.
         """
         await self.view.render(query.get_bot(), arguments, retire=retire)
-
-    def _bind_sent(self, message) -> None:
-        """Adopt a freshly sent screen as the live view, and hand it its tokens."""
-        message_id = getattr(message, "message_id", None) if message is not None else None
-        if message_id:
-            self.anchors.record_anchor(self.owner_chat_id, message_id)
-            self.callbacks.bind_pending(self.owner_chat_id, message_id)
 
     async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
         if refresh:
@@ -1497,7 +1490,7 @@ class PrivateBotBoundary:
         """Mint a token for a screen that has not been delivered yet.
 
         The keyboard is built before the message exists, so the token is created unbound and
-        `_render`/`_bind_sent` attaches it once Telegram has answered with a message id.
+        `LiveView` attaches it once Telegram has answered with a message id.
         """
         return self.callbacks.create(
             action,
