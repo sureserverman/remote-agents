@@ -14,6 +14,11 @@ The refusals are modelled too, because they are the ones the design turns on:
 
 A harness that quietly accepted those would let exactly the bugs this stage is about pass.
 
+There is deliberately no `reply_text`/`reply_document` on a message here. Every outbound
+message now goes through `LiveView`, which addresses the chat rather than replying to
+whatever arrived, so a double offering the reply form would offer a route production no
+longer has.
+
 **What the content comparison can and cannot catch.** Every keyboarded screen embeds at
 least one freshly minted token, so two consecutive renders of the *same* screen differ and
 the no-op branch cannot fire for them — it is reachable only for the keyboardless screens
@@ -89,15 +94,29 @@ class FakeChat:
     def press(self, token: str, *, on: int | None = None) -> SimpleNamespace:
         """An update carrying a button press on a bot message.
 
-        Defaults to the newest bot message, which under one live view is the only one there
-        is — a test that has to name the message is usually a test about a chat that grew a
-        second screen.
+        By default the press comes from the message actually **carrying** that button, which
+        is what a thumb can do and nothing else is. Defaulting to the newest bot message
+        instead looks equivalent right up until the chat holds a second one — a captured
+        document, an input box — and then every press silently arrives from the wrong id and
+        resolves to nothing, which reads exactly like the code being broken.
+
+        Pass `on` to press a token from somewhere it was never drawn; that is a real case
+        worth testing, but it should have to be asked for.
         """
         if on is None:
-            if not self.bot_messages:
-                raise AssertionError("no bot message to press a button on")
-            on = self.bot_messages[-1].message_id
+            on = self._carrier_of(token)
         return self._update(callback_query=FakeCallbackQuery(self, token, on))
+
+    def _carrier_of(self, token: str) -> int:
+        for message in self.bot_messages:
+            keyboard = getattr(message.reply_markup, "inline_keyboard", ())
+            if any(button.callback_data == token for row in keyboard for button in row):
+                return message.message_id
+        if not self.bot_messages:
+            raise AssertionError("no bot message to press a button on")
+        # A token no live keyboard carries — a stale one, or one never issued. The newest
+        # screen is where a thumb would have found it.
+        return self.bot_messages[-1].message_id
 
     def _update(self, **carrier: object) -> SimpleNamespace:
         source = carrier.get("callback_query") or carrier.get("effective_message")
@@ -127,31 +146,6 @@ class ChatMessage:
 
     def get_bot(self) -> FakeBot:
         return self._chat.bot
-
-    async def reply_text(self, text: str | None = None, **kwargs: object) -> ChatMessage:
-        """Send a *separate* bot message beside the live view.
-
-        Kept because one thing genuinely needs it: a `ForceReply` cannot ride on an edit of
-        a message carrying an inline keyboard, so the entry prompt is its own message. That
-        message is then the caller's to discard once it has been answered.
-        """
-        body = text if text is not None else str(kwargs.get("text", ""))
-        return ChatMessage(
-            self._chat, self._chat._add("bot", body, reply_markup=kwargs.get("reply_markup"))
-        )
-
-    async def reply_document(self, **kwargs: object) -> ChatMessage:
-        document = kwargs["document"]
-        return ChatMessage(
-            self._chat,
-            self._chat._add(
-                "bot",
-                "",
-                document=document.read(),
-                filename=kwargs["filename"],
-                protect_content=bool(kwargs.get("protect_content", False)),
-            ),
-        )
 
 
 class FakeCallbackQuery:
@@ -203,6 +197,16 @@ class LoneMessageBot:
     async def delete_message(self, **kwargs: object) -> None:
         self._owner.deletions.append(int(kwargs["message_id"]))
 
+    async def send_document(self, **kwargs: object) -> SimpleNamespace:
+        self._owner.documents.append(
+            {
+                "document": kwargs["document"].read(),
+                "filename": kwargs["filename"],
+                "protect_content": kwargs.get("protect_content", False),
+            }
+        )
+        return SimpleNamespace(message_id=self._owner.message_id)
+
 
 class FakeBot:
     """Telegram's message surface, refusing what Telegram refuses."""
@@ -249,6 +253,18 @@ class FakeBot:
             raise BadRequest("Message is not modified: specified new message content")
         existing.text = text
         existing.reply_markup = markup
+
+    async def send_document(self, *, chat_id: int, **kwargs: object) -> Sent:
+        self._require_chat(chat_id)
+        if self.send_error is not None:
+            raise self.send_error
+        return self._chat._add(
+            "bot",
+            "",
+            document=kwargs["document"].read(),
+            filename=kwargs["filename"],
+            protect_content=bool(kwargs.get("protect_content", False)),
+        )
 
     async def delete_message(self, *, chat_id: int, message_id: int) -> None:
         self._require_chat(chat_id)

@@ -125,7 +125,9 @@ def _button(message, label: str) -> str:
     """
     for row in message.reply_markup.inline_keyboard:
         for button in row:
-            if button.text == label:
+            # A session row carries a relative age that drifts between runs, so a prefix is
+            # the only stable handle on it. Exact matches still win first.
+            if button.text == label or button.text.startswith(label):
                 return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
@@ -347,3 +349,134 @@ async def test_a_re_ask_that_cannot_be_sent_leaves_the_owner_a_way_to_answer() -
         "and still has what they typed, rather than losing both to a failed re-ask"
     )
     assert boundary._awaiting_text[(7, 11)].input_message_id == box.message_id
+
+
+def _inspectable_boundary(record: SessionRecord, output: str) -> PrivateBotBoundary:
+    boundary = _boundary(record)
+
+    async def _capture(_session_id) -> str:
+        return output
+
+    boundary.capture = _capture
+    return boundary
+
+
+def _a_running_session() -> SessionRecord:
+    return SessionRecord(
+        SessionId(UUID(int=7)),
+        ProjectId("a" * 24),
+        ProfileId("claude"),
+        SessionDisplayIdentity("Demo", "Claude", "regular", 1),
+        SessionState.RUNNING,
+        datetime(2026, 8, 10, tzinfo=UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_inspect_document_is_its_own_message_and_goes_when_the_session_does() -> None:
+    """The capture is a screen; the file beside it is not, and cannot be redrawn.
+
+    So it is the one thing here that has to be taken back out deliberately — and only once
+    the owner has actually left the session it came from, not the moment they press Back.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+
+    documents = [message for message in chat.bot_messages if message.document is not None]
+    assert len(documents) == 1, chat.transcript()
+    assert documents[0].protect_content is True, "a captured pane must stay unforwardable"
+    assert documents[0].filename == "session-output.txt"
+    assert "attached as UTF-8 text" in chat.messages[anchor].text
+    assert len(chat.bot_messages) == 2, "the live view, and the file — nothing else"
+
+    # Back into the same session's detail is not leaving it.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
+    assert documents[0].message_id in chat.messages, chat.transcript()
+
+    # Home is.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+
+    assert documents[0].message_id not in chat.messages, chat.transcript()
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert chat.owner_messages == []
+
+
+@pytest.mark.asyncio
+async def test_a_capture_small_enough_to_read_leaves_no_file_behind() -> None:
+    """Only an oversized capture becomes a document; a short one is just the screen."""
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "ready\n")
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+
+    assert [message.document for message in chat.bot_messages] == [None]
+    assert "ready" in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_inspecting_the_same_session_twice_leaves_one_document_not_two() -> None:
+    """The second inspect passes the release check untouched — its session has not changed.
+
+    So without an unconditional retire, the first document is orphaned: nothing tracks it
+    any more, and no later navigation can ever take it out. A permanent extra message
+    holding whatever the pane had printed.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    row = _button(chat.messages[anchor], "Demo · Claude · regular · #1")
+    await boundary.callback(chat.press(row), None)
+
+    for _ in range(3):
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
+
+    documents = [message for message in chat.bot_messages if message.document is not None]
+    assert len(documents) == 1, chat.transcript()
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+
+    assert [message.document for message in chat.bot_messages] == [None], chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_a_confirmation_about_the_session_is_not_leaving_the_session() -> None:
+    """A stop token names `session:profile`, so an exact comparison reads its confirmation
+    dialog as a screen about something else.
+
+    The owner opens Force stop, reads it, and cancels — never having left the session — and
+    the capture they were reading is gone.
+    """
+    session = _a_running_session()
+    boundary = _inspectable_boundary(session, "x" * 5000)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
+    document = next(message for message in chat.bot_messages if message.document is not None)
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Force stop")), None)
+
+    assert document.message_id in chat.messages, (
+        "a dialog about the session is not a screen about something else"
+    )
+    assert "cannot be undone" in chat.messages[anchor].text, "and it really is the dialog"

@@ -23,6 +23,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -197,6 +198,7 @@ class PrivateBotBoundary:
     view: LiveView = field(init=False)
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _labels: dict[str, str] = field(default_factory=dict)
+    _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
     session_page_size: int = 8
@@ -256,6 +258,7 @@ class PrivateBotBoundary:
         """
         bot = message.get_bot()
         await self.view.render(bot, arguments)
+        await self._release_attachment(bot, None)
         await self.view.discard(bot, message.message_id)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -332,6 +335,7 @@ class PrivateBotBoundary:
         """
         await self.view.render(bot, arguments)
         self._awaiting_text.pop(self._entry_key, None)
+        await self._release_attachment(bot, None)
         await self._clear_entry(bot, entry, message)
 
     async def _ask_again(self, bot, entry: _TextEntry, message, notice: str) -> None:
@@ -447,6 +451,10 @@ class PrivateBotBoundary:
         pending = self._pending_notice(state.action)
         await query.answer(pending)
         try:
+            # Whatever this press draws, it answers "is that session still on screen". Inside
+            # the try, so an unexpected failure lands on the recovery screen below rather
+            # than leaving a cleared spinner and nothing drawn.
+            await self._release_attachment(query.get_bot(), state.entity_id)
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
@@ -951,12 +959,50 @@ class PrivateBotBoundary:
         if result.attachment is not None and result.filename is not None:
             # Captured panes carry whatever the agent printed — credentials, paths, whole
             # conversations — so the document is marked unforwardable rather than left
-            # saveable from every other client the owner is signed into.
-            await query.message.reply_document(
-                document=io.BytesIO(result.attachment),
-                filename=result.filename,
-                protect_content=True,
+            # saveable from every other client the owner is signed into. That is also why
+            # it is remembered: it is the one thing here that cannot be redrawn, so it has
+            # to be taken back out deliberately when its session leaves the screen.
+            # Unconditionally, and before the new one is sent: a second inspect of the
+            # *same* session passes the release check above untouched, so without this the
+            # first document is orphaned in the chat with nothing left tracking it.
+            await self._release_attachment(query.get_bot(), None)
+            self._attachment = (
+                session_value,
+                await self.view.send_document_apart(
+                    query.get_bot(),
+                    document=io.BytesIO(result.attachment),
+                    filename=result.filename,
+                    protect_content=True,
+                ),
             )
+
+    async def _release_attachment(self, bot, showing: str | None) -> None:
+        """Take a captured document out of the chat once its session is off the screen.
+
+        `showing` is the entity the screen being drawn is about. It is compared by its
+        *session* rather than whole, because several actions carry a composite id —
+        `session:profile` for a stop, `session|state` for remote control — and an exact
+        comparison reads a confirmation dialog *about* a session as a screen about
+        something else. That took the document away while the owner was still looking at
+        the session, and gave it back to nobody when they cancelled.
+
+        `None` means the screen is about no session at all, which is what a command and a
+        finished text step always are.
+        """
+        if self._attachment is None:
+            return
+        if showing is not None and self._attachment[0] == _session_scope(showing):
+            return
+        try:
+            await self.view.discard(bot, self._attachment[1])
+        except TelegramError:
+            # Housekeeping must never cost the owner the screen they pressed for. The
+            # document stays and the next navigation tries again — the alternative is a
+            # cleared spinner and nothing drawn, which is the dead button this plan exists
+            # to remove.
+            _LOG.warning("could not remove the captured document; leaving it in the chat")
+            return
+        self._attachment = None
 
     async def _inspection_result(self, session_value: str):
         if self.capture is None:
@@ -1531,6 +1577,18 @@ def _install_stop_signals(stopping: asyncio.Event) -> None:
             loop.add_signal_handler(event, stopping.set)
         except NotImplementedError:
             signal.signal(event, lambda _number, _frame: stopping.set())
+
+
+def _session_scope(entity_id: str) -> str:
+    """The session an entity id is about, for the composite ids some actions carry.
+
+    A stop token names `session:profile` and a remote-control token names `session|state`.
+    Everything else is left whole — a project id or `home` has no session in it, and will
+    simply never match one.
+    """
+    for separator in (":", "|"):
+        entity_id = entity_id.split(separator, 1)[0]
+    return entity_id
 
 
 def _reply_arguments(message: RenderedMessage) -> dict[str, object]:

@@ -201,6 +201,19 @@ class LiveView:
         message = await bot.send_message(chat_id=self._chat_id, **arguments)
         return int(message.message_id)
 
+    async def send_document_apart(self, bot, **arguments: object) -> int:
+        """Send a captured file beside the live view, and answer its id.
+
+        Addressed to the chat rather than replied to the anchor, because by the time this
+        runs the anchor may have just been re-sent — replying to a message that no longer
+        exists is a failure the owner would see, for a convenience nobody asked for.
+
+        Binds nothing, for the same reason `send_apart` does not: a document carries no
+        inline keyboard.
+        """
+        message = await bot.send_document(chat_id=self._chat_id, **arguments)
+        return int(message.message_id)
+
     async def discard(self, bot, message_id: int) -> None:
         """Take a message out of the chat, and answer for why it was allowed to go.
 

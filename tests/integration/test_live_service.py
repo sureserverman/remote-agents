@@ -248,9 +248,7 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     awaiting_search = _Callback(search)
     await boundary.callback(_trusted_update(callback=awaiting_search), None)
     assert awaiting_search.edits[0]["text"] == "Reply below with a project name."
-    assert (
-        awaiting_search.sends[0]["reply_markup"].input_field_placeholder == "Project name"
-    )
+    assert awaiting_search.sends[0]["reply_markup"].input_field_placeholder == "Project name"
 
     result = _Message("verse")
     await boundary.text(_trusted_update(message=result), None)
@@ -266,8 +264,7 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     await boundary.callback(_trusted_update(callback=awaiting_label), None)
     assert awaiting_label.edits[0]["text"] == "Reply below with an optional session label."
     assert (
-        awaiting_label.sends[0]["reply_markup"].input_field_placeholder
-        == "Optional session label"
+        awaiting_label.sends[0]["reply_markup"].input_field_placeholder == "Optional session label"
     )
 
     labelled = _Message("  review  ")
@@ -331,7 +328,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     assert callback.edits[0]["text"] == "<pre>Output is attached as UTF-8 text.</pre>"
     # Marked unforwardable: a pane's transcript is exactly the thing that should not be one
     # tap from leaving this private chat.
-    assert callback.message.documents == [
+    assert callback.documents == [
         {"document": b"x" * 5000, "filename": "session-output.txt", "protect_content": True}
     ]
 
@@ -365,7 +362,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
     await boundary.callback(_trusted_update(callback=callback), None)
 
     assert callback.edits[0]["text"] == "Inspection is unavailable."
-    assert callback.message.documents == []
+    assert callback.documents == []
 
 
 @pytest.mark.asyncio
@@ -605,22 +602,6 @@ class _Message:
     def get_bot(self) -> _MessageBot:
         return self.bot
 
-    async def reply_text(self, text: str | None = None, **kwargs: object) -> _Message:
-        if text is not None:
-            kwargs["text"] = text
-        self.replies.append(kwargs)
-        return self
-
-    async def reply_document(self, **kwargs: object) -> None:
-        document = kwargs["document"]
-        self.documents.append(
-            {
-                "document": document.read(),
-                "filename": kwargs["filename"],
-                "protect_content": kwargs.get("protect_content", False),
-            }
-        )
-
 
 class _MessageBot:
     """The same surface, for an update that arrived as a message rather than a press.
@@ -676,6 +657,17 @@ class _Bot:
     async def delete_message(self, **kwargs: object) -> None:
         self._owner.deletions.append(kwargs)
 
+    async def send_document(self, **kwargs: object) -> _Message:
+        document = kwargs["document"]
+        self._owner.documents.append(
+            {
+                "document": document.read(),
+                "filename": kwargs["filename"],
+                "protect_content": kwargs.get("protect_content", False),
+            }
+        )
+        return _Message(message_id=self._owner.message.message_id + 1)
+
 
 class _Callback:
     def __init__(self, data: str, *, edit_error: Exception | None = None) -> None:
@@ -686,6 +678,7 @@ class _Callback:
         self.edits: list[dict[str, object]] = []
         self.sends: list[dict[str, object]] = []
         self.deletions: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
         self.message = _Message()
         self.bot = _Bot(self)
 

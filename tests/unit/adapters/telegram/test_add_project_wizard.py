@@ -48,6 +48,7 @@ class FakeMessage:
         self.message_id = message_id
         self.replies: list[dict[str, object]] = []
         self.deletions: list[int] = []
+        self.documents: list[dict[str, object]] = []
         self.bot = LoneMessageBot(self)
 
     def get_bot(self) -> LoneMessageBot:
