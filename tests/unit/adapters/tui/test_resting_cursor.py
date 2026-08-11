@@ -189,9 +189,7 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task
     """Same shape as the force drive, and modal for the same reason."""
     await app.show_sessions()
     await app.show_detail(str(_SESSION_ID))
-    return asyncio.create_task(
-        app.screen.confirm_remote_control(RemoteControlState.ACTIVE)
-    )
+    return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
 
 
 async def _drive_to_resume_confirm(app: RemoteAgentsTui) -> None:
@@ -223,9 +221,7 @@ _RESTING = (
     # The resume flow's commit point. Same "abort under the cursor" shape as the two
     # destructive confirms, and it held only because Cancel happens to be listed first with
     # the default highlight — nothing pinned it until this entry.
-    pytest.param(
-        _drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"
-    ),
+    pytest.param(_drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
 )

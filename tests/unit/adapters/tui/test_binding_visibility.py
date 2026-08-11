@@ -329,8 +329,7 @@ def test_no_screen_inherits_the_permissive_default(screen_type: type[Screen]) ->
 _WORK_SCREENS = tuple(
     s
     for s in ALL_SCREENS
-    if getattr(s, "entry_is_a_commitment", False)
-    or "work_in_flight" in vars(s)
+    if getattr(s, "entry_is_a_commitment", False) or "work_in_flight" in vars(s)
 )
 
 

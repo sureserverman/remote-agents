@@ -16,6 +16,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 
+from remote_agents.adapters.agents.activity_spool import spool_agent_event
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
@@ -227,7 +228,16 @@ def main(
     add_project_parser.add_argument("--name", required=True)
     tui_parser = subcommands.add_parser("tui")
     tui_parser.add_argument("--config", type=Path)
+    subcommands.add_parser("agent-event")
     arguments = parser.parse_args(argv)
+    if arguments.command == "agent-event":
+        # An agent hook invokes this, so the branch reports success whatever happens: the
+        # spool never raises, and resolving the owner's paths is the only step here that can.
+        try:
+            paths = ProductionPaths.for_home(Path.home())
+        except (ConfigError, RuntimeError):
+            return 0
+        return spool_agent_event(sys.stdin.buffer, activity_directory=paths.activity_directory)
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(probe_profiles(closed_profiles()))

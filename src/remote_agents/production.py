@@ -71,8 +71,26 @@ class ProductionPaths:
             self._reject_symlink_ancestors(path)
             if path.exists() and not path.is_dir():
                 raise ConfigError(f"production path is not a directory: {path}")
-            path.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(path, 0o700)
+            self._create_privately(path)
+
+    def _create_privately(self, path: Path) -> None:
+        """Create each component owner-only, re-checking for a link as it goes.
+
+        `_reject_symlink_ancestors` above clears the whole path and then returns, so a single
+        `mkdir(parents=True, exist_ok=True)` afterwards would act several syscalls later on a
+        conclusion already drawn — and `exist_ok=True` resolves a symlink and reports success,
+        which is what makes that gap worth closing rather than merely noting.
+
+        `ports.private_directory` does exactly this for the two spools, and the duplication
+        here is deliberate rather than overlooked: this module is the composition root, which
+        ARCH-02 forbids from importing `ports`. Keeping the boundary costs these six lines.
+        """
+        for parent in (*reversed(path.parents), path):
+            if parent.is_symlink():
+                raise ConfigError(f"production paths cannot traverse symlinks: {parent}")
+            if parent.is_relative_to(self.home) and not parent.exists():
+                parent.mkdir(mode=0o700)
+        os.chmod(path, 0o700)
 
     def _reject_symlink_ancestors(self, path: Path) -> None:
         try:

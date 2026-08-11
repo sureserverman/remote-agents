@@ -717,9 +717,7 @@ class ChoiceScreen(Screen[None]):
         # back as `option_id`. It replaces the attribute this used to bolt onto each mounted
         # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and
         # row identity is first-class rather than monkey-patched.
-        choices.add_options(
-            Option(text, id=key, disabled=key == _EMPTY) for key, text in entries
-        )
+        choices.add_options(Option(text, id=key, disabled=key == _EMPTY) for key, text in entries)
         if entries and focus:
             resting = min(highlight, len(entries) - 1)
             # Set twice, deliberately. Here, so the cursor is correct the instant this

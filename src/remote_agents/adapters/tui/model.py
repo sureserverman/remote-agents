@@ -112,5 +112,3 @@ def conversation_row(summary: ConversationSummary) -> str:
 
 def session_row(record: SessionRecord) -> str:
     return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
-
-

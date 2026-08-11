@@ -20,6 +20,7 @@ from remote_agents.adapters.tmux.remote_control import (
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
@@ -140,7 +141,10 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="invalid_intent"
             )
         intent_directory = self._gateway.intent_directory
-        intent_directory.mkdir(parents=True, exist_ok=True)
+        if open_private_directory(intent_directory) is None:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
         document = {
             "session_id": str(session_id),
             "profile_id": str(profile_id),
@@ -153,7 +157,15 @@ class TmuxTerminal:
             document["session_id"] = str(SessionId.new())
             self.invalidate_next_intent = False
         path = intent_directory / f"{session_id}.json"
-        path.write_text(json.dumps(document), encoding="utf-8")
+        # The mode belongs to the open, so a *new* file is never briefly world-readable. This
+        # document carries the launch environment and argv, which is exactly what must not be
+        # read in that window. O_TRUNC rather than O_EXCL, because relaunching one session
+        # rewrites its intent.
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(document))
+        # Not redundant with that mode: open applies it only when it creates the file, so an
+        # intent left behind at a looser mode by an older build would keep it forever.
         os.chmod(path, 0o600)
         try:
             await self._gateway.launch(session_id, project_id, profile_id, cwd)

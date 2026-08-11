@@ -178,8 +178,9 @@ _ARRANGED: dict[type[ConfirmScreen], tuple[_Arrangement, ...]] = {
             offered_when=lambda record: FORCE in available_actions(record.state),
             refused_state=SessionState.ORPHANED,
             refusal_names="force stop",
-            expects=lambda command: isinstance(command, ForceStopCommand)
-            and command.session_id == _SESSION_ID,
+            expects=lambda command: (
+                isinstance(command, ForceStopCommand) and command.session_id == _SESSION_ID
+            ),
         ),
     ),
     # `remote_control_available` requires a RUNNING Claude pane, so PRESERVED is the same
@@ -194,9 +195,13 @@ _ARRANGED: dict[type[ConfirmScreen], tuple[_Arrangement, ...]] = {
             # two rows' states survived a version that checked a name, and hard-coding the
             # direction inside the command survived a version that covered only Enable.
             expects=(
-                lambda desired: lambda command: isinstance(command, RemoteControlCommand)
-                and command.session_id == _SESSION_ID
-                and command.desired_state is desired
+                lambda desired: (
+                    lambda command: (
+                        isinstance(command, RemoteControlCommand)
+                        and command.session_id == _SESSION_ID
+                        and command.desired_state is desired
+                    )
+                )
             )(desired),
         )
         for key, desired in (
@@ -766,9 +771,7 @@ async def test_a_burst_of_answers_answers_once_and_pops_once(
 
         # No pump turn between them, which is what a single terminal read delivers.
         for _ in range(bursts):
-            modal.post_message(
-                OptionList.OptionSelected(choices, chosen, modal.resting_index)
-            )
+            modal.post_message(OptionList.OptionSelected(choices, chosen, modal.resting_index))
         await pilot.pause()
         await asyncio.wait_for(asking, timeout=5)
         await pilot.pause()
@@ -786,9 +789,7 @@ async def test_a_burst_of_answers_answers_once_and_pops_once(
 
 
 @pytest.mark.parametrize("confirm,arrangement", _CASES)
-async def test_a_store_failure_reported_under_a_modal_does_not_crash(
-    confirm, arrangement
-) -> None:
+async def test_a_store_failure_reported_under_a_modal_does_not_crash(confirm, arrangement) -> None:
     """BL-021, which the Stage 2 gate recorded and predicted this stage would make reachable.
 
     `RemoteAgentsTui.body` was an unchecked cast to `ChoiceScreen`, safe only while nothing
