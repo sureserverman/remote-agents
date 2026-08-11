@@ -6,19 +6,17 @@ gate remediation: corrected hook payload field names, the `output_limit` kind, a
 backoff), plus this document's own corrections
 Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity-notifications-plan.md`
 
-> **Status: PENDING OWNER OBSERVATION, 2026-08-11.** The unattended host-side verification below
-> is complete and every figure in it is a real reading taken on this host at this commit.
+> **Status: RUN AND ACCEPTED, 2026-08-11.** Steps 1 and 2 were performed from the working
+> session at the owner's instruction and are recorded from their own output, including the config
+> crash-loop the run found. Steps 3 through 8 were performed by the owner against the real
+> Telegram client and reported as a **single blanket confirmation** — "all 6 are fine" — against a
+> six-instruction sequence, **not** as six separate readings. That distinction is preserved rather
+> than smoothed over: what each step's line records is the owner's coverage of it, and the
+> independent machine-side corroboration is listed separately under *What the host confirms on its
+> own*. No per-step observation has been invented.
 >
-> **Steps 1 and 2 of the checklist have since been performed** from the working session, at the
-> owner's explicit instruction ("do it"): the hooks are installed in the real
-> `~/.claude/settings.json`, the config gained the two keys this release requires, and the service
-> is running this branch. Both steps carry their real readings, and step 2 records the crash-loop
-> the run found.
->
-> **Steps 3 through 9 have not been performed, and cannot be from here.** They need a managed
-> Claude session launched from the owner's own Telegram client and a notification observed on a
-> phone. No sweep can observe a phone. Those steps stay unticked and this document must not be
-> described as accepted until they are walked and their readings written in.
+> Step 9, the removal drill against the real settings file, was **not** performed — reversibility
+> is verified against a scratch file only. It is marked as such below.
 >
 > The instrument is written this way on purpose. `docs/acceptance-2026-08-11.md` records a
 > near-miss on the previous sub-plan: a confirmation arrived while the store showed the checklist
@@ -30,6 +28,13 @@ Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity
 > correction is recorded in place rather than smoothed over — see *Corrected figure, 2026-08-11*
 > below. It is the only defence this instrument has: a transcribed number is indistinguishable
 > from a measured one until somebody re-measures it.
+>
+> **This run found two defects that nothing else did**, and both are recorded where they happened:
+> the config crash-loop at step 2, and — reported by the owner from the real client after a first
+> pass over steps 3-8 — a pressed notification that was never removed and a menu pushed out of
+> view as notifications accumulated. The second was fixed (`aa6819b`), redeployed, and steps 3-8
+> re-walked against the fix; the confirmation above is of the fixed build. An acceptance run that
+> finds nothing is not evidence that there was nothing to find.
 
 One behaviour is new. Until now the bot only ever answered something the owner pressed. It now
 sends unprompted messages — one per observation — when a managed agent finishes, hits a usage
@@ -230,7 +235,7 @@ against the real binaries at Stage 2 it measured **codex settling and opencode s
 therefore unverified for that third profile, and a `cursor-agent` session that never produces a
 `quiet` notification is an expected-unknown rather than a defect until that measurement exists.
 
-## Owner steps — 1 and 2 done, 3 onward outstanding
+## Owner steps — 1-8 performed, 9 outstanding
 
 Walk these in order against the installed service and the real Telegram client. Record what you
 actually see beside each one; leave unperformed steps marked unperformed rather than folding them
@@ -263,16 +268,16 @@ into a blanket confirmation.
       errors since that start. The runbook now carries the upgrade note this step needed; no test
       could have caught it, because every test builds its own config and so can never be stale
       against the code.
-- [ ] 3. From Telegram, launch a managed **Claude** session through the bot — the hook path only
+- [x] 3. From Telegram, launch a managed **Claude** session through the bot — the hook path only
       covers `claude` and `claude-remote`. Give it a task with a definite end.
-- [ ] 4. Let it finish that task.
-- [ ] 5. **The load-bearing step.** Exactly one notification arrives on the phone, naming that
+- [x] 4. Let it finish that task.
+- [x] 5. **The load-bearing step.** Exactly one notification arrives on the phone, naming that
       session by its display identity, reading "The agent has finished its work." Not two, not one
       per turn — the rate limit collapses a burst of the same kind for the same session.
-- [ ] 6. Press that message's `Open session` button. It renders **that** session's detail into the
+- [x] 6. Press that message's `Open session` button. It renders **that** session's detail into the
       live view, and **that notification disappears** — it has been acted on. Confirm the menu you
       are left with is the session detail and that its buttons work.
-- [ ] 7. Confirm the menu is the **last** message in the chat, not somewhere above the
+- [x] 7. Confirm the menu is the **last** message in the chat, not somewhere above the
       notifications. Let a second notification arrive (or trigger one at step 8) and check the
       menu moves down below it rather than being pushed up. Navigate it (Back, Home) and confirm
       any *unpressed* notification is still there — navigation must not delete one you have not
@@ -280,7 +285,7 @@ into a blanket confirmation.
       original build left a pressed notification in place and never moved the menu, so alerts
       accumulated and the menu was pushed out of view. The owner reported it from the real
       client; no test had asked the question.)*
-- [ ] 8. Stop and close that session from the live view. A second notification should arrive,
+- [x] 8. Stop and close that session from the live view. A second notification should arrive,
       reading "The session has ended." and naming it: `SessionEnd` fires on an owner-initiated stop
       too, because the graceful stop types `/exit` into the pane, and every `reason` maps to the
       same sentence. This is the one hook kind an owner can trigger on demand rather than wait for,
@@ -290,6 +295,30 @@ into a blanket confirmation.
       Confirm it reports removal, that `grep -c 'remote_agents agent-event' ~/.claude/settings.json`
       now reports `0`, and that the file is otherwise identical to the backup taken in step 1
       (`diff` it). Your own hooks must be untouched.
+
+### What the host confirms on its own
+
+Read out of the live store and journal **after** the owner's run, at 2026-08-11T19:4x, and listed
+separately from the owner's confirmation because it is independent of it. This is the check
+sub-plan 2's near-miss exists to require: there, a confirmation arrived while the store showed the
+checklist had not been performed.
+
+| Reading | What it corroborates |
+|---|---|
+| Session `9931a162` (`claude-remote`) created `19:30:34Z`, state `ended` | A hook-sourced session was launched and ended after the fix deployed — steps 3, 4, 8 |
+| Exactly **one** `session.detail.notified` token in `callback_states` | The pressed notification's tokens were pruned and the unpressed one's survived — steps 6 and 7 |
+| That token is bound to message **215**; `chat_views` anchor is **216** | The menu is the *newest* message in the chat, below the notification — step 7 |
+| **7** live tokens bound to message 216 | The live view was re-sent and its keyboard rebound; no button on the moved menu is dead |
+| `~/.local/state/remote-agents/activity` empty, 0 delivery failures in the journal | Every spooled activity was drained and delivered — nothing held, nothing lost |
+
+`claude-remote` rather than `claude` is expected and not a deviation: `HOOK_SOURCED_PROFILES`
+covers both, and both report through the same hooks.
+
+**What none of this can show** is the part that mattered most — the message on the phone, its
+wording, and what pressing the button looked like. Those rest on the owner's word, which is why
+steps 5 to 7 are the ones the plan calls a judgment no sweep can make. The store can prove a
+notification's token existed and was pruned; it cannot prove the owner read a sentence and found
+it true.
 
 ### What the host will be able to corroborate afterwards, and what it will not
 
@@ -343,13 +372,20 @@ ones the plan calls a judgment no sweep can make.
 
 ## Outcome
 
-**Not yet accepted.** The unattended half is complete and recorded above, and steps 1 and 2 have
-been performed with their real readings written in — including the config crash-loop, which is the
-only defect this run found that no test could have. **Steps 3 through 9 have not been run**: they
-need a session launched from the owner's own Telegram client and a message observed on a phone.
+**Accepted, 2026-08-11**, with two exceptions recorded rather than waived.
 
-What is left is small and specific. The hooks are installed, the service is running this branch,
-and the spool is empty and healthy. Launch a managed **Claude** session from Telegram, give it a
-task with a definite end, and let it finish. Fill in each step's observation as it is walked, then
-replace this section and the status block with the result, whichever way it goes — and if a step
-fails, that is the run doing its job, not a reason to soften it.
+The unattended half is complete and every figure in it is a real reading. Steps 1 and 2 were
+performed from the working session; steps 3 through 8 by the owner against the real Telegram
+client, reported as one blanket confirmation and recorded as one. The host corroborates the
+mechanical half of that confirmation independently, above.
+
+**Not covered:** step 9, the removal drill against the real `~/.claude/settings.json`.
+Reversibility is proven against a scratch file — install, re-install, remove, `diff` byte-identical
+— but not against the owner's own file, whose `PostToolUse` and opaque-study `SessionEnd` hooks are
+the ones that would actually be at risk. The install half *was* run against it and preserved both.
+
+**Also not covered, and carried forward:** `limit_reached` and `output_limit` have never been
+observed on this host. Both were unreachable until this gate corrected the field names, and
+provoking either means exhausting a real rate limit or an output ceiling. The live drill checks the
+field names against the installed agent on every run, which is the strongest available claim short
+of the event itself.
