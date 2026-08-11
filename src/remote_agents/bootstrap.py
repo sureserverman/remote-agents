@@ -21,6 +21,12 @@ from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
 from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
+from remote_agents.adapters.agents.hook_install import (
+    HookInstallError,
+    default_settings_path,
+    install_agent_hooks,
+    remove_agent_hooks,
+)
 from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
@@ -229,6 +235,9 @@ def main(
     tui_parser = subcommands.add_parser("tui")
     tui_parser.add_argument("--config", type=Path)
     subcommands.add_parser("agent-event")
+    install_hooks_parser = subcommands.add_parser("install-agent-hooks")
+    install_hooks_parser.add_argument("--settings", type=Path)
+    install_hooks_parser.add_argument("--remove", action="store_true")
     arguments = parser.parse_args(argv)
     if arguments.command == "agent-event":
         # An agent hook invokes this, so the branch reports success whatever happens: the
@@ -238,6 +247,21 @@ def main(
         except (ConfigError, RuntimeError):
             return 0
         return spool_agent_event(sys.stdin.buffer, activity_directory=paths.activity_directory)
+    if arguments.command == "install-agent-hooks":
+        # --settings names the file to operate on. It defaults to the agent's own, and exists
+        # so that a test can exercise this branch end to end without going anywhere near it.
+        settings_path = arguments.settings or default_settings_path(Path.home())
+        try:
+            outcome = (
+                remove_agent_hooks(settings_path)
+                if arguments.remove
+                else install_agent_hooks(settings_path)
+            )
+        except HookInstallError as error:
+            print(error, file=sys.stderr)
+            return 1
+        print(outcome.summary)
+        return 0
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(probe_profiles(closed_profiles()))
