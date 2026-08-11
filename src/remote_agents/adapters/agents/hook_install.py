@@ -38,12 +38,14 @@ running it have to be different things here, because the cost of confusing them 
 else's hook, and this module has no way to give that back.
 
 *The hooks are installed without matchers.* ``StopFailure``, ``Notification`` and
-``SessionEnd`` each discriminate on a field of their own — ``error_type``,
-``notification_type``, ``end_reason`` — and a matcher here would have to enumerate the values
-each can take. The spool on the other end already reads whichever of those fields an event
-happens to carry, so filtering in the settings file would only add a second place to keep in
-step with upstream, and a value added there would go silently unreported. Every instance is
-received and the application layer decides.
+``SessionEnd`` each discriminate on a field of their own — ``error``, ``notification_type``,
+``reason``, as the installed bundle spells them — and a matcher here would have to enumerate
+the values each can take. The spool on the other end already reads whichever of those fields
+an event happens to carry, so filtering in the settings file would only add a second place to
+keep in step with upstream, and a value added there would go silently unreported. Every
+instance is received and the application layer decides. Two of those three names were wrong
+here until the Stage 3 gate compared them with the agent rather than with our own fixtures;
+see ``activity_spool._DISCRIMINATING_FIELDS`` for what that cost.
 """
 
 from __future__ import annotations

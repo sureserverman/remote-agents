@@ -128,9 +128,11 @@ def test_the_hook_payload_field_names_match_the_installed_agent() -> None:
     This is the test whose absence let `limit_reached` ship dead. The spool's unit test
     fixtured `error_type` and the classifier's unit test wrote `reason="rate_limit"` straight
     into a spool record, so each half was verified against the other half's assumption and the
-    pair agreed perfectly about a field the agent has never sent. `error_type` appears nowhere
-    in the shipped bundle. A managed session hitting a rate limit spooled a record the drain
-    then dropped as uninterpretable -- no message, no error, no way to notice.
+    pair agreed perfectly about a field the agent has never sent. (`error_type` is a real
+    string in the bundle -- 58 times, all telemetry -- but never a hook payload field, which
+    is why searching for the name alone would have been reassuring and wrong. This test
+    searches where the payload is *built*.) A managed session hitting a rate limit spooled a
+    record the drain then dropped as uninterpretable -- no message, no error, no way to notice.
 
     Static, and deliberately so: provoking a real `StopFailure` means exhausting a real rate
     limit. Reading how the shipped bundle *constructs* the payload is the strongest claim

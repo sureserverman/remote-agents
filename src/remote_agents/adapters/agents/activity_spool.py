@@ -46,11 +46,17 @@ _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #:
 #: Measured against `~/.local/share/claude/versions/2.1.227`, not assumed:
 #: `StopFailure` carries `error`, `Notification` carries `notification_type`, `SessionEnd`
-#: carries `reason`. Two of these were previously `error_type` and `end_reason` -- names that
-#: appear **nowhere** in that binary -- which made `limit_reached` an unreachable kind: a
-#: managed session stopping on a rate limit spooled a record whose reason was `None`, and the
-#: drain dropped it as an event it could not interpret. Silently, and for the one thing a
-#: phone notification is most wanted for.
+#: carries `reason`. Two of these were previously `error_type` and `end_reason`, which made
+#: `limit_reached` an unreachable kind: a managed session stopping on a rate limit spooled a
+#: record whose reason was `None`, and the drain dropped it as an event it could not
+#: interpret. Silently, and for the one thing a phone notification is most wanted for.
+#:
+#: `end_reason` appears nowhere in that bundle. `error_type` appears 58 times and **never in a
+#: hook payload** -- it is a telemetry key. The distinction is kept because the first draft of
+#: this comment claimed both were absent, which was a `grep -c` on a binary file reporting
+#: nothing and being read as zero. The conclusion is unchanged; the evidence for it was
+#: overstated, and a comment that overstates its evidence is the failure this whole repair is
+#: about.
 #:
 #: Nothing caught it because both sides were tested against each other: the spool's fixture
 #: asserted `error_type` and the classifier's fixture wrote `reason="rate_limit"` directly, so

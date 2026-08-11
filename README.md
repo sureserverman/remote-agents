@@ -96,12 +96,15 @@ available only on a live managed Claude pane, requires a second confirmation, an
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
 The service also speaks first, once per observation, when a managed agent stops working: it has
-finished, it hit a usage limit, it is waiting for an answer, its session ended, or — for the
-profiles with no hook system — its pane has produced no output since a stated time, which is said
-as the guess it is. Each notification is its own message beside the live view, with one button that
-opens the session it names. A managed Claude session reports this itself through a global Claude
-Code hook, installed once with `remote-agents install-agent-hooks` and removed with `--remove`; the
-hook does nothing at all in a Claude session this service did not start.
+finished, it hit a usage limit, one reply hit its output length limit, it is waiting for an answer,
+its session ended, or — for the profiles with no hook system — its pane has produced no output
+since a stated time, which is said as the guess it is. Each notification is its own message beside
+the live view, with one button that opens the session it names. A managed Claude session reports this itself through a global Claude
+Code hook, installed once with `remote-agents install-agent-hooks` and removed with `--remove`. The
+hook fires in every Claude session on the host — it starts a short-lived Python process each time —
+but it writes nothing and exits 0 unless the environment carries the session identifier this
+service injects into the panes it launches. Descendants of a managed pane inherit that identifier,
+so a `claude` started from inside one is the exception and spools under its parent's session.
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
 [agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for

@@ -1,7 +1,9 @@
 # Acceptance: the bot speaks first when an agent stops working
 
 Date: 2026-08-11
-Release: unreleased — branch `feat/live-view-and-activity-notifications`, `6ffa5cb`
+Release: unreleased — branch `feat/live-view-and-activity-notifications`, `74d2f33` (the Stage 3
+gate remediation: corrected hook payload field names, the `output_limit` kind, and the notification
+backoff), plus this document's own corrections
 Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity-notifications-plan.md`
 
 > **Status: PENDING OWNER RUN, 2026-08-11.** The unattended host-side verification below is
@@ -16,17 +18,25 @@ Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity
 > had not been performed, and filling the document in at that point would have recorded ten
 > observations nobody made. An acceptance document that can be satisfied by saying "yes" is not an
 > acceptance document, and one pre-filled by the session that wrote the code is worse.
+>
+> One figure in the unattended half was **not** a real reading when it was first written, and the
+> correction is recorded in place rather than smoothed over — see *Corrected figure, 2026-08-11*
+> below. It is the only defence this instrument has: a transcribed number is indistinguishable
+> from a measured one until somebody re-measures it.
 
 One behaviour is new. Until now the bot only ever answered something the owner pressed. It now
 sends unprompted messages — one per observation — when a managed agent finishes, hits a usage
-limit, needs an answer, ends, or (for the profiles with no hook system) stops producing output.
-Each is its own message beside the live view, carrying one `Open session` button.
+limit, stops at its output length limit for one reply, needs an answer, ends, or (for the profiles
+with no hook system) stops producing output. That is six kinds. Each is its own message beside the
+live view, carrying one `Open session` button.
 
 ## What was verified unattended on this host
 
-All of the following was run at `6ffa5cb` with `README.md` and `docs/operator-runbook.md` modified
-and nothing else. The full suite is deliberately **not** run here; it takes about five minutes and
-the executing session runs it at the Stage 3 gate.
+All of the following was first run at `6ffa5cb`, and **re-run in full** against the Stage 3 gate
+remediation now committed as `74d2f33` — the corrected `StopFailure` / `SessionEnd` field names, the
+`output_limit` kind, and the notification backoff. Every figure below is the reading from that
+re-run. The full suite is deliberately **not** run here; it takes about five minutes and the
+executing session runs it at the Stage 3 gate.
 
 **The boundaries hold.**
 
@@ -49,14 +59,17 @@ never described with a word the Telegram action surface forbids.
 
 ```text
 $ .venv/bin/python -m pytest tests/unit/adapters/telegram/test_notifications.py -q
-17 passed in 0.10s
+27 passed in 0.13s
 
 $ .venv/bin/python -m pytest tests/integration/test_live_service.py -k notification -q
-7 passed, 34 deselected in 0.19s
+9 passed, 34 deselected in 0.17s
 
 $ .venv/bin/python -m pytest tests/e2e/test_telegram_fake_backend.py -k notification -q
-4 passed, 37 deselected in 0.20s
+5 passed, 37 deselected in 0.25s
 ```
+
+These counts are higher than at `6ffa5cb` (17, 7 and 4) because the gate remediation added the
+`output_limit` kind, the backoff, and the notified-button action, each with its own tests.
 
 **Hook payload content never reaches the durable store or the domain.**
 
@@ -67,7 +80,34 @@ $ grep -rn 'last_assistant_message\|notification_type\|stop_reason\|error_type' 
 ```
 
 Nothing an agent said, and nothing captured from a pane, enters SQLite. Activity detail is
-rendered into a message and discarded.
+rendered into a message and discarded. Note what that pattern does and does not cover: only
+`last_assistant_message` and `notification_type` are names these hook payloads actually carry.
+`error_type` is a telemetry key in the bundle and `stop_reason` an API response field — neither is
+on this path, so half the pattern guards nothing. The check holds for the two that matter, and the
+field it should have named all along is `error`, which is too common a word to grep for usefully.
+
+**The discriminating field names, read out of the agent this host runs.** Not a fixture: the
+bundle's own payload construction, in `~/.local/share/claude/versions/2.1.227`.
+
+```text
+$ for e in StopFailure SessionEnd Notification; do
+    grep -ao "hook_event_name:\"$e\"[^}]*" ~/.local/share/claude/versions/2.1.227; done
+hook_event_name:"StopFailure",error:s,error_details:e.errorDetails,last_assistant_message:i
+hook_event_name:"SessionEnd",reason:e
+hook_event_name:"Notification",message:r,title:n,notification_type:o
+```
+
+`StopFailure` carries **`error`** and `SessionEnd` carries **`reason`**; only `notification_type`
+was right in the shipped code, which read `error_type` and `end_reason`. `end_reason` appears
+nowhere in the bundle; `error_type` appears 58 times but only as a telemetry key, never as a hook
+payload field. The consequence was a dead kind — `limit_reached` could not fire, because a rate
+limit spooled a record whose `reason` was null and the drain dropped it as uninterpretable. The
+values `error` may take are enumerated in the same bundle (`authentication_failed`,
+`oauth_org_not_allowed`, `billing_error`, `rate_limit`, `overloaded`, `invalid_request`,
+`model_not_found`, `server_error`, `unknown`, `max_output_tokens`); only `rate_limit` →
+`limit_reached` and `max_output_tokens` → `output_limit` are mapped, and every other value is
+dropped. `tests/live/test_agent_activity_hooks.py::test_the_hook_payload_field_names_match_the_installed_agent`
+now makes this comparison on every live run.
 
 **The installer, drilled against a scratch settings file.** Not a fixture inside the test suite —
 these were run from the command line against a file created for the purpose, because the guarantee
@@ -118,7 +158,7 @@ $ printf '{"hook_event_name":"Stop","last_assistant_message":"done"}' \
                                                                (exit 0, 1 file written)
 
 $ ls -l <spool>
--rw------- 1 user user 126 drill-20260811T155613784706Z.json
+-rw------- 1 user user 125 drill-20260811T163143366165Z.json
 ```
 
 The record's whole content is
@@ -126,6 +166,13 @@ The record's whole content is
 "drill"}` — no transcript path, no working directory. Both the module form
 (`python -m remote_agents agent-event`) and the console script were exercised; both route to the
 hook entry point without importing the composition root.
+
+> **Corrected figure, 2026-08-11.** The `ls -l` above previously read `126` bytes for the record
+> whose content is quoted beside it; that record is **125** bytes, so the size was not a reading.
+> It was caught during the documentation-correction pass after the Stage 3 gate, by reproducing the
+> drill instead of copying its recorded output — the only way a transcribed figure can be checked
+> at all. The whole authority of this document rests on every figure in it being a real reading, so
+> the correction is recorded here rather than made silently.
 
 **The silent failure mode is real and reproduces.** With the spool reached through a symlinked
 ancestor:
@@ -180,7 +227,13 @@ into a blanket confirmation.
 - [ ] 7. The chat now holds both: the live view showing the session detail, **and** the
       notification, still above it. Navigate the live view (Back, Home) and confirm the
       notification is still there — it is not the anchor and the anchor's pruning does not own it.
-- [ ] 8. Remove the hooks again: `uv run --locked remote-agents install-agent-hooks --remove`.
+- [ ] 8. Stop and close that session from the live view. A second notification should arrive,
+      reading "The session has ended." and naming it: `SessionEnd` fires on an owner-initiated stop
+      too, because the graceful stop types `/exit` into the pane, and every `reason` maps to the
+      same sentence. This is the one hook kind an owner can trigger on demand rather than wait for,
+      which makes it cheap to walk — and it must be walked *before* the removal below, since step 9
+      takes the hooks out.
+- [ ] 9. Remove the hooks again: `uv run --locked remote-agents install-agent-hooks --remove`.
       Confirm it reports removal, that `grep -c 'remote_agents agent-event' ~/.claude/settings.json`
       now reports `0`, and that the file is otherwise identical to the backup taken in step 1
       (`diff` it). Your own hooks must be untouched.
@@ -193,7 +246,7 @@ own. What can be checked afterwards is the spool directory being empty (`ls -A
 ~/.local/state/remote-agents/activity`), because the drain deletes each record once it has been
 turned into a message; the session's own row and state in SQLite; the service journal; and the
 settings file before and after. **The message on the phone, its wording, and the button's effect
-cannot be read back from anywhere.** They rest on the owner's word, which is why steps 5–7 are the
+cannot be read back from anywhere.** They rest on the owner's word, which is why steps 5–8 are the
 ones the plan calls a judgment no sweep can make.
 
 ## Known limitations to confirm rather than be surprised by
@@ -206,8 +259,24 @@ ones the plan calls a judgment no sweep can make.
   not report the idle panes it finds; a session that was already quiet when the service started is
   reported only after it changes and then stops again.
 - `Stop` fires per turn, not per task. An agent working through a long instruction can legitimately
-  finish more than once; the 120-second per-(session, kind) limit is what keeps that from being a
-  storm, and it is not configurable.
+  finish more than once; the per-(session, kind) suppression window is what keeps that from being a
+  storm. The window is not configurable and no longer flat: it starts at 120 seconds and **doubles
+  for each consecutive delivered repeat of the same kind**, to a cap of one message every 64
+  minutes (2, 4, 8, 16, 32, 64). The first message of a kind is as prompt as before. A different
+  kind for the same session resets that session's repeat counts, so a genuinely new thing is not
+  delayed by an hour of a previous one. Expect a standing `needs_answer` — an agent waiting while
+  the owner is asleep — to arrive on that widening schedule rather than every two minutes.
+- `REMOTE_AGENTS_SESSION_ID` is **inherited by descendants of a managed pane**. A `claude` started
+  from a shell inside a managed session, or by the managed agent's own Bash tool, spools under the
+  *parent's* session id, so its `Stop` or `SessionEnd` reaches the owner as a notification naming a
+  managed session that has not finished or ended. A sibling tmux pane does not inherit it. During
+  the run, do not start a nested `claude` inside the managed session unless you mean to observe
+  this; if an unexplained notification arrives, this is the first thing to suspect.
+- `limit_reached` was **unreachable** until this gate: the code read `error_type` where the agent
+  sends `error`, so a rate-limited session spooled a record the drain dropped. It has therefore
+  **never been observed on this host**, and this run will not observe it either — provoking it
+  means exhausting a real rate limit. The corrected field name is verified statically against the
+  installed bundle (above), which is the strongest claim available short of that.
 - A notification whose `Open session` button could not be attached is still delivered, without the
   button, and is not re-sent — the words are what it is for.
 - If Telegram is unreachable when a pass runs, the activities are held in memory and retried; the
@@ -217,5 +286,5 @@ ones the plan calls a judgment no sweep can make.
 ## Outcome
 
 **Not yet accepted.** The unattended half is complete and recorded above. The owner-driven half —
-steps 1 through 8 — has not been run. Fill in each step's observation as it is walked, then replace
+steps 1 through 9 — has not been run. Fill in each step's observation as it is walked, then replace
 this section and the status block with the result, whichever way it goes.

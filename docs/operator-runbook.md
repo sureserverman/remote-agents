@@ -199,7 +199,7 @@ python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-even
 
 That must report `4`. Then confirm the guard, which is what makes a global hook safe to install —
 the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
-environment, so a Claude session you start by hand notifies nobody:
+environment, so a Claude session started outside a managed pane notifies nobody:
 
 ```bash
 mkdir -p /tmp/ra-hook-check
@@ -223,6 +223,17 @@ The variable itself is injected only into the panes this service launches or res
 the curated environment (`HOME`, `LANG`, `LC_ALL`, `PATH`, `TERM`) those panes are given. It is
 launch-time context for the hook and never an authority on which session is which; the store and
 the tmux inventory remain the authority, exactly as they are for a stop (DEC-006).
+
+**It is inherited by descendants of a managed pane, and the hook cannot tell that apart.** The
+variable goes into the managed agent's own process environment — the fixed runner `execvpe`s the
+agent with it — so every process started beneath that agent carries it too: a `claude` you start
+from a shell inside a managed session, and a `claude` the managed agent runs through its own Bash
+tool. Those sessions spool under the **parent's** session id, so their `Stop` or `SessionEnd`
+reaches you as a notification naming a managed session that has not finished or ended. Nothing here
+is configurable, so this is knowledge rather than a setting: an unexplained "finished" for a session
+you can see still working usually means a nested `claude`. A *sibling* tmux pane does not inherit it
+— the variable never enters the tmux server's environment, only the launched process's — so an
+unrelated pane on the same server is silent, as is any `claude` started outside the managed tree.
 
 ### Removing the hooks
 
@@ -268,16 +279,34 @@ live view and survives the view's pruning, so navigating afterwards leaves it in
 | Kind | Sentence the owner sees | Source | Reported or inferred |
 |---|---|---|---|
 | `completed` | "The agent has finished its work." | Claude's `Stop` hook | reported |
-| `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `rate_limit` or `max_output_tokens` | reported |
-| `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `permission_prompt` or `agent_needs_input` | reported |
-| `needs_answer` | "The agent may be waiting for an answer." | Claude's `Notification` hook, `idle_prompt` | inferred |
-| `ended` | "The session has ended." | Claude's `SessionEnd` hook | reported |
+| `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
+| `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
+| `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
+| `needs_answer` | "The agent may be waiting for an answer." | Claude's `Notification` hook, `notification_type: idle_prompt` | inferred |
+| `ended` | "The session has ended." | Claude's `SessionEnd` hook, any `reason` | reported |
 | `quiet` | "No output since 14:05 UTC." | this service watching the pane | inferred |
 
-The first five are the agent reporting on itself, and each carries at most one bounded, escaped
-line of what it last said. Everything else those hook fields can carry — every other error type and
-notification type — is dropped rather than mapped to the nearest neighbour: reporting the wrong
-reason an agent stopped is worse than reporting nothing.
+The first six are the agent reporting on itself, and each carries at most one bounded, escaped
+line of what it last said. Everything else those hook fields can carry — every other value of
+`error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
+reporting the wrong reason an agent stopped is worse than reporting nothing.
+
+`limit_reached` and `output_limit` are separate because the next move differs: a rate limit is
+waited out or paid around and the work is untouched, while a reply that hit its output ceiling is
+simply continued from. They were one kind under the `limit_reached` sentence until this was
+corrected, which named the alarming one for the routine event.
+
+The field names above are the ones the installed agent actually sets — `StopFailure` carries
+`error`, `SessionEnd` carries `reason`, `Notification` carries `notification_type`. Two of the
+three were wrong in the shipped code (`error_type` and `end_reason`), which made `limit_reached`
+unreachable: a managed session stopping on a rate limit spooled a record whose reason was null and
+the drain dropped it, silently. `tests/live/test_agent_activity_hooks.py` now reads the installed
+bundle rather than a fixture, so the same drift fails a test instead of losing notifications.
+
+`SessionEnd` fires whenever a session ends, including one the owner ended: the graceful stop types
+`/exit` into the pane, so pressing Stop in Telegram normally produces an `ended` notification
+confirming what the owner just did. Every `reason` maps to the same sentence, so the message does
+not distinguish an owner-initiated exit from any other.
 
 The two inferred kinds append one further sentence, "This is a guess, not something it reported.",
 and they are guesses of different sizes. `idle_prompt` is a sixty-second timer upstream with
@@ -296,11 +325,24 @@ understated, which is the right direction for a heuristic to be wrong in.
 
 Both knobs live under `[limits]` in `~/.config/remote-agents/config.toml`. The shipped sample sets
 `activity_poll_seconds = 30` (bounded 5–600) and `activity_quiet_polls = 3` (bounded 2–20), so a
-pane goes quiet 90 seconds after its last change by default. Separately, and not configurable, one
-session's one kind of news is rate-limited to one message every 120 seconds: a `Stop` hook fires
-per turn rather than per task, so an agent working through a long instruction reports "finished"
-repeatedly and each report is true. An agent that finishes and then needs an answer has said two
-different things and both arrive, because the limit is keyed by session *and* kind.
+pane goes quiet 90 seconds after its last change by default.
+
+Separately, and not configurable, one session's one kind of news is rate-limited — a `Stop` hook
+fires per turn rather than per task, so an agent working through a long instruction reports
+"finished" repeatedly and each report is true. The first message of a kind is always prompt; the
+window then **doubles for each consecutive repeat of that same kind**, from 2 minutes to 4, 8, 16,
+32, and no further than one message every 64 minutes. Only the second and later copies are made
+rarer, and the cap keeps the signal alive rather than muting it: an agent that has been waiting all
+night is still waiting, and a window that kept doubling would amount to never mentioning it again.
+
+The limit is keyed by session *and* kind, and so is the backoff. An agent that finishes and then
+needs an answer has said two different things and both arrive. A **different** kind for the same
+session also resets that session's repeat counts to zero, because a different kind means something
+changed and the count is a claim that nothing has: an agent that finishes, is asked something, and
+finishes again is not repeating itself, and its second "finished" arrives at the base window rather
+than an hour later. The other kinds keep their timestamps, so a genuine burst is still collapsed.
+A repeat is counted only when a message was actually sent; a suppressed one does not advance the
+backoff.
 
 ## Local terminal visual baselines
 
