@@ -315,6 +315,29 @@ def test_an_empty_list_under_one_of_our_events_is_refused(tmp_path: Path) -> Non
     assert path.read_bytes() == before
 
 
+def test_a_null_under_one_of_our_events_is_refused_rather_than_crashing(tmp_path: Path) -> None:
+    """A JSON null defeats a `.get` default, which is a traceback rather than a refusal.
+
+    `_refuse_unmergeable_hooks` lets a null through on purpose -- it reads as "absent", the
+    same as a missing key -- so the merge is what has to survive it. It did not: an explicit
+    null came back from `.get(event, ())` and unpacking it raised `TypeError` out through the
+    CLI, which prints a traceback and tells the operator nothing they can act on. This module
+    promises the opposite for every other malformed shape, and the file is what it protects.
+    """
+    path = _settings_file(tmp_path, {"model": "opus", "hooks": {"Stop": None}})
+    before = path.read_bytes()
+
+    with pytest.raises(HookInstallError) as refusal:
+        install_agent_hooks(path)
+
+    # Refusing is only half of it: the operator has to be told which shape is theirs, and a
+    # message naming only the empty block and the empty list does not describe a null.
+    assert "null" in str(refusal.value)
+    assert path.read_bytes() == before
+    # A refusal that left a temporary behind would be its own defect.
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def test_an_absent_settings_file_is_created_and_remove_is_a_quiet_no_op(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
 

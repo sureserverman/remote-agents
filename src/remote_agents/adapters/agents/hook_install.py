@@ -260,7 +260,13 @@ def _with_our_groups(document: dict[str, Any], command: str) -> dict[str, Any]:
     hooks = dict(document.get("hooks") or {})
     for event in INSTALLED_EVENTS:
         group = {"hooks": [{"type": "command", "command": command}]}
-        hooks[event] = [*hooks.get(event, ()), group]
+        # `or ()` rather than a `.get` default, because an explicit JSON null defeats the
+        # default and unpacking it raised out through the CLI as a traceback. Reading null as
+        # "no groups" is what the validator above already decided; the round-trip check then
+        # refuses the install anyway, since dropping our groups again would leave the key
+        # gone rather than null -- which is the same refusal an empty list gets, and the same
+        # message tells the operator to delete it. Same form as `_holds_our_groups`.
+        hooks[event] = [*(hooks.get(event) or ()), group]
     return {**document, "hooks": hooks}
 
 
@@ -353,8 +359,9 @@ def _refuse_when_removal_would_not_restore(
             "could not put it back exactly as it is now. An empty block is almost always the "
             'cause: "hooks": {} and no "hooks" key at all mean the same thing but are '
             "different text, so an uninstall cannot tell which one to leave behind. Delete "
-            "the empty block (or the empty list under Stop, StopFailure, Notification or "
-            "SessionEnd) and run this again — that changes nothing else about your settings."
+            "the empty block (or the empty list, or a null, under Stop, StopFailure, "
+            "Notification or SessionEnd) and run this again — that changes nothing else "
+            "about your settings."
         )
 
 
