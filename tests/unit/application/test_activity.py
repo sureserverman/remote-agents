@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -315,3 +316,29 @@ def test_a_partly_written_record_is_never_seen(tmp_path: Path) -> None:
 
     assert activity.detail == "complete"
     assert (tmp_path / ".pending-abc123.tmp").exists()
+
+
+def test_an_abandoned_temporary_is_eventually_cleared_and_a_live_one_is_not(
+    tmp_path: Path,
+) -> None:
+    """A hook killed between creating its temporary and linking it leaves the temporary behind.
+
+    Nothing collected them: the drain globs `*.json`, and these are named to be invisible to
+    exactly that glob so a half-written record is never read. So they accumulated in the
+    owner's spool for the life of the machine, one per killed hook.
+
+    The age threshold is what separates the two cases, because there is no other way to tell
+    an abandoned temporary from one being written this instant -- and deleting the second
+    would destroy the record the earlier test exists to protect.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    abandoned = tmp_path / ".pending-longgone.tmp"
+    abandoned.write_text("half a record", encoding="utf-8")
+    os.utime(abandoned, (0, 0))
+    live = tmp_path / ".pending-rightnow.tmp"
+    live.write_text("being written", encoding="utf-8")
+
+    assert drain_activity(tmp_path) == ()
+
+    assert not abandoned.exists()
+    assert live.exists()

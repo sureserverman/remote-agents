@@ -287,7 +287,8 @@ def test_a_group_the_operator_narrowed_with_a_matcher_is_not_ours_to_delete(
     stop = json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"]
 
     # Ours is added beside theirs; theirs keeps both keys it was given.
-    assert {"matcher": "*", "timeout": 5, "hooks": [{"type": "command", "command": command}]} in stop
+    theirs = {"matcher": "*", "timeout": 5, "hooks": [{"type": "command", "command": command}]}
+    assert theirs in stop
 
     remove_agent_hooks(path)
     assert path.read_bytes() == before
@@ -527,7 +528,8 @@ def test_the_installed_hook_command_does_not_load_the_composition_root(tmp_path:
         "    runpy.run_module('remote_agents', run_name='__main__')\n"
         "except SystemExit:\n"
         "    pass\n"
-        "print('loaded' if 'remote_agents.bootstrap' in sys.modules else 'lean', len(sys.modules))\n"
+        "loaded = 'remote_agents.bootstrap' in sys.modules\n"
+        "print('loaded' if loaded else 'lean', len(sys.modules))\n"
     )
     completed = subprocess.run(
         [sys.executable, "-c", probe],

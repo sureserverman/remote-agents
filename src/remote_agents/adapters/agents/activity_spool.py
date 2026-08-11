@@ -44,6 +44,13 @@ MAXIMUM_PAYLOAD_BYTES = 32_768
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _DISCRIMINATING_FIELDS = ("error_type", "notification_type", "end_reason")
 _DETAIL_FIELDS = ("message", "last_assistant_message")
+#: How many times a colliding name is stepped over before the record is dropped in silence.
+#:
+#: A collision needs two events in the same *microsecond* for one session, so the four hooks
+#: firing together at the end of a turn do not approach this; reaching eight means something
+#: is wrong that a ninth attempt would not fix. Exhausting it is a silent drop, which is the
+#: right answer in a hook -- it is stated here because the loop's `return` is inside the
+#: `try`, so the fall-through is easy to read as unreachable rather than as a decision.
 _MAXIMUM_NAME_ATTEMPTS = 8
 
 

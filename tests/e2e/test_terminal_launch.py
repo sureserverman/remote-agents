@@ -3,12 +3,14 @@
 import asyncio
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from remote_agents.adapters.tmux import runtime
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
@@ -77,6 +79,41 @@ async def test_a_link_planted_at_the_intent_name_refuses_the_launch(tmp_path: Pa
     # the target the link named.
     assert (intents / f"{session_id}.json").is_symlink()
     assert not (tmp_path / "elsewhere.json").exists()
+
+
+async def test_an_intent_is_owner_only_before_its_contents_are_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The launch environment and argv must never exist in a file anyone else can read.
+
+    `O_CREAT`'s mode applies only when it creates the file, so an intent left behind at a
+    looser mode by an older build kept it -- which the code already knew and repaired with a
+    `chmod`. The repair ran *after* the write, so the window it was closing was exactly the
+    one in which the document was on disk. Observed at the descriptor, which is the only
+    place the ordering is visible: by the time the file has been written it reads 0600 either
+    way.
+    """
+    terminal, _ = make_terminal(tmp_path, timeout=0.01, mode="immediate_exit")
+    session_id = SessionId.new()
+    intents = tmp_path / "intents"
+    intents.mkdir(mode=0o700, parents=True, exist_ok=True)
+    stale = intents / f"{session_id}.json"
+    stale.write_text("{}", encoding="utf-8")
+    stale.chmod(0o644)
+
+    seen: list[int] = []
+    real_fdopen = os.fdopen
+
+    def record_mode_at_open(descriptor: int, *args: object, **kwargs: object):
+        seen.append(stat.S_IMODE(os.fstat(descriptor).st_mode))
+        return real_fdopen(descriptor, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runtime.os, "fdopen", record_mode_at_open)
+
+    await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+
+    assert seen == [0o600]
+    assert stat.S_IMODE(stale.stat().st_mode) == 0o600
 
 
 async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_path: Path) -> None:

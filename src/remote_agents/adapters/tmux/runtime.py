@@ -163,11 +163,16 @@ class TmuxTerminal:
         # rewrites its intent.
         try:
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(json.dumps(document))
             # Not redundant with that mode: open applies it only when it creates the file, so
             # an intent left behind at a looser mode by an older build would keep it forever.
-            os.chmod(path, 0o600)
+            # Before the write, not after, because the window being closed is precisely the
+            # one where the document is on disk -- repairing the mode afterwards left the
+            # launch environment and argv readable for exactly as long as the write took. On
+            # the descriptor rather than the path, so the name is not resolved a second time:
+            # O_NOFOLLOW has already decided what this frame is writing to.
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(document))
         except OSError:
             # The same answer the directory guard above gives, for the same class of failure.
             # O_NOFOLLOW exists here to refuse a link planted at this exact name, and refusing

@@ -18,7 +18,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections.abc import Iterator
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -40,6 +42,10 @@ _STAMP = re.compile(r"\d{8}T\d{12}Z")
 #: down for a day, or a hook that fired on every tool call, would stall every other thing the
 #: loop owes the owner. What is left over is not lost -- the next pass takes it, seconds later.
 MAXIMUM_DRAIN = 200
+
+#: How long a `.pending-*.tmp` must sit untouched before it counts as abandoned rather
+#: than in progress. Far longer than any write that is still going to finish.
+_ABANDONED_TEMPORARY_SECONDS = 3600.0
 
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
@@ -69,6 +75,7 @@ def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
     after the truncation cannot repair that: by then the records that should have been taken
     are the ones left behind.
     """
+    _clear_abandoned_temporaries(activity_directory)
     try:
         paths = sorted(activity_directory.glob("*.json"), key=_written_at)[:MAXIMUM_DRAIN]
     except OSError:
@@ -87,6 +94,31 @@ def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
         # is a worse answer than sorted; it is a far better one than none.
         _LOG.warning("delivering %d activity records unsorted", len(drained))
         return tuple(drained)
+
+
+def _clear_abandoned_temporaries(activity_directory: Path) -> None:
+    """Collect the temporaries a killed hook left behind, and never one still being written.
+
+    The spool writes each record to a `.pending-*.tmp` and links it into place, so a record is
+    visible under its final name only once every byte is there. A hook killed between those
+    two steps leaves the temporary, and nothing collected it: the drain globs `*.json`, and
+    these are deliberately named to be invisible to that glob. One per killed hook, kept for
+    the life of the machine, in the owner's own spool.
+
+    Age is the only thing separating an abandoned temporary from one being written this
+    instant -- there is nothing else to ask, and deleting the second would destroy exactly the
+    record the link-into-place dance exists to protect. An hour is far longer than any write
+    that is still going to finish.
+    """
+    horizon = time.time() - _ABANDONED_TEMPORARY_SECONDS
+    try:
+        pending = list(activity_directory.glob(".pending-*.tmp"))
+    except OSError:
+        return
+    for path in pending:
+        with suppress(OSError):
+            if path.stat().st_mtime < horizon:
+                path.unlink(missing_ok=True)
 
 
 def _written_at(path: Path) -> tuple[str, str]:
