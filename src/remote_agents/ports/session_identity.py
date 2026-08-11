@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 SESSION_ID_VARIABLE = "REMOTE_AGENTS_SESSION_ID"
 """The one variable a managed launch adds to the curated environment.
 
@@ -18,3 +20,24 @@ stay authoritative on which sessions exist, exactly as they are for a stop. Noth
 this variable to decide whether a session is real; it decides only whether a hook that has
 already fired is one this service should hear about.
 """
+
+
+_SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def safe_session_id(value: object) -> str | None:
+    """Accept only an opaque id, or nothing.
+
+    This shape lives beside the variable name for the same reason the variable name lives
+    here: both ends of the spool have to agree on it, and they may not import each other. The
+    hook applies it because the value arrives from the environment and becomes part of a
+    filename. The drain applies it because a *different process* wrote the file it is reading
+    -- tolerating a foreign writer is the design, not an oversight -- so what the hook
+    enforced says nothing about what comes back. A session id also reaches the owner as the
+    name of the session a notification is about, and an unbounded one carrying newlines is
+    the wrong thing to put in a message.
+
+    Rejecting rather than truncating, because a truncated id would name a different session,
+    or no session at all, while looking like an answer.
+    """
+    return value if isinstance(value, str) and _SAFE_SESSION_ID.fullmatch(value) else None

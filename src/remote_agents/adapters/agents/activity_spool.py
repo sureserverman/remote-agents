@@ -37,11 +37,10 @@ from typing import IO
 
 from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
-from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE, safe_session_id
 
 MAXIMUM_PAYLOAD_BYTES = 32_768
 
-_SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _DISCRIMINATING_FIELDS = ("error_type", "notification_type", "end_reason")
 _DETAIL_FIELDS = ("message", "last_assistant_message")
@@ -77,7 +76,7 @@ def spool_agent_event(
 ) -> int:
     """Record one hook event privately, and always report success to the agent."""
     try:
-        session_id = _safe_session_id(environment.get(SESSION_ID_VARIABLE))
+        session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
         observed = _observed_event(payload, session_id, now())
@@ -91,18 +90,6 @@ def spool_agent_event(
         # disk - costs one activity record and nothing more.
         return 0
     return 0
-
-
-def _safe_session_id(value: str | None) -> str | None:
-    """Accept only an opaque id, because this value alone becomes part of a filename.
-
-    It arrives from the environment, so it is attacker-influenced text in the one place this
-    package turns text into a path. Allowing nothing but an unpunctuated token makes a
-    traversal, an absolute path, or an embedded NUL unrepresentable rather than filtered.
-    """
-    if value is None or not _SAFE_SESSION_ID.fullmatch(value):
-        return None
-    return value
 
 
 def _observed_event(

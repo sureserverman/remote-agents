@@ -177,6 +177,64 @@ def test_a_timestamp_without_an_offset_costs_only_its_own_record(tmp_path: Path)
     assert list(tmp_path.iterdir()) == []
 
 
+def _spool_as_the_hook_names_it(
+    directory: Path, session_id: str, stamp: str, **fields: object
+) -> Path:
+    """Write a record under the name `_write_privately` actually produces.
+
+    The other helper here names files by a counter, which is fine for tests that only care
+    that a record round-trips -- and useless for one about ordering, because the real name is
+    `{session_id}-{stamp}.json` and the session comes first.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    observed_at = (
+        f"{stamp[0:4]}-{stamp[4:6]}-{stamp[6:8]}T{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}+00:00"
+    )
+    record = {
+        "session_id": session_id,
+        "event": "Stop",
+        "reason": None,
+        "detail": None,
+        "observed_at": observed_at,
+        **fields,
+    }
+    path = directory / f"{session_id}-{stamp}.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+def test_a_backlog_is_taken_oldest_first_rather_than_by_whichever_session_sorts_first(
+    tmp_path: Path,
+) -> None:
+    """A bounded drain has to take the *oldest* records, not an arbitrary subset of them.
+
+    The stamp is in the name so the drain can order what it finds, but the session id is in
+    front of it, and a session id is a UUID -- so sorting the names sorts by session, and the
+    bound then truncates whole sessions rather than the newest records. A session whose id
+    happens to sort late would keep losing every pass while a busier one won, and the operator
+    would never be told that agent is waiting. Ordering after truncating cannot fix this: by
+    then the records that should have been taken are the ones left behind.
+    """
+    # The stamp is `%Y%m%dT%H%M%S%fZ`, so the varying part has to stay inside the six
+    # microsecond digits; widening a field instead would just make an unparseable name.
+    for index in range(MAXIMUM_DRAIN):
+        _spool_as_the_hook_names_it(
+            tmp_path, "aaaa", f"20260811T080000{index:06d}Z", detail=f"new {index}"
+        )
+    for index in range(5):
+        _spool_as_the_hook_names_it(
+            tmp_path, "zzzz", f"20260811T070000{index:06d}Z", detail=f"old {index}"
+        )
+
+    first = drain_activity(tmp_path)
+
+    assert len(first) == MAXIMUM_DRAIN
+    assert [activity.detail for activity in first[:5]] == [f"old {index}" for index in range(5)]
+    # What is left behind is the newest, which is the half of the promise that makes the
+    # remainder genuinely "the next pass takes it" rather than "that session never wins".
+    assert {path.name.split("-")[0] for path in tmp_path.iterdir()} == {"aaaa"}
+
+
 def test_a_drain_is_bounded_and_leaves_the_rest_for_the_next_pass(tmp_path: Path) -> None:
     """The drain runs on the service's event loop, so one pass cannot be unbounded work."""
     for index in range(MAXIMUM_DRAIN + 5):
@@ -189,6 +247,62 @@ def test_a_drain_is_bounded_and_leaves_the_rest_for_the_next_pass(tmp_path: Path
 
     assert len(drain_activity(tmp_path)) == 5
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_record_that_cannot_be_parsed_at_all_costs_only_its_own_record(tmp_path: Path) -> None:
+    """`ValueError` is not the only way `json.loads` refuses, and the batch is already deleted.
+
+    Deeply nested JSON raises `RecursionError`, and a huge file raises `MemoryError`; neither
+    is an `OSError` or a `ValueError`, so both escaped the guard, propagated out through the
+    generator, and took down a pass whose earlier records had already been unlinked. The spool
+    side of this boundary catches broad `Exception` for exactly this reason. The side that
+    *deletes* had the narrower guard.
+    """
+    _spool(tmp_path, event="Stop", detail="before")
+    # Deep enough to overflow the decoder's stack with margin. The exact depth that trips it
+    # is an interpreter build detail, which is the reason to catch broadly rather than to
+    # enumerate the exceptions a parser can raise.
+    (tmp_path / "poison.json").write_text("[" * 200_000 + "]" * 200_000, encoding="utf-8")
+    _spool(tmp_path, event="Stop", detail="after")
+
+    activities = drain_activity(tmp_path)
+
+    assert sorted(activity.detail or "" for activity in activities) == ["after", "before"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_session_id_is_bounded_on_the_way_out_as_well_as_in(tmp_path: Path) -> None:
+    """The spool constrains this value because it becomes a filename; the drain must too.
+
+    A different process writes these files -- the module says so, and tolerating a foreign
+    writer is the design -- so the shape the spool enforces proves nothing about what the
+    drain reads back. `detail` is already re-bounded here for that exact reason. This is the
+    same argument about the field that reaches the owner as a session's name.
+    """
+    # Written directly rather than through `_spool`, which names the file after the session
+    # id -- these two ids are exactly the ones that cannot be a filename, which is the point.
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for name, session_id in (
+        ("huge", "s" * 4096),
+        ("newline", "a-session\nInjected: text"),
+    ):
+        (tmp_path / f"foreign-{name}.json").write_text(
+            json.dumps(
+                {
+                    "session_id": session_id,
+                    "event": "Stop",
+                    "reason": None,
+                    "detail": name,
+                    "observed_at": _OBSERVED_AT,
+                }
+            ),
+            encoding="utf-8",
+        )
+    _spool(tmp_path, event="Stop", detail="fine", session_id="a-session")
+
+    activities = drain_activity(tmp_path)
+
+    assert [activity.detail for activity in activities] == ["fine"]
 
 
 def test_a_partly_written_record_is_never_seen(tmp_path: Path) -> None:

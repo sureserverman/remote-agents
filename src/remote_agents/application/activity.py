@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -27,8 +28,12 @@ from remote_agents.ports.agent_activity import (
     AgentActivity,
     bounded_detail_line,
 )
+from remote_agents.ports.session_identity import safe_session_id
 
 _LOG = logging.getLogger(__name__)
+
+#: The `%Y%m%dT%H%M%S%fZ` stamp `_write_privately` puts in every name it creates.
+_STAMP = re.compile(r"\d{8}T\d{12}Z")
 
 #: How many records one pass may take. The drain runs on the same event loop that long-polls
 #: Telegram and captures panes, so "however many are there" is not a bound: a service that was
@@ -51,9 +56,21 @@ _NOTIFICATIONS = {
 
 
 def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
-    """Take every spooled record, return what it means, and leave the spool empty."""
+    """Take up to `MAXIMUM_DRAIN` of the oldest spooled records and return what they mean.
+
+    The rest stay on disk for the next pass, seconds later; this does not leave the spool
+    empty when it is backlogged, and a caller that assumed it did would stop polling with
+    records still waiting.
+
+    *Oldest* is the load-bearing word. The stamp is in the filename so the drain can order
+    what it finds, but the session id is in front of it, so sorting names sorts by session --
+    and the bound would then truncate whole sessions rather than the newest records, letting
+    a session whose id sorts late lose every pass while a busier one keeps winning. Ordering
+    after the truncation cannot repair that: by then the records that should have been taken
+    are the ones left behind.
+    """
     try:
-        paths = sorted(activity_directory.glob("*.json"))[:MAXIMUM_DRAIN]
+        paths = sorted(activity_directory.glob("*.json"), key=_written_at)[:MAXIMUM_DRAIN]
     except OSError:
         # A spool that does not exist yet is the ordinary case before the first managed
         # launch, and one that cannot be listed is a problem for the operator, not for the
@@ -72,11 +89,28 @@ def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
         return tuple(drained)
 
 
+def _written_at(path: Path) -> tuple[str, str]:
+    """Order by the stamp the hook put in the name, falling back to the name itself.
+
+    A name with no stamp is not one this spool wrote, and it sorts first so that foreign
+    files clear out rather than accumulating in front of a bound they would otherwise sit
+    behind forever. The name is the tiebreak, so the order is total and a pass is repeatable.
+    """
+    found = _STAMP.search(path.name)
+    return (found.group(0) if found else "", path.name)
+
+
 def _drained(paths: list[Path]) -> Iterator[AgentActivity]:
     for path in paths:
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except Exception:
+            # Broad on purpose, and for the same reason the hook's own boundary is: this is
+            # the frame that *deletes*. `json.loads` answers deeply nested input with
+            # `RecursionError` and a huge file with `MemoryError`, neither of which is an
+            # `OSError` or a `ValueError`, so both escaped, propagated out through this
+            # generator, and destroyed a pass whose earlier records had already been
+            # unlinked. One unreadable record is worth one lost record, never the batch.
             _LOG.warning("discarding an unreadable activity record")
             record = None
         finally:
@@ -91,9 +125,9 @@ def _drained(paths: list[Path]) -> Iterator[AgentActivity]:
 
 def _activity(record: dict) -> AgentActivity | None:
     """Map one spooled record onto the vocabulary, or onto nothing."""
-    session_id = record.get("session_id")
+    session_id = safe_session_id(record.get("session_id"))
     observed_at = _moment(record.get("observed_at"))
-    if not isinstance(session_id, str) or observed_at is None:
+    if session_id is None or observed_at is None:
         return None
     resolved = _kind(record.get("event"), record.get("reason"))
     if resolved is None:
