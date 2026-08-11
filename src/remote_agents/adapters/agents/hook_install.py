@@ -324,6 +324,18 @@ def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
     """
     if activity_directory is None:
         return
+    if not activity_directory.is_absolute():
+        # Refused before the mode check, because a relative path makes that check answer about
+        # the wrong directory rather than fail: it resolves against *this* process's working
+        # directory, while the path is embedded in the hook command verbatim and every Claude
+        # session resolves it against its own. One spool per project, none of them the one
+        # that was inspected, none of them the one the service drains -- and the check reports
+        # safe throughout, which is worse than never having run.
+        raise HookInstallError(
+            f"--activity-dir must be an absolute path; {activity_directory} would mean a "
+            "different directory in every project the agent runs in, and none of them the "
+            "one this service reads."
+        )
     exposed = ancestors_writable_by_others(activity_directory)
     if not exposed:
         return

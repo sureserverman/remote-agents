@@ -166,7 +166,16 @@ def _read_one(path: Path) -> AgentActivity | None:
     "your agent is waiting" on every pass for as long as the spool stays unwritable.
     """
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            # One byte past the limit, so "too large" is decided without the file ever being
+            # in memory. `read_bytes()` and a length check afterwards rejected the same
+            # records, but only after allocating all of them: a 600 MB spool file took peak
+            # memory from 16 MB to 631 MB before being judged. The `MemoryError` was caught
+            # and the file unlinked, so it healed in one pass -- while there was headroom for
+            # it. A file large enough to get the process killed mid-read survives the kill,
+            # and `Restart=on-failure` brings the service back to read it again. Same shape
+            # as `activity_spool`'s own read, on the other side of the same spool.
+            raw = handle.read(MAXIMUM_RECORD_BYTES + 1)
     except Exception:
         _LOG.warning("discarding an unreadable activity record")
         raw = None

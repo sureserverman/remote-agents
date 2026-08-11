@@ -585,3 +585,25 @@ def test_a_spool_under_a_sticky_shared_ancestor_is_accepted(tmp_path: Path) -> N
     path = _settings_file(tmp_path)
 
     assert install_agent_hooks(path, activity_directory=shared / "activity").changed
+
+
+def test_a_relative_spool_is_refused_rather_than_checked_against_the_wrong_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative --activity-dir makes the ancestor check answer about the installer's cwd.
+
+    The path is embedded in the hook command verbatim, and the hook runs in each Claude
+    session's own working directory -- so a relative one names a different directory in every
+    project, none of them the one that was checked, and none of them the one the service
+    drains. The guard passed while being asked about the wrong thing entirely, which is worse
+    than not having been asked: it reports safe.
+    """
+    monkeypatch.chdir(tmp_path)
+    path = _settings_file(tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(HookInstallError) as refusal:
+        install_agent_hooks(path, activity_directory=Path("spool"))
+
+    assert "absolute" in str(refusal.value)
+    assert path.read_bytes() == before

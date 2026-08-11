@@ -444,3 +444,48 @@ def test_a_file_with_no_stamp_drains_first_rather_than_waiting_behind_the_bound(
     # file left behind to be reconsidered on every future pass.
     left = [path.name for path in tmp_path.iterdir()]
     assert left == [f"aaaa-20260811T080000{MAXIMUM_DRAIN - 1:06d}Z.json"]
+
+
+def test_a_huge_record_is_refused_without_being_read_into_memory(tmp_path: Path) -> None:
+    """Bounding after the read is not bounding. The file is already in memory by then.
+
+    `read_bytes()` followed by a length check does reject the record, and the guard catches the
+    MemoryError, so the spool self-heals in one pass -- while it has the headroom. A file large
+    enough to get the process killed mid-read survives the kill, and the unit restarts on
+    failure, so the next pass reads it again. `activity_spool` already has the shape this
+    needs: read one byte past the limit and judge that.
+
+    Asserted by watching the read rather than by allocating something huge, which would make
+    the test as expensive as the bug.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    oversized = tmp_path / "oversized.json"
+    oversized.write_bytes(b"[" + b"0," * MAXIMUM_RECORD_BYTES + b"0]")
+    _spool(tmp_path, event="Stop", detail="modest")
+
+    requested: list[int | None] = []
+    real_open = Path.open
+
+    def record_the_read(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        handle = real_open(self, *args, **kwargs)
+        if self.name == "oversized.json":
+            real_read = handle.read
+
+            def watched(size: int | None = -1, /):
+                requested.append(size)
+                return real_read(size)
+
+            handle.read = watched  # type: ignore[method-assign]
+        return handle
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "open", record_the_read)
+        activities = drain_activity(tmp_path)
+
+    assert [activity.detail for activity in activities] == ["modest"]
+    assert list(tmp_path.iterdir()) == []
+    # A bounded read asks for a bounded number of bytes. Reading to the end asks for -1 or None.
+    assert requested, "the oversized record was never read at all"
+    assert all(size is not None and 0 < size <= MAXIMUM_RECORD_BYTES + 1 for size in requested), (
+        f"the whole file was read before it was judged: {requested}"
+    )
