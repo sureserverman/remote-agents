@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -19,11 +20,13 @@ from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
+from remote_agents.application.activity import PaneQuietWatcher
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_actions import available_actions
 from remote_agents.domain.models import ProfileId, ProjectId, SessionState
+from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -274,5 +277,113 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
         for record in await service.list_sessions():
             try:
                 await gateway.mutate("kill-session", f"ra-{record.session_id}")
+            except RuntimeError:
+                pass
+
+
+def _chatty_terminal(
+    tmp_path: Path, project_id: ProjectId, *, script: str
+) -> tuple[TmuxTerminal, TmuxGateway]:
+    """A terminal whose fake agent's output behaviour the caller writes."""
+    agent = tmp_path / "chatty_agent.py"
+    agent.write_text(script, encoding="utf-8")
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    profile = LaunchProfile(
+        sys.executable, (sys.executable, str(agent)), {"PATH": os.environ["PATH"]}, "READY"
+    )
+    return TmuxTerminal(
+        gateway,
+        {project_id: tmp_path / "dev" / "opaque-editor"},
+        # `codex` rather than `claude`: the watcher deliberately skips the profiles whose own
+        # hooks report for them, so launching this as claude would prove nothing.
+        {ProfileId("codex"): profile},
+        startup_timeout=2,
+    ), gateway
+
+
+async def _launch_and_watch(
+    tmp_path: Path, script: str, *, polls: int
+) -> tuple[list, TmuxGateway, object]:
+    """Launch a real fake agent into a real tmux and run the watcher over its real pane."""
+    project_id = ProjectId("opaque-editor")
+    (tmp_path / "dev" / "opaque-editor").mkdir(parents=True)
+    terminal, gateway = _chatty_terminal(tmp_path, project_id, script=script)
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        service = SessionService(store, terminal)
+        launched = await service.launch(LaunchCommand(project_id, ProfileId("codex"), None))
+        assert (await store.get(launched.session_id)).state is SessionState.RUNNING
+
+        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+        seen = []
+        for _ in range(polls):
+            seen.extend(await watcher.poll())
+            await asyncio.sleep(0.3)
+        return seen, gateway, launched.session_id
+
+
+async def test_a_quiet_fake_agent_produces_exactly_one_quiet_activity(tmp_path: Path) -> None:
+    """The whole path, over a real pane: launch, go silent, be noticed once.
+
+    Every other test of this reaches the classifier with a string a test wrote. This one reads
+    what tmux actually captured, which is the only way to find out that a real pane carries a
+    trailing cursor line, a prompt, or a redraw that never settles -- any of which would make
+    the digest change forever and the signal never fire.
+    """
+    session_id = None
+    gateway = None
+    try:
+        seen, gateway, session_id = await _launch_and_watch(
+            tmp_path,
+            # It has to still be working when the watching starts. An agent that is already
+            # silent by the first poll is deliberately never reported -- the service cannot
+            # tell it from one that finished last week -- so a script that prints everything
+            # up front tests the suppression rule and not this one. That is what the first
+            # version of this test did, and it correctly saw nothing.
+            "import time\n"
+            "print('READY', flush=True)\n"
+            "for n in range(4):\n"
+            "    print(f'step {n}', flush=True)\n"
+            "    time.sleep(0.35)\n"
+            "time.sleep(30)\n",
+            polls=12,
+        )
+
+        assert len(seen) == 1, f"expected exactly one quiet activity, got {len(seen)}"
+        assert seen[0].kind is ActivityKind.QUIET
+        assert seen[0].confidence is ActivityConfidence.INFERRED
+        assert str(session_id) == seen[0].session_id
+    finally:
+        if gateway is not None and session_id is not None:
+            try:
+                await gateway.mutate("kill-session", f"ra-{session_id}")
+            except RuntimeError:
+                pass
+
+
+async def test_a_fake_agent_that_keeps_printing_produces_no_quiet_activity(tmp_path: Path) -> None:
+    """A working agent must never be reported as having stopped."""
+    session_id = None
+    gateway = None
+    try:
+        seen, gateway, session_id = await _launch_and_watch(
+            tmp_path,
+            "import itertools, time\n"
+            "print('READY', flush=True)\n"
+            "for n in itertools.count():\n"
+            "    print(f'still working {n}', flush=True)\n"
+            "    time.sleep(0.1)\n",
+            polls=6,
+        )
+
+        assert seen == [], f"a working agent was reported as quiet: {seen}"
+    finally:
+        if gateway is not None and session_id is not None:
+            try:
+                await gateway.mutate("kill-session", f"ra-{session_id}")
             except RuntimeError:
                 pass
