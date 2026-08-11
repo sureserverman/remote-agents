@@ -133,7 +133,7 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     paths = ProductionPaths.for_home(home)
     paths.ensure_directories()
     (home / "dev").mkdir()
-    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10)
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
         composition = _private_boundary(config, connection, paths)

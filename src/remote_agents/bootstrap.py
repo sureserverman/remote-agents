@@ -385,6 +385,7 @@ def main(
                     _private_boundary(config, connection, paths),
                     serve_runner,
                     _RECONCILE_INTERVAL_SECONDS,
+                    config.activity_poll_seconds,
                 )
             )
         finally:
@@ -484,6 +485,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         ),
         terminal,
         ReconciliationService(store),
+        PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
     )
 
 

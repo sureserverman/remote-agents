@@ -6,3 +6,9 @@ database_path = "/home/user/.local/state/remote-agents/sessions.sqlite3"
 [limits]
 max_label_length = 40
 project_page_size = 10
+
+# How often a pane without a hook system is looked at, in seconds, and how many consecutive
+# unchanged looks count as the agent having stopped producing output. The second is a
+# heuristic and is described to the owner as one.
+activity_poll_seconds = 30
+activity_quiet_polls = 3

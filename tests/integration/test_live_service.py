@@ -72,7 +72,8 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
         f'dev_root = "{tmp_path}"\n'
         f'registry_path = "{tmp_path / "registry.yaml"}"\n'
         f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     paths = _DoctorPaths(config)
@@ -437,7 +438,8 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
         f'dev_root = "{tmp_path}"\n'
         f'registry_path = "{tmp_path / "registry.yaml"}"\n'
         f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     received: list[TelegramSecrets] = []
@@ -482,7 +484,8 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
         f'dev_root = "{tmp_path}"\n'
         f'registry_path = "{tmp_path / "registry.yaml"}"\n'
         f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     older = CatalogProject("a" * 24, "older", "tests", "Registered")
