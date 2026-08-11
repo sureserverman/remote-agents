@@ -36,6 +36,14 @@ def open_private_directory(path: Path) -> Path | None:
     what the composition root wants, which is why `ProductionPaths` keeps its own version
     bounded by the configured home rather than calling this one.
 
+    One precondition the caller owns, since this cannot check it: the *pre-existing* ancestors
+    must not be writable by anyone else. A component that already exists keeps its mode by
+    design (see above), so pointing this at a path under a group- or world-writable,
+    non-sticky directory leaves someone else able to unlink the leaf and leave a link in its
+    place — the very race the walk refuses, reintroduced one level up. The leaf is 0700 once
+    made, and the two call sites here sit under the owner's own XDG state directory; a caller
+    passing an operator-supplied path is the one that has to have checked.
+
     Returns the directory, or ``None`` when it cannot be made owner-only without following a
     link. Callers treat ``None`` as "drop this record": nothing here may raise into a hook.
     """
