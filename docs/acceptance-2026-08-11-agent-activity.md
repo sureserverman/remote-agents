@@ -6,12 +6,19 @@ gate remediation: corrected hook payload field names, the `output_limit` kind, a
 backoff), plus this document's own corrections
 Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity-notifications-plan.md`
 
-> **Status: PENDING OWNER RUN, 2026-08-11.** The unattended host-side verification below is
-> complete and every figure in it is a real reading taken on this host at this commit. **The
-> owner-driven half has not been performed.** Nobody has installed the hooks into the real
-> `~/.claude/settings.json`, launched a managed Claude session through the bot, or looked at a
-> phone. The checklist under *Owner steps, not yet performed* is therefore unticked, and this
-> document must not be described as accepted until it is walked and its readings written in.
+> **Status: PENDING OWNER OBSERVATION, 2026-08-11.** The unattended host-side verification below
+> is complete and every figure in it is a real reading taken on this host at this commit.
+>
+> **Steps 1 and 2 of the checklist have since been performed** from the working session, at the
+> owner's explicit instruction ("do it"): the hooks are installed in the real
+> `~/.claude/settings.json`, the config gained the two keys this release requires, and the service
+> is running this branch. Both steps carry their real readings, and step 2 records the crash-loop
+> the run found.
+>
+> **Steps 3 through 9 have not been performed, and cannot be from here.** They need a managed
+> Claude session launched from the owner's own Telegram client and a notification observed on a
+> phone. No sweep can observe a phone. Those steps stay unticked and this document must not be
+> described as accepted until they are walked and their readings written in.
 >
 > The instrument is written this way on purpose. `docs/acceptance-2026-08-11.md` records a
 > near-miss on the previous sub-plan: a confirmation arrived while the store showed the checklist
@@ -190,6 +197,28 @@ would spool nothing forever, in silence. The service is the half that complains:
 refuses to start. This asymmetry is documented in the runbook under *When notifications stop
 arriving and nothing complains*.
 
+**The hook path, against the real agent, at this commit.** Not a fixture and not a fake payload:
+`tests/live/test_agent_activity_hooks.py` launches a real `claude` with the hook installed into a
+settings file made for the test, and it now also reads how the *installed bundle* constructs each
+payload rather than trusting this project's belief about the field names.
+
+```text
+$ REMOTE_AGENTS_LIVE_ACCEPTANCE=1 .venv/bin/python -m pytest tests/live/test_agent_activity_hooks.py -q
+3 passed in 11.32s
+```
+
+Those three are: a managed session spools exactly one file on `Stop`; a session started without
+`REMOTE_AGENTS_SESSION_ID` spools none; and `StopFailure`/`Notification`/`SessionEnd` are spelled
+`error`/`notification_type`/`reason` in `2.1.227`, as `_DISCRIMINATING_FIELDS` now expects. The
+third is the one whose absence let `limit_reached` ship dead — see *Known limitations*.
+
+**The service itself, on this branch, with the hooks installed.** `systemctl --user is-active`
+reports `active`; the spool `~/.local/state/remote-agents/activity` exists `drwx------` and is
+empty; and the journal since the successful start at 18:47:54 carries **no** `activity watch pass
+failed`, no drain failure and no delivery failure. An empty spool with a healthy service is the
+correct resting state — the drain deletes what it turns into a message, and no managed Claude
+session has finished work since the restart.
+
 ## The measured gap, carried forward from Stage 2
 
 `tests/live/test_idle_pane_settles.py` exists because every automated test of the quiet path drives
@@ -201,21 +230,39 @@ against the real binaries at Stage 2 it measured **codex settling and opencode s
 therefore unverified for that third profile, and a `cursor-agent` session that never produces a
 `quiet` notification is an expected-unknown rather than a defect until that measurement exists.
 
-## Owner steps, not yet performed
+## Owner steps — 1 and 2 done, 3 onward outstanding
 
 Walk these in order against the installed service and the real Telegram client. Record what you
 actually see beside each one; leave unperformed steps marked unperformed rather than folding them
 into a blanket confirmation.
 
-- [ ] 1. Back up the settings file this is about to edit, then install the hooks:
+- [x] 1. Back up the settings file this is about to edit, then install the hooks:
       `cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date -u +%Y%m%dT%H%M%S)` followed by
       `uv run --locked remote-agents install-agent-hooks`. The summary must name four hooks. Confirm
       `python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-event'` reports
       `4`, and that your own hooks are still there.
-- [ ] 2. Deploy this branch and start the service:
-      `systemctl --user restart remote-agents.service`, then
-      `systemctl --user is-active remote-agents.service` and a clean
-      `journalctl --user -u remote-agents.service -n 50 --no-pager`.
+      **Performed 2026-08-11T18:46Z from the working session, at the owner's instruction.** Backup
+      `~/.claude/settings.json.pre-agent-hooks-20260811T174642`; `installed 4 agent hooks`; the
+      count reports `4`; the owner's own `PostToolUse` (`Edit|Write`) and opaque-study `SessionEnd`
+      hooks both survived, ours sitting beside the latter; mode `600` preserved; a second run
+      answered `agent hooks already current` and wrote nothing. The installed command is
+      `/home/user/dev/infra/remote-agents/.venv/bin/python -m remote_agents agent-event` — the
+      project venv rather than `uv run`'s interpreter, deliberately, since that is the one the
+      unit itself runs.
+- [x] 2. **Edit the config, then** deploy this branch and start the service. `[limits]` gained
+      `activity_poll_seconds` and `activity_quiet_polls`, and that table is validated against an
+      exact key set, so a config written before this release makes the new service exit 1 —
+      `Restart=on-failure` then turns it into a crash-loop.
+      **Performed 2026-08-11T18:47Z, and this step is written the way it is because the run found
+      it the hard way.** The restart was done first and the service crash-looped through three
+      restarts with
+      `ConfigError: limits has unknown or missing keys: ['activity_poll_seconds', 'activity_quiet_polls']`.
+      Config backed up to `~/.config/remote-agents/config.toml.pre-activity-20260811T174733`, both
+      keys added at the shipped defaults (30 / 3), restarted: `active (running)`, PID 437956, and
+      `~/.local/state/remote-agents/activity` created `drwx------` by `ensure_directories`. No
+      errors since that start. The runbook now carries the upgrade note this step needed; no test
+      could have caught it, because every test builds its own config and so can never be stale
+      against the code.
 - [ ] 3. From Telegram, launch a managed **Claude** session through the bot — the hook path only
       covers `claude` and `claude-remote`. Give it a task with a definite end.
 - [ ] 4. Let it finish that task.
@@ -290,6 +337,13 @@ ones the plan calls a judgment no sweep can make.
 
 ## Outcome
 
-**Not yet accepted.** The unattended half is complete and recorded above. The owner-driven half —
-steps 1 through 9 — has not been run. Fill in each step's observation as it is walked, then replace
-this section and the status block with the result, whichever way it goes.
+**Not yet accepted.** The unattended half is complete and recorded above, and steps 1 and 2 have
+been performed with their real readings written in — including the config crash-loop, which is the
+only defect this run found that no test could have. **Steps 3 through 9 have not been run**: they
+need a session launched from the owner's own Telegram client and a message observed on a phone.
+
+What is left is small and specific. The hooks are installed, the service is running this branch,
+and the spool is empty and healthy. Launch a managed **Claude** session from Telegram, give it a
+task with a definite end, and let it finish. Fill in each step's observation as it is walked, then
+replace this section and the status block with the result, whichever way it goes — and if a step
+fails, that is the run doing its job, not a reason to soften it.

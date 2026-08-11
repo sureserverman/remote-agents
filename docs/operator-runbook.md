@@ -126,6 +126,30 @@ journalctl --user -u remote-agents.service -n 100 --no-pager
 
 ## Agent activity notifications
 
+> **Upgrading an existing host: edit the config before you restart the service.** This feature
+> added two keys to `[limits]`, and `config.py` validates that table against an *exact* key set —
+> unknown keys **and** missing ones are refused. So a config written before this release makes the
+> new service exit 1 on startup, and `Restart=on-failure` turns that into a crash-loop:
+>
+> ```text
+> remote_agents.config.ConfigError: limits has unknown or missing keys:
+> ['activity_poll_seconds', 'activity_quiet_polls']
+> ```
+>
+> Add both to `~/.config/remote-agents/config.toml` under `[limits]` first — the shipped defaults
+> are in `config/remote-agents.example.toml`:
+>
+> ```toml
+> activity_poll_seconds = 30
+> activity_quiet_polls = 3
+> ```
+>
+> They are deliberately required rather than defaulted, which is the same rule that rejects a
+> typo'd key: this file is small, exact and hand-edited, and a silently defaulted knob is one the
+> owner never learns they have. The cost is this upgrade step, and the error names both keys.
+> Found by the acceptance run on 2026-08-11 rather than by any test, because every test builds its
+> own config and so can never be out of date with the code.
+
 The service sends unprompted messages when a managed agent stops working, one message per
 observation, beside the live view rather than inside it. Two sources feed them and only one has
 to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
