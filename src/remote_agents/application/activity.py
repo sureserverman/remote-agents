@@ -21,7 +21,9 @@ import re
 import time
 from collections.abc import Iterator
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 from remote_agents.ports.agent_activity import (
@@ -260,3 +262,73 @@ def _moment(value: object) -> datetime | None:
     except ValueError:
         return None
     return None if moment.tzinfo is None else moment
+
+
+@dataclass(frozen=True, slots=True)
+class QuietWatch:
+    """What one session's pane looked like last time, in the only form worth keeping.
+
+    A digest, never the capture. This is held in memory for every managed session between
+    polls, and pane text is the one thing this project refuses to keep anywhere -- the store
+    rejects it, and `_append_event` rejects error codes that merely mention it. A digest
+    answers the only question the classifier asks ("is this the same as before?") and answers
+    nothing else, which is exactly the right amount to remember.
+    """
+
+    digest: str
+    unchanged_polls: int
+    seen_a_change: bool
+    already_reported: bool
+
+
+def observe_quiet(
+    watch: QuietWatch | None,
+    *,
+    session_id: str,
+    capture: str,
+    now: datetime,
+    quiet_polls: int,
+) -> tuple[QuietWatch, AgentActivity | None]:
+    """Fold one poll into a session's watch, and say whether it just went quiet.
+
+    Pure: the clock and the capture are given, never read, so a test drives the whole state
+    machine without a terminal or a sleep, and the caller keeps the only I/O.
+
+    Two rules carry the honesty of this signal, and both are about *not* reporting.
+
+    A change must have been seen before an absence of change can mean anything. The claim is
+    that an agent stopped producing output, which is a claim about a transition; a service
+    that has only ever seen one state has not observed one, and the pane may have been
+    finished for a week. Without this, restarting the service tells the owner that every idle
+    pane on the host just went quiet.
+
+    And a pane that is still quiet is not news. The report fires once per quiet spell and
+    re-arms only when the pane changes again, so an agent that goes quiet, is answered, and
+    goes quiet again is reported twice, while one left alone overnight is reported once.
+    """
+    digest = sha256(capture.encode("utf-8", errors="replace")).hexdigest()
+    if watch is None:
+        # The first poll establishes a baseline and claims nothing about it.
+        return QuietWatch(digest, 0, seen_a_change=False, already_reported=False), None
+    if digest != watch.digest:
+        return QuietWatch(digest, 0, seen_a_change=True, already_reported=False), None
+
+    unchanged = watch.unchanged_polls + 1
+    due = watch.seen_a_change and not watch.already_reported and unchanged >= quiet_polls
+    settled = QuietWatch(
+        digest,
+        unchanged,
+        seen_a_change=watch.seen_a_change,
+        already_reported=watch.already_reported or due,
+    )
+    if not due:
+        return settled, None
+    return settled, AgentActivity(
+        session_id=session_id,
+        kind=ActivityKind.QUIET,
+        detail=None,
+        observed_at=now,
+        # Never REPORTED: nothing said this. It is inferred from a pane that stopped changing,
+        # and the wording the owner sees has to be able to say so.
+        confidence=ActivityConfidence.INFERRED,
+    )

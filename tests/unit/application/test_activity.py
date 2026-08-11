@@ -14,6 +14,7 @@ from remote_agents.application.activity import (
     MAXIMUM_DRAIN,
     MAXIMUM_RECORD_BYTES,
     drain_activity,
+    observe_quiet,
 )
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 
@@ -489,3 +490,111 @@ def test_a_huge_record_is_refused_without_being_read_into_memory(tmp_path: Path)
     assert all(size is not None and 0 < size <= MAXIMUM_RECORD_BYTES + 1 for size in requested), (
         f"the whole file was read before it was judged: {requested}"
     )
+
+
+_POLLED_AT = datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
+
+
+def _observe(watch, capture: str, *, polls: int = 3, minute: int = 0):
+    """One poll, with the clock and the capture supplied rather than read."""
+    return observe_quiet(
+        watch,
+        session_id="a-session",
+        capture=capture,
+        now=_POLLED_AT.replace(minute=minute),
+        quiet_polls=polls,
+    )
+
+
+def test_a_pane_quiet_for_the_configured_number_of_polls_reports_once(tmp_path: Path) -> None:
+    """The signal is the pane not changing, and it is worth saying exactly once."""
+    watch, activity = _observe(None, "working...")
+    assert activity is None
+
+    watch, activity = _observe(watch, "working... done step one", minute=1)
+    assert activity is None
+
+    for minute in (2, 3):
+        watch, activity = _observe(watch, "working... done step one", minute=minute)
+        assert activity is None
+
+    watch, activity = _observe(watch, "working... done step one", minute=4)
+
+    assert activity is not None
+    assert activity.kind is ActivityKind.QUIET
+    assert activity.session_id == "a-session"
+    assert activity.observed_at == _POLLED_AT.replace(minute=4)
+
+
+def test_a_pane_that_stays_quiet_is_not_reported_again(tmp_path: Path) -> None:
+    """Repeating "no output since" every minute is the storm this whole path avoids."""
+    watch, _ = _observe(None, "start")
+    watch, _ = _observe(watch, "changed", minute=1)
+    for minute in (2, 3, 4):
+        watch, activity = _observe(watch, "changed", minute=minute)
+    assert activity is not None
+
+    for minute in (5, 6, 7, 8):
+        watch, activity = _observe(watch, "changed", minute=minute)
+        assert activity is None
+
+
+def test_a_pane_that_changes_again_re_arms_the_quiet_report(tmp_path: Path) -> None:
+    """An agent that went quiet, was answered, and went quiet again is quiet twice."""
+    watch, _ = _observe(None, "start")
+    watch, _ = _observe(watch, "first", minute=1)
+    for minute in (2, 3, 4):
+        watch, first = _observe(watch, "first", minute=minute)
+    assert first is not None
+
+    watch, activity = _observe(watch, "second", minute=5)
+    assert activity is None
+
+    for minute in (6, 7, 8):
+        watch, second = _observe(watch, "second", minute=minute)
+
+    assert second is not None
+    assert second.kind is ActivityKind.QUIET
+
+
+def test_a_pane_quiet_since_start_up_is_never_reported_as_having_gone_quiet(
+    tmp_path: Path,
+) -> None:
+    """A restart must not tell the owner every idle pane on the host just went quiet.
+
+    The claim is that an agent *stopped* producing output, which is a claim about a
+    transition. A service that has only ever seen one state has not observed one -- the pane
+    may have been finished for a week. So a change has to be seen before an absence of change
+    can mean anything.
+    """
+    watch = None
+    for minute in range(12):
+        watch, activity = _observe(
+            watch, "an idle pane, unchanged since before we started", minute=minute
+        )
+        assert activity is None, f"reported at poll {minute} having never seen a change"
+
+
+def test_a_quiet_report_is_never_stated_as_a_fact(tmp_path: Path) -> None:
+    """Pane quiet is a heuristic by construction, and carries the confidence that says so."""
+    watch, _ = _observe(None, "start")
+    watch, _ = _observe(watch, "changed", minute=1)
+    for minute in (2, 3, 4):
+        watch, activity = _observe(watch, "changed", minute=minute)
+
+    assert activity is not None
+    assert activity.confidence is ActivityConfidence.INFERRED
+
+
+def test_the_quiet_classifier_keeps_no_pane_text(tmp_path: Path) -> None:
+    """The watch is carried between polls, and pane text must not be what is carried.
+
+    `session_store` refuses to persist pane content and `_append_event` rejects error codes
+    that even mention it. A classifier holding captures would put that text in the service's
+    memory for every managed session, one poll from anywhere that logs its state.
+    """
+    secret = "sk-not-a-real-key-000 and a whole transcript"
+    watch, _ = _observe(None, secret)
+
+    assert secret not in repr(watch)
+    assert secret not in str(watch)
