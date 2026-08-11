@@ -35,8 +35,8 @@ from pathlib import Path
 from typing import IO
 
 from remote_agents.ports.private_directory import open_private_directory
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
-SESSION_ID_VARIABLE = "REMOTE_AGENTS_SESSION_ID"
 MAXIMUM_PAYLOAD_BYTES = 32_768
 MAXIMUM_DETAIL_CHARACTERS = 240
 

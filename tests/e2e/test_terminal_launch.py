@@ -1,6 +1,7 @@
 """Dedicated-socket startup readiness outcomes using harmless fake agents."""
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -9,8 +10,11 @@ from uuid import uuid4
 import pytest
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway
+from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.profiles import ProfileDefinition
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 
 @pytest.mark.parametrize(
@@ -101,6 +105,50 @@ async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_pa
 
         assert launched.live
         assert created_for == [session_id]
+    finally:
+        try:
+            await gateway.mutate("kill-session", f"ra-{session_id}")
+        except RuntimeError:
+            pass
+
+
+async def test_the_written_intent_carries_the_session_environment(tmp_path: Path) -> None:
+    """The hook reads its session from the environment, and the intent is what sets it.
+
+    The pane is started by re-executing the intent document, so a variable that reaches
+    `LaunchProfile.environment` but not this file never reaches the agent at all.
+    """
+    session_id = SessionId.new()
+
+    def profile_factory(received_session_id: SessionId) -> LaunchProfile:
+        return build_launch_profile(
+            ProfileDefinition(
+                ProfileId("claude"), "claude", ("claude",), ("--version",), ("/exit", "Enter")
+            ),
+            Path(sys.executable),
+            received_session_id,
+            {"PATH": os.environ["PATH"]},
+        )
+
+    gateway = TmuxGateway(
+        f"remote-agents-test-{uuid4().hex}",
+        AsyncTmuxRunner(),
+        intent_directory=tmp_path / "intents",
+    )
+    terminal = TmuxTerminal(
+        gateway,
+        {ProjectId("opaque-editor"): tmp_path},
+        {},
+        startup_timeout=0.05,
+        profile_factories={ProfileId("claude"): profile_factory},
+    )
+    try:
+        await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("claude"))
+
+        written = json.loads(
+            (tmp_path / "intents" / f"{session_id}.json").read_text(encoding="utf-8")
+        )
+        assert written["environment"][SESSION_ID_VARIABLE] == str(session_id)
     finally:
         try:
             await gateway.mutate("kill-session", f"ra-{session_id}")
