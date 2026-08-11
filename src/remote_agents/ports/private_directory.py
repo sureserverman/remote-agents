@@ -30,6 +30,12 @@ def open_private_directory(path: Path) -> Path | None:
     can always win such a race — but against a link left lying in wait, which is the
     reachable case.
 
+    There is deliberately no containment boundary here: given a path several levels below
+    anything that exists, this creates every level. That suits a caller that was *told* where
+    its spool is — an installed hook carrying a directory on its command line — and it is not
+    what the composition root wants, which is why `ProductionPaths` keeps its own version
+    bounded by the configured home rather than calling this one.
+
     Returns the directory, or ``None`` when it cannot be made owner-only without following a
     link. Callers treat ``None`` as "drop this record": nothing here may raise into a hook.
     """

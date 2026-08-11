@@ -81,9 +81,16 @@ class ProductionPaths:
         conclusion already drawn — and `exist_ok=True` resolves a symlink and reports success,
         which is what makes that gap worth closing rather than merely noting.
 
-        `ports.private_directory` does exactly this for the two spools, and the duplication
-        here is deliberate rather than overlooked: this module is the composition root, which
-        ARCH-02 forbids from importing `ports`. Keeping the boundary costs these six lines.
+        `ports.private_directory` makes the same *symlink* decisions for the two spools, and
+        the duplication is deliberate rather than overlooked: this module is the composition
+        root, which ARCH-02 forbids from importing `ports`. Keeping the boundary costs these
+        six lines.
+
+        The two are not interchangeable, and the difference is the point of this one. Only
+        this version is bounded by the configured home: it creates nothing outside it, and
+        `_reject_symlink_ancestors` refuses loudly when a path escapes. The `ports` version
+        has no home to refuse against and will build out whatever tree it is pointed at, which
+        is right for a hook told where its spool is and wrong for the declared boundary.
         """
         for parent in (*reversed(path.parents), path):
             if parent.is_symlink():

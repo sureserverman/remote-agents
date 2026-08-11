@@ -18,6 +18,21 @@ def test_a_missing_directory_is_created_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
 
 
+def test_several_missing_levels_are_all_created_owner_only(tmp_path: Path) -> None:
+    """This one is unbounded on purpose, and every level it creates is still owner-only.
+
+    `ProductionPaths` keeps its own copy of the symlink check precisely because it wants the
+    opposite -- a boundary at the configured home. Pinning the behaviour here stops the two
+    from being read as interchangeable.
+    """
+    target = tmp_path / "one" / "two" / "three" / "activity"
+
+    assert open_private_directory(target) == target
+
+    for level in (target, *list(target.parents)[:3]):
+        assert stat.S_IMODE(level.stat().st_mode) == 0o700
+
+
 def test_an_existing_directory_is_accepted_and_its_mode_repaired(tmp_path: Path) -> None:
     target = tmp_path / "activity"
     target.mkdir(mode=0o755)

@@ -13,11 +13,11 @@ from typing import Any
 import pytest
 
 from remote_agents.adapters.agents.activity_spool import (
-    MAXIMUM_DETAIL_CHARACTERS,
     MAXIMUM_PAYLOAD_BYTES,
     SESSION_ID_VARIABLE,
     spool_agent_event,
 )
+from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS
 
 _STOP_PAYLOAD: dict[str, Any] = {
     "session_id": "f4020001-e712-4832-9fc8-dd28d38d5b8a",

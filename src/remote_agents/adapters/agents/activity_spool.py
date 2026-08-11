@@ -28,17 +28,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
+from remote_agents.ports.agent_activity import bounded_detail_line
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 MAXIMUM_PAYLOAD_BYTES = 32_768
-MAXIMUM_DETAIL_CHARACTERS = 240
 
 _SAFE_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -124,7 +125,7 @@ def _observed_event(
         session_id=session_id,
         event=event,
         reason=_first(document, _DISCRIMINATING_FIELDS, _plain_token),
-        detail=_first(document, _DETAIL_FIELDS, _detail_line),
+        detail=_first(document, _DETAIL_FIELDS, bounded_detail_line),
         observed_at=moment.astimezone(UTC),
     )
 
@@ -147,34 +148,39 @@ def _plain_token(value: object) -> str | None:
     return value if isinstance(value, str) and _PLAIN_TOKEN.fullmatch(value) else None
 
 
-def _detail_line(value: object) -> str | None:
-    """Normalize free agent text to one bounded line, since a notification shows one line."""
-    if not isinstance(value, str):
-        return None
-    normalized = " ".join(value.split())
-    return normalized[:MAXIMUM_DETAIL_CHARACTERS] if normalized else None
-
-
 def _write_privately(observed: ObservedAgentEvent, activity_directory: Path) -> None:
     """Publish one owner-only file, named so the drain can order what it finds.
 
-    The mode is given to ``os.open`` rather than repaired afterwards, so the file is never
-    briefly readable by anyone else, and ``O_EXCL`` means a name already taken - by a second
-    event within the same microsecond, or by anything else - is stepped over instead of
-    overwritten. ``O_NOFOLLOW`` says the same thing about a link as the directory guard
-    above says about the spool: this frame writes to the name it was given, or to nothing.
+    The record is written to a uniquely named temporary and then *linked* into place, so it
+    appears under the name the drain collects only once all of its bytes are there. Creating
+    it directly at its final name left it visible and empty for as long as the write took,
+    and a drain passing through that window would have read nothing parseable and deleted it
+    -- losing a record the hook had already reported writing.
+
+    ``os.link`` rather than ``os.replace`` because the final name still has to be *claimed*,
+    not overwritten: two events in the same microsecond propose the same name, and link fails
+    where replace would silently discard the first. Renaming a temporary into place got the
+    atomicity right and lost that, since the temporary was gone by the time the second event
+    looked for it. ``mkstemp`` opens the temporary owner-only, so the mode is never repaired
+    after the fact and the content is never briefly readable by anyone else.
     """
     if open_private_directory(activity_directory) is None:
         return
     content = json.dumps(observed.document(), sort_keys=True).encode("utf-8")
     stamp = observed.observed_at.strftime("%Y%m%dT%H%M%S%fZ")
-    for attempt in range(_MAXIMUM_NAME_ATTEMPTS):
-        suffix = "" if attempt == 0 else f"-{attempt}"
-        path = activity_directory / f"{observed.session_id}-{stamp}{suffix}.json"
-        try:
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            continue
+    descriptor, name = tempfile.mkstemp(dir=activity_directory, prefix=".pending-", suffix=".tmp")
+    pending = Path(name)
+    try:
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
-        return
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(_MAXIMUM_NAME_ATTEMPTS):
+            suffix = "" if attempt == 0 else f"-{attempt}"
+            try:
+                os.link(pending, activity_directory / f"{observed.session_id}-{stamp}{suffix}.json")
+            except FileExistsError:
+                continue
+            return
+    finally:
+        pending.unlink(missing_ok=True)

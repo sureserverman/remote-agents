@@ -6,6 +6,28 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+MAXIMUM_DETAIL_CHARACTERS = 240
+"""How much of what an agent said a notification will carry.
+
+It lives here because both ends of the spool have to agree on it: the hook bounds what it
+writes, and the drain bounds again what it reads, since a different process wrote the file in
+between. Two copies of this number would be two budgets, and nothing would notice them
+drifting apart -- each side's tests only ever exercise its own.
+"""
+
+
+def bounded_detail_line(value: object) -> str | None:
+    """Reduce free agent text to the one bounded line a notification can show.
+
+    Not a formatting nicety: this text arrives from whatever the agent last said, so it may
+    carry newlines that would break a message into pieces, runs of whitespace from a rendered
+    table, or a whole essay. One line, bounded, or nothing.
+    """
+    if not isinstance(value, str):
+        return None
+    normalized = " ".join(value.split())
+    return normalized[:MAXIMUM_DETAIL_CHARACTERS] if normalized else None
+
 
 class ActivityKind(Enum):
     """The only things this service claims about an agent that has stopped working.

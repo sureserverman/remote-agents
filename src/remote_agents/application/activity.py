@@ -21,11 +21,20 @@ from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
-from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+    bounded_detail_line,
+)
 
 _LOG = logging.getLogger(__name__)
 
-MAXIMUM_DETAIL_CHARACTERS = 240
+#: How many records one pass may take. The drain runs on the same event loop that long-polls
+#: Telegram and captures panes, so "however many are there" is not a bound: a service that was
+#: down for a day, or a hook that fired on every tool call, would stall every other thing the
+#: loop owes the owner. What is left over is not lost -- the next pass takes it, seconds later.
+MAXIMUM_DRAIN = 200
 
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
@@ -44,13 +53,23 @@ _NOTIFICATIONS = {
 def drain_activity(activity_directory: Path) -> tuple[AgentActivity, ...]:
     """Take every spooled record, return what it means, and leave the spool empty."""
     try:
-        paths = sorted(activity_directory.glob("*.json"))
+        paths = sorted(activity_directory.glob("*.json"))[:MAXIMUM_DRAIN]
     except OSError:
         # A spool that does not exist yet is the ordinary case before the first managed
         # launch, and one that cannot be listed is a problem for the operator, not for the
         # poll that found it. Either way there is nothing to deliver this pass.
         return ()
-    return tuple(sorted(_drained(paths), key=lambda activity: activity.observed_at))
+    drained = list(_drained(paths))
+    try:
+        return tuple(sorted(drained, key=lambda activity: activity.observed_at))
+    except TypeError:
+        # Sorting is the one step here that can still fail on data that individually parsed:
+        # comparing a naive timestamp against an aware one raises. `_moment` rejects naive
+        # values so this should be unreachable, but the records are already deleted by now,
+        # and an ordering problem is not worth every pending activity in the batch. Unsorted
+        # is a worse answer than sorted; it is a far better one than none.
+        _LOG.warning("delivering %d activity records unsorted", len(drained))
+        return tuple(drained)
 
 
 def _drained(paths: list[Path]) -> Iterator[AgentActivity]:
@@ -83,7 +102,7 @@ def _activity(record: dict) -> AgentActivity | None:
     return AgentActivity(
         session_id=session_id,
         kind=kind,
-        detail=_detail(record.get("detail")),
+        detail=bounded_detail_line(record.get("detail")),
         observed_at=observed_at,
         confidence=confidence,
     )
@@ -103,22 +122,18 @@ def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfiden
 
 
 def _moment(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    """Accept an instant, which means one that knows its own offset.
 
-
-def _detail(value: object) -> str | None:
-    """Bound it again here rather than trusting the spool to have done it.
-
-    The spool bounds what it writes, but this reads files a different process produced, and
-    the one thing a notification must not do is carry an agent's entire last message into a
-    Telegram message.
+    `fromisoformat` is happy to return a naive datetime, and a naive one cannot be compared
+    with an aware one -- so a single record without an offset used to raise while the batch
+    was being ordered, after every file in it had already been deleted. The spool this reads
+    always writes an offset; a foreign writer, which this design explicitly tolerates, need
+    not. Refusing the record costs that record alone.
     """
     if not isinstance(value, str):
         return None
-    normalized = " ".join(value.split())
-    return normalized[:MAXIMUM_DETAIL_CHARACTERS] if normalized else None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return None if moment.tzinfo is None else moment

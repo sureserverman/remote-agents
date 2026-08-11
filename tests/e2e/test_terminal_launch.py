@@ -55,6 +55,30 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
             pass
 
 
+async def test_a_link_planted_at_the_intent_name_refuses_the_launch(tmp_path: Path) -> None:
+    """O_NOFOLLOW refusing has to become an observation, not an exception out through the bot.
+
+    The directory guard above this already answers `invalid_intent` for its own class of
+    failure; the file open was the one site in this path that still refused by raising, and
+    nothing between here and the Telegram handler would have caught it -- leaving the record
+    STARTING for reconciliation to find and no launch behind it.
+    """
+    terminal, _ = make_terminal(tmp_path, timeout=0.3)
+    session_id = SessionId.new()
+    intents = tmp_path / "intents"
+    intents.mkdir(mode=0o700, parents=True, exist_ok=True)
+    (intents / f"{session_id}.json").symlink_to(tmp_path / "elsewhere.json")
+
+    observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+
+    assert observation.live is False
+    assert observation.detail == "invalid_intent"
+    # The link is what it was: refusing means this frame wrote nothing at all, here or at
+    # the target the link named.
+    assert (intents / f"{session_id}.json").is_symlink()
+    assert not (tmp_path / "elsewhere.json").exists()
+
+
 async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_path: Path) -> None:
     terminal, gateway = make_terminal(tmp_path, timeout=0.01, mode="delayed")
     session_id = SessionId.new()

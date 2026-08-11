@@ -161,12 +161,22 @@ class TmuxTerminal:
         # document carries the launch environment and argv, which is exactly what must not be
         # read in that window. O_TRUNC rather than O_EXCL, because relaunching one session
         # rewrites its intent.
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(document))
-        # Not redundant with that mode: open applies it only when it creates the file, so an
-        # intent left behind at a looser mode by an older build would keep it forever.
-        os.chmod(path, 0o600)
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(document))
+            # Not redundant with that mode: open applies it only when it creates the file, so
+            # an intent left behind at a looser mode by an older build would keep it forever.
+            os.chmod(path, 0o600)
+        except OSError:
+            # The same answer the directory guard above gives, for the same class of failure.
+            # O_NOFOLLOW exists here to refuse a link planted at this exact name, and refusing
+            # by raising would have gone uncaught all the way out through the Telegram
+            # handler, leaving the record STARTING for reconciliation to find. A launch that
+            # cannot write its intent has not launched.
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
         try:
             await self._gateway.launch(session_id, project_id, profile_id, cwd)
         except RuntimeError:
