@@ -60,6 +60,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from remote_agents.ports.private_directory import ancestors_writable_by_others
+
 INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "SessionEnd")
 
 # What identifies a group as ours: the argument tail, matched as parsed words rather than as
@@ -114,6 +116,7 @@ def install_agent_hooks(
     activity_directory: Path | None = None,
 ) -> HookInstallOutcome:
     """Add one group per event, replacing any this installer left behind previously."""
+    _refuse_a_spool_others_can_reach(activity_directory)
     settings = _read_settings(settings_path)
     interpreter = Path(sys.executable) if executable is None else executable
     base = _without_our_groups(settings.document)
@@ -301,6 +304,36 @@ def _without_our_groups(document: dict[str, Any]) -> dict[str, Any]:
     if remaining:
         return {**document, "hooks": remaining}
     return {key: value for key, value in document.items() if key != "hooks"}
+
+
+def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
+    """Check the chosen spool before writing a command that will keep writing into it.
+
+    `--activity-dir` makes this location operator-supplied, and the guard on the other end
+    refuses to write *through* a planted link while deliberately leaving an existing
+    ancestor's mode alone. That leaves a precondition which was documented and unenforced:
+    under an ancestor others can write, the leaf can be unlinked and replaced with a link
+    between one hook firing and the next.
+
+    Refused here because this is the moment the path is chosen and the only one that can say
+    so out loud. The hook fires constantly and must stay silent, so a check there would turn
+    a misconfiguration into a spool that mysteriously stays empty forever.
+
+    Nothing is checked when the flag is absent: the default lives under the state directory
+    `ProductionPaths` already refuses to resolve through a symlink.
+    """
+    if activity_directory is None:
+        return
+    exposed = ancestors_writable_by_others(activity_directory)
+    if not exposed:
+        return
+    listed = ", ".join(str(parent) for parent in exposed)
+    raise HookInstallError(
+        f"refusing to install hooks that would spool into {activity_directory}, because "
+        f"another user can write to {listed}. Anything able to write there can replace the "
+        "spool with a link and read what your agents report. Choose a directory under your "
+        "own home, or set the sticky bit on it as /tmp has."
+    )
 
 
 def _foreign_variant_note(base: dict[str, Any]) -> str:

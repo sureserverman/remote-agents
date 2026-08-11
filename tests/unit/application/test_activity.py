@@ -408,3 +408,39 @@ def test_an_abandoned_temporary_is_eventually_cleared_and_a_live_one_is_not(
 
     assert not abandoned.exists()
     assert live.exists()
+
+
+def test_a_file_with_no_stamp_drains_first_rather_than_waiting_behind_the_bound(
+    tmp_path: Path,
+) -> None:
+    """The fallback's ordering guarantee, at the scale where it actually decides something.
+
+    `_written_at` gives an unstamped name the empty string, which sorts before every real
+    stamp, so a foreign file is always drained rather than accumulating behind a full backlog
+    it could never get in front of. Below `MAXIMUM_DRAIN` nothing is being chosen between, so
+    only a full backlog distinguishes this from a fallback that merely happens not to crash.
+    """
+    for index in range(MAXIMUM_DRAIN):
+        _spool_as_the_hook_names_it(
+            tmp_path, "aaaa", f"20260811T080000{index:06d}Z", detail=f"stamped {index}"
+        )
+    (tmp_path / "foreign-no-stamp.json").write_text(
+        json.dumps(
+            {
+                "session_id": "a-session",
+                "event": "Stop",
+                "reason": None,
+                "detail": "unstamped",
+                "observed_at": _OBSERVED_AT,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    first = drain_activity(tmp_path)
+
+    assert "unstamped" in [activity.detail for activity in first]
+    # Exactly one stamped record is displaced, and it is the newest one -- not the foreign
+    # file left behind to be reconsidered on every future pass.
+    left = [path.name for path in tmp_path.iterdir()]
+    assert left == [f"aaaa-20260811T080000{MAXIMUM_DRAIN - 1:06d}Z.json"]

@@ -76,3 +76,33 @@ def _created_without_following_links(path: Path) -> Path | None:
 def _is_real_directory(path: Path) -> bool:
     """Ask the link itself, never what it points at."""
     return stat.S_ISDIR(path.lstat().st_mode)
+
+
+def ancestors_writable_by_others(path: Path) -> tuple[Path, ...]:
+    """Name the existing components of ``path`` that someone other than the owner may write.
+
+    A pure query, deliberately: it is the precondition `open_private_directory` documents and
+    cannot itself enforce. That function refuses to write *through* a link and leaves an
+    existing ancestor's mode alone, both correctly -- so under a group- or world-writable,
+    non-sticky ancestor another user can unlink the leaf and leave a link in its place, which
+    is the refused race reintroduced one level up.
+
+    It is separate from the creation path because the answers belong at different moments. A
+    hook fires constantly, must stay silent, and cannot act on this; whoever *chooses* the
+    directory runs once, with an operator reading the output, and can refuse out loud.
+
+    The sticky bit is the exemption, and the reason ``/tmp`` is not on this list: with it set,
+    only the owner of an entry may remove it, so a shared directory carrying it does not grant
+    the swap this is looking for.
+    """
+    offenders = []
+    for parent in (*reversed(path.parents), path):
+        try:
+            mode = parent.lstat().st_mode
+        except OSError:
+            # Does not exist yet, so it will be created 0700 by the walk above rather than
+            # inherited from anyone. Nothing to answer for.
+            continue
+        if mode & (stat.S_IWGRP | stat.S_IWOTH) and not mode & stat.S_ISVTX:
+            offenders.append(parent)
+    return tuple(offenders)

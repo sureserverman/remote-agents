@@ -132,6 +132,12 @@ def _written_at(path: Path) -> tuple[str, str]:
     A name with no stamp is not one this spool wrote, and it sorts first so that foreign
     files clear out rather than accumulating in front of a bound they would otherwise sit
     behind forever. The name is the tiebreak, so the order is total and a pass is repeatable.
+
+    The match is the leftmost one anywhere in the name, which assumes stamps appear only where
+    the hook puts them. A session id is `[A-Za-z0-9_-]{1,128}` and so *could* be shaped like a
+    stamp and sort ahead of its own timestamp. Nothing is granted by that: writing into this
+    directory already means running as the owner, and an owner who wants to disturb the order
+    can simply write an old stamp. Ordering here is a fairness property, not a security one.
     """
     found = _STAMP.search(path.name)
     return (found.group(0) if found else "", path.name)

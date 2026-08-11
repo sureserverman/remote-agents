@@ -547,3 +547,41 @@ def test_the_installed_hook_command_does_not_load_the_composition_root(tmp_path:
     verdict, modules = completed.stdout.decode("utf-8").split()
     assert verdict == "lean"
     assert int(modules) < 300
+
+
+def test_a_spool_under_an_ancestor_others_can_write_is_refused_at_install_time(
+    tmp_path: Path,
+) -> None:
+    """`--activity-dir` made the spool's location operator-supplied, so someone has to check it.
+
+    `open_private_directory` refuses to write *through* a planted link and deliberately leaves a
+    pre-existing ancestor's mode alone -- those are shared XDG directories, not this project's
+    to tighten. Together that leaves a precondition its own docstring names and nothing
+    enforces: under a group- or world-writable, non-sticky ancestor, another user can unlink
+    the leaf and leave a link in its place, which is the race the walk refuses reintroduced one
+    level up.
+
+    Checked here rather than in the hook, because this is the moment the path is *chosen* and
+    the only one that can refuse out loud. The hook fires thousands of times and must stay
+    silent and fast; an installer runs once and has an operator reading its output.
+    """
+    loose = tmp_path / "loose"
+    loose.mkdir(mode=0o777)
+    path = _settings_file(tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(HookInstallError) as refusal:
+        install_agent_hooks(path, activity_directory=loose / "activity")
+
+    message = str(refusal.value)
+    assert str(loose) in message
+    assert path.read_bytes() == before
+
+
+def test_a_spool_under_a_sticky_shared_ancestor_is_accepted(tmp_path: Path) -> None:
+    """The sticky bit is what makes a shared directory safe, and /tmp is the ordinary case."""
+    shared = tmp_path / "sticky"
+    shared.mkdir(mode=0o1777)
+    path = _settings_file(tmp_path)
+
+    assert install_agent_hooks(path, activity_directory=shared / "activity").changed
