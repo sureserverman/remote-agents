@@ -19,20 +19,23 @@ import json
 import logging
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
+from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import (
+    HOOK_SOURCED_PROFILES,
     ActivityConfidence,
     ActivityKind,
     AgentActivity,
     bounded_detail_line,
 )
 from remote_agents.ports.session_identity import safe_session_id
+from remote_agents.ports.session_store import SessionStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -332,3 +335,61 @@ def observe_quiet(
         # and the wording the owner sees has to be able to say so.
         confidence=ActivityConfidence.INFERRED,
     )
+
+
+class PaneQuietWatcher:
+    """Watch the panes of the agents that cannot report for themselves.
+
+    Application-layer under DEC-001: the terminal is reached through a callable the caller
+    supplies, so nothing here knows what tmux is, and the driver adapter never reaches a pane.
+
+    It holds one `QuietWatch` per session between passes, which is the only state the service
+    keeps about an agent's behaviour -- digests, never captures.
+    """
+
+    def __init__(
+        self,
+        store: SessionStore,
+        capture: Callable[[SessionId], Awaitable[str]],
+        *,
+        quiet_polls: int,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._store = store
+        self._capture = capture
+        self._quiet_polls = quiet_polls
+        self._now = now
+        self._watches: dict[str, QuietWatch] = {}
+
+    async def poll(self) -> tuple[AgentActivity, ...]:
+        """Take one look at every running session that has no hook to speak for it."""
+        records = await self._store.list((SessionState.RUNNING,))
+        watched = [
+            record for record in records if str(record.profile_id) not in HOOK_SOURCED_PROFILES
+        ]
+        # Sessions that have gone away keep no state. Without this the map grows for the life
+        # of the service, one entry per session ever launched.
+        live = {str(record.session_id) for record in watched}
+        self._watches = {key: value for key, value in self._watches.items() if key in live}
+
+        activities = []
+        for record in watched:
+            key = str(record.session_id)
+            try:
+                capture = await self._capture(record.session_id)
+            except Exception:
+                # A pane that cannot be read is not a pane that has gone quiet, and this loop
+                # runs beside the poll that serves the owner. The watch is left untouched, so
+                # a transient failure does not read as a change and re-arm the report.
+                _LOG.warning("could not capture a pane while watching for quiet")
+                continue
+            self._watches[key], activity = observe_quiet(
+                self._watches.get(key),
+                session_id=key,
+                capture=capture,
+                now=self._now(),
+                quiet_polls=self._quiet_polls,
+            )
+            if activity is not None:
+                activities.append(activity)
+        return tuple(activities)

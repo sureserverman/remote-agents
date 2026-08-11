@@ -66,3 +66,17 @@ class AgentActivity:
     detail: str | None
     observed_at: datetime
     confidence: ActivityConfidence = ActivityConfidence.REPORTED
+
+
+HOOK_SOURCED_PROFILES = frozenset({"claude", "claude-remote"})
+"""The profiles whose own hooks report what they are doing.
+
+Everything else -- codex, opencode, cursor-agent -- has no hook system, so the only evidence
+available about it is its pane. The distinction lives here rather than in `domain/profiles.py`
+because it is a fact about where *activity* comes from, not about how a profile launches, and
+a profile gaining a hook system upstream changes this line and nothing else.
+
+It is a subtraction, not an optimization: a session that reports its own Stop and is *also*
+watched for pane quiet tells the owner the same thing twice, in two different wordings, one of
+them a guess.
+"""

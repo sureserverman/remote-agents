@@ -11,6 +11,7 @@ import pytest
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.application.activity import PaneQuietWatcher
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.bootstrap import ServiceComposition, _serve_with_reconciliation
 from remote_agents.config import TelegramSecrets
@@ -23,6 +24,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import LifecycleEvent
+from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.terminal import TerminalObservation
 
 _SECRETS = TelegramSecrets("token", 7, 11)
@@ -270,3 +272,165 @@ async def test_an_absent_server_does_end_a_record_it_no_longer_holds(tmp_path: P
         assert (await store.get(session_id)).state is SessionState.ENDED
     finally:
         connection.close()
+
+
+class CapturingTerminal(StubTerminal):
+    """A terminal whose panes a test scripts, and which records what was asked for."""
+
+    def __init__(self, captures: dict[str, list[str]] | None = None) -> None:
+        super().__init__(())
+        self.captures = captures or {}
+        self.asked: list[str] = []
+
+    async def capture(self, session_id: SessionId) -> str:
+        self.asked.append(str(session_id))
+        scripted = self.captures.get(str(session_id), ["unchanged"])
+        return scripted.pop(0) if len(scripted) > 1 else scripted[0]
+
+
+async def _running(store: SQLiteSessionStore, profile: str) -> SessionId:
+    session_id = SessionId.new()
+    await store.save(
+        SessionRecord(
+            session_id,
+            ProjectId("opaque-project"),
+            ProfileId(profile),
+            SessionDisplayIdentity("opaque-project", profile, "regular", 1),
+            SessionState.STARTING,
+            datetime.now(UTC),
+        )
+    )
+    await store.record_event(session_id, LifecycleEvent.READY)
+    return session_id
+
+
+async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
+    tmp_path: Path,
+) -> None:
+    """A session with a hook is already telling us; watching it too would say it twice."""
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        hooked = await _running(store, "claude")
+        also_hooked = await _running(store, "claude-remote")
+        watched = await _running(store, "codex")
+        terminal = CapturingTerminal()
+        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+
+        await watcher.poll()
+
+        assert terminal.asked == [str(watched)]
+        assert str(hooked) not in terminal.asked
+        assert str(also_hooked) not in terminal.asked
+
+
+async def test_activity_watching_survives_a_capture_that_raises(tmp_path: Path) -> None:
+    """A pane that cannot be read is not a pane that has gone quiet."""
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        await _running(store, "codex")
+
+        async def refuse(session_id: SessionId) -> str:
+            raise RuntimeError("tmux command failed")
+
+        watcher = PaneQuietWatcher(store, refuse, quiet_polls=1)
+
+        assert await watcher.poll() == ()
+        assert await watcher.poll() == ()
+
+
+async def test_activity_watching_reports_a_codex_pane_that_stopped_changing(
+    tmp_path: Path,
+) -> None:
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        session_id = await _running(store, "codex")
+        terminal = CapturingTerminal({str(session_id): ["one", "two", "two", "two"]})
+        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+
+        assert await watcher.poll() == ()
+        assert await watcher.poll() == ()
+        assert await watcher.poll() == ()
+        (activity,) = await watcher.poll()
+
+        assert activity.kind is ActivityKind.QUIET
+        assert activity.session_id == str(session_id)
+
+
+async def test_activity_watching_forgets_a_session_that_is_no_longer_running(
+    tmp_path: Path,
+) -> None:
+    """The watch map is per-session state, and a service runs for weeks."""
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        session_id = await _running(store, "codex")
+        terminal = CapturingTerminal()
+        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+        await watcher.poll()
+        assert watcher._watches
+
+        await store.record_event(session_id, LifecycleEvent.RECONCILED_PANE_DEAD)
+
+        await watcher.poll()
+
+        assert watcher._watches == {}
+
+
+async def test_activity_watching_runs_beside_the_poll_and_stops_with_it(tmp_path: Path) -> None:
+    """The watcher is a second periodic task, and shutdown must not leave it pending.
+
+    Cancelling one loop and forgetting the other is the shape of bug that leaves a task
+    holding a database connection open past the connection's own lifetime.
+    """
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        session_id = await _running(store, "codex")
+        terminal = CapturingTerminal()
+        # Reconciliation runs first and ends any record whose pane the terminal does not
+        # report, so a stub with no observations would delete the very session under watch.
+        terminal.observations = (TerminalObservation(session_id, live=True, preserved=False),)
+        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=1)
+        composition = ServiceComposition(
+            PrivateBotBoundary(7, 11), terminal, ReconciliationService(store), watcher
+        )
+
+        async def poll_briefly(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.05)
+
+        before = len(asyncio.all_tasks())
+        await _serve_with_reconciliation(
+            _SECRETS, composition, poll_briefly, 0.01, activity_interval=0.01
+        )
+
+        assert terminal.asked, "the watcher never polled while the service was serving"
+        await asyncio.sleep(0)
+        assert len(asyncio.all_tasks()) <= before
+
+
+async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) -> None:
+    """A watch pass that raises is logged and the next one still happens."""
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        passes = 0
+
+        class ExplodingWatcher(PaneQuietWatcher):
+            async def poll(self):  # type: ignore[override]
+                nonlocal passes
+                passes += 1
+                raise RuntimeError("the watcher itself failed")
+
+        terminal = CapturingTerminal()
+        composition = ServiceComposition(
+            PrivateBotBoundary(7, 11),
+            terminal,
+            ReconciliationService(store),
+            ExplodingWatcher(store, terminal.capture, quiet_polls=1),
+        )
+
+        async def poll_briefly(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
+            await asyncio.sleep(0.06)
+
+        await _serve_with_reconciliation(
+            _SECRETS, composition, poll_briefly, 0.01, activity_interval=0.01
+        )
+
+        assert passes >= 2, f"the loop did not survive its own failure: {passes} pass(es)"

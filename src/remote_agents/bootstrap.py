@@ -58,6 +58,7 @@ from remote_agents.adapters.tmux.profiles import (
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.agent_event import spool_from_stdin
+from remote_agents.application.activity import PaneQuietWatcher
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -72,6 +73,7 @@ from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
 _RECONCILE_INTERVAL_SECONDS = 60.0
+_ACTIVITY_POLL_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +147,12 @@ class ServiceComposition:
     boundary: PrivateBotBoundary
     terminal: TmuxTerminal
     reconciler: ReconciliationService
+    quiet_watcher: PaneQuietWatcher | None = None
+    """Absent when nothing needs watching, and optional so every existing caller still composes.
+
+    The watcher only has work when a profile without a hook system is running, and a
+    composition that never launches one has nothing for it to do.
+    """
 
 
 async def _serve_with_reconciliation(
@@ -152,6 +160,7 @@ async def _serve_with_reconciliation(
     composition: ServiceComposition,
     serve_runner: Callable[[TelegramSecrets, PrivateBotBoundary], Awaitable[None]],
     interval: float,
+    activity_interval: float = _ACTIVITY_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -174,12 +183,38 @@ async def _serve_with_reconciliation(
     # which makes this line reachable by a test; the runner is not.
     await composition.boundary.refresh_catalogue()
     await _reconcile_quietly(composition)
-    periodic = asyncio.create_task(_reconcile_periodically(composition, interval))
+    periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
+    if composition.quiet_watcher is not None:
+        # A separate task rather than another step inside the reconciliation pass: the two
+        # answer different questions on different clocks, and a pane capture that hangs must
+        # not stop records being reconciled. Nothing is polled before the service is serving,
+        # unlike reconciliation -- a first pass at start-up could only establish the baseline
+        # the classifier already refuses to report on.
+        periodic.append(
+            asyncio.create_task(_watch_quiet_periodically(composition, activity_interval))
+        )
     try:
         await serve_runner(secrets, composition.boundary)
     finally:
-        periodic.cancel()
-        await asyncio.gather(periodic, return_exceptions=True)
+        for task in periodic:
+            task.cancel()
+        await asyncio.gather(*periodic, return_exceptions=True)
+
+
+async def _watch_quiet_periodically(composition: ServiceComposition, interval: float) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        await _watch_quiet_once(composition)
+
+
+async def _watch_quiet_once(composition: ServiceComposition) -> None:
+    """One pass, which may never raise: this loop runs beside the one that serves the owner."""
+    if composition.quiet_watcher is None:
+        return
+    try:
+        await composition.quiet_watcher.poll()
+    except Exception:
+        _LOG.exception("activity watch pass failed")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:
