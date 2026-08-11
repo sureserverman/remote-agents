@@ -254,6 +254,22 @@ class FakeBot:
         existing.text = text
         existing.reply_markup = markup
 
+    async def edit_message_reply_markup(
+        self, *, chat_id: int, message_id: int, **kwargs: object
+    ) -> None:
+        """Attach or replace a message's keyboard without touching its text.
+
+        Modelled because a notification is sent before its button exists: the token is bound
+        to the message the send answered with, so the keyboard can only arrive in a second
+        call. Refuses a message that is gone, exactly as `edit_message_text` does — a harness
+        that accepted an edit to nothing would let a notifier addressing the wrong id pass.
+        """
+        self._require_chat(chat_id)
+        existing = self._chat.messages.get(message_id)
+        if existing is None:
+            raise BadRequest("Message to edit not found")
+        existing.reply_markup = kwargs.get("reply_markup")
+
     async def send_document(self, *, chat_id: int, **kwargs: object) -> Sent:
         self._require_chat(chat_id)
         if self.send_error is not None:

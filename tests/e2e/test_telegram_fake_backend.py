@@ -10,6 +10,9 @@ from fake_telegram import FakeChat
 from stop_results import a_clean_stop
 from telegram.error import BadRequest
 
+from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
+from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -25,6 +28,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 
 def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
@@ -990,3 +994,137 @@ async def test_a_document_telegram_refuses_to_delete_is_retried_not_forgotten() 
 
     assert document.message_id not in chat.messages, "the next navigation really does retry"
     assert boundary._attachment is None
+
+
+def _finished(session: SessionRecord) -> AgentActivity:
+    return AgentActivity(
+        session_id=str(session.session_id),
+        kind=ActivityKind.COMPLETED,
+        detail="Ran the suite.",
+        observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+    )
+
+
+async def _notify(chat: FakeChat, boundary: PrivateBotBoundary, activity: AgentActivity) -> int:
+    """Deliver one activity into the chat and answer which message it became."""
+    boundary.notifier.attach(chat.bot)
+    before = {message.message_id for message in chat.bot_messages}
+    assert await boundary.notifier.deliver([activity]) == 1
+    new = [message for message in chat.bot_messages if message.message_id not in before]
+    assert len(new) == 1, chat.transcript()
+    return new[0].message_id
+
+
+@pytest.mark.asyncio
+async def test_a_notification_stands_beside_the_live_view_rather_than_replacing_it() -> None:
+    """Sub-plan 1 left this chat with exactly one bot message. A notification is the first
+    thing entitled to be a second one, and it may not take the screen to do it."""
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+
+    notification = await _notify(chat, boundary, _finished(record))
+
+    assert notification != anchor
+    assert boundary.view.anchor() == anchor, "the notification took over the live view"
+    assert "Sessions" in chat.messages[anchor].text
+    assert "The agent has finished its work." in chat.messages[notification].text
+    assert len(chat.bot_messages) == 2, chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() -> None:
+    """The live view redraws and prunes its own message's tokens. A notification is not its
+    message, so neither the redraw nor the prune may reach it."""
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    notification = await _notify(chat, boundary, _finished(record))
+    open_session = _button(chat.messages[notification], "Open session")
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
+
+    assert notification in chat.messages, chat.transcript()
+    assert "The agent has finished its work." in chat.messages[notification].text
+    assert (
+        boundary.callbacks.resolve(open_session, owner_id=7, chat_id=11, message_id=notification)
+        is not None
+    ), "navigating the live view pruned a token it does not own"
+
+
+@pytest.mark.asyncio
+async def test_the_notification_button_opens_the_session_in_the_live_view() -> None:
+    """The press lands where every other screen does — in the anchor — and the notification
+    it came from is still there afterwards, because nothing about it was superseded."""
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    notification = await _notify(chat, boundary, _finished(record))
+
+    press = chat.press(_button(chat.messages[notification], "Open session"))
+    await boundary.callback(press, None)
+
+    assert press.callback_query.answers == [None], "the button was refused"
+    assert "Demo · Claude · regular · #1" in chat.messages[anchor].text
+    assert "Rename" in [
+        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+    ], "the press opened the session detail, not some other screen"
+    assert notification in chat.messages, chat.transcript()
+    assert len(chat.bot_messages) == 2, chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_path) -> None:
+    """Sub-plan 1's durability, on a message the anchor does not own.
+
+    A restart re-reads the anchor and redraws the live view into it; the notification is a
+    different message, so the only thing that can make its button survive is the token store
+    being durable and the token being bound to a message id rather than to a process.
+    """
+    record = _a_running_session()
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+
+    class _Launcher:
+        async def list_sessions(self):
+            return [record]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    before = PrivateBotBoundary(
+        7,
+        11,
+        launcher=_Launcher(),
+        callbacks=SQLiteCallbackStateStore(connection),
+        anchors=SQLiteChatViewStore(connection),
+    )
+    chat = FakeChat()
+    await before.sessions_command(chat.message_update("/sessions"), None)
+    notification = await _notify(chat, before, _finished(record))
+    open_session = _button(chat.messages[notification], "Open session")
+    connection.close()
+
+    reopened = open_database(database)
+    after = PrivateBotBoundary(
+        7,
+        11,
+        launcher=_Launcher(),
+        callbacks=SQLiteCallbackStateStore(reopened),
+        anchors=SQLiteChatViewStore(reopened),
+    )
+    press = chat.press(open_session)
+    await after.callback(press, None)
+
+    assert press.callback_query.answers == [None], (
+        "the restarted service refused a notification it had sent"
+    )
+    assert "Demo · Claude · regular · #1" in chat.messages[after.view.anchor()].text
+    assert notification in chat.messages, chat.transcript()
