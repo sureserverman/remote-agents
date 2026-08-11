@@ -120,14 +120,19 @@ def install_agent_hooks(
     installed = _with_our_groups(base, agent_event_command(interpreter, activity_directory))
     _refuse_when_removal_would_not_restore(settings, base, installed)
     content = settings.style.render(installed)
+    # Reported on both paths. Re-running the installer is exactly what an operator does when
+    # they are trying to work out why every event arrives twice, and answering "already
+    # current" while saying nothing about the variant that is doubling them is the least
+    # helpful moment to stay quiet.
+    note = _foreign_variant_note(base)
     if content == settings.content:
         return HookInstallOutcome(
-            settings_path, False, f"agent hooks already current in {settings_path}"
+            settings_path, False, f"agent hooks already current in {settings_path}{note}"
         )
     _refuse_if_changed_since_it_was_read(settings_path, settings.content)
     _write_atomically(settings_path, content, settings.mode)
     summary = f"installed {len(INSTALLED_EVENTS)} agent hooks in {settings_path}"
-    return HookInstallOutcome(settings_path, True, summary + _foreign_variant_note(base))
+    return HookInstallOutcome(settings_path, True, summary + note)
 
 
 def remove_agent_hooks(settings_path: Path) -> HookInstallOutcome:

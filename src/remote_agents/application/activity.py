@@ -47,6 +47,11 @@ MAXIMUM_DRAIN = 200
 #: than in progress. Far longer than any write that is still going to finish.
 _ABANDONED_TEMPORARY_SECONDS = 3600.0
 
+#: The largest file this will read back as one record. The hook caps its *input* at 32 KiB
+#: and writes a record far smaller than that, so this is generous by orders of magnitude; it
+#: exists because the writer on the far side of the spool is not guaranteed to be that hook.
+MAXIMUM_RECORD_BYTES = 65_536
+
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
 # absent on purpose, and an event carrying one is dropped by the lookup below.
@@ -134,25 +139,62 @@ def _written_at(path: Path) -> tuple[str, str]:
 
 def _drained(paths: list[Path]) -> Iterator[AgentActivity]:
     for path in paths:
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            # Broad on purpose, and for the same reason the hook's own boundary is: this is
-            # the frame that *deletes*. `json.loads` answers deeply nested input with
-            # `RecursionError` and a huge file with `MemoryError`, neither of which is an
-            # `OSError` or a `ValueError`, so both escaped, propagated out through this
-            # generator, and destroyed a pass whose earlier records had already been
-            # unlinked. One unreadable record is worth one lost record, never the batch.
-            _LOG.warning("discarding an unreadable activity record")
-            record = None
-        finally:
-            # Before the record is used, not after: a record that is read and then fails to
-            # delete would be delivered again on the next pass, and repeating "your agent is
-            # waiting" every sixty seconds is the storm this whole path is arranged to avoid.
-            path.unlink(missing_ok=True)
-        activity = _activity(record) if isinstance(record, dict) else None
+        activity = _read_one(path)
         if activity is not None:
             yield activity
+
+
+def _read_one(path: Path) -> AgentActivity | None:
+    """Turn one file into activity, or into nothing, but never into an exception.
+
+    Every step is guarded, deliberately. An earlier version wrapped only the read and the
+    parse, which left the unlink and the mapping outside -- and both run once the pass has
+    already deleted files, so anything raising there destroyed the batch exactly as a parse
+    failure had. Narrowing a guard to the line that happened to fail is what turns one bug
+    into two.
+
+    The order is the invariant: *nothing is delivered that was not first removed*. Deleting
+    before the record is used means a crash between here and the send loses one notification,
+    which is the right way round for a message saying an agent is waiting -- and a record that
+    could not be deleted is dropped rather than returned, because delivering it would repeat
+    "your agent is waiting" on every pass for as long as the spool stays unwritable.
+    """
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        _LOG.warning("discarding an unreadable activity record")
+        raw = None
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        _LOG.warning("leaving an activity record that could not be deleted")
+        return None
+
+    if raw is None:
+        return None
+    try:
+        if len(raw) > MAXIMUM_RECORD_BYTES:
+            # Bounded here as well as at the hook, and not redundantly: a foreign writer is
+            # tolerated by design, so the hook's cap on what it will read says nothing about
+            # the size of a file found on this side. An unbounded detail reaches
+            # `bounded_detail_line`'s `split()` as millions of objects before anything gets
+            # to bound it.
+            _LOG.warning("discarding an activity record larger than this service writes")
+            return None
+        record = json.loads(raw)
+    except Exception:
+        # Broad on purpose, and for the reason the hook's own boundary is. `json.loads`
+        # answers deeply nested input with `RecursionError` and a huge one with `MemoryError`,
+        # neither an `OSError` nor a `ValueError`, so both escaped a narrower guard and took
+        # every already-unlinked record in the pass with them.
+        _LOG.warning("discarding an unparseable activity record")
+        return None
+    try:
+        return _activity(record) if isinstance(record, dict) else None
+    except Exception:
+        _LOG.warning("discarding an activity record that could not be interpreted")
+        return None
 
 
 def _activity(record: dict) -> AgentActivity | None:

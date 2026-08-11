@@ -1,5 +1,7 @@
 """The installed user-service boundary is deliberate and remains secret-free."""
 
+import subprocess
+import sys
 from pathlib import Path
 
 UNIT = Path("systemd/remote-agents.service")
@@ -40,3 +42,26 @@ def test_transient_probe_keeps_the_same_kill_mode_without_production_configurati
     )
     assert "KillMode=process" in contents
     assert "EnvironmentFile=" not in contents
+
+
+def test_the_executable_the_unit_starts_actually_runs() -> None:
+    """The unit names a console script, so something has to check that script still imports.
+
+    `ExecStart` above is asserted as *text*, which stays green while the entry point it names
+    is broken -- and it was: moving `__main__`'s imports inside `if __name__ == "__main__"` to
+    keep the agent-event hook from loading the composition root removed the module-level
+    `main` that `[project.scripts]` resolves. Every in-process test drives `bootstrap.main`
+    directly and the one subprocess test used `runpy`, which takes the `__main__` branch, so
+    nothing noticed that the service could no longer start at all.
+
+    Run through the real script rather than by importing it, because the failure was in the
+    generated shim's `from remote_agents.__main__ import main`.
+    """
+    script = Path(sys.executable).parent / "remote-agents"
+    assert script.exists(), f"no console script at {script}"
+
+    completed = subprocess.run([str(script), "--help"], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "agent-event" in completed.stdout
+    assert "Traceback" not in completed.stderr

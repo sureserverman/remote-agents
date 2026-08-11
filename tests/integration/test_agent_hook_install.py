@@ -317,6 +317,12 @@ def test_an_unrecognised_variant_of_our_command_is_reported_rather_than_silently
     assert outcome.changed
     assert "Stop" in outcome.summary
     assert "twice" in outcome.summary
+
+    # Re-running is what an operator does while working out why events arrive twice, so the
+    # no-op path has to say it too rather than answering "already current" and nothing else.
+    repeated = install_agent_hooks(path)
+    assert not repeated.changed
+    assert "twice" in repeated.summary
     # Still left strictly alone, which is the half that was already right.
     survivors = [
         entry["command"]

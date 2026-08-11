@@ -7,7 +7,14 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from remote_agents.application.activity import MAXIMUM_DRAIN, drain_activity
+import pytest
+
+from remote_agents.application import activity as activity_module
+from remote_agents.application.activity import (
+    MAXIMUM_DRAIN,
+    MAXIMUM_RECORD_BYTES,
+    drain_activity,
+)
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 
 _OBSERVED_AT = "2026-08-11T07:30:00+00:00"
@@ -269,6 +276,65 @@ def test_a_record_that_cannot_be_parsed_at_all_costs_only_its_own_record(tmp_pat
     activities = drain_activity(tmp_path)
 
     assert sorted(activity.detail or "" for activity in activities) == ["after", "before"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_oversized_record_costs_only_itself(tmp_path: Path) -> None:
+    """The hook bounds what it writes; the drain reads whatever is on disk.
+
+    A foreign writer is explicitly tolerated here, so the 32 KiB cap the hook applies to its
+    input says nothing about the size of a file this reads back. Without a bound of its own
+    the drain loads the whole thing and hands it to `bounded_detail_line`, whose
+    `" ".join(value.split())` expands a large string into millions of objects -- and the
+    resulting `MemoryError` escaped a guard that only covered read-and-parse, taking every
+    already-unlinked record in the batch with it.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "oversized.json").write_text(
+        json.dumps(
+            {
+                "session_id": "a-session",
+                "event": "Stop",
+                "reason": None,
+                "detail": "x " * MAXIMUM_RECORD_BYTES,
+                "observed_at": _OBSERVED_AT,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _spool(tmp_path, event="Stop", detail="modest")
+
+    activities = drain_activity(tmp_path)
+
+    assert [activity.detail for activity in activities] == ["modest"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_record_that_fails_after_it_is_read_still_costs_only_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guarding read-and-parse is not the same as guarding the record.
+
+    The mapping runs after the file is unlinked and used to sit outside the guard, so anything
+    raising there destroyed the batch just as surely as a parse failure did -- the same class,
+    two lines further down. Fixing the first without moving the boundary left the second.
+    """
+    _spool(tmp_path, event="Stop", detail="before")
+    _spool(tmp_path, event="Stop", detail="explodes")
+    _spool(tmp_path, event="Stop", detail="after")
+
+    real = activity_module._activity
+
+    def explode_on_one(record: dict):
+        if record.get("detail") == "explodes":
+            raise MemoryError("simulated")
+        return real(record)
+
+    monkeypatch.setattr(activity_module, "_activity", explode_on_one)
+
+    activities = drain_activity(tmp_path)
+
+    assert sorted(a.detail or "" for a in activities) == ["after", "before"]
     assert list(tmp_path.iterdir()) == []
 
 
