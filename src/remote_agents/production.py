@@ -48,6 +48,17 @@ class ProductionPaths:
     def intent_directory(self) -> Path:
         return self.state_directory / "intents"
 
+    @property
+    def activity_directory(self) -> Path:
+        """Where an agent hook spools what it observed, before the service drains it.
+
+        Private for the same reason `intent_directory` is: what lands here is written by a
+        hook running inside the agent's own process, so it carries whatever that agent was
+        last saying. Nothing drains it yet; the drain that deletes each file once it has been
+        turned into activity arrives with the application service that reads this directory.
+        """
+        return self.state_directory / "activity"
+
     def ensure_directories(self) -> None:
         """Create only declared directories and repair their private modes."""
         for path in (
@@ -55,6 +66,7 @@ class ProductionPaths:
             self.state_directory,
             self.unit_directory,
             self.intent_directory,
+            self.activity_directory,
         ):
             self._reject_symlink_ancestors(path)
             if path.exists() and not path.is_dir():
