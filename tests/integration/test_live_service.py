@@ -1464,3 +1464,73 @@ async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tm
         )
         is not None
     )
+
+
+async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_computed(
+    tmp_path, monkeypatch
+) -> None:
+    """The two sources are guarded separately because one of them commits before it returns.
+
+    `poll()` marks a quiet spell reported as it decides the pane went quiet, and re-arms only
+    when the pane changes again. Under one shared `try`, a drain that raised after a successful
+    poll threw that observation away with its dedup state already committed — so the spell
+    became unreportable, permanently, and nothing counted anything as lost. The owner simply
+    never hears that the agent stopped.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+
+    class _QuietWatcher:
+        async def poll(self):
+            return (
+                AgentActivity(
+                    session_id=str(record.session_id),
+                    kind=ActivityKind.QUIET,
+                    detail=None,
+                    observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+                    confidence=ActivityConfidence.INFERRED,
+                ),
+            )
+
+    def _explode(_directory):
+        raise RuntimeError("the spool could not be listed")
+
+    monkeypatch.setattr("remote_agents.bootstrap.drain_activity", _explode)
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary,
+            _SilentTerminal(),
+            _SilentReconciler(),
+            _QuietWatcher(),
+            activity_directory=tmp_path / "activity",
+        )
+    )
+
+    assert len(bot.sends) == 1, "the drain's failure took the quiet observation with it"
+    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
+
+
+async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tmp_path) -> None:
+    """Returning early on an empty pass would strand a backlog until something else happened.
+
+    The retry queue is drained by `deliver`, not by the sources, so a quiet host with a held
+    notification must still deliver it — which is exactly the state a Telegram outage leaves.
+    """
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == []
+    assert boundary.notifier.pending_count() == 1
+
+    # Nothing new to observe: the spool is empty and there is no quiet watcher.
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert boundary.notifier.pending_count() == 0

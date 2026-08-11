@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from html import escape
 from math import ceil
 
+from remote_agents.ports.terminal_text import encodable_text
+
 MAX_TELEGRAM_TEXT_UNITS = 4096
 _ELLIPSIS = "…"
 
@@ -55,6 +57,7 @@ def bounded_text(text: str, *, limit: int = MAX_TELEGRAM_TEXT_UNITS) -> str:
 
     if limit < 1:
         raise ValueError("Telegram text limit must be positive")
+    text = encodable_text(text)
     if _utf16_units(text) <= limit:
         return text
 
@@ -170,6 +173,10 @@ def render_paginated(
 
 
 def _message(text: str, keyboard: tuple[tuple[Button, ...], ...]) -> RenderedMessage:
+    # The last gate every screen passes, and the one that makes the guarantee hold for text
+    # this module did not compose: `service` builds most of its screens with f-strings around
+    # `escape(...)`, which is HTML-safe but says nothing about what UTF-16 can carry.
+    text = encodable_text(text)
     if _utf16_units(text) > MAX_TELEGRAM_TEXT_UNITS:
         raise ValueError("presenter text exceeds the Telegram message limit")
     return RenderedMessage(text=text, keyboard=keyboard)
@@ -215,7 +222,11 @@ def _validate_callback(callback: str) -> None:
 
 
 def _utf16_units(text: str) -> int:
-    return len(text.encode("utf-16-le")) // 2
+    # Total, because `encodable_text` has already removed everything an encoder would refuse.
+    # Without it a lone surrogate — from a hook payload or from an undecodable directory name
+    # — raised `UnicodeEncodeError` out of the middle of a render, and every budget in this
+    # module runs through this one line.
+    return len(encodable_text(text).encode("utf-16-le")) // 2
 
 
 def _bounded_escaped(text: str, limit: int) -> str:
@@ -223,6 +234,7 @@ def _bounded_escaped(text: str, limit: int) -> str:
 
     if limit < 1:
         return ""
+    text = encodable_text(text)
     escaped = escape(text)
     if _utf16_units(escaped) <= limit:
         return escaped

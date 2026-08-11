@@ -59,12 +59,19 @@ def test_a_rate_limit_is_a_limit_reached(tmp_path: Path) -> None:
     assert activity.confidence is ActivityConfidence.REPORTED
 
 
-def test_an_exhausted_output_budget_is_a_limit_reached(tmp_path: Path) -> None:
+def test_an_exhausted_output_budget_is_not_reported_as_a_usage_limit(tmp_path: Path) -> None:
+    """Two different facts with two different next moves, so two kinds.
+
+    A rate limit is waited out or paid around and the work is untouched; a reply that hit its
+    output ceiling is simply continued. Folded together under one "usage limit" sentence, the
+    routine one arrived wearing the alarming one's words.
+    """
     _spool(tmp_path, event="StopFailure", reason="max_output_tokens")
 
     (activity,) = drain_activity(tmp_path)
 
-    assert activity.kind is ActivityKind.LIMIT_REACHED
+    assert activity.kind is ActivityKind.OUTPUT_LIMIT
+    assert activity.kind is not ActivityKind.LIMIT_REACHED
 
 
 def test_a_permission_request_is_an_agent_that_needs_an_answer(tmp_path: Path) -> None:

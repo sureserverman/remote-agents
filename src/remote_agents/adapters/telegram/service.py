@@ -36,6 +36,9 @@ from telegram.ext import (
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
+from remote_agents.adapters.telegram.notifications import (
+    NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
+)
 from remote_agents.adapters.telegram.notifications import ActivityNotifier
 from remote_agents.adapters.telegram.presenters import (
     Button,
@@ -560,19 +563,33 @@ class PrivateBotBoundary:
         # fallback collides with a sentinel. -1 matches nothing, which is the honest answer
         # for a press whose message the API did not give us.
         message_id = query.message.message_id if query.message is not None else -1
+        state = self.callbacks.resolve(
+            query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
+        )
         # A callback query in this chat can only have come from an inline keyboard this bot
         # sent, and `permits` has already established the chat. So the message it was
         # pressed on is a screen of ours — enough to recover an anchor a composition never
-        # recorded, without waiting for the token to resolve.
+        # recorded.
         #
         # It only ever fills an *absent* anchor and never moves a recorded one. Adopting the
         # pressed message unconditionally would walk the live view backwards onto an older
         # screen — which is wrong whatever else is in the chat, so the rule outlives the
         # transitional reason it was first written for.
-        self.view.adopt(message_id)
-        state = self.callbacks.resolve(
-            query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
-        )
+        #
+        # One message of ours is deliberately **not** a screen, and it is the reason this now
+        # resolves first rather than adopting blind. A notification is sent apart from the live
+        # view; adopting it would make the next render edit the session detail *over* the
+        # notification, so the message the runbook promises survives pruning would instead be
+        # consumed by it. The exemption travels in the token's action rather than in a set held
+        # in this process, because the vulnerable state — a chat with no recorded anchor and a
+        # notification already in it — is exactly what a restored database leaves behind, and a
+        # process-local set is empty precisely then.
+        if state is None or state.action != _NOTIFIED_DETAIL:
+            self.view.adopt(message_id)
+        if state is not None and state.action == _NOTIFIED_DETAIL:
+            # Normalized once, here, so no downstream branch has to know the distinction
+            # exists: it is about where the press came *from*, not about what it does.
+            state = replace(state, action="session.detail")
         if state is None:
             # A press this screen cannot account for: the button belongs to a keyboard this
             # message no longer carries. Nothing expired — the token was pruned when the

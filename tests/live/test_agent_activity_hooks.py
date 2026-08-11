@@ -91,3 +91,77 @@ def test_a_session_this_service_did_not_start_spools_nothing(tmp_path: Path) -> 
 
     assert drain_activity(spool) == ()
     assert not spool.exists() or list(spool.iterdir()) == []
+
+
+_DISCRIMINATORS = {
+    "StopFailure": "error",
+    "Notification": "notification_type",
+    "SessionEnd": "reason",
+}
+"""The field each event discriminates on, as this project believes the agent spells them.
+
+The belief `_DISCRIMINATING_FIELDS` is built on, stated once so a single test can check it
+against reality rather than against another fixture.
+"""
+
+
+def _installed_bundle() -> Path | None:
+    """The Claude Code bundle this host would actually run, or None if it cannot be found."""
+    executable = shutil.which("claude")
+    if executable is None:
+        return None
+    versions = Path.home() / ".local" / "share" / "claude" / "versions"
+    try:
+        current = subprocess.run(
+            [executable, "--version"], capture_output=True, text=True, timeout=30, check=True
+        ).stdout.split()[0]
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return None
+    bundle = versions / current
+    return bundle if bundle.is_file() else None
+
+
+@pytest.mark.live_profile
+def test_the_hook_payload_field_names_match_the_installed_agent() -> None:
+    """Compare this project's assumption against the agent, not against its own fixtures.
+
+    This is the test whose absence let `limit_reached` ship dead. The spool's unit test
+    fixtured `error_type` and the classifier's unit test wrote `reason="rate_limit"` straight
+    into a spool record, so each half was verified against the other half's assumption and the
+    pair agreed perfectly about a field the agent has never sent. `error_type` appears nowhere
+    in the shipped bundle. A managed session hitting a rate limit spooled a record the drain
+    then dropped as uninterpretable -- no message, no error, no way to notice.
+
+    Static, and deliberately so: provoking a real `StopFailure` means exhausting a real rate
+    limit. Reading how the shipped bundle *constructs* the payload is the strongest claim
+    available without that, and it is strictly stronger than another fixture. It skips rather
+    than fails when the bundle cannot be located or its shape is unrecognisable, because an
+    upstream repackaging is not this project's defect -- but a name that is present and
+    *different* is, and that is the case this fails on.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+    bundle = _installed_bundle()
+    if bundle is None:
+        pytest.skip("BLOCKED: the installed claude bundle could not be located")
+    source = bundle.read_text(encoding="utf-8", errors="replace")
+
+    unrecognised = [
+        event for event in _DISCRIMINATORS if f'hook_event_name:"{event}"' not in source
+    ]
+    if unrecognised:
+        pytest.skip(f"BLOCKED: payload construction not recognisable for {unrecognised}")
+
+    wrong = {}
+    for event, expected in _DISCRIMINATORS.items():
+        start = source.index(f'hook_event_name:"{event}"')
+        # The payload object literal, up to its close -- long enough to carry every field the
+        # event sets, short enough not to run into the next statement.
+        window = source[start : start + 240]
+        if f"{expected}:" not in window:
+            wrong[event] = window[: window.find("}") if "}" in window else 200]
+
+    assert not wrong, (
+        "the installed agent does not spell these discriminating fields the way "
+        f"activity_spool._DISCRIMINATING_FIELDS expects: {wrong}"
+    )

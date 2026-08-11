@@ -105,7 +105,7 @@ def test_a_stop_payload_never_spools_the_filesystem_layout_it_carries(tmp_path: 
     ("payload", "event", "reason", "detail"),
     [
         (
-            {"hook_event_name": "StopFailure", "error_type": "rate_limit"},
+            {"hook_event_name": "StopFailure", "error": "rate_limit"},
             "StopFailure",
             "rate_limit",
             None,
@@ -121,7 +121,7 @@ def test_a_stop_payload_never_spools_the_filesystem_layout_it_carries(tmp_path: 
             "Claude needs your permission to use Bash",
         ),
         (
-            {"hook_event_name": "SessionEnd", "end_reason": "logout"},
+            {"hook_event_name": "SessionEnd", "reason": "logout"},
             "SessionEnd",
             "logout",
             None,

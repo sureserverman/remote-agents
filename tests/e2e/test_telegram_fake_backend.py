@@ -1128,3 +1128,48 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     )
     assert "Demo · Claude · regular · #1" in chat.messages[after.view.anchor()].text
     assert notification in chat.messages, chat.transcript()
+
+
+@pytest.mark.asyncio
+async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> None:
+    """The one message of ours that is deliberately not a screen.
+
+    Every press adopts the message it came from as the anchor when the chat has none recorded
+    — a recovery for a composition that never wrote one, and right for every screen. A
+    notification is not a screen: adopting it would make the next render edit the session
+    detail *over* the notification, consuming the message the runbook promises survives
+    pruning. The state is reachable rather than theoretical — a restored database
+    (`docs/database-recovery.md`) leaves a chat with sessions, hooks and no anchor row.
+    """
+    record = _a_running_session()
+
+    class _Launcher:
+        async def list_sessions(self):
+            return [record]
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        launcher=_Launcher(),
+        callbacks=SQLiteCallbackStateStore(connection),
+        anchors=SQLiteChatViewStore(connection),
+    )
+    chat = FakeChat()
+
+    # No screen has ever been drawn: the chat has no anchor at all.
+    assert boundary.view.anchor() is None
+    notification = await _notify(chat, boundary, _finished(record))
+
+    press = chat.press(_button(chat.messages[notification], "Open session"))
+    await boundary.callback(press, None)
+
+    assert press.callback_query.answers == [None], "the button was refused"
+    assert boundary.view.anchor() != notification, "the notification became the live view"
+    assert "The agent has finished its work." in chat.messages[notification].text, (
+        "the session detail was drawn over the notification"
+    )
+    assert "Demo · Claude · regular · #1" in chat.messages[boundary.view.anchor()].text

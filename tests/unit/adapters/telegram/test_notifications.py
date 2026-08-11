@@ -4,8 +4,10 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
+from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.notifications import (
     OPEN_SESSION_LABEL,
+    ActivityNotifier,
     render_activity,
 )
 from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
@@ -43,6 +45,7 @@ def _utf16_units(text: str) -> int:
 EVERY_KIND = (
     ActivityKind.COMPLETED,
     ActivityKind.LIMIT_REACHED,
+    ActivityKind.OUTPUT_LIMIT,
     ActivityKind.NEEDS_ANSWER,
     ActivityKind.ENDED,
     ActivityKind.QUIET,
@@ -217,3 +220,251 @@ def test_a_callback_that_is_not_an_opaque_token_is_refused() -> None:
             render_activity(
                 _activity(ActivityKind.COMPLETED), display=DISPLAY, open_session=rejected
             )
+
+
+class _RecordingView:
+    """The `LiveView` surface a notifier actually uses: one send, addressed to a chat."""
+
+    chat_id = 11
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+        self._next_id = 900
+
+    async def send_apart(self, _bot: object, arguments: dict[str, object]) -> int:
+        self.sent.append(arguments)
+        self._next_id += 1
+        return self._next_id
+
+
+class _SilentBot:
+    async def edit_message_reply_markup(self, **_kwargs: object) -> None:
+        return None
+
+
+class _Clock:
+    """A clock a test can move, so the rate limit's *expiry* is reachable at all."""
+
+    def __init__(self) -> None:
+        self.moment = datetime(2026, 8, 11, 14, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self.moment
+
+    def advance(self, seconds: float) -> None:
+        self.moment += timedelta(seconds=seconds)
+
+
+def _notifier(clock: _Clock, *, rate_limit_seconds: float = 120.0):
+    view = _RecordingView()
+
+    async def display(_session_id: str) -> str:
+        return DISPLAY
+
+    notifier = ActivityNotifier(
+        view=view,
+        callbacks=CallbackStateStore(),
+        owner_user_id=7,
+        display=display,
+        rate_limit_seconds=rate_limit_seconds,
+        now=clock,
+    )
+    notifier.attach(_SilentBot())
+    return notifier, view
+
+
+async def test_the_same_kind_is_delivered_again_once_the_window_has_passed() -> None:
+    """The suppression window has two halves and only one of them had a test.
+
+    A rate limit that never expires is not a rate limit, it is a mute: the second time an
+    agent finishes — an hour later, on a different task — the owner is owed that message.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    activity = _activity(ActivityKind.COMPLETED)
+
+    assert await notifier.deliver([activity]) == 1
+    assert await notifier.deliver([activity]) == 0, "the burst was not collapsed"
+
+    clock.advance(121)
+    assert await notifier.deliver([activity]) == 1
+    assert len(view.sent) == 2
+
+
+async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() -> None:
+    """One entry per (session, kind) is small; unbounded over a service that launches
+    sessions all day is not. An entry older than the window suppresses nothing."""
+    clock = _Clock()
+    notifier, _ = _notifier(clock)
+
+    for index in range(25):
+        await notifier.deliver(
+            [
+                AgentActivity(
+                    session_id=f"session-{index}",
+                    kind=ActivityKind.COMPLETED,
+                    detail=None,
+                    observed_at=clock.moment,
+                )
+            ]
+        )
+    assert len(notifier._last_sent) == 25
+
+    # Past the window *and* the retention that keeps a lapsed entry's repeat count readable.
+    clock.advance(241)
+    await notifier.deliver([])
+
+    assert notifier._last_sent == {}, "expired suppressions were kept for the life of the run"
+
+
+async def test_an_entry_still_inside_its_window_is_not_forgotten() -> None:
+    """The other direction, which the pruning could break silently: forgetting an entry that
+    is still suppressing turns the burst collapse off without anything failing."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    activity = _activity(ActivityKind.COMPLETED)
+
+    assert await notifier.deliver([activity]) == 1
+    clock.advance(60)
+    assert await notifier.deliver([activity]) == 0
+    assert len(view.sent) == 1
+
+
+async def test_a_notification_the_owner_received_is_never_re_queued_as_undelivered() -> None:
+    """The guard around the mint and the render is as wide as the send it follows.
+
+    Drawn narrower, a failure between the send and the keyboard escaped as "held for retry"
+    over a message the owner already had — and the next pass, finding the rate limit recorded,
+    dropped it silently as a collapsed burst. Two false statements about one notification.
+    """
+    clock = _Clock()
+    view = _RecordingView()
+
+    class _RefusingCallbacks(CallbackStateStore):
+        """Fails at the *mint*, which is the step the narrow guard left outside itself.
+
+        Not the keyboard call: that one was guarded even before the repair, so a test driving
+        it would pass against the defect it claims to cover.
+        """
+
+        def create(self, *args: object, **kwargs: object) -> str:
+            raise RuntimeError("the callback store refused a token")
+
+    async def display(_session_id: str) -> str:
+        return DISPLAY
+
+    notifier = ActivityNotifier(
+        view=view,
+        callbacks=_RefusingCallbacks(),
+        owner_user_id=7,
+        display=display,
+        now=clock,
+    )
+    notifier.attach(_SilentBot())
+
+    assert await notifier.deliver([_activity(ActivityKind.COMPLETED)]) == 1
+    assert notifier.pending_count() == 0, "a delivered notification was held for retry"
+    assert len(view.sent) == 1, "the owner was told once"
+
+    # And the next pass must not report it a second time under a different wrong name.
+    assert await notifier.deliver([]) == 0
+    assert len(view.sent) == 1
+
+
+def test_an_output_ceiling_is_not_worded_as_a_usage_limit() -> None:
+    """Two facts, two next moves: a rate limit is waited out, an output ceiling is continued
+    from. One sentence for both named the alarming one for the routine event."""
+    usage = render_activity(
+        _activity(ActivityKind.LIMIT_REACHED), display=DISPLAY, open_session=OPEN
+    )
+    output = render_activity(
+        _activity(ActivityKind.OUTPUT_LIMIT), display=DISPLAY, open_session=OPEN
+    )
+
+    assert "usage limit" in usage.text
+    assert "usage limit" not in output.text
+    assert "output length limit" in output.text
+
+
+def test_text_no_encoder_can_carry_is_replaced_rather_than_raising() -> None:
+    """A lone surrogate is a legal `str` and an illegal encode.
+
+    `json.loads` decodes `\\udXXX` in a spooled payload straight back into one, and the spool
+    tolerates a foreign writer by design — so this arrived from outside, reached the UTF-16
+    budget, and raised out of the middle of the render. Because it raised *before* the send,
+    the activity was never popped: it sat at the head of the queue and every later
+    notification, for every session, queued behind it silently.
+    """
+    message = render_activity(
+        _activity(ActivityKind.COMPLETED, detail="done \ud800 here"),
+        display="proj \udcff x",
+        open_session=OPEN,
+    )
+
+    assert "�" in message.text
+    assert message.text.encode("utf-8"), "the rendered message must be sendable"
+    assert "done" in message.text and "proj" in message.text
+
+
+async def test_a_standing_condition_backs_off_instead_of_repeating_every_window() -> None:
+    """`needs_answer` repeats for as long as the owner does not answer.
+
+    A fixed window turns that into a message every two minutes all night. The window doubles
+    per consecutive repeat instead — the first message is as prompt as ever, and only the
+    copies get rarer.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+
+    assert await notifier.deliver([waiting]) == 1
+    clock.advance(121)
+    assert await notifier.deliver([waiting]) == 1, "the second copy is still owed"
+
+    # Now backed off to 240s: at 121s more it is still suppressed.
+    clock.advance(121)
+    assert await notifier.deliver([waiting]) == 0
+    clock.advance(121)
+    assert await notifier.deliver([waiting]) == 1
+    assert len(view.sent) == 3
+
+
+async def test_a_different_kind_from_the_same_session_starts_the_count_over() -> None:
+    """A repeat count claims nothing has changed. A different kind is something changing."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+
+    assert await notifier.deliver([waiting]) == 1
+    clock.advance(121)
+    assert await notifier.deliver([waiting]) == 1  # repeats == 1, window now 240s
+    clock.advance(121)
+    assert await notifier.deliver([_activity(ActivityKind.COMPLETED)]) == 1
+
+    # The answer arrived and the agent moved on, so waiting again is news, not a repeat.
+    clock.advance(121)
+    assert await notifier.deliver([waiting]) == 1
+    assert len(view.sent) == 4
+
+
+async def test_a_backed_off_entry_is_not_forgotten_while_it_is_still_suppressing() -> None:
+    """The pruning measures each entry against its own window.
+
+    Under a fixed horizon the backed-off entries — the repeating ones, which are the only ones
+    the backoff is for — were forgotten while still suppressing, quietly restoring the
+    every-two-minutes behaviour for exactly the case it was added to fix.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+
+    await notifier.deliver([waiting])
+    clock.advance(121)
+    await notifier.deliver([waiting])  # window now 240s
+
+    clock.advance(121)
+    await notifier.deliver([])  # a pass that prunes but sends nothing
+
+    assert len(notifier._last_sent) == 1, "an entry still suppressing was pruned"
+    assert await notifier.deliver([waiting]) == 0
+    assert len(view.sent) == 2

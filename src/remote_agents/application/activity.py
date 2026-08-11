@@ -67,7 +67,9 @@ _CAPTURE_TIMEOUT_SECONDS = 15.0
 # absent on purpose, and an event carrying one is dropped by the lookup below.
 _STOP_FAILURES = {
     "rate_limit": ActivityKind.LIMIT_REACHED,
-    "max_output_tokens": ActivityKind.LIMIT_REACHED,
+    # Not the same news, and not the same next move: a rate limit is waited out, an output
+    # ceiling is continued from. One sentence for both told the owner the alarming one.
+    "max_output_tokens": ActivityKind.OUTPUT_LIMIT,
 }
 _NOTIFICATIONS = {
     "permission_prompt": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),

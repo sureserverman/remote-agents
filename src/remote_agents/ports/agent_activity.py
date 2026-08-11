@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from remote_agents.ports.terminal_text import encodable_text
+
 MAXIMUM_DETAIL_CHARACTERS = 240
 """How much of what an agent said a notification will carry.
 
@@ -25,7 +27,13 @@ def bounded_detail_line(value: object) -> str | None:
     """
     if not isinstance(value, str):
         return None
-    normalized = " ".join(value.split())
+    # Surrogates go before anything else looks at this. A lone surrogate is a legal `str` and
+    # an illegal encode, so it survives `split()`, survives the spool's `json.dumps` as
+    # `\udXXX`, and detonates at the far end where the text is measured for a message budget.
+    # Dropping it at the boundary where free agent text is first reduced is cheaper than every
+    # later consumer being total -- and the presentation layer is made total anyway, through
+    # this same function, for the inputs that never come through here at all.
+    normalized = " ".join(encodable_text(value).split())
     return normalized[:MAXIMUM_DETAIL_CHARACTERS] if normalized else None
 
 
@@ -33,12 +41,19 @@ class ActivityKind(Enum):
     """The only things this service claims about an agent that has stopped working.
 
     Deliberately fewer than the events upstream emits. A hook carries a dozen error types and
-    notification types; the owner is being told one of five things, and an event that does not
+    notification types; the owner is being told one of six things, and an event that does not
     answer "why did it stop" is dropped rather than mapped to the nearest neighbour.
+
+    `LIMIT_REACHED` and `OUTPUT_LIMIT` are separate because the owner's next move differs. A
+    rate limit is waited out or paid around and the work is untouched; a response that hit its
+    output ceiling is simply continued. Folded together -- as they were, under one "usage
+    limit" sentence -- the message named the more alarming of the two for an event that is
+    routine, which is the same over-claiming the confidence split exists to prevent.
     """
 
     COMPLETED = "completed"
     LIMIT_REACHED = "limit_reached"
+    OUTPUT_LIMIT = "output_limit"
     NEEDS_ANSWER = "needs_answer"
     ENDED = "ended"
     QUIET = "quiet"

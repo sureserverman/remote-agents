@@ -229,21 +229,39 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
     same question about different profiles, and the owner is owed one message per observation
     regardless of which of them noticed.
 
+    **Each source is guarded separately, and that is not tidiness.** `poll()` commits its own
+    dedup state as a side effect of deciding a pane has gone quiet -- it marks the spell
+    reported before the activity reaches anyone, and re-arms only when the pane changes again.
+    Under one shared `try`, a drain that raised after a successful poll discarded that already
+    committed observation, and the quiet spell was then never reportable at all. The failure is
+    invisible: nothing is lost that anything counts, and the owner simply never hears about an
+    agent that stopped.
+
+    `deliver` is called even when both sources yielded nothing, because it also drains the
+    retry queue an earlier pass may have left behind; returning early on an empty list would
+    strand a backlog for as long as nothing new happened.
+
     The drain is a synchronous directory walk that unlinks what it reads, so it goes to a
     thread: this coroutine shares its event loop with Telegram long-polling and pane captures,
     and a spool with a backlog would otherwise stall both.
     """
-    try:
-        activities: list[AgentActivity] = []
-        if composition.quiet_watcher is not None:
+    activities: list[AgentActivity] = []
+    if composition.quiet_watcher is not None:
+        try:
             activities.extend(await composition.quiet_watcher.poll())
-        if composition.activity_directory is not None:
+        except Exception:
+            _LOG.exception("pane quiet watch failed")
+    if composition.activity_directory is not None:
+        try:
             activities.extend(
                 await asyncio.to_thread(drain_activity, composition.activity_directory)
             )
+        except Exception:
+            _LOG.exception("draining the activity spool failed")
+    try:
         await composition.boundary.notifier.deliver(activities)
     except Exception:
-        _LOG.exception("activity watch pass failed")
+        _LOG.exception("delivering activity notifications failed")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:

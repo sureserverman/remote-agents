@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -56,12 +57,25 @@ A notification is not a screen: it is sent apart from the live view and it is no
 so it may not carry navigation. One button, and it leads to the session the message is about.
 """
 
+NOTIFIED_DETAIL_ACTION = "session.detail.notified"
+"""`session.detail`, reached from a notification rather than from a screen.
+
+It exists so the press can be told apart at the boundary, which needs it for exactly one
+decision: a notification is sent *apart* from the live view, so pressing it must not let it be
+adopted as the live view. `service` normalizes it back to `session.detail` the moment that
+decision is taken -- it is a fact about which message the button was on, not about the action.
+
+Defined here rather than in `service` because the dependency runs this way: `service` imports
+this module to build the notifier, so the constant has to live on this side of it.
+"""
+
 _HEDGE = "This is a guess, not something it reported."
 """Appended to every inferred observation, and to no reported one."""
 
 _SENTENCES = {
     ActivityKind.COMPLETED: "The agent has finished its work.",
     ActivityKind.LIMIT_REACHED: "The agent stopped after reaching a usage limit.",
+    ActivityKind.OUTPUT_LIMIT: "The agent stopped at its output length limit for one reply.",
     ActivityKind.ENDED: "The session has ended.",
 }
 
@@ -156,6 +170,30 @@ Scoped to (session, kind) rather than to the chat: an agent that finishes and th
 answer has said two different things, and collapsing those would lose the one worth acting on.
 """
 
+_MAXIMUM_BACKOFF_DOUBLINGS = 5
+"""How far the repeat window may double: 2 minutes to 64, and no further.
+
+Capped rather than unbounded because an agent that has been waiting eight hours is still
+waiting, and a window that keeps doubling eventually amounts to never telling the owner again.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class _Sent:
+    """When one (session, kind) last went out, and how many times running."""
+
+    sent_at: datetime
+    repeats: int
+
+
+_RETENTION_WINDOWS = 2
+"""How many of its own windows an entry is kept for after its suppression has lapsed.
+
+Two, so a repeat arriving any time before the window has passed *again* is still recognised as
+a repeat. One would mean the count died with the suppression it caused, and the backoff could
+never reach its second step.
+"""
+
 _MAXIMUM_PENDING = 100
 """How many undelivered notifications are worth holding while Telegram is unreachable.
 
@@ -167,7 +205,15 @@ so the oldest is dropped and said out loud.
 
 
 class ActivityNotifier:
-    """Send each observation to the owner once, and never turn a busy agent into a storm.
+    """Send each observation to the owner, at least once, and never as a storm.
+
+    *At least once*, not exactly once, and the difference is not pedantry. The Bot API offers
+    no idempotency key on `sendMessage`, so a send that succeeds on Telegram's side and then
+    times out on the way back is indistinguishable here from one that never landed -- and the
+    only safe answer to that ambiguity is to retry, which can duplicate. The rate limit is what
+    bounds the consequence: a duplicate of the same kind for the same session inside the window
+    is collapsed. Claiming "exactly once" would be claiming a guarantee the transport does not
+    offer.
 
     It holds three pieces of state, and each answers a failure the others cannot:
 
@@ -206,7 +252,7 @@ class ActivityNotifier:
         self._now = now
         self._bot: object | None = None
         self._pending: deque[AgentActivity] = deque()
-        self._last_sent: dict[tuple[str, ActivityKind], datetime] = {}
+        self._last_sent: dict[tuple[str, ActivityKind], _Sent] = {}
 
     def attach(self, bot: object) -> None:
         """Learn which Telegram application to speak through, once there is one."""
@@ -232,10 +278,32 @@ class ActivityNotifier:
                 # here loses it outright. Stopping the pass rather than skipping to the next
                 # keeps the order and avoids hammering a Telegram that just refused us.
                 _LOG.warning("could not deliver an activity notification; holding it for retry")
-                return sent
+                break
             self._pending.popleft()
             sent += int(delivered)
+        self._report_backlog()
         return sent
+
+    def pending_count(self) -> int:
+        """How many observations are waiting on a Telegram that is not answering."""
+        return len(self._pending)
+
+    def _report_backlog(self) -> None:
+        """Say, every pass, that undelivered notifications are being held in this process.
+
+        The queue is process-local and there is no durable counterpart, which is a deliberate
+        limitation rather than an oversight -- the spool it came from deletes before it
+        delivers, so the same "lost on a crash" cost is already accepted one layer down. What
+        was missing was any way for an operator to *know* it applies right now: a restart
+        during an outage takes the whole backlog with it, and nothing said the backlog existed.
+        Saying it on every pass makes the window visible in the journal while it is open,
+        rather than inferable afterwards from a notification that never came.
+        """
+        if self._pending:
+            _LOG.warning(
+                "holding %d undelivered notification(s) in memory; a restart now loses them",
+                len(self._pending),
+            )
 
     def _enqueue(self, activities: Iterable[AgentActivity]) -> None:
         for activity in activities:
@@ -252,8 +320,8 @@ class ActivityNotifier:
         """
         moment = self._now()
         key = (activity.session_id, activity.kind)
-        last = self._last_sent.get(key)
-        if last is not None and moment - last < self._rate_limit:
+        entry = self._last_sent.get(key)
+        if entry is not None and moment - entry.sent_at < self._window(entry.repeats):
             return False
         display = await self._display(activity.session_id)
         if display is None:
@@ -268,16 +336,27 @@ class ActivityNotifier:
         )
         # Recorded before the keyboard, because by here the owner has already been told. A
         # markup failure below must not re-send the message it is trying to decorate.
-        self._last_sent[key] = moment
-        token = self._callbacks.create(
-            "session.detail",
-            activity.session_id,
-            self._owner_user_id,
-            self._view.chat_id,
-            message_id,
-        )
-        rendered = render_activity(activity, display=display, open_session=token)
+        self._record_sent(key, moment, entry)
+        # The guard covers the mint and the render as well as the call, and the width is the
+        # point. An earlier version wrapped only `edit_message_reply_markup`, which left two
+        # raising steps outside it -- and a raise there escaped into `deliver`, which logged
+        # "holding it for retry" over an activity the owner had *already received*. The next
+        # pass then found the rate limit recorded one line above, declined it as a collapsed
+        # burst, and popped it silently. Two wrong statements about one notification, from a
+        # guard drawn one line too narrow. Everything after the send decorates a message that
+        # has landed, so everything after the send is caught together.
         try:
+            token = self._callbacks.create(
+                # Spelled apart from `session.detail` so a press on this message cannot make
+                # it the chat's live view -- see `service._NOTIFIED_DETAIL`. It opens the same
+                # screen; it just says where the thumb was.
+                NOTIFIED_DETAIL_ACTION,
+                activity.session_id,
+                self._owner_user_id,
+                self._view.chat_id,
+                message_id,
+            )
+            rendered = render_activity(activity, display=display, open_session=token)
             await self._bot.edit_message_reply_markup(
                 chat_id=self._view.chat_id,
                 message_id=message_id,
@@ -290,14 +369,67 @@ class ActivityNotifier:
             _LOG.warning("an activity notification was sent without its Open session button")
         return True
 
+    def _window(self, repeats: int) -> timedelta:
+        """How long this news stays old, given how many times it has already been sent.
+
+        A fixed window is the right answer for a burst and the wrong one for a **standing**
+        condition. `Stop` fires per turn, so a busy agent repeats "finished" and one message
+        per two minutes is a fair summary. But `needs_answer` repeats for as long as the owner
+        does not answer -- which, at three in the morning, is all night -- and a fixed window
+        turns that into a message every two minutes until they wake up. The pane-quiet path
+        already has the equivalent rule (`observe_quiet` reports once per spell and re-arms only
+        on a change); the hook-sourced kinds had nothing, because the burst was the only case
+        anyone had in mind.
+
+        So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
+        every 64 minutes for as long as it lasts. The first message arrives as fast as ever --
+        this only ever makes the *second and later* copies rarer -- and the cap keeps the signal
+        alive rather than muting it, because an agent that is still waiting is still news.
+        """
+        return self._rate_limit * (2 ** min(repeats, _MAXIMUM_BACKOFF_DOUBLINGS))
+
+    def _record_sent(
+        self, key: tuple[str, ActivityKind], moment: datetime, prior: _Sent | None
+    ) -> None:
+        """Stamp this send, and let anything else about the same session start over.
+
+        A repeat count is a claim that *nothing has changed*. The moment a session reports a
+        different kind, something has: an agent that finishes, is asked something, and finishes
+        again is not repeating itself, and backing its second "finished" off to an hour would
+        answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
+        so their base windows still collapse a genuine burst.
+        """
+        self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
+        session = key[0]
+        for other, sent in self._last_sent.items():
+            if other[0] == session and other != key and sent.repeats:
+                self._last_sent[other] = _Sent(sent.sent_at, 0)
+
     def _forget_expired_limits(self) -> None:
         """Keep the rate-limit map the size of what it is still suppressing.
 
         One entry per (session, kind) is small, but it is unbounded over the life of a service
-        that launches sessions all day, and an entry older than the window suppresses nothing.
+        that launches sessions all day, and an entry older than its window suppresses nothing.
+
+        Measured against **its own** window rather than the base one. Under a fixed horizon a
+        backed-off entry -- the ones that matter, because they are the repeating ones -- was
+        forgotten while it was still suppressing, which silently restored the every-two-minutes
+        behaviour the backoff exists to remove, and did it only for standing conditions.
+
+        And kept for `_RETENTION_WINDOWS` times that, because the repeat count has to outlive
+        the suppression it produced. Dropped the instant the window closed, the entry took the
+        count with it, so the very next repeat looked like a first sighting and reset the
+        backoff to two minutes -- a backoff that could never reach its second step, which is
+        exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
+        one; the entry is inert during it, since the window has already passed.
         """
-        horizon = self._now() - self._rate_limit
-        for key in [key for key, moment in self._last_sent.items() if moment < horizon]:
+        moment = self._now()
+        expired = [
+            key
+            for key, sent in self._last_sent.items()
+            if moment - sent.sent_at >= self._window(sent.repeats) * _RETENTION_WINDOWS
+        ]
+        for key in expired:
             del self._last_sent[key]
 
 
