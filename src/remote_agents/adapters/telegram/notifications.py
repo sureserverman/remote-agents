@@ -296,6 +296,16 @@ class ActivityNotifier:
                 break
             self._pending.popleft()
             sent += int(delivered)
+        if sent:
+            # Once per pass, not once per message: the menu only has to end up below the last
+            # notification, and moving it five times to get there would delete and re-send the
+            # owner's screen five times.
+            try:
+                await self._view.move_to_bottom(self._bot)
+            except Exception:
+                # The notifications are delivered and that is the part that matters. A menu
+                # that stayed where it was is the behaviour of every build before this one.
+                _LOG.warning("could not move the live view below the notifications")
         self._report_backlog()
         return sent
 

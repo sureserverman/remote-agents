@@ -586,7 +586,8 @@ class PrivateBotBoundary:
         # process-local set is empty precisely then.
         if state is None or state.action != _NOTIFIED_DETAIL:
             self.view.adopt(message_id)
-        if state is not None and state.action == _NOTIFIED_DETAIL:
+        notified = state is not None and state.action == _NOTIFIED_DETAIL
+        if notified:
             # Normalized once, here, so no downstream branch has to know the distinction
             # exists: it is about where the press came *from*, not about what it does.
             state = replace(state, action="session.detail")
@@ -634,6 +635,15 @@ class PrivateBotBoundary:
                     message_id=message_id,
                 ),
             )
+            if notified:
+                # The notification has been acted on, so it is an answered question of ours --
+                # the second category `discard` permits. Leaving it turned the chat into a
+                # pile of alerts the owner had already dealt with, each still offering the
+                # button they had just pressed, and each pushing the menu further up.
+                # Pruned first: the message is going, and a token outliving its message is the
+                # dead-button state this store exists to make impossible.
+                self.callbacks.prune_for_message(chat_id, message_id)
+                await self.view.discard(query.get_bot(), message_id)
         except Exception:
             if pending is None:
                 raise

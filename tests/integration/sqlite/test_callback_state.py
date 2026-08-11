@@ -205,3 +205,25 @@ def test_binding_leaves_another_chats_pending_tokens_alone(tmp_path) -> None:
 
     assert store.resolve(mine, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is not None
     assert store.resolve(theirs, owner_id=_OWNER, chat_id=_CHAT + 1, message_id=_MESSAGE) is None
+
+
+def test_a_moved_screen_carries_its_tokens_across_a_restart(tmp_path) -> None:
+    """The durable half of the move, which is the half that matters.
+
+    The live view is re-sent below arriving notifications, so its keyboard changes message
+    while the owner is not looking. A rebind that lived only in memory would leave every button
+    on the moved screen dead after the next restart — the exact defect sub-plan 1 made the
+    store durable to remove.
+    """
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    store = SQLiteCallbackStateStore(connection)
+    token = store.create("sessions.open", "sessions", _OWNER, _CHAT, _MESSAGE)
+
+    assert store.rebind(_CHAT, _MESSAGE, _MESSAGE + 5) == 1
+    connection.close()
+
+    reopened = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    assert reopened.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE) is None
+    assert (
+        reopened.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE + 5) is not None
+    )

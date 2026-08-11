@@ -109,3 +109,34 @@ def test_a_full_store_evicts_its_oldest_rather_than_refusing_a_new_screen() -> N
     assert store.resolve(oldest, owner_id=7, chat_id=11, message_id=_MESSAGE) is None
     for token in (kept, newest):
         assert store.resolve(token, owner_id=7, chat_id=11, message_id=_MESSAGE) is not None
+
+
+def test_a_moved_screen_carries_its_tokens_to_the_message_that_replaced_it() -> None:
+    """The live view is re-sent below arriving notifications so the menu stays reachable.
+
+    Re-sending without this leaves the new message showing a keyboard whose every token still
+    names the message just deleted — a screen that looks right and answers nothing, which is
+    the dead-button state the message-scoped store exists to make impossible.
+    """
+    store = CallbackStateStore()
+    moving = store.create("sessions.open", "sessions", 7, 11, _MESSAGE)
+    elsewhere = store.create("nav.home", "home", 7, 11, _MESSAGE + 1)
+
+    assert store.rebind(11, _MESSAGE, _MESSAGE + 5) == 1
+    assert store.resolve(moving, owner_id=7, chat_id=11, message_id=_MESSAGE) is None
+    assert store.resolve(moving, owner_id=7, chat_id=11, message_id=_MESSAGE + 5) is not None
+    assert store.resolve(elsewhere, owner_id=7, chat_id=11, message_id=_MESSAGE + 1) is not None
+
+
+def test_a_move_onto_an_unreal_message_is_refused() -> None:
+    """UNBOUND means "no message yet". Rebinding onto it would make every pending-token
+    binding in the chat adopt these as well."""
+    store = CallbackStateStore()
+    store.create("sessions.open", "sessions", 7, 11, _MESSAGE)
+
+    for unreal in (0, -1):
+        try:
+            store.rebind(11, _MESSAGE, unreal)
+        except ValueError:
+            continue
+        raise AssertionError(f"rebinding onto {unreal} was accepted")

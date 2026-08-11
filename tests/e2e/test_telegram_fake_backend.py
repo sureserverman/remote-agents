@@ -1006,11 +1006,20 @@ def _finished(session: SessionRecord) -> AgentActivity:
 
 
 async def _notify(chat: FakeChat, boundary: PrivateBotBoundary, activity: AgentActivity) -> int:
-    """Deliver one activity into the chat and answer which message it became."""
+    """Deliver one activity into the chat and answer which message it became.
+
+    A pass that sends anything also moves the live view below it, so *two* messages can be new.
+    The anchor is the one that is not the notification.
+    """
     boundary.notifier.attach(chat.bot)
     before = {message.message_id for message in chat.bot_messages}
     assert await boundary.notifier.deliver([activity]) == 1
-    new = [message for message in chat.bot_messages if message.message_id not in before]
+    anchor = boundary.view.anchor()
+    new = [
+        message
+        for message in chat.bot_messages
+        if message.message_id not in before and message.message_id != anchor
+    ]
     assert len(new) == 1, chat.transcript()
     return new[0].message_id
 
@@ -1023,12 +1032,11 @@ async def test_a_notification_stands_beside_the_live_view_rather_than_replacing_
     boundary, _ = _renameable(record)
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
-    anchor = chat.bot_messages[0].message_id
 
     notification = await _notify(chat, boundary, _finished(record))
 
-    assert notification != anchor
-    assert boundary.view.anchor() == anchor, "the notification took over the live view"
+    anchor = boundary.view.anchor()
+    assert notification != anchor, "the notification took over the live view"
     assert "Sessions" in chat.messages[anchor].text
     assert "The agent has finished its work." in chat.messages[notification].text
     assert len(chat.bot_messages) == 2, chat.transcript()
@@ -1042,9 +1050,9 @@ async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() ->
     boundary, _ = _renameable(record)
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
-    anchor = chat.bot_messages[0].message_id
     notification = await _notify(chat, boundary, _finished(record))
     open_session = _button(chat.messages[notification], "Open session")
+    anchor = boundary.view.anchor()
 
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
@@ -1058,26 +1066,94 @@ async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() ->
 
 
 @pytest.mark.asyncio
-async def test_the_notification_button_opens_the_session_in_the_live_view() -> None:
-    """The press lands where every other screen does — in the anchor — and the notification
-    it came from is still there afterwards, because nothing about it was superseded."""
+async def test_the_notification_button_opens_the_session_and_consumes_the_notification() -> None:
+    """The press opens the session, and the notification that offered it goes.
+
+    This reverses what Task 3.3 originally pinned. That test asserted the notification survived
+    its own press, which the plan asked for — and the owner's acceptance run showed what it
+    actually produces: a chat filling with alerts already acted on, each still offering the
+    button just pressed, each pushing the menu further out of view. An answered question of
+    ours is one of the four things `LiveView.discard` has always permitted; nothing needed
+    relaxing, only applying.
+    """
     record = _a_running_session()
     boundary, _ = _renameable(record)
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
-    anchor = chat.bot_messages[0].message_id
     notification = await _notify(chat, boundary, _finished(record))
+    token = _button(chat.messages[notification], "Open session")
 
-    press = chat.press(_button(chat.messages[notification], "Open session"))
+    press = chat.press(token)
     await boundary.callback(press, None)
 
     assert press.callback_query.answers == [None], "the button was refused"
+    anchor = boundary.view.anchor()
     assert "Demo · Claude · regular · #1" in chat.messages[anchor].text
     assert "Rename" in [
         button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
     ], "the press opened the session detail, not some other screen"
-    assert notification in chat.messages, chat.transcript()
-    assert len(chat.bot_messages) == 2, chat.transcript()
+    assert notification not in chat.messages, chat.transcript()
+    assert len(chat.bot_messages) == 1, chat.transcript()
+    assert (
+        boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=notification) is None
+    ), "a token outlived the message it was drawn on"
+
+
+@pytest.mark.asyncio
+async def test_a_notification_moves_the_menu_below_it_so_it_stays_reachable() -> None:
+    """Telegram orders a chat by send time, so a notification always lands below the menu.
+
+    Editing the anchor in place cannot answer that — the message stays where it was sent — so
+    the live view is re-sent beneath whatever arrived. Reported by the owner from the real
+    client: the menu was being pushed out of view as notifications accumulated.
+    """
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    first_anchor = chat.bot_messages[0].message_id
+    sessions_token = _button(chat.messages[first_anchor], "Home")
+
+    notification = await _notify(chat, boundary, _finished(record))
+
+    moved = boundary.view.anchor()
+    assert moved != first_anchor, "the live view did not move"
+    assert first_anchor not in chat.messages, "the old screen was left in the chat"
+    assert [message.message_id for message in chat.bot_messages] == [notification, moved], (
+        "the menu must be the newest message in the chat"
+    )
+    assert (
+        boundary.callbacks.resolve(sessions_token, owner_id=7, chat_id=11, message_id=moved)
+        is not None
+    ), "moving the screen killed the keyboard on it"
+
+
+@pytest.mark.asyncio
+async def test_the_menu_stays_at_the_bottom_as_notifications_accumulate() -> None:
+    """Three unacted notifications, and the menu is still the last thing in the chat."""
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+
+    for index in range(3):
+        boundary.notifier.attach(chat.bot)
+        await boundary.notifier.deliver(
+            [
+                AgentActivity(
+                    session_id=str(record.session_id),
+                    kind=ActivityKind.COMPLETED,
+                    detail=f"run {index}",
+                    observed_at=datetime(2026, 8, 11, 14, 5 + index, tzinfo=UTC),
+                )
+            ]
+        )
+        # Past the suppression window, so each pass genuinely sends.
+        boundary.notifier._last_sent.clear()
+
+    assert chat.bot_messages[-1].message_id == boundary.view.anchor(), chat.transcript()
+    assert "Sessions" in chat.messages[boundary.view.anchor()].text
+    assert len(chat.bot_messages) == 4, "three notifications and one menu"
 
 
 @pytest.mark.asyncio
@@ -1127,7 +1203,9 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
         "the restarted service refused a notification it had sent"
     )
     assert "Demo · Claude · regular · #1" in chat.messages[after.view.anchor()].text
-    assert notification in chat.messages, chat.transcript()
+    assert notification not in chat.messages, (
+        "the restarted service resolved the button but did not consume the notification"
+    )
 
 
 @pytest.mark.asyncio
@@ -1169,7 +1247,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
 
     assert press.callback_query.answers == [None], "the button was refused"
     assert boundary.view.anchor() != notification, "the notification became the live view"
-    assert "The agent has finished its work." in chat.messages[notification].text, (
-        "the session detail was drawn over the notification"
-    )
+    assert notification not in chat.messages, "the notification should have been consumed"
+    # The detail was drawn into a message of its own rather than over the notification: had the
+    # notification been adopted, discarding it afterwards would have deleted the live view too.
     assert "Demo · Claude · regular · #1" in chat.messages[boundary.view.anchor()].text

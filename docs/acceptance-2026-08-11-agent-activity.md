@@ -270,10 +270,16 @@ into a blanket confirmation.
       session by its display identity, reading "The agent has finished its work." Not two, not one
       per turn — the rate limit collapses a burst of the same kind for the same session.
 - [ ] 6. Press that message's `Open session` button. It renders **that** session's detail into the
-      live view.
-- [ ] 7. The chat now holds both: the live view showing the session detail, **and** the
-      notification, still above it. Navigate the live view (Back, Home) and confirm the
-      notification is still there — it is not the anchor and the anchor's pruning does not own it.
+      live view, and **that notification disappears** — it has been acted on. Confirm the menu you
+      are left with is the session detail and that its buttons work.
+- [ ] 7. Confirm the menu is the **last** message in the chat, not somewhere above the
+      notifications. Let a second notification arrive (or trigger one at step 8) and check the
+      menu moves down below it rather than being pushed up. Navigate it (Back, Home) and confirm
+      any *unpressed* notification is still there — navigation must not delete one you have not
+      acted on. *(Steps 6 and 7 were rewritten on 2026-08-11 after the first real run: the
+      original build left a pressed notification in place and never moved the menu, so alerts
+      accumulated and the menu was pushed out of view. The owner reported it from the real
+      client; no test had asked the question.)*
 - [ ] 8. Stop and close that session from the live view. A second notification should arrive,
       reading "The session has ended." and naming it: `SessionEnd` fires on an owner-initiated stop
       too, because the graceful stop types `/exit` into the pane, and every `reason` maps to the

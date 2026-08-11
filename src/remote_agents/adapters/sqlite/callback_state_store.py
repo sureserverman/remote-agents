@@ -128,6 +128,23 @@ class SQLiteCallbackStateStore:
             )
         return cursor.rowcount
 
+    def rebind(self, chat_id: int, from_message_id: int, to_message_id: int) -> int:
+        """Move a message's tokens onto the message replacing it, and report how many.
+
+        One statement, so a concurrent writer cannot see the tokens belonging to neither
+        message. The durable half of the pair matters here: the live view moves to the bottom
+        of the chat whenever a notification arrives, and a keyboard that stopped resolving
+        across that move would be the dead-button defect sub-plan 1 exists to have removed.
+        """
+        if to_message_id <= UNBOUND:
+            raise ValueError("a rebound callback message must be a real Telegram message")
+        with self._connection:
+            cursor = self._connection.execute(
+                "UPDATE callback_states SET message_id = ? WHERE chat_id = ? AND message_id = ?",
+                (to_message_id, chat_id, from_message_id),
+            )
+        return cursor.rowcount
+
     def active_count(self) -> int:
         return int(self._connection.execute("SELECT COUNT(*) FROM callback_states").fetchone()[0])
 

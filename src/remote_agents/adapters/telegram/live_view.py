@@ -96,6 +96,15 @@ class LiveView:
         self._chat_id = chat_id
         self._callbacks = callbacks
         self._anchors = anchors
+        self._last_arguments: dict[str, object] | None = None
+        """What the anchor currently shows, so the screen can be moved without re-deriving it.
+
+        Process-local, and that is the right scope: it exists only to redraw the screen the
+        owner is looking at *now*. A restart has no "now" to preserve — the first render after
+        one fills this in, and until then `move_to_bottom` declines rather than guessing, which
+        is why it is safe for this to be empty.
+        """
+
         self._owed_prunes: set[int] = set()
         """Retired messages whose tokens an interstitial re-send could not discard yet.
 
@@ -142,6 +151,10 @@ class LiveView:
         render would discard. Pruning there kills the action mid-flight — the button
         resolves, the wait appears, and nothing happens.
         """
+        # Remembered before the send, so a screen that is drawn and then fails to move is still
+        # the screen this object believes it is showing.
+        if retire:
+            self._last_arguments = arguments
         anchor = self._anchors.anchor(self._chat_id)
         if anchor is None:
             return await self._send(bot, arguments, retire=retire)
@@ -185,6 +198,37 @@ class LiveView:
             # shared step rather than a line inside `_retire`.
             self._owed_prunes.add(retired)
         return message_id
+
+    async def move_to_bottom(self, bot) -> int | None:
+        """Redraw the current screen as the newest message in the chat, and answer where.
+
+        Telegram orders a chat by send time and nothing else, so every notification lands
+        *below* the live view and pushes it further out of sight. Editing the anchor in place
+        cannot fix that — the message stays where it was sent — so the only way for the menu to
+        stay reachable is for it to be sent again, below whatever has arrived since.
+
+        The owner's report is the reason this exists: notifications accumulated, each one
+        pushing the menu up, until reaching it meant scrolling past them. Sub-plan 1 gave this
+        chat exactly one bot message so the screen was always the last thing in it; Stage 3
+        added a second kind of message and quietly took that away again.
+
+        Answers None when there is nothing to move — no anchor yet, or no remembered screen
+        after a restart — because inventing a screen to move is worse than leaving one behind.
+
+        The token rebind is what makes this safe rather than merely tidy. A token resolves only
+        against the message it is bound to, so re-sending without moving them leaves the new
+        keyboard entirely dead. Send, rebind, then delete: at every point between those steps
+        some message in the chat carries buttons that work.
+        """
+        anchor = self._anchors.anchor(self._chat_id)
+        if anchor is None or self._last_arguments is None:
+            return None
+        message = await bot.send_message(chat_id=self._chat_id, **self._last_arguments)
+        moved = int(message.message_id)
+        self._anchors.record_anchor(self._chat_id, moved)
+        self._callbacks.rebind(self._chat_id, anchor, moved)
+        await self._delete(bot, anchor)
+        return moved
 
     async def send_apart(self, bot, arguments: dict[str, object]) -> int:
         """Send a message that is deliberately *not* the live view, and answer its id.

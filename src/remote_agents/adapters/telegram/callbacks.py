@@ -105,6 +105,19 @@ class CallbackStateStore:
             self._discard(token)
         return len(doomed)
 
+    def rebind(self, chat_id: int, from_message_id: int, to_message_id: int) -> int:
+        """Move a message's tokens onto the message replacing it, and report how many."""
+        if to_message_id <= UNBOUND:
+            raise ValueError("a rebound callback message must be a real Telegram message")
+        moved = [
+            token
+            for token, state in self._states.items()
+            if state.chat_id == chat_id and state.message_id == from_message_id
+        ]
+        for token in moved:
+            self._states[token] = replace(self._states[token], message_id=to_message_id)
+        return len(moved)
+
     def active_count(self) -> int:
         """Expose the number of live callback states for bounded-resource verification.
 

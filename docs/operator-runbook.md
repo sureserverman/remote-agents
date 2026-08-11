@@ -298,7 +298,19 @@ opposite one, and points at the service rather than at the hook — check
 Each message names the session by its display identity, gives one sentence, and carries a single
 `Open session` button that renders that session's detail into the live view. There is no other
 button: a notification is not a screen, so it may not carry navigation. It is sent apart from the
-live view and survives the view's pruning, so navigating afterwards leaves it in the chat.
+live view, so navigating the live view (Back, Home, a session detail) leaves it alone — the
+anchor's pruning does not own it.
+
+Two things follow from Telegram ordering a chat purely by send time, and both were added after
+the first real run showed what their absence feels like. **Pressing `Open session` deletes that
+notification**: it has been acted on, and left in place it becomes one of a growing pile of
+alerts already dealt with, each still offering the button just pressed. And **every pass that
+sends a notification moves the live view to the bottom of the chat**, re-sending it below
+whatever arrived, because a notification always lands *below* the menu and editing the anchor in
+place cannot move it back. Without that, the menu drifts upward until reaching it means scrolling
+past the notifications. The move re-binds the screen's callback tokens to the new message, so no
+button on it dies; if the move fails, the notifications are still delivered and the menu simply
+stays where it was.
 
 | Kind | Sentence the owner sees | Source | Reported or inferred |
 |---|---|---|---|
