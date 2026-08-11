@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.agents import hook_install
 from remote_agents.adapters.agents.hook_install import (
     INSTALLED_EVENTS,
     HookInstallError,
@@ -247,6 +249,116 @@ def test_a_hook_that_only_mentions_our_command_is_never_treated_as_ours(
     ]
 
     assert command in survivors
+
+
+def test_a_group_the_operator_narrowed_with_a_matcher_is_not_ours_to_delete(
+    tmp_path: Path,
+) -> None:
+    """This installer writes matcherless groups, so a group with a matcher is not one of ours.
+
+    `_is_our_group` looked only at the commands and ignored every other key, so a group an
+    operator had narrowed with a `matcher` and given a `timeout` was claimed, and `--remove`
+    deleted their customization with no record of it. Install did it more quietly still:
+    the group was stripped and re-added bare, so the matcher and timeout simply vanished.
+    That is the outcome this module says it exists to prevent -- failing to remove a hook is
+    recoverable, deleting somebody else's is not.
+    """
+    command = agent_event_command(Path(sys.executable))
+    document = {
+        "model": "opus",
+        "hooks": {
+            "Stop": [
+                {
+                    "matcher": "*",
+                    "timeout": 5,
+                    "hooks": [{"type": "command", "command": command}],
+                }
+            ]
+        },
+    }
+    path = _settings_file(tmp_path, document)
+    before = path.read_bytes()
+
+    assert not remove_agent_hooks(path).changed
+    assert path.read_bytes() == before
+
+    install_agent_hooks(path)
+    stop = json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"]
+
+    # Ours is added beside theirs; theirs keeps both keys it was given.
+    assert {"matcher": "*", "timeout": 5, "hooks": [{"type": "command", "command": command}]} in stop
+
+    remove_agent_hooks(path)
+    assert path.read_bytes() == before
+
+
+def test_an_unrecognised_variant_of_our_command_is_reported_rather_than_silently_doubled(
+    tmp_path: Path,
+) -> None:
+    """Refusing to touch it is right; saying nothing about it is not.
+
+    A command running our subcommand with a flag this installer does not know is deliberately
+    left alone -- it is a wrapper, a hand-edit, or a future version, and removing it would be
+    guessing. But install then appends its own group beside it, so the agent runs the hook
+    twice per event, and `--remove` later takes only ours and leaves theirs spooling forever.
+    The conservative choice is kept; what changes is that the operator is told they have one.
+    """
+    command = f"{sys.executable} -m remote_agents agent-event --verbose"
+    document = {
+        "model": "opus",
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": command}]}]},
+    }
+    path = _settings_file(tmp_path, document)
+
+    outcome = install_agent_hooks(path)
+
+    assert outcome.changed
+    assert "Stop" in outcome.summary
+    assert "twice" in outcome.summary
+    # Still left strictly alone, which is the half that was already right.
+    survivors = [
+        entry["command"]
+        for group in json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"]
+        for entry in group["hooks"]
+    ]
+    assert command in survivors
+
+
+def test_a_write_landing_while_this_one_computes_is_refused_rather_than_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file is read, computed against, then replaced whole -- so a writer in that window loses.
+
+    Claude Code writes this same file itself: a model change, an "always allow" grant. This
+    command is plausibly run from inside a session that does exactly that, and `os.replace` of
+    content built from the *old* bytes discards the grant entirely. Everything else in this
+    module exists to leave the file as it was found apart from four groups, and this was the
+    one remaining way that promise broke silently.
+
+    The concurrent write is injected at a real point in the sequence -- after the read, before
+    the replace -- rather than simulated after the fact.
+    """
+    path = _settings_file(tmp_path)
+    real = hook_install._refuse_when_removal_would_not_restore
+
+    def land_a_concurrent_write(*args: object, **kwargs: object) -> None:
+        real(*args, **kwargs)  # type: ignore[arg-type]
+        document = dict(_LIVED_IN_SETTINGS)
+        document["permissions"] = {"allow": ["Bash(git status:*)", "Bash(git diff:*)"]}
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        hook_install, "_refuse_when_removal_would_not_restore", land_a_concurrent_write
+    )
+
+    with pytest.raises(HookInstallError) as refusal:
+        install_agent_hooks(path)
+
+    assert "changed" in str(refusal.value)
+    # The grant that landed in the window is still there, which is the whole point.
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["permissions"]["allow"] == ["Bash(git status:*)", "Bash(git diff:*)"]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["settings.json"]
 
 
 def test_a_spool_this_installer_redirected_is_still_its_own_to_remove(tmp_path: Path) -> None:

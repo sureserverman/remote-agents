@@ -23,9 +23,12 @@ argued for here.
 
 *Our groups are found by what they run — not by what they say.* There is nowhere in the
 documented hook schema to put a marker key, and inventing one risks tripping a validator
-upstream, so a group is recognised as ours when every command in it, split into words,
-*ends* in ``-m remote_agents agent-event``. Ignoring the interpreter in front is what makes
-reinstalling after the virtualenv moves replace the stale entry instead of adding a second.
+upstream, so a group is recognised as ours when every command in it, split into words, has
+``-m remote_agents agent-event`` immediately after the interpreter, followed by nothing or by
+the one option this installer knows how to add — and when the group carries no key but
+``hooks``, since the groups written here are matcherless and carry nothing else. Ignoring the
+interpreter in front is what makes reinstalling after the virtualenv moves replace the stale
+entry instead of adding a second.
 
 Comparing parsed words rather than searching the text is the part that matters. Substring
 matching, which is what this did first, made an operator's own hook ours as soon as its
@@ -52,6 +55,7 @@ import stat
 import sys
 import tempfile
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -120,10 +124,10 @@ def install_agent_hooks(
         return HookInstallOutcome(
             settings_path, False, f"agent hooks already current in {settings_path}"
         )
+    _refuse_if_changed_since_it_was_read(settings_path, settings.content)
     _write_atomically(settings_path, content, settings.mode)
-    return HookInstallOutcome(
-        settings_path, True, f"installed {len(INSTALLED_EVENTS)} agent hooks in {settings_path}"
-    )
+    summary = f"installed {len(INSTALLED_EVENTS)} agent hooks in {settings_path}"
+    return HookInstallOutcome(settings_path, True, summary + _foreign_variant_note(base))
 
 
 def remove_agent_hooks(settings_path: Path) -> HookInstallOutcome:
@@ -136,6 +140,7 @@ def remove_agent_hooks(settings_path: Path) -> HookInstallOutcome:
     content = settings.style.render(_without_our_groups(settings.document))
     if content == settings.content:
         return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}")
+    _refuse_if_changed_since_it_was_read(settings_path, settings.content)
     _write_atomically(settings_path, content, settings.mode)
     return HookInstallOutcome(settings_path, True, f"removed agent hooks from {settings_path}")
 
@@ -293,14 +298,71 @@ def _without_our_groups(document: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in document.items() if key != "hooks"}
 
 
+def _foreign_variant_note(base: dict[str, Any]) -> str:
+    """Name the events already running our subcommand in a form this installer will not manage.
+
+    Leaving such an entry alone is the right call and stays the right call -- it is a wrapper,
+    a hand-edit, or a future version, and removing it would be guessing about a command we did
+    not write. But the consequence of leaving it was invisible: install adds its own group
+    beside it, so the agent runs the hook twice for every one of those events, and `--remove`
+    later takes only ours and leaves theirs spooling with nothing left that knows how to
+    clean it up. Refusing outright would strand an operator who cannot install until they
+    edit a file by hand; saying nothing left them with duplicate notifications and no clue
+    where they came from. So it is reported, and the choice of what to do stays theirs.
+    """
+    hooks = base.get("hooks")
+    if not isinstance(hooks, dict):
+        return ""
+    events = [
+        event
+        for event in INSTALLED_EVENTS
+        if any(_mentions_our_subcommand(group) for group in hooks.get(event) or ())
+    ]
+    if not events:
+        return ""
+    return (
+        f". Note: {', '.join(events)} already runs this subcommand in a form this installer "
+        "does not recognise and will not touch, so the hook now runs twice for those events; "
+        "removing these hooks later will leave that entry in place"
+    )
+
+
+def _mentions_our_subcommand(group: Any) -> bool:
+    """Report a group running our subcommand that `_is_our_group` will not claim."""
+    if _is_our_group(group) or not isinstance(group, dict):
+        return False
+    entries = group.get("hooks")
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+            continue
+        try:
+            words = shlex.split(entry["command"])
+        except ValueError:
+            continue
+        # The parsed words, exactly as `_runs_our_command` reads them -- so a command that
+        # merely *mentions* the subcommand in an echo or a grep is no more a near-miss here
+        # than it is one there.
+        if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) == _COMMAND_TAIL:
+            return True
+    return False
+
+
 def _is_our_group(group: Any) -> bool:
     """Recognise a group this installer wrote, and never a group that merely resembles one.
 
     Every command in the group must be ours. A group an operator has hand-edited to run our
     command beside one of their own is therefore left alone: failing to remove a hook is
     recoverable, and deleting somebody else's is not.
+
+    The group must also carry nothing but ``hooks``. This installer writes matcherless groups
+    and adds no other key, so a group holding a ``matcher`` or a ``timeout`` is by
+    construction not one it wrote -- and claiming it deleted an operator's deliberate
+    narrowing on removal, or silently dropped it on reinstall, which is the same
+    unrecoverable outcome the paragraph above exists to prevent.
     """
-    if not isinstance(group, dict):
+    if not isinstance(group, dict) or set(group) != {"hooks"}:
         return False
     entries = group.get("hooks")
     if not isinstance(entries, list) or not entries:
@@ -375,6 +437,49 @@ def _holds_our_groups(document: dict[str, Any]) -> bool:
     )
 
 
+def _persist_directory_entry(directory: Path) -> None:
+    """Make the rename itself durable, not just the bytes it renamed.
+
+    The content is fsynced before the replace, but the *entry* naming it is not, so a crash
+    straight after a successful install could leave the settings file at its pre-install
+    content while the command has already reported success. Best effort: the replacement is
+    visible to every reader by this point, so failing here would report that nothing was
+    written about a change that in fact landed. Same reasoning, and the same shape, as
+    `registry_writer._sync_directory`.
+    """
+    with suppress(OSError):
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _refuse_if_changed_since_it_was_read(path: Path, expected: bytes | None) -> None:
+    """Check the bytes are still the ones this change was computed against.
+
+    A whole-file replace built from a stale read discards whatever landed in between, and the
+    agent whose settings these are writes them itself -- a model change, an "always allow"
+    grant -- while this command is plausibly being run from inside one of its sessions. The
+    window is milliseconds and the loss is silent and total, which is the combination worth a
+    check rather than a comment.
+
+    Not a lock: two writers can still interleave inside the moment between this read and the
+    rename below. It converts the likely case, a write that landed while this process was
+    parsing and rendering, from silent loss into a refusal the operator can act on.
+    """
+    try:
+        current = path.read_bytes() if path.exists() else None
+    except OSError as error:
+        raise HookInstallError(f"cannot re-read {path}: {error}") from error
+    if current != expected:
+        raise HookInstallError(
+            f"{path} changed while this command was preparing its edit, so it has been left "
+            "untouched rather than written from what it used to say. Nothing was lost — run "
+            "the command again."
+        )
+
+
 def _write_atomically(path: Path, content: bytes, mode: int) -> None:
     """Replace the file whole, so an interruption can never leave a half-written settings file.
 
@@ -405,6 +510,7 @@ def _write_atomically(path: Path, content: bytes, mode: int) -> None:
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
         os.replace(temporary, path)
+        _persist_directory_entry(path.parent)
     except BaseException as error:
         temporary.unlink(missing_ok=True)
         if isinstance(error, OSError):
