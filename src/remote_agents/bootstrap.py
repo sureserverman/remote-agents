@@ -16,7 +16,6 @@ from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
 
-from remote_agents.adapters.agents.activity_spool import spool_agent_event
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
@@ -58,6 +57,7 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -242,15 +242,10 @@ def main(
     install_hooks_parser.add_argument("--remove", action="store_true")
     arguments = parser.parse_args(argv)
     if arguments.command == "agent-event":
-        # An agent hook invokes this, so the branch reports success whatever happens: the
-        # spool never raises, and resolving the owner's paths is the only step here that can.
-        try:
-            activity_directory = (
-                arguments.activity_dir or ProductionPaths.for_home(Path.home()).activity_directory
-            )
-        except (ConfigError, RuntimeError):
-            return 0
-        return spool_agent_event(sys.stdin.buffer, activity_directory=activity_directory)
+        # Delegated rather than implemented here: `__main__` routes the installed hook command
+        # straight to that module without importing this one, and two copies of a path that
+        # promises never to raise would eventually stop agreeing about how it does that.
+        return spool_from_stdin(arguments.activity_dir)
     if arguments.command == "install-agent-hooks":
         # --settings names the file to operate on, and --activity-dir the spool the installed
         # command will write to. Both default to the owner's real ones and exist so that the

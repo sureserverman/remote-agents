@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -504,3 +505,37 @@ def test_the_subcommand_reports_a_refusal_on_standard_error(
 
     assert path.read_bytes() == b"not json at all"
     assert capsys.readouterr().err.strip() != ""
+
+
+def test_the_installed_hook_command_does_not_load_the_composition_root(tmp_path: Path) -> None:
+    """The command installed here fires in every Claude session on the machine, managed or not.
+
+    `bootstrap` is the composition root: importing it pulls in the Telegram service, httpx,
+    sqlite3, rich and asyncio. Measured before this was split, `-m remote_agents agent-event`
+    loaded 678 modules and took ~0.25s -- on `Stop`, `StopFailure`, `Notification` and
+    `SessionEnd`, for every agent session the operator runs, including the ones this service
+    did not start and will do nothing about. The environment gate that makes those a no-op was
+    only consulted after all of it.
+
+    Asserting on the module *set* rather than on a wall-clock number, because the cost is the
+    import graph and a timing assertion would be flaky on a loaded machine.
+    """
+    probe = (
+        "import sys, runpy\n"
+        f"sys.argv = ['remote_agents', 'agent-event', '--activity-dir', {str(tmp_path)!r}]\n"
+        "try:\n"
+        "    runpy.run_module('remote_agents', run_name='__main__')\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "print('loaded' if 'remote_agents.bootstrap' in sys.modules else 'lean', len(sys.modules))\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        input=json.dumps({"hook_event_name": "Stop"}).encode("utf-8"),
+        capture_output=True,
+        check=True,
+    )
+
+    verdict, modules = completed.stdout.decode("utf-8").split()
+    assert verdict == "lean"
+    assert int(modules) < 300
