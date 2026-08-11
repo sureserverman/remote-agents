@@ -266,6 +266,11 @@ ones the plan calls a judgment no sweep can make.
   kind for the same session resets that session's repeat counts, so a genuinely new thing is not
   delayed by an hour of a previous one. Expect a standing `needs_answer` — an agent waiting while
   the owner is asleep — to arrive on that widening schedule rather than every two minutes.
+- **At most ten notifications are sent per poll**, which is the one bound about the chat rather
+  than about a session. The per-(session, kind) window cannot supply it — twenty sessions stopping
+  together are twenty separate keys, none suppressing another, and that is past Telegram's per-chat
+  rate. Nothing is dropped; the remainder waits for the next poll. If you deliberately stop several
+  managed sessions at once during the run, expect them to arrive over a minute or two.
 - `REMOTE_AGENTS_SESSION_ID` is **inherited by descendants of a managed pane**. A `claude` started
   from a shell inside a managed session, or by the managed agent's own Bash tool, spools under the
   *parent's* session id, so its `Stop` or `SessionEnd` reaches the owner as a notification naming a

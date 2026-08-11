@@ -194,6 +194,21 @@ a repeat. One would mean the count died with the suppression it caused, and the 
 never reach its second step.
 """
 
+_MAXIMUM_SENDS_PER_PASS = 10
+"""The ceiling the per-(session, kind) limit cannot provide, because it is per key.
+
+That limit collapses one session repeating itself; it says nothing about many sessions
+speaking at once. Twenty managed sessions stopping together are twenty *distinct* keys, none
+suppressing any other, and each notification costs two Bot API calls -- past Telegram's
+per-chat rate, at which point the 429s land in the retry queue and the backlog grows against
+its own cap.
+
+Ten per pass against a thirty-second poll is a third of a message per second, comfortably
+under that. Nothing is dropped: the remainder stays queued and the next pass takes it, so a
+genuine burst arrives spread out rather than refused. This is the only bound here that is
+about the *chat* rather than about one session's news.
+"""
+
 _MAXIMUM_PENDING = 100
 """How many undelivered notifications are worth holding while Telegram is unreachable.
 
@@ -269,7 +284,7 @@ class ActivityNotifier:
             return 0
         self._forget_expired_limits()
         sent = 0
-        while self._pending:
+        while self._pending and sent < _MAXIMUM_SENDS_PER_PASS:
             activity = self._pending[0]
             try:
                 delivered = await self._send(activity)

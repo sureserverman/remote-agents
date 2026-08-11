@@ -344,6 +344,13 @@ than an hour later. The other kinds keep their timestamps, so a genuine burst is
 A repeat is counted only when a message was actually sent; a suppressed one does not advance the
 backoff.
 
+One further bound sits above all of that, and it is the only one about the chat rather than about
+a session's news: **at most ten notifications are sent per poll.** The per-session limit cannot
+provide this, because twenty sessions stopping at once are twenty separate keys and none of them
+suppresses another — past Telegram's per-chat rate, at which point its refusals would come back as
+a growing backlog. Nothing is dropped: the remainder stays queued and the next poll takes it, so a
+burst arrives spread over a minute or two instead of being refused.
+
 ## Local terminal visual baselines
 
 Every position the terminal wizard can be in has a committed SVG baseline under

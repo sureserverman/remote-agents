@@ -468,3 +468,32 @@ async def test_a_backed_off_entry_is_not_forgotten_while_it_is_still_suppressing
     assert len(notifier._last_sent) == 1, "an entry still suppressing was pruned"
     assert await notifier.deliver([waiting]) == 0
     assert len(view.sent) == 2
+
+
+async def test_many_sessions_at_once_are_spread_across_passes_not_fired_at_the_chat() -> None:
+    """The per-(session, kind) limit is per key, so it bounds one session and not the chat.
+
+    Twenty sessions stopping together are twenty distinct keys, none suppressing any other.
+    Each notification costs two Bot API calls, so an unbounded pass runs past Telegram's
+    per-chat rate and the 429s come back as a growing backlog. Nothing is dropped here — the
+    remainder waits for the next pass, seconds later.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    burst = [
+        AgentActivity(
+            session_id=f"session-{index}",
+            kind=ActivityKind.COMPLETED,
+            detail=None,
+            observed_at=clock.moment,
+        )
+        for index in range(25)
+    ]
+
+    assert await notifier.deliver(burst) == 10
+    assert notifier.pending_count() == 15, "the remainder must wait, not be discarded"
+
+    assert await notifier.deliver([]) == 10
+    assert await notifier.deliver([]) == 5
+    assert notifier.pending_count() == 0
+    assert len(view.sent) == 25, "every observation still reached the owner"
