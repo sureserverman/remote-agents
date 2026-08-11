@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from stop_results import a_clean_stop, a_stop_that_did_not_take
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.database import open_database
@@ -23,7 +24,12 @@ from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
-from remote_agents.bootstrap import ServiceComposition, _resolve_profile_executable, main
+from remote_agents.bootstrap import (
+    ServiceComposition,
+    _resolve_profile_executable,
+    _watch_quiet_once,
+    main,
+)
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
@@ -32,6 +38,11 @@ from remote_agents.domain.models import (
     SessionId,
     SessionRecord,
     SessionState,
+)
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
 )
 from remote_agents.ports.session_store import ProjectUsage
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -1217,3 +1228,239 @@ async def test_a_button_drawn_before_a_restart_still_works_after_one(tmp_path) -
 
     assert callback.answers == [None], "the restarted service refused a button it had drawn"
     assert "Sessions" in str(callback.edits[0]["text"])
+
+
+class _NotifyBot:
+    """The chat-addressed surface an *unsolicited* message goes out through.
+
+    Separate from `_Bot` because it answers a different question. Every other double in this
+    file records what a press produced; this one records what the service said with nobody
+    pressing anything, which is the whole of Stage 3 and the only outbound path in the bot
+    that no owner action started.
+
+    `fail_sends` models Telegram being unreachable for the first N sends, because "retried on
+    the next pass" is a claim about the failure path and cannot be tested from the happy one.
+    """
+
+    def __init__(self, *, first_id: int = 900, fail_sends: int = 0) -> None:
+        self.sends: list[dict[str, object]] = []
+        self.markups: list[dict[str, object]] = []
+        self._next_id = first_id
+        self._failures = fail_sends
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        if self._failures > 0:
+            self._failures -= 1
+            raise TelegramError("Telegram is unreachable")
+        self.sends.append(kwargs)
+        message = _Message(message_id=self._next_id)
+        self._next_id += 1
+        return message
+
+    async def edit_message_reply_markup(self, **kwargs: object) -> None:
+        self.markups.append(kwargs)
+
+
+def _spool(directory, session_id: str, *, event: str = "Stop", stamp: str = "000001") -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{session_id}-20260811T140500{stamp}Z.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "event": event,
+                "observed_at": "2026-08-11T14:05:00+00:00",
+                "detail": "Ran the suite.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _notified(*records: SessionRecord, **bot_arguments: object):
+    launcher = _Launcher()
+    launcher.records = list(records)
+    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    bot = _NotifyBot(**bot_arguments)
+    boundary.notifier.attach(bot)
+    return boundary, bot
+
+
+def _running(label: str = "one") -> SessionRecord:
+    return _record(SessionState.RUNNING, label, ProjectId("p" * 24))
+
+
+async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file(
+    tmp_path,
+) -> None:
+    """The spool is drained by delivery, not merely read by it.
+
+    Exactly-once here is a property of two things agreeing: the drain deletes what it returns,
+    and the notifier sends what the drain returned. A pass that sent without draining would
+    repeat the same message every poll for as long as the file sat there.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert list(spool.glob("*.json")) == []
+
+    await _watch_quiet_once(composition)
+    assert len(bot.sends) == 1, "a second pass re-delivered an activity that was already sent"
+
+
+async def test_a_restart_over_a_drained_spool_sends_no_notification(tmp_path) -> None:
+    """A fresh service is not a fresh spool. Nothing survives a delivery that the next
+    process could mistake for undelivered work."""
+    record = _running()
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+
+    first, first_bot = _notified(record)
+    await _watch_quiet_once(
+        ServiceComposition(first, _SilentTerminal(), _SilentReconciler(), activity_directory=spool)
+    )
+    assert len(first_bot.sends) == 1
+
+    restarted, restarted_bot = _notified(record)
+    await _watch_quiet_once(
+        ServiceComposition(
+            restarted, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert restarted_bot.sends == []
+
+
+async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path) -> None:
+    """A hook that fires on every turn is a notification storm, not a signal.
+
+    Collapsed per session *and* per kind: an agent that finishes and then needs an answer has
+    said two different things and is entitled to two messages.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    session_id = str(record.session_id)
+    spool = tmp_path / "activity"
+    for index in range(5):
+        _spool(spool, session_id, stamp=f"00000{index}")
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    _spool(spool, session_id, event="SessionEnd", stamp="000009")
+    await _watch_quiet_once(composition)
+    assert len(bot.sends) == 2, "a different kind was suppressed by another kind's rate limit"
+
+
+async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_path) -> None:
+    """The drain has already deleted the file by the time Telegram refuses it, so a dropped
+    send is a lost notification — the only copy left is the one held in memory."""
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == [], "the double was supposed to refuse the first send"
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+
+
+async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> None:
+    """The sessions list hides an ENDED record, and `SessionEnd` is precisely the event whose
+    record is ENDED by the time it is delivered. Resolving the name through the list would
+    have dropped every one of them."""
+    record = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id), event="SessionEnd")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+
+
+async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
+    """The other half of the source. Stage 2 computed this and dropped it on purpose; the
+    drop is what this pass exists to end, so it is pinned rather than left to a docstring."""
+    record = _running()
+    boundary, bot = _notified(record)
+
+    class _QuietWatcher:
+        def __init__(self) -> None:
+            self.passes = 0
+
+        async def poll(self):
+            self.passes += 1
+            return (
+                AgentActivity(
+                    session_id=str(record.session_id),
+                    kind=ActivityKind.QUIET,
+                    detail=None,
+                    observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+                    confidence=ActivityConfidence.INFERRED,
+                ),
+            )
+
+    watcher = _QuietWatcher()
+    await _watch_quiet_once(
+        ServiceComposition(boundary, _SilentTerminal(), _SilentReconciler(), watcher)
+    )
+
+    assert watcher.passes == 1
+    assert len(bot.sends) == 1
+    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
+
+
+async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tmp_path) -> None:
+    """Its button is bound to the message the send answered with, never to the anchor.
+
+    The token is minted *after* the send for that reason: `bind_pending` adopts every unbound
+    token in the chat, so a token minted before an awaited send can be claimed by a render
+    that interleaved with it — and then the notification's one button is bound to the live
+    view, where nothing draws it.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert boundary.view.anchor() is None, "a notification took over the chat's live view"
+    assert len(bot.markups) == 1
+    keyboard = bot.markups[0]["reply_markup"].inline_keyboard
+    assert [button.text for row in keyboard for button in row] == ["Open session"]
+    token = keyboard[0][0].callback_data
+    assert (
+        boundary.callbacks.resolve(
+            token, owner_id=7, chat_id=11, message_id=int(bot.markups[0]["message_id"])
+        )
+        is not None
+    )

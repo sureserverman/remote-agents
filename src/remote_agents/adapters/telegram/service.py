@@ -36,6 +36,7 @@ from telegram.ext import (
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
+from remote_agents.adapters.telegram.notifications import ActivityNotifier
 from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
@@ -229,6 +230,7 @@ class PrivateBotBoundary:
     anchors: ChatViewPort = field(default_factory=ChatViewStore)
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
+    notifier: ActivityNotifier = field(init=False)
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
@@ -244,6 +246,15 @@ class PrivateBotBoundary:
         self.stops = StopController(self.callbacks)
         self.view = LiveView(
             chat_id=self.owner_chat_id, callbacks=self.callbacks, anchors=self.anchors
+        )
+        # Built here rather than by the composition root because everything it needs is
+        # already assembled here, and because a boundary without one would leave every
+        # caller checking whether the service can speak before telling it to.
+        self.notifier = ActivityNotifier(
+            view=self.view,
+            callbacks=self.callbacks,
+            owner_user_id=self.owner_user_id,
+            display=self._display_for,
         )
 
     async def refresh_catalogue(self) -> None:
@@ -1361,6 +1372,24 @@ class PrivateBotBoundary:
             None,
         )
 
+    async def _display_for(self, session_value: str) -> str | None:
+        """Name a session for a message the owner did not ask for.
+
+        Deliberately not `_record`, and the difference is the whole point: that one reads
+        `_records`, which hides an ENDED session because the sessions *list* should not show
+        history. A `SessionEnd` activity is precisely the one whose record is ENDED by the time
+        it is delivered, so resolving a notification's name through the list would have dropped
+        every ending — the notification most worth having — while every other kind worked.
+        """
+        if self.launcher is None:
+            return None
+        project_names = {project.opaque_id: project.name for project in self.catalogue}
+        for record in await self.launcher.list_sessions():
+            if str(record.session_id) == session_value:
+                named = _with_project_name(record, project_names.get(str(record.project_id)))
+                return named.display.rendered
+        return None
+
     def _projects_reply(
         self,
         projects: tuple[CatalogProject, ...],
@@ -1657,6 +1686,11 @@ async def run_private_bot(
     stopping = asyncio.Event()
     _install_stop_signals(stopping)
     await application.initialize()
+    # The one thing the boundary cannot build for itself. Every other message this bot sends
+    # answers an update and reaches Telegram through that update's own bot handle; a
+    # notification answers nothing, so it needs the application's, and the application does
+    # not exist until here.
+    boundary.notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
         webhook = await application.bot.get_webhook_info()

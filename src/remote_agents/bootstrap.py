@@ -58,7 +58,7 @@ from remote_agents.adapters.tmux.profiles import (
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.agent_event import spool_from_stdin
-from remote_agents.application.activity import PaneQuietWatcher
+from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -69,6 +69,7 @@ from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
+from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
@@ -155,6 +156,14 @@ class ServiceComposition:
     is optional so that every composition predating it still constructs.
     """
 
+    activity_directory: Path | None = None
+    """Where the agent hooks spool what they reported, or None when nothing spools.
+
+    The second of the two activity sources, and the reason the periodic pass runs even for a
+    composition with no quiet watcher: a host running only Claude sessions has nothing to watch
+    a pane for and everything to deliver.
+    """
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -185,12 +194,16 @@ async def _serve_with_reconciliation(
     await composition.boundary.refresh_catalogue()
     await _reconcile_quietly(composition)
     periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
-    if composition.quiet_watcher is not None:
+    if composition.quiet_watcher is not None or composition.activity_directory is not None:
         # A separate task rather than another step inside the reconciliation pass: the two
         # answer different questions on different clocks, and a pane capture that hangs must
         # not stop records being reconciled. Nothing is polled before the service is serving,
         # unlike reconciliation -- a first pass at start-up could only establish the baseline
         # the classifier already refuses to report on.
+        #
+        # Either source is reason enough to run it. A host serving only Claude sessions has no
+        # pane to watch and a spool full of what those sessions reported, and gating the whole
+        # pass on the watcher would have delivered none of it.
         periodic.append(
             asyncio.create_task(_watch_quiet_periodically(composition, activity_interval))
         )
@@ -209,18 +222,26 @@ async def _watch_quiet_periodically(composition: ServiceComposition, interval: f
 
 
 async def _watch_quiet_once(composition: ServiceComposition) -> None:
-    """One pass, which may never raise: this loop runs beside the one that serves the owner.
+    """One pass over both activity sources, delivered — and never raising.
 
-    The activities this returns are deliberately dropped, and that is a stage boundary rather
-    than an oversight: detection is built here and delivery is built next, alongside the hook
-    spool's own drain, which is unwired for the same reason. Said out loud because "the service
-    computes it" and "the owner is told" are indistinguishable from inside this function, and a
-    reader finding a discarded return value has no way to tell a boundary from a bug.
+    This loop runs beside the one that serves the owner, so a failure anywhere in it is logged
+    and costs one pass. The two sources are gathered into one list on purpose: they answer the
+    same question about different profiles, and the owner is owed one message per observation
+    regardless of which of them noticed.
+
+    The drain is a synchronous directory walk that unlinks what it reads, so it goes to a
+    thread: this coroutine shares its event loop with Telegram long-polling and pane captures,
+    and a spool with a backlog would otherwise stall both.
     """
-    if composition.quiet_watcher is None:
-        return
     try:
-        await composition.quiet_watcher.poll()
+        activities: list[AgentActivity] = []
+        if composition.quiet_watcher is not None:
+            activities.extend(await composition.quiet_watcher.poll())
+        if composition.activity_directory is not None:
+            activities.extend(
+                await asyncio.to_thread(drain_activity, composition.activity_directory)
+            )
+        await composition.boundary.notifier.deliver(activities)
     except Exception:
         _LOG.exception("activity watch pass failed")
 
@@ -494,6 +515,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         terminal,
         ReconciliationService(store),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
+        paths.activity_directory,
     )
 
 
