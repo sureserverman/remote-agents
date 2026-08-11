@@ -434,3 +434,27 @@ async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) ->
         )
 
         assert passes >= 2, f"the loop did not survive its own failure: {passes} pass(es)"
+
+
+async def test_activity_watching_gives_up_on_a_capture_that_never_returns(
+    tmp_path: Path,
+) -> None:
+    """A hang is the one capture failure the existing guard cannot catch.
+
+    `except Exception` only fires on something raised. The tmux runner awaits `communicate()`
+    with no timeout, so a wedged server leaves the capture awaiting forever: the watch loop
+    stops for the life of the process, every watched session frozen, and nothing logged. The
+    bound turns a permanent silent stall into one skipped pass.
+    """
+    with open_database(tmp_path / "state.db") as connection:
+        store = SQLiteSessionStore(connection)
+        await _running(store, "codex")
+
+        async def never_returns(session_id: SessionId) -> str:
+            await asyncio.sleep(3600)
+            raise AssertionError("unreachable")
+
+        watcher = PaneQuietWatcher(store, never_returns, quiet_polls=2)
+        watcher._capture_timeout = 0.05
+
+        assert await asyncio.wait_for(watcher.poll(), timeout=5) == ()

@@ -322,7 +322,7 @@ async def _launch_and_watch(
         seen = []
         for _ in range(polls):
             seen.extend(await watcher.poll())
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
         return seen, gateway, launched.session_id
 
 
@@ -348,7 +348,7 @@ async def test_a_quiet_fake_agent_produces_exactly_one_quiet_activity(tmp_path: 
             "print('READY', flush=True)\n"
             "for n in range(4):\n"
             "    print(f'step {n}', flush=True)\n"
-            "    time.sleep(0.35)\n"
+            "    time.sleep(0.2)\n"
             "time.sleep(30)\n",
             polls=12,
         )

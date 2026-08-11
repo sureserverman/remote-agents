@@ -148,10 +148,11 @@ class ServiceComposition:
     terminal: TmuxTerminal
     reconciler: ReconciliationService
     quiet_watcher: PaneQuietWatcher | None = None
-    """Absent when nothing needs watching, and optional so every existing caller still composes.
+    """None only in compositions that do not wire pane watching, which today means tests.
 
-    The watcher only has work when a profile without a hook system is running, and a
-    composition that never launches one has nothing for it to do.
+    Production always supplies one -- `_private_boundary` builds it unconditionally -- and it
+    simply has nothing to do on a pass where no hookless-profile session is running. The field
+    is optional so that every composition predating it still constructs.
     """
 
 
@@ -208,7 +209,14 @@ async def _watch_quiet_periodically(composition: ServiceComposition, interval: f
 
 
 async def _watch_quiet_once(composition: ServiceComposition) -> None:
-    """One pass, which may never raise: this loop runs beside the one that serves the owner."""
+    """One pass, which may never raise: this loop runs beside the one that serves the owner.
+
+    The activities this returns are deliberately dropped, and that is a stage boundary rather
+    than an oversight: detection is built here and delivery is built next, alongside the hook
+    spool's own drain, which is unwired for the same reason. Said out loud because "the service
+    computes it" and "the owner is told" are indistinguishable from inside this function, and a
+    reader finding a discarded return value has no way to tell a boundary from a bug.
+    """
     if composition.quiet_watcher is None:
         return
     try:

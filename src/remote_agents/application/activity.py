@@ -15,6 +15,7 @@ notification -- and that is the right way round for a message that says an agent
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -56,6 +57,10 @@ _ABANDONED_TEMPORARY_SECONDS = 3600.0
 #: and writes a record far smaller than that, so this is generous by orders of magnitude; it
 #: exists because the writer on the far side of the spool is not guaranteed to be that hook.
 MAXIMUM_RECORD_BYTES = 65_536
+
+#: How long one pane capture may take before it counts as a failed read. Generous for a
+#: local tmux, and finite so a wedged server costs one pass rather than the whole watch.
+_CAPTURE_TIMEOUT_SECONDS = 15.0
 
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
@@ -358,6 +363,7 @@ class PaneQuietWatcher:
         self._store = store
         self._capture = capture
         self._quiet_polls = quiet_polls
+        self._capture_timeout = _CAPTURE_TIMEOUT_SECONDS
         self._now = now
         self._watches: dict[str, QuietWatch] = {}
 
@@ -376,7 +382,14 @@ class PaneQuietWatcher:
         for record in watched:
             key = str(record.session_id)
             try:
-                capture = await self._capture(record.session_id)
+                # Bounded, because the failure it prevents is silent and permanent. The tmux
+                # runner awaits `communicate()` with no timeout of its own, so a wedged server
+                # hangs this coroutine forever -- and the guard below never fires, because
+                # nothing is ever raised. The loop simply stops, for the life of the process,
+                # with every watched session frozen at whatever it last looked like.
+                capture = await asyncio.wait_for(
+                    self._capture(record.session_id), timeout=self._capture_timeout
+                )
             except Exception:
                 # A pane that cannot be read is not a pane that has gone quiet, and this loop
                 # runs beside the poll that serves the owner. The watch is left untouched, so
