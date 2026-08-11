@@ -15,8 +15,9 @@ Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-03-agent-activity
 > independent machine-side corroboration is listed separately under *What the host confirms on its
 > own*. No per-step observation has been invented.
 >
-> Step 9, the removal drill against the real settings file, was **not** performed — reversibility
-> is verified against a scratch file only. It is marked as such below.
+> Step 9, the removal drill, was then performed against the real settings file at the owner's
+> instruction and is recorded from its own output: byte-identical restore, confirmed by `diff` and
+> by MD5, with the hooks reinstalled afterwards.
 >
 > The instrument is written this way on purpose. `docs/acceptance-2026-08-11.md` records a
 > near-miss on the previous sub-plan: a confirmation arrived while the store showed the checklist
@@ -235,7 +236,7 @@ against the real binaries at Stage 2 it measured **codex settling and opencode s
 therefore unverified for that third profile, and a `cursor-agent` session that never produces a
 `quiet` notification is an expected-unknown rather than a defect until that measurement exists.
 
-## Owner steps — 1-8 performed, 9 outstanding
+## Owner steps — all 9 performed
 
 Walk these in order against the installed service and the real Telegram client. Record what you
 actually see beside each one; leave unperformed steps marked unperformed rather than folding them
@@ -291,10 +292,20 @@ into a blanket confirmation.
       same sentence. This is the one hook kind an owner can trigger on demand rather than wait for,
       which makes it cheap to walk — and it must be walked *before* the removal below, since step 9
       takes the hooks out.
-- [ ] 9. Remove the hooks again: `uv run --locked remote-agents install-agent-hooks --remove`.
+- [x] 9. Remove the hooks again: `uv run --locked remote-agents install-agent-hooks --remove`.
       Confirm it reports removal, that `grep -c 'remote_agents agent-event' ~/.claude/settings.json`
       now reports `0`, and that the file is otherwise identical to the backup taken in step 1
       (`diff` it). Your own hooks must be untouched.
+      **Performed 2026-08-11T19:5xZ from the working session, at the owner's instruction, against
+      the real `~/.claude/settings.json`.** `removed agent hooks from …`, exit 0; the count reports
+      `0`; `diff` against `~/.claude/settings.json.pre-agent-hooks-20260811T174642` produced **no
+      output**, and the MD5 returned to the pre-install `<redacted>` with the
+      size unchanged and mode `600` — byte-for-byte the file as found. The owner's
+      `PostToolUse` (`Edit|Write`) and opaque-study `SessionEnd` hooks were both still present
+      afterwards, and all top-level keys intact. The hooks were then **reinstalled** so the
+      feature stays on: 4 hooks, ours beside the owner's `SessionEnd`, service still `active`.
+      This closes the one gap the Outcome previously recorded as not covered — reversibility is now
+      proven against the file that actually matters, not only against a scratch copy.
 
 ### What the host confirms on its own
 
@@ -372,17 +383,17 @@ ones the plan calls a judgment no sweep can make.
 
 ## Outcome
 
-**Accepted, 2026-08-11**, with two exceptions recorded rather than waived.
+**Accepted, 2026-08-11**, with one exception recorded rather than waived.
 
 The unattended half is complete and every figure in it is a real reading. Steps 1 and 2 were
 performed from the working session; steps 3 through 8 by the owner against the real Telegram
 client, reported as one blanket confirmation and recorded as one. The host corroborates the
 mechanical half of that confirmation independently, above.
 
-**Not covered:** step 9, the removal drill against the real `~/.claude/settings.json`.
-Reversibility is proven against a scratch file — install, re-install, remove, `diff` byte-identical
-— but not against the owner's own file, whose `PostToolUse` and opaque-study `SessionEnd` hooks are
-the ones that would actually be at risk. The install half *was* run against it and preserved both.
+Step 9 closed the last gap: reversibility is proven against the owner's **own**
+`~/.claude/settings.json`, whose `PostToolUse` and opaque-study `SessionEnd` hooks are the ones that
+would actually have been at risk. Removed, `diff` clean, MD5 back to the pre-install value, both of
+the owner's hooks intact — then reinstalled, because the feature is being kept.
 
 **Also not covered, and carried forward:** `limit_reached` and `output_limit` have never been
 observed on this host. Both were unreachable until this gate corrected the field names, and
