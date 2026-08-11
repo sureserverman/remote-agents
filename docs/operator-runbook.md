@@ -124,6 +124,184 @@ systemctl --user is-active remote-agents.service
 journalctl --user -u remote-agents.service -n 100 --no-pager
 ```
 
+## Agent activity notifications
+
+The service sends unprompted messages when a managed agent stops working, one message per
+observation, beside the live view rather than inside it. Two sources feed them and only one has
+to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
+hooks; every other curated profile — `codex`, `opencode`, `cursor-agent` — has no hook system, so
+it is watched by capturing its pane. The hooks are not installed by the unit, by `serve`, or by
+`doctor`. Install them once per host:
+
+```bash
+uv run --locked remote-agents install-agent-hooks
+```
+
+With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
+configuration, which this project does not own — and adds one matcherless group to each of
+`Stop`, `StopFailure`, `Notification` and `SessionEnd`, each holding one command:
+
+```json
+{
+  "hooks": [
+    {
+      "type": "command",
+      "command": "/path/to/.venv/bin/python -m remote_agents agent-event"
+    }
+  ]
+}
+```
+
+The command names the interpreter that performed the install rather than the `remote-agents`
+console script, because a hook runs with whatever environment the agent happened to have and a
+virtualenv's `bin` need not be on its `PATH`; a hook that fails to resolve is worse than no hook,
+because nothing reports it. Re-run the install after moving or rebuilding that virtualenv. A group
+is recognised by the parsed words after the interpreter, so a stale entry is replaced rather than
+joined by a second one.
+
+**It merges, and it only ever adds those four groups.** Every other key, every other event, and
+every other group under those four events is copied across untouched — including a `SessionEnd`
+hook of your own, which is the case this host's real settings file presents. **It is idempotent:**
+a second run reports `agent hooks already current in <path>` and writes nothing. If an entry
+already runs this subcommand in a form the installer does not recognise — a wrapper, a hand-edit,
+a future version — the summary says so and names the events, because it will not touch that entry
+and the hook then runs twice for them.
+
+**It refuses rather than damages.** A settings file that is not valid JSON is left exactly as it
+was found and the command exits 1:
+
+```text
+~/.claude/settings.json is not valid JSON (Expecting property name enclosed in double quotes:
+line 2 column 1 (char 19)); it has been left untouched
+```
+
+The same refusal, always without writing, covers a `hooks` key that is not a JSON object, one of
+those four events whose value is not a JSON array, a file whose exact formatting cannot be
+reproduced (so a later `--remove` would reformat the rest of it), an empty `"hooks": {}` block
+that removal could not tell apart from no `hooks` key at all, and a file that changed on disk
+while the command was preparing its edit. Each prints its reason on standard error and exits 1.
+
+Three flags exist and no others. `--settings <path>` names the file to operate on, `--activity-dir
+<path>` names the spool the installed command will write to, and `--remove` takes the hooks out
+again. Both path flags default to the real ones and exist so that the live drill can drive a real
+agent end to end without going near either. `--activity-dir` must be absolute, and it is refused
+when another user can write to any existing ancestor of it without the sticky bit. Note that
+`serve` always drains `~/.local/state/remote-agents/activity`, so an `--activity-dir` pointing
+anywhere else in production means the hooks spool where the service does not read.
+
+### Verifying the install
+
+Confirm the four groups are present:
+
+```bash
+python3 -m json.tool ~/.claude/settings.json | grep -c 'remote_agents agent-event'
+```
+
+That must report `4`. Then confirm the guard, which is what makes a global hook safe to install —
+the hook writes nothing and exits 0 when `REMOTE_AGENTS_SESSION_ID` is absent from its
+environment, so a Claude session you start by hand notifies nobody:
+
+```bash
+mkdir -p /tmp/ra-hook-check
+printf '{"hook_event_name":"Stop","last_assistant_message":"drill"}' \
+  | env -u REMOTE_AGENTS_SESSION_ID \
+    uv run --locked remote-agents agent-event --activity-dir /tmp/ra-hook-check
+ls -A /tmp/ra-hook-check
+printf '{"hook_event_name":"Stop","last_assistant_message":"drill"}' \
+  | REMOTE_AGENTS_SESSION_ID=drill \
+    uv run --locked remote-agents agent-event --activity-dir /tmp/ra-hook-check
+ls -A /tmp/ra-hook-check
+```
+
+The first listing must be empty and the second must hold exactly one `0600` file named
+`drill-<timestamp>.json`. Both invocations exit 0: a hook that fails must never break the agent it
+is attached to, so every path through it — a malformed payload, an oversized one, an unwritable
+spool, no stdin at all — reports success and costs at most one record. Remove the drill directory
+afterwards; it is not the spool the service reads.
+
+The variable itself is injected only into the panes this service launches or resumes, as part of
+the curated environment (`HOME`, `LANG`, `LC_ALL`, `PATH`, `TERM`) those panes are given. It is
+launch-time context for the hook and never an authority on which session is which; the store and
+the tmux inventory remain the authority, exactly as they are for a stop (DEC-006).
+
+### Removing the hooks
+
+```bash
+uv run --locked remote-agents install-agent-hooks --remove
+```
+
+This deletes only the groups this installer wrote and restores the file to its pre-install content
+**byte for byte** — the file's own indentation, separators and trailing newline are recovered from
+its original bytes rather than re-picked by a JSON writer, and the install refuses outright when it
+cannot promise that. A group you have hand-edited to run this command beside one of your own is
+left alone, because failing to remove a hook is recoverable and deleting somebody else's is not. On
+a host that was never installed to, `--remove` reports `no agent hooks in <path>` or `no settings
+file at <path>` and exits 0.
+
+### When notifications stop arriving and nothing complains
+
+The failure mode to know about is a symlink standing anywhere on the spool path. The hook opens its
+directory through a check that refuses to write *through* a link, and it cannot say so: it is
+running inside the agent's process, where raising would disrupt the session the owner is working
+in. So it returns 0, writes nothing, and does that on every event for as long as the link is there.
+The service is the half that can complain, and does — `serve` calls `ensure_directories`, which
+raises `production paths cannot traverse symlinks` and refuses to start. If notifications have gone
+quiet with a healthy service, check the path itself before anything else:
+
+```bash
+namei -l ~/.local/state/remote-agents/activity
+ls -A ~/.local/state/remote-agents/activity | wc -l
+```
+
+Every component must be a real directory, and the leaf `drwx------`. A spool that stays empty while
+managed Claude sessions finish work is this fault; a spool that grows without shrinking is the
+opposite one, and points at the service rather than at the hook — check
+`journalctl --user -u remote-agents.service` for `activity watch pass failed`.
+
+### What each notification means
+
+Each message names the session by its display identity, gives one sentence, and carries a single
+`Open session` button that renders that session's detail into the live view. There is no other
+button: a notification is not a screen, so it may not carry navigation. It is sent apart from the
+live view and survives the view's pruning, so navigating afterwards leaves it in the chat.
+
+| Kind | Sentence the owner sees | Source | Reported or inferred |
+|---|---|---|---|
+| `completed` | "The agent has finished its work." | Claude's `Stop` hook | reported |
+| `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `rate_limit` or `max_output_tokens` | reported |
+| `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `permission_prompt` or `agent_needs_input` | reported |
+| `needs_answer` | "The agent may be waiting for an answer." | Claude's `Notification` hook, `idle_prompt` | inferred |
+| `ended` | "The session has ended." | Claude's `SessionEnd` hook | reported |
+| `quiet` | "No output since 14:05 UTC." | this service watching the pane | inferred |
+
+The first five are the agent reporting on itself, and each carries at most one bounded, escaped
+line of what it last said. Everything else those hook fields can carry — every other error type and
+notification type — is dropped rather than mapped to the nearest neighbour: reporting the wrong
+reason an agent stopped is worse than reporting nothing.
+
+The two inferred kinds append one further sentence, "This is a guess, not something it reported.",
+and they are guesses of different sizes. `idle_prompt` is a sixty-second timer upstream with
+recorded false positives and false negatives, so its wording is weakened to "may be waiting" rather
+than dropped. `quiet` is this service's own heuristic, and the only signal available for the three
+profiles with no hook system: the pane's captured output is digested each poll, and a digest that
+has not changed for the configured number of polls is reported once. It says what was observed —
+that no output has appeared since a given minute — and never that the agent finished, because the
+service did not see that. It carries no agent text at all, since nothing said anything; the last
+line of an idle screen rendered under a session's name reads exactly like a parting statement. A
+change must be seen before an absence of change means anything, so a restart does not report every
+idle pane on the host, and the report fires once per quiet spell, re-arming only when the pane
+changes again. The time in the sentence is the moment the threshold was crossed, so the true
+silence began `activity_quiet_polls × activity_poll_seconds` earlier — the sentence is true and
+understated, which is the right direction for a heuristic to be wrong in.
+
+Both knobs live under `[limits]` in `~/.config/remote-agents/config.toml`. The shipped sample sets
+`activity_poll_seconds = 30` (bounded 5–600) and `activity_quiet_polls = 3` (bounded 2–20), so a
+pane goes quiet 90 seconds after its last change by default. Separately, and not configurable, one
+session's one kind of news is rate-limited to one message every 120 seconds: a `Stop` hook fires
+per turn rather than per task, so an agent working through a long instruction reports "finished"
+repeatedly and each report is true. An agent that finishes and then needs an answer has said two
+different things and both arrive, because the limit is keyed by session *and* kind.
+
 ## Local terminal visual baselines
 
 Every position the terminal wizard can be in has a committed SVG baseline under

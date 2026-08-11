@@ -95,7 +95,17 @@ Copy Attach is offered only for a currently trusted live managed pane. Claude Re
 available only on a live managed Claude pane, requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
-See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback.
+The service also speaks first, once per observation, when a managed agent stops working: it has
+finished, it hit a usage limit, it is waiting for an answer, its session ended, or — for the
+profiles with no hook system — its pane has produced no output since a stated time, which is said
+as the guess it is. Each notification is its own message beside the live view, with one button that
+opens the session it names. A managed Claude session reports this itself through a global Claude
+Code hook, installed once with `remote-agents install-agent-hooks` and removed with `--remove`; the
+hook does nothing at all in a Claude session this service did not start.
+
+See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
+[agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for
+installing, verifying and removing the hooks.
 Do not put secrets in this repository.
 
 ## Local terminal surface
