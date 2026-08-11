@@ -67,6 +67,7 @@ INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "SessionEnd")
 # hook, and removing it would be exactly the unrecoverable deletion this module refuses to
 # risk elsewhere. Matching parsed words means "mentions" and "runs" stop being the same thing.
 _COMMAND_TAIL = ("-m", "remote_agents", "agent-event")
+_ACTIVITY_DIRECTORY_OPTION = "--activity-dir"
 
 
 class HookInstallError(Exception):
@@ -87,7 +88,7 @@ def default_settings_path(home: Path) -> Path:
     return home / ".claude" / "settings.json"
 
 
-def agent_event_command(executable: Path) -> str:
+def agent_event_command(executable: Path, activity_directory: Path | None = None) -> str:
     """Spell the hook command against a named interpreter rather than the caller's PATH.
 
     A hook runs with whatever environment the agent happened to have, and the console script
@@ -96,17 +97,23 @@ def agent_event_command(executable: Path) -> str:
     performing the install fixes the resolution at a moment when it is known to be correct:
     that interpreter is by definition one that can import this package.
     """
-    return f"{shlex.quote(str(executable))} -m remote_agents agent-event"
+    command = f"{shlex.quote(str(executable))} -m remote_agents agent-event"
+    if activity_directory is None:
+        return command
+    return f"{command} --activity-dir {shlex.quote(str(activity_directory))}"
 
 
 def install_agent_hooks(
-    settings_path: Path, *, executable: Path | None = None
+    settings_path: Path,
+    *,
+    executable: Path | None = None,
+    activity_directory: Path | None = None,
 ) -> HookInstallOutcome:
     """Add one group per event, replacing any this installer left behind previously."""
     settings = _read_settings(settings_path)
     interpreter = Path(sys.executable) if executable is None else executable
     base = _without_our_groups(settings.document)
-    installed = _with_our_groups(base, agent_event_command(interpreter))
+    installed = _with_our_groups(base, agent_event_command(interpreter, activity_directory))
     _refuse_when_removal_would_not_restore(settings, base, installed)
     content = settings.style.render(installed)
     if content == settings.content:
@@ -301,13 +308,23 @@ def _is_our_group(group: Any) -> bool:
 
 
 def _runs_our_command(command: str) -> bool:
-    """Decide whether this command line *runs* our subcommand, rather than mentioning it."""
+    """Decide whether this command line is one this installer could have written.
+
+    Not "mentions our subcommand", and not "invokes it somehow" either. The words after the
+    interpreter must be our subcommand followed by nothing, or by the one option this
+    installer knows how to add. An invocation carrying some other flag is something else's --
+    a wrapper, a hand-edit, a future version -- and removing it would be guessing about a
+    command we did not write.
+    """
     try:
         words = shlex.split(command)
     except ValueError:
         # Unbalanced quoting. Not something this installer wrote, so not ours to touch.
         return False
-    return tuple(words[1:]) == _COMMAND_TAIL
+    if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) != _COMMAND_TAIL:
+        return False
+    rest = words[1 + len(_COMMAND_TAIL) :]
+    return not rest or (len(rest) == 2 and rest[0] == _ACTIVITY_DIRECTORY_OPTION)
 
 
 def _refuse_when_removal_would_not_restore(

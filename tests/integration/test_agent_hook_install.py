@@ -214,6 +214,7 @@ def test_a_file_this_installer_could_not_restore_exactly_is_refused(tmp_path: Pa
         "echo 'note: never run remote_agents agent-event by hand' && /home/tester/mine.sh",
         "grep -r 'remote_agents agent-event' ~/.claude",
         "/usr/bin/python -m remote_agents agent-event --extra",
+        "/usr/bin/python -m remote_agents agent-event --activity-dir",
         "/usr/bin/python -m remote_agents doctor",
     ),
 )
@@ -246,6 +247,21 @@ def test_a_hook_that_only_mentions_our_command_is_never_treated_as_ours(
     ]
 
     assert command in survivors
+
+
+def test_a_spool_this_installer_redirected_is_still_its_own_to_remove(tmp_path: Path) -> None:
+    """The one option this installer adds must not make its own entry unrecognisable."""
+    path = _settings_file(tmp_path)
+    before = path.read_bytes()
+
+    install_agent_hooks(path, activity_directory=tmp_path / "somewhere else")
+    installed = json.loads(path.read_text(encoding="utf-8"))["hooks"]["Stop"]
+
+    assert "--activity-dir" in installed[0]["hooks"][0]["command"]
+
+    remove_agent_hooks(path)
+
+    assert path.read_bytes() == before
 
 
 def test_a_symlinked_settings_file_is_written_through_rather_than_replaced(
