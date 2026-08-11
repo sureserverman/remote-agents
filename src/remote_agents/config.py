@@ -27,11 +27,18 @@ class AppConfig:
     database_path: Path
     max_label_length: int
     project_page_size: int
+    activity_poll_seconds: int
+    activity_quiet_polls: int
 
 
 _TOP_LEVEL_KEYS = {"paths", "limits"}
 _PATH_KEYS = {"dev_root", "registry_path", "database_path"}
-_LIMIT_KEYS = {"max_label_length", "project_page_size"}
+_LIMIT_KEYS = {
+    "max_label_length",
+    "project_page_size",
+    "activity_poll_seconds",
+    "activity_quiet_polls",
+}
 
 
 def load_config(path: Path) -> AppConfig:
@@ -52,7 +59,27 @@ def load_config(path: Path) -> AppConfig:
     database_path = _absolute_path(paths["database_path"], "paths.database_path")
     max_label_length = _bounded_int(limits["max_label_length"], "limits.max_label_length", 1, 40)
     project_page_size = _bounded_int(limits["project_page_size"], "limits.project_page_size", 1, 20)
-    return AppConfig(dev_root, registry_path, database_path, max_label_length, project_page_size)
+    # Five seconds is a floor on self-inflicted load: every pass captures one pane per running
+    # hookless session on the same loop that long-polls Telegram. Ten minutes is a ceiling on
+    # how stale "has produced no output since" may be before it stops being worth sending.
+    activity_poll_seconds = _bounded_int(
+        limits["activity_poll_seconds"], "limits.activity_poll_seconds", 5, 600
+    )
+    # Two is the real floor, not one. At one, "quiet" means a single capture matched the one
+    # before it -- true of any agent between two lines of output. The claim is that output
+    # stopped, and a single poll cannot support it.
+    activity_quiet_polls = _bounded_int(
+        limits["activity_quiet_polls"], "limits.activity_quiet_polls", 2, 20
+    )
+    return AppConfig(
+        dev_root,
+        registry_path,
+        database_path,
+        max_label_length,
+        project_page_size,
+        activity_poll_seconds,
+        activity_quiet_polls,
+    )
 
 
 def load_secrets(

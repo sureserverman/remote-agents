@@ -20,6 +20,12 @@ from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
 from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
+from remote_agents.adapters.agents.hook_install import (
+    HookInstallError,
+    default_settings_path,
+    install_agent_hooks,
+    remove_agent_hooks,
+)
 from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
@@ -28,6 +34,8 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
     open_database,
@@ -49,6 +57,8 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.agent_event import spool_from_stdin
+from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -59,10 +69,12 @@ from remote_agents.application.services import SessionService
 from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
+from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
 _RECONCILE_INTERVAL_SECONDS = 60.0
+_ACTIVITY_POLL_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +148,21 @@ class ServiceComposition:
     boundary: PrivateBotBoundary
     terminal: TmuxTerminal
     reconciler: ReconciliationService
+    quiet_watcher: PaneQuietWatcher | None = None
+    """None only in compositions that do not wire pane watching, which today means tests.
+
+    Production always supplies one -- `_private_boundary` builds it unconditionally -- and it
+    simply has nothing to do on a pass where no hookless-profile session is running. The field
+    is optional so that every composition predating it still constructs.
+    """
+
+    activity_directory: Path | None = None
+    """Where the agent hooks spool what they reported, or None when nothing spools.
+
+    The second of the two activity sources, and the reason the periodic pass runs even for a
+    composition with no quiet watcher: a host running only Claude sessions has nothing to watch
+    a pane for and everything to deliver.
+    """
 
 
 async def _serve_with_reconciliation(
@@ -143,6 +170,7 @@ async def _serve_with_reconciliation(
     composition: ServiceComposition,
     serve_runner: Callable[[TelegramSecrets, PrivateBotBoundary], Awaitable[None]],
     interval: float,
+    activity_interval: float = _ACTIVITY_POLL_SECONDS,
 ) -> None:
     """Poll Telegram while keeping durable records agreeing with observed panes.
 
@@ -157,13 +185,83 @@ async def _serve_with_reconciliation(
     signal handling out of the polling boundary. That is a larger change to the shutdown
     path than this repair warrants.
     """
+    # Rank before the first screen can be drawn. The composition hands the catalogue over in
+    # registry order and the ranking is applied on refresh, so without this every start and
+    # restart served an unranked Launch, Resume and search until the owner happened to press
+    # Refresh — the common case, and the first thing an acceptance run looks at. It lives here
+    # rather than inside the long-poll runner because `main` lets a test substitute the runner,
+    # which makes this line reachable by a test; the runner is not.
+    await composition.boundary.refresh_catalogue()
     await _reconcile_quietly(composition)
-    periodic = asyncio.create_task(_reconcile_periodically(composition, interval))
+    periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
+    if composition.quiet_watcher is not None or composition.activity_directory is not None:
+        # A separate task rather than another step inside the reconciliation pass: the two
+        # answer different questions on different clocks, and a pane capture that hangs must
+        # not stop records being reconciled. Nothing is polled before the service is serving,
+        # unlike reconciliation -- a first pass at start-up could only establish the baseline
+        # the classifier already refuses to report on.
+        #
+        # Either source is reason enough to run it. A host serving only Claude sessions has no
+        # pane to watch and a spool full of what those sessions reported, and gating the whole
+        # pass on the watcher would have delivered none of it.
+        periodic.append(
+            asyncio.create_task(_watch_quiet_periodically(composition, activity_interval))
+        )
     try:
         await serve_runner(secrets, composition.boundary)
     finally:
-        periodic.cancel()
-        await asyncio.gather(periodic, return_exceptions=True)
+        for task in periodic:
+            task.cancel()
+        await asyncio.gather(*periodic, return_exceptions=True)
+
+
+async def _watch_quiet_periodically(composition: ServiceComposition, interval: float) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        await _watch_quiet_once(composition)
+
+
+async def _watch_quiet_once(composition: ServiceComposition) -> None:
+    """One pass over both activity sources, delivered — and never raising.
+
+    This loop runs beside the one that serves the owner, so a failure anywhere in it is logged
+    and costs one pass. The two sources are gathered into one list on purpose: they answer the
+    same question about different profiles, and the owner is owed one message per observation
+    regardless of which of them noticed.
+
+    **Each source is guarded separately, and that is not tidiness.** `poll()` commits its own
+    dedup state as a side effect of deciding a pane has gone quiet -- it marks the spell
+    reported before the activity reaches anyone, and re-arms only when the pane changes again.
+    Under one shared `try`, a drain that raised after a successful poll discarded that already
+    committed observation, and the quiet spell was then never reportable at all. The failure is
+    invisible: nothing is lost that anything counts, and the owner simply never hears about an
+    agent that stopped.
+
+    `deliver` is called even when both sources yielded nothing, because it also drains the
+    retry queue an earlier pass may have left behind; returning early on an empty list would
+    strand a backlog for as long as nothing new happened.
+
+    The drain is a synchronous directory walk that unlinks what it reads, so it goes to a
+    thread: this coroutine shares its event loop with Telegram long-polling and pane captures,
+    and a spool with a backlog would otherwise stall both.
+    """
+    activities: list[AgentActivity] = []
+    if composition.quiet_watcher is not None:
+        try:
+            activities.extend(await composition.quiet_watcher.poll())
+        except Exception:
+            _LOG.exception("pane quiet watch failed")
+    if composition.activity_directory is not None:
+        try:
+            activities.extend(
+                await asyncio.to_thread(drain_activity, composition.activity_directory)
+            )
+        except Exception:
+            _LOG.exception("draining the activity spool failed")
+    try:
+        await composition.boundary.notifier.deliver(activities)
+    except Exception:
+        _LOG.exception("delivering activity notifications failed")
 
 
 async def _reconcile_periodically(composition: ServiceComposition, interval: float) -> None:
@@ -218,7 +316,34 @@ def main(
     add_project_parser.add_argument("--name", required=True)
     tui_parser = subcommands.add_parser("tui")
     tui_parser.add_argument("--config", type=Path)
+    agent_event_parser = subcommands.add_parser("agent-event")
+    agent_event_parser.add_argument("--activity-dir", type=Path)
+    install_hooks_parser = subcommands.add_parser("install-agent-hooks")
+    install_hooks_parser.add_argument("--settings", type=Path)
+    install_hooks_parser.add_argument("--activity-dir", type=Path)
+    install_hooks_parser.add_argument("--remove", action="store_true")
     arguments = parser.parse_args(argv)
+    if arguments.command == "agent-event":
+        # Delegated rather than implemented here: `__main__` routes the installed hook command
+        # straight to that module without importing this one, and two copies of a path that
+        # promises never to raise would eventually stop agreeing about how it does that.
+        return spool_from_stdin(arguments.activity_dir)
+    if arguments.command == "install-agent-hooks":
+        # --settings names the file to operate on, and --activity-dir the spool the installed
+        # command will write to. Both default to the owner's real ones and exist so that the
+        # live drill can drive a real agent end to end without going near either.
+        settings_path = arguments.settings or default_settings_path(Path.home())
+        try:
+            outcome = (
+                remove_agent_hooks(settings_path)
+                if arguments.remove
+                else install_agent_hooks(settings_path, activity_directory=arguments.activity_dir)
+            )
+        except HookInstallError as error:
+            print(error, file=sys.stderr)
+            return 1
+        print(outcome.summary)
+        return 0
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(probe_profiles(closed_profiles()))
@@ -307,6 +432,7 @@ def main(
                     _private_boundary(config, connection, paths),
                     serve_runner,
                     _RECONCILE_INTERVAL_SECONDS,
+                    config.activity_poll_seconds,
                 )
             )
         finally:
@@ -387,9 +513,17 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         PrivateBotBoundary(
             secrets.owner_user_id,
             secrets.owner_chat_id,
+            # The durable store, not the in-memory default: a restart used to void every
+            # button in the chat, and only this half of the pair actually fixes that.
+            callbacks=SQLiteCallbackStateStore(connection),
+            # And the durable anchor for the same reason: a restart that forgot which
+            # message the live view is would send a second one and leave the first above it,
+            # still holding buttons that — since Stage 1 — still resolve.
+            anchors=SQLiteChatViewStore(connection),
             catalogue=catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
+            max_label_length=config.max_label_length,
             launcher=SessionService(store, terminal),
             conversations=conversations,
             creator=_project_creator(config),
@@ -398,6 +532,8 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         ),
         terminal,
         ReconciliationService(store),
+        PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
+        paths.activity_directory,
     )
 
 

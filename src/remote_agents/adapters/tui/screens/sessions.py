@@ -259,6 +259,7 @@ class SessionsScreen(ChoiceScreen):
 
 class SessionDetailScreen(ChoiceScreen):
     """One session's state, what it means, and the actions the policy allows on it."""
+
     #: always at least Back, plus whatever the policy allows.
     empty_state = NEVER_EMPTY
 

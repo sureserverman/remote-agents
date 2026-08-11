@@ -12,6 +12,19 @@ from pathlib import Path
 PACKAGE_NAME = "remote_agents"
 DRIVER_ADAPTERS = frozenset({"telegram", "tui"})
 
+#: The modules allowed to wire adapters together, named individually rather than by position.
+#:
+#: `bootstrap` composes the service. `agent_event` composes the hook, and exists as a separate
+#: entry precisely so that the installed hook command does not import `bootstrap` -- it fires
+#: in every Claude session on the machine, and the composition root costs 678 modules to load
+#: before the environment check that answers "not mine". Splitting it moved a composition into
+#: a second file; it did not make composition legal anywhere else.
+#:
+#: ARCH-02 is about this set staying closed and enumerated, not about it having exactly one
+#: member. Adding a member is a deliberate, reviewable act; the rule it must never become is
+#: "anything at the package root may import adapters".
+COMPOSITION_ROOTS = frozenset({"bootstrap.py", "agent_event.py"})
+
 
 @dataclass(frozen=True, slots=True)
 class Violation:
@@ -52,7 +65,8 @@ def module_layer(path: Path, source_root: Path) -> str:
     """Return the architecture layer that owns a source module."""
     parts = path.relative_to(source_root).parts
     if parts[0] != PACKAGE_NAME or len(parts) < 3:
-        return "bootstrap" if parts == (PACKAGE_NAME, "bootstrap.py") else "root"
+        composing = len(parts) == 2 and parts[1] in COMPOSITION_ROOTS
+        return "bootstrap" if composing else "root"
     return parts[1]
 
 
@@ -81,7 +95,8 @@ def allowed_import(path: Path, source_root: Path, layer: str, imported: str) -> 
             f"{PACKAGE_NAME}.adapters.{adapter_name}"
         )
     if layer == "root":
-        return imported == f"{PACKAGE_NAME}.bootstrap" or imported.startswith(
+        composition = tuple(f"{PACKAGE_NAME}.{name[:-3]}" for name in sorted(COMPOSITION_ROOTS))
+        return imported in composition or imported.startswith(
             (f"{PACKAGE_NAME}.config", f"{PACKAGE_NAME}.production")
         )
     if layer == "bootstrap":

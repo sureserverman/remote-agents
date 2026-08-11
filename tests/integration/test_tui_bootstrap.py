@@ -47,7 +47,8 @@ def _config_file(
         f'[paths]\ndev_root = "{home / "dev"}"\n'
         f'registry_path = "{registry}"\n'
         f'database_path = "{database or paths.database_path}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     return config_path

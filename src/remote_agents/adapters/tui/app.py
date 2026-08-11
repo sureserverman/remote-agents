@@ -162,9 +162,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             "Refresh",
             tooltip="Re-read what this screen shows, without leaving it",
         ),
-        Binding(
-            "ctrl+n", "add_project", "Add project", tooltip="Register a new project directory"
-        ),
+        Binding("ctrl+n", "add_project", "Add project", tooltip="Register a new project directory"),
         Binding("ctrl+s", "sessions", "Sessions", tooltip="Every managed session on this host"),
         Binding(
             "ctrl+o", "resume", "Resume", tooltip="Reopen a saved conversation as a new session"
@@ -789,8 +787,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # instruction: these words name the condition, so an owner under NO_COLOR reads it
         # from the sentence and the colour only makes it quicker to find.
         target.set_status(
-            "The managed sessions could not be read. Press escape to return to the "
-            "project list.",
+            "The managed sessions could not be read. Press escape to return to the project list.",
             severity="error",
         )
         target.announce(f"The managed sessions could not be read: {error}")

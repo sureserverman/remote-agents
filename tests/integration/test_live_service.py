@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from stop_results import a_clean_stop, a_stop_that_did_not_take
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
+from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
+from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.service import (
     _BOT_DESCRIPTION,
     _BOT_SHORT_DESCRIPTION,
@@ -17,10 +20,16 @@ from remote_agents.adapters.telegram.service import (
     _sync_owner_metadata,
     audit_bot_metadata,
 )
+from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
-from remote_agents.bootstrap import ServiceComposition, _resolve_profile_executable, main
+from remote_agents.bootstrap import (
+    ServiceComposition,
+    _resolve_profile_executable,
+    _watch_quiet_once,
+    main,
+)
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
@@ -30,6 +39,12 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+)
+from remote_agents.ports.session_store import ProjectUsage
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -68,7 +83,8 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
         f'dev_root = "{tmp_path}"\n'
         f'registry_path = "{tmp_path / "registry.yaml"}"\n'
         f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     paths = _DoctorPaths(config)
@@ -124,12 +140,14 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
-    assert callback.answers == [None, "This view has expired."]
+    # The first press replaced this message's keyboard, which pruned the token it came from
+    # -- so the second press of the same button is a race, answered and redrawn.
+    assert callback.answers == [None, "That screen has moved on."]
     assert callback.edits[1]["text"].startswith("<b>Remote agents</b>")
 
 
 @pytest.mark.asyncio
-async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> None:
+async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repeat() -> None:
     launcher = _Launcher()
     boundary = PrivateBotBoundary(
         7,
@@ -147,15 +165,20 @@ async def test_private_bot_boundary_submits_only_a_confirmed_opaque_launch() -> 
     profiles = _Callback(project)
     await boundary.callback(_trusted_update(callback=profiles), None)
     profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    confirmation = _Callback(profile)
-    await boundary.callback(_trusted_update(callback=confirmation), None)
-    confirm = confirmation.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    submitted = _Callback(confirm)
-    await boundary.callback(_trusted_update(callback=submitted), None)
+    launched = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=launched), None)
 
+    # Three presses from Home, not five: choosing the agent starts the session, and there is
+    # no review screen between the choice and the launch.
     assert len(launcher.commands) == 1
     assert str(launcher.commands[0].project_id) == "a" * 24
     assert str(launcher.commands[0].profile_id) == "claude"
+    assert launcher.commands[0].label is None, "a launch is unnamed; naming it comes later"
+
+    # DEC-008: the same button pressed again is dropped, never serviced into a second session.
+    await boundary.callback(_trusted_update(callback=_Callback(profile)), None)
+
+    assert len(launcher.commands) == 1, "a second press must not start a second session"
 
 
 @pytest.mark.asyncio
@@ -170,12 +193,11 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
         profiles=(ProfileAvailability("cursor-agent", True),),
         launcher=launcher,
     )
-    boundary._view_revisions[(7, 11)] = 1
     token = boundary.callbacks.create(
-        "launch.confirm", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
+        "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
     )
 
-    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token)
+    reply = await boundary._launch_reply("a" * 24 + "|cursor-agent", token, 1)
 
     assert "Session did not become ready" in reply["text"]
     assert "never approved remotely" in reply["text"]
@@ -223,7 +245,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
 
 @pytest.mark.asyncio
-async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> None:
+async def test_private_bot_boundary_searches_projects_and_launches_from_a_result() -> None:
     launcher = _Launcher()
     boundary = PrivateBotBoundary(
         7,
@@ -244,9 +266,7 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     awaiting_search = _Callback(search)
     await boundary.callback(_trusted_update(callback=awaiting_search), None)
     assert awaiting_search.edits[0]["text"] == "Reply below with a project name."
-    assert (
-        awaiting_search.message.replies[0]["reply_markup"].input_field_placeholder == "Project name"
-    )
+    assert awaiting_search.sends[0]["reply_markup"].input_field_placeholder == "Project name"
 
     result = _Message("verse")
     await boundary.text(_trusted_update(message=result), None)
@@ -255,25 +275,13 @@ async def test_private_bot_boundary_searches_projects_and_labels_a_launch() -> N
     profiles = _Callback(project)
     await boundary.callback(_trusted_update(callback=profiles), None)
     profile = profiles.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    confirmation = _Callback(profile)
-    await boundary.callback(_trusted_update(callback=confirmation), None)
-    label = confirmation.edits[0]["reply_markup"].inline_keyboard[1][0].callback_data
-    awaiting_label = _Callback(label)
-    await boundary.callback(_trusted_update(callback=awaiting_label), None)
-    assert awaiting_label.edits[0]["text"] == "Reply below with an optional session label."
-    assert (
-        awaiting_label.message.replies[0]["reply_markup"].input_field_placeholder
-        == "Optional session label"
-    )
+    launched = _Callback(profile)
+    await boundary.callback(_trusted_update(callback=launched), None)
 
-    labelled = _Message("  review  ")
-    await boundary.text(_trusted_update(message=labelled), None)
-    confirm = labelled.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
-    submitted = _Callback(confirm)
-    await boundary.callback(_trusted_update(callback=submitted), None)
-
+    # The search still reaches a launch; what it no longer reaches is a label step. Naming a
+    # session moved to the session's own menu, so a launch arrives unnamed.
     assert str(launcher.commands[0].project_id) == "b" * 24
-    assert launcher.commands[0].label == "review"
+    assert launcher.commands[0].label is None
 
 
 @pytest.mark.asyncio
@@ -312,7 +320,8 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     launcher.records = [session]
     boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id))
+    detail = await boundary._detail_reply(str(session.session_id), 1)
+    boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
         for row in detail.keyboard
@@ -326,7 +335,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
     assert callback.edits[0]["text"] == "<pre>Output is attached as UTF-8 text.</pre>"
     # Marked unforwardable: a pane's transcript is exactly the thing that should not be one
     # tap from leaving this private chat.
-    assert callback.message.documents == [
+    assert callback.documents == [
         {"document": b"x" * 5000, "filename": "session-output.txt", "protect_content": True}
     ]
 
@@ -347,7 +356,8 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
     launcher.records = [session]
     boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
     await boundary.start(_trusted_update(message=_Message()), None)
-    detail = await boundary._detail_reply(str(session.session_id))
+    detail = await boundary._detail_reply(str(session.session_id), 1)
+    boundary.callbacks.bind_pending(11, 1)
     inspect = next(
         button.callback_data
         for row in detail.keyboard
@@ -359,7 +369,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
     await boundary.callback(_trusted_update(callback=callback), None)
 
     assert callback.edits[0]["text"] == "Inspection is unavailable."
-    assert callback.message.documents == []
+    assert callback.documents == []
 
 
 @pytest.mark.asyncio
@@ -439,7 +449,8 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
         f'dev_root = "{tmp_path}"\n'
         f'registry_path = "{tmp_path / "registry.yaml"}"\n'
         f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
-        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
         encoding="utf-8",
     )
     received: list[TelegramSecrets] = []
@@ -463,6 +474,79 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
 
     assert main(["serve", "--config", str(config)], serve_runner=serve) == 0
     assert received == [TelegramSecrets("token", 7, 11)]
+
+
+def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
+    tmp_path, monkeypatch
+) -> None:
+    """The catalogue is ranked at startup, not on the first Refresh the owner happens to press.
+
+    The composition hands the catalogue over in registry order and the ranking is applied on
+    refresh, so this is the difference between "Launch opens with your most-used project first"
+    and "…after you press Refresh". It shipped as the latter: every ranking test called
+    `refresh_catalogue()` itself, so none of them could see that nothing else did.
+
+    Asserted against the boundary the serve runner is *handed*, which is the last point before
+    Telegram gets it.
+    """
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        encoding="utf-8",
+    )
+    older = CatalogProject("a" * 24, "older", "tests", "Registered")
+    newer = CatalogProject("b" * 24, "newer", "tests", "Registered")
+
+    class _UsageLauncher:
+        async def project_usage(self):
+            return [
+                ProjectUsage(
+                    ProjectId(older.opaque_id), 40, datetime.now(UTC) - timedelta(days=400)
+                ),
+                ProjectUsage(ProjectId(newer.opaque_id), 2, datetime.now(UTC) - timedelta(days=1)),
+            ]
+
+        async def list_sessions(self):
+            return []
+
+        async def refresh_readiness(self) -> None:
+            return None
+
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(older, newer),
+        catalogue_source=lambda: (older, newer),
+        launcher=_UsageLauncher(),
+    )
+    served: list[tuple[str, ...]] = []
+
+    async def serve(_secrets: TelegramSecrets, handed: PrivateBotBoundary) -> None:
+        served.append(tuple(project.name for project in handed.catalogue))
+
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.load_secrets", lambda: TelegramSecrets("token", 7, 11)
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.ProductionPaths.for_home",
+        lambda _home: _Paths(tmp_path / "sessions.sqlite3"),
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._private_boundary",
+        lambda _config, _connection, _paths: ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler()
+        ),
+    )
+    assert boundary.catalogue == (older, newer), "registry order before serve runs"
+
+    assert main(["serve", "--config", str(config)], serve_runner=serve) == 0
+
+    assert served == [("newer", "older")], "ranked before the runner ever saw it"
 
 
 def test_telegram_ui_audit_reads_only_the_private_environment_file(
@@ -580,25 +664,90 @@ class _Launcher:
 
 
 class _Message:
-    def __init__(self, text: str | None = None) -> None:
+    """One chat message, with the id the boundary binds its keyboard to.
+
+    `reply_text` answers with a message rather than None because the boundary now uses what
+    Telegram returns: a keyboard is minted before it is sent, so the send is what tells the
+    store which message carries it. The doubles share one id, which is the shape this chat
+    actually has — one live view.
+    """
+
+    def __init__(self, text: str | None = None, message_id: int = 1) -> None:
         self.replies: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
+        self.deletions: list[int] = []
         self.text = text
+        self.message_id = message_id
+        self.bot = _MessageBot(self)
 
-    async def reply_text(self, text: str | None = None, **kwargs: object) -> None:
-        if text is not None:
-            kwargs["text"] = text
-        self.replies.append(kwargs)
+    def get_bot(self) -> _MessageBot:
+        return self.bot
 
-    async def reply_document(self, **kwargs: object) -> None:
+
+class _MessageBot:
+    """The same surface, for an update that arrived as a message rather than a press.
+
+    Both a send and an edit land in the owning double's `replies`, because from a test's
+    point of view they are the same event — this screen was drawn in answer to this update.
+    Which of the two Telegram performed depends only on whether an anchor already existed.
+    """
+
+    def __init__(self, owner: _Message) -> None:
+        self._owner = owner
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        kwargs.pop("chat_id", None)
+        self._owner.replies.append(kwargs)
+        # The doubles share one message id: this chat has one live view, so a send answers
+        # with the same id every later edit will address.
+        return _Message(message_id=self._owner.message_id)
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        kwargs.pop("chat_id", None)
+        kwargs.pop("message_id", None)
+        self._owner.replies.append(kwargs)
+
+    async def delete_message(self, **kwargs: object) -> None:
+        self._owner.deletions.append(int(kwargs["message_id"]))
+
+
+class _Bot:
+    """The chat-addressed surface the live view speaks through.
+
+    Records into the lists the press it belongs to already exposes, so a test still reads
+    `callback.edits` however the render reached Telegram. What changed underneath is the
+    address: a screen is drawn into a message id in a chat rather than into whatever
+    message the update arrived on.
+    """
+
+    def __init__(self, owner: _Callback, *, first_id: int = 500) -> None:
+        self._owner = owner
+        self._next_id = first_id
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        if self._owner.edit_error is not None:
+            raise self._owner.edit_error
+        self._owner.edits.append(kwargs)
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        message = _Message(message_id=self._next_id)
+        self._next_id += 1
+        self._owner.sends.append(kwargs)
+        return message
+
+    async def delete_message(self, **kwargs: object) -> None:
+        self._owner.deletions.append(kwargs)
+
+    async def send_document(self, **kwargs: object) -> _Message:
         document = kwargs["document"]
-        self.documents.append(
+        self._owner.documents.append(
             {
                 "document": document.read(),
                 "filename": kwargs["filename"],
                 "protect_content": kwargs.get("protect_content", False),
             }
         )
+        return _Message(message_id=self._owner.message.message_id + 1)
 
 
 class _Callback:
@@ -608,16 +757,18 @@ class _Callback:
         self.answers: list[str | None] = []
         self.alerts: list[bool] = []
         self.edits: list[dict[str, object]] = []
+        self.sends: list[dict[str, object]] = []
+        self.deletions: list[dict[str, object]] = []
+        self.documents: list[dict[str, object]] = []
         self.message = _Message()
+        self.bot = _Bot(self)
+
+    def get_bot(self) -> _Bot:
+        return self.bot
 
     async def answer(self, text: str | None = None, *, show_alert: bool = False) -> None:
         self.answers.append(text)
         self.alerts.append(show_alert)
-
-    async def edit_message_text(self, **kwargs: object) -> None:
-        if self.edit_error is not None:
-            raise self.edit_error
-        self.edits.append(kwargs)
 
 
 class _MetadataBot:
@@ -673,7 +824,6 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     Both flows now share one renderer; only the action each button carries differs.
     """
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(94))
-    boundary._view_revisions[(7, 11)] = 1
 
     resume = boundary._resume_projects_reply()
     launch = boundary._projects_reply(boundary.catalogue, view_id="all")
@@ -690,13 +840,13 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
     """A project chosen after paging or searching must still resume, never launch."""
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
-    boundary._view_revisions[(7, 11)] = 1
     boundary._resume_projects_reply()
 
     second = boundary._project_page_reply("all|2", flow="resume")
 
     def _action(token: str) -> str | None:
-        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=1)
+        boundary.callbacks.bind_pending(11, 1)
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
         return None if state is None else state.action
 
     assert second.text.startswith("<b>Resume 2/3</b>")
@@ -707,18 +857,19 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
     boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
-    boundary._view_revisions[(7, 11)] = 1
     boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
-    # silently answered with the launch flow's results.
+    # silently answered with the launch flow's results. Only a search is refused: an "all"
+    # view is reconstructible from the catalogue and re-renders instead.
     assert boundary._project_page_reply("search|2", flow="resume").text == (
-        "That project view has expired."
+        "That search is no longer open. Search again."
     )
+    assert boundary._project_page_reply("all|2", flow="resume").text.startswith("<b>Resume 2/3</b>")
 
 
 def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launcher]:
-    """A boundary holding `records`, with its view revision pinned for token minting."""
+    """A boundary holding `records`, ready to render and be pressed."""
     launcher = _Launcher()
     launcher.records = list(records)
     boundary = PrivateBotBoundary(
@@ -727,7 +878,6 @@ def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launch
         catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
         launcher=launcher,
     )
-    boundary._view_revisions[(7, 11)] = 1
     return boundary, launcher
 
 
@@ -752,10 +902,10 @@ async def test_refresh_is_reachable_from_the_two_screens_whose_answer_goes_stale
 
     home = await boundary._home_reply()
     sessions = await boundary._sessions_reply()
-    revision = boundary._view_revisions[(7, 11)]
 
     def _resolved_action(token: str) -> str | None:
-        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, view_revision=revision)
+        boundary.callbacks.bind_pending(11, 1)
+        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
         return None if state is None else state.action
 
     home_refresh = next(
@@ -803,10 +953,11 @@ async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_k
     # The name the bot shows carries the catalogue's project name, not the opaque slug.
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "force", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "force", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("force", token)
+    reply = await boundary._stop_reply("force", token, 1)
 
     rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
     assert subject in reply["text"]
@@ -821,10 +972,11 @@ async def test_a_completed_stop_names_the_session_and_what_became_of_its_output(
     boundary, launcher = _stop_boundary(running)
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert launcher.stopped == ["graceful"]
     assert subject in reply["text"]
@@ -839,30 +991,38 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     boundary, launcher = _stop_boundary(running)
     launcher.leave_running = True
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert "is still running" in reply["text"]
     assert "did not exit in time" in reply["text"]
-    assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
-        "Open session",
-        "Back",
-        "Home",
-    ]
+    # The outcome now leads the session list rather than a screen of its own. The session is
+    # still listed precisely because the stop did not take, so the row the owner needs to act
+    # on is already under the notice — which is what the "Open session" button was for, and
+    # why this keyboard no longer carries it or the Back that led out of that dead end.
+    assert "Sessions 1/1" in reply["text"]
+    labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+    assert labels[-2:] == ["Refresh", "Home"]
+    assert "Back" not in labels
+    assert "Open session" not in labels
+    assert labels[0].startswith("Demo"), "the session that would not stop is on the list"
 
 
 def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
     boundary = PrivateBotBoundary(7, 11)
 
-    assert boundary._pending_notice("graceful", "c1_token") is not None
-    assert boundary._pending_notice("launch.confirm", "c1_token") is not None
-    assert boundary._pending_notice("session.detail", "c1_token") is None
-    # A first press on force only opens the confirmation, so nothing is running yet.
-    assert boundary._pending_notice("force", "c1_token") is None
-    boundary._force_confirmed.add("c1_token")
-    assert boundary._pending_notice("force", "c1_token") is not None
+    assert boundary._pending_notice("graceful") is not None
+    # Selecting the agent is the launch now, so the wait it causes is announced there.
+    assert boundary._pending_notice("launch.profile") is not None
+    assert boundary._pending_notice("launch.confirm") is None, "the review step is gone"
+    assert boundary._pending_notice("session.detail") is None
+    # A first press on force only opens the confirmation, so nothing is running yet — and
+    # that is now readable from the action alone, with no confirmation state to consult.
+    assert boundary._pending_notice("force") is None
+    assert boundary._pending_notice(CONFIRMED_FORCE) is not None
 
 
 @pytest.mark.asyncio
@@ -871,9 +1031,10 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, _ = _stop_boundary(running)
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
     callback = _Callback(token)
+    boundary.callbacks.bind_pending(11, callback.message.message_id)
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
@@ -886,22 +1047,31 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
 
 
 @pytest.mark.asyncio
-async def test_an_expired_view_alerts_rather_than_silently_jumping_home() -> None:
+async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -> None:
+    """Nothing expires any more, so the modal alert that said so is gone with it.
+
+    A token only fails to resolve when the keyboard that drew it has already been replaced
+    on this message — a thumb racing a redraw. That earns a toast and a redraw, not a modal
+    telling the owner their view died.
+    """
     boundary, _ = _stop_boundary()
     callback = _Callback("c1_never_issued")
 
     await boundary.callback(_trusted_update(callback=callback), None)
 
-    assert callback.answers == ["This view has expired."]
-    assert callback.alerts == [True]
+    assert callback.answers == ["That screen has moved on."]
+    assert callback.alerts == [False]
+    assert "Remote agents" in str(callback.edits[0]["text"])
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):
+    carrier = callback if callback is not None else message
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=7),
         effective_chat=SimpleNamespace(id=11, type="private"),
         effective_message=message,
         callback_query=callback,
+        get_bot=lambda: carrier.get_bot(),
     )
 
 
@@ -946,10 +1116,421 @@ async def test_the_bot_names_which_cause_left_the_session_running(
     launcher.leave_running = True
     launcher.graceful_detail = detail
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11, 1
+        running.session_id, running.profile_id, running.state, "graceful", 7, 11
     )
+    boundary.callbacks.bind_pending(11, 1)
 
-    reply = await boundary._stop_reply("graceful", token)
+    reply = await boundary._stop_reply("graceful", token, 1)
 
     assert names in reply["text"], reply["text"]
     assert denies not in reply["text"], reply["text"]
+
+
+# The render pipeline itself -- the gap that hid two dead-button defects ------------------
+
+
+def _press(callback: _Callback) -> _Callback:
+    """The next press, on the same message the last render edited."""
+    return callback
+
+
+@pytest.mark.asyncio
+async def test_a_stop_button_survives_the_render_that_drew_it() -> None:
+    """Drive a *mutating* action through `callback()`, which no stop test used to do.
+
+    Every other stop test calls `_detail_reply`/`_stop_reply` directly, so none of them ran
+    the edit-prune-bind pipeline — and a review found that stop tokens were minted already
+    bound to the message being redrawn, so the prune step destroyed them in the very pass
+    that drew them. Every stop button in the live bot was dead, and the whole suite was green.
+    This presses one, the way a phone does.
+    """
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    boundary.callbacks.bind_pending(11, sessions.message.message_id)
+
+    await boundary.callback(_trusted_update(callback=sessions), None)
+    row = _Callback(_edited_button(sessions, 0))
+    await boundary.callback(_trusted_update(callback=row), None)
+    graceful = _Callback(_edited_button(row, -1, text="Stop and close"))
+    await boundary.callback(_trusted_update(callback=graceful), None)
+
+    assert graceful.answers == ["Stopping the session — waiting for the agent to exit…"], (
+        "the stop button did not resolve, so the press did nothing"
+    )
+    assert launcher.stopped == ["graceful"], "the stop never reached the application"
+
+
+@pytest.mark.asyncio
+async def test_the_force_confirmation_button_survives_the_render_that_drew_it() -> None:
+    """The second press must reach the kill; the confirmation screen is a re-render."""
+    running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
+    boundary, launcher = _stop_boundary(running)
+    await boundary.start(_trusted_update(message=_Message()), None)
+    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    boundary.callbacks.bind_pending(11, sessions.message.message_id)
+
+    await boundary.callback(_trusted_update(callback=sessions), None)
+    row = _Callback(_edited_button(sessions, 0))
+    await boundary.callback(_trusted_update(callback=row), None)
+    force = _Callback(_edited_button(row, -1, text="Force stop"))
+    await boundary.callback(_trusted_update(callback=force), None)
+
+    assert "Force stop" in str(force.edits[0]["text"]) and "cannot be undone" in str(
+        force.edits[0]["text"]
+    )
+    confirmed = _Callback(_edited_button(force, 0, text="Force stop"))
+    await boundary.callback(_trusted_update(callback=confirmed), None)
+
+    assert confirmed.answers == ["Force stopping the session…"]
+    assert launcher.stopped == ["force"], "the confirmed force never reached the application"
+
+
+def _button(reply: dict[str, object], text: str) -> str:
+    return next(
+        button.callback_data
+        for row in reply["reply_markup"].inline_keyboard
+        for button in row
+        if button.text == text
+    )
+
+
+def _edited_button(callback: _Callback, index: int, *, text: str | None = None) -> str:
+    keyboard = callback.edits[-1]["reply_markup"].inline_keyboard
+    if text is not None:
+        return next(
+            button.callback_data for row in keyboard for button in row if button.text == text
+        )
+    return keyboard[index][0].callback_data
+
+
+@pytest.mark.asyncio
+async def test_a_button_drawn_before_a_restart_still_works_after_one(tmp_path) -> None:
+    """The reported defect, end to end: a new composition over the same database.
+
+    The first connection is **closed** before the second is opened, which is what
+    `bootstrap.main()` actually does across a restart — sharing one handle would prove only
+    that two objects can read one open file, and would survive a store that never persisted
+    anything at all.
+    """
+    database = tmp_path / "sessions.sqlite3"
+    connection = open_database(database)
+    before = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(connection))
+    message = _Message()
+    await before.start(_trusted_update(message=message), None)
+    sessions = _button(message.replies[0], "Sessions")
+    connection.close()
+
+    after = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(open_database(database)))
+    callback = _Callback(sessions)
+    await after.callback(_trusted_update(callback=callback), None)
+
+    assert callback.answers == [None], "the restarted service refused a button it had drawn"
+    assert "Sessions" in str(callback.edits[0]["text"])
+
+
+class _NotifyBot:
+    """The chat-addressed surface an *unsolicited* message goes out through.
+
+    Separate from `_Bot` because it answers a different question. Every other double in this
+    file records what a press produced; this one records what the service said with nobody
+    pressing anything, which is the whole of Stage 3 and the only outbound path in the bot
+    that no owner action started.
+
+    `fail_sends` models Telegram being unreachable for the first N sends, because "retried on
+    the next pass" is a claim about the failure path and cannot be tested from the happy one.
+    """
+
+    def __init__(self, *, first_id: int = 900, fail_sends: int = 0) -> None:
+        self.sends: list[dict[str, object]] = []
+        self.markups: list[dict[str, object]] = []
+        self._next_id = first_id
+        self._failures = fail_sends
+
+    async def send_message(self, **kwargs: object) -> _Message:
+        if self._failures > 0:
+            self._failures -= 1
+            raise TelegramError("Telegram is unreachable")
+        self.sends.append(kwargs)
+        message = _Message(message_id=self._next_id)
+        self._next_id += 1
+        return message
+
+    async def edit_message_reply_markup(self, **kwargs: object) -> None:
+        self.markups.append(kwargs)
+
+
+def _spool(directory, session_id: str, *, event: str = "Stop", stamp: str = "000001") -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{session_id}-20260811T140500{stamp}Z.json").write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "event": event,
+                "observed_at": "2026-08-11T14:05:00+00:00",
+                "detail": "Ran the suite.",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _notified(*records: SessionRecord, **bot_arguments: object):
+    launcher = _Launcher()
+    launcher.records = list(records)
+    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    bot = _NotifyBot(**bot_arguments)
+    boundary.notifier.attach(bot)
+    return boundary, bot
+
+
+def _running(label: str = "one") -> SessionRecord:
+    return _record(SessionState.RUNNING, label, ProjectId("p" * 24))
+
+
+async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file(
+    tmp_path,
+) -> None:
+    """The spool is drained by delivery, not merely read by it.
+
+    Exactly-once here is a property of two things agreeing: the drain deletes what it returns,
+    and the notifier sends what the drain returned. A pass that sent without draining would
+    repeat the same message every poll for as long as the file sat there.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert list(spool.glob("*.json")) == []
+
+    await _watch_quiet_once(composition)
+    assert len(bot.sends) == 1, "a second pass re-delivered an activity that was already sent"
+
+
+async def test_a_restart_over_a_drained_spool_sends_no_notification(tmp_path) -> None:
+    """A fresh service is not a fresh spool. Nothing survives a delivery that the next
+    process could mistake for undelivered work."""
+    record = _running()
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+
+    first, first_bot = _notified(record)
+    await _watch_quiet_once(
+        ServiceComposition(first, _SilentTerminal(), _SilentReconciler(), activity_directory=spool)
+    )
+    assert len(first_bot.sends) == 1
+
+    restarted, restarted_bot = _notified(record)
+    await _watch_quiet_once(
+        ServiceComposition(
+            restarted, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert restarted_bot.sends == []
+
+
+async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path) -> None:
+    """A hook that fires on every turn is a notification storm, not a signal.
+
+    Collapsed per session *and* per kind: an agent that finishes and then needs an answer has
+    said two different things and is entitled to two messages.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    session_id = str(record.session_id)
+    spool = tmp_path / "activity"
+    for index in range(5):
+        _spool(spool, session_id, stamp=f"00000{index}")
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    _spool(spool, session_id, event="SessionEnd", stamp="000009")
+    await _watch_quiet_once(composition)
+    assert len(bot.sends) == 2, "a different kind was suppressed by another kind's rate limit"
+
+
+async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_path) -> None:
+    """The drain has already deleted the file by the time Telegram refuses it, so a dropped
+    send is a lost notification — the only copy left is the one held in memory."""
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == [], "the double was supposed to refuse the first send"
+
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+
+
+async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> None:
+    """The sessions list hides an ENDED record, and `SessionEnd` is precisely the event whose
+    record is ENDED by the time it is delivered. Resolving the name through the list would
+    have dropped every one of them."""
+    record = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id), event="SessionEnd")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1
+    assert record.display.rendered in str(bot.sends[0]["text"])
+
+
+async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
+    """The other half of the source. Stage 2 computed this and dropped it on purpose; the
+    drop is what this pass exists to end, so it is pinned rather than left to a docstring."""
+    record = _running()
+    boundary, bot = _notified(record)
+
+    class _QuietWatcher:
+        def __init__(self) -> None:
+            self.passes = 0
+
+        async def poll(self):
+            self.passes += 1
+            return (
+                AgentActivity(
+                    session_id=str(record.session_id),
+                    kind=ActivityKind.QUIET,
+                    detail=None,
+                    observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+                    confidence=ActivityConfidence.INFERRED,
+                ),
+            )
+
+    watcher = _QuietWatcher()
+    await _watch_quiet_once(
+        ServiceComposition(boundary, _SilentTerminal(), _SilentReconciler(), watcher)
+    )
+
+    assert watcher.passes == 1
+    assert len(bot.sends) == 1
+    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
+
+
+async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tmp_path) -> None:
+    """Its button is bound to the message the send answered with, never to the anchor.
+
+    The token is minted *after* the send for that reason: `bind_pending` adopts every unbound
+    token in the chat, so a token minted before an awaited send can be claimed by a render
+    that interleaved with it — and then the notification's one button is bound to the live
+    view, where nothing draws it.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert boundary.view.anchor() is None, "a notification took over the chat's live view"
+    assert len(bot.markups) == 1
+    keyboard = bot.markups[0]["reply_markup"].inline_keyboard
+    assert [button.text for row in keyboard for button in row] == ["Open session"]
+    token = keyboard[0][0].callback_data
+    assert (
+        boundary.callbacks.resolve(
+            token, owner_id=7, chat_id=11, message_id=int(bot.markups[0]["message_id"])
+        )
+        is not None
+    )
+
+
+async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_computed(
+    tmp_path, monkeypatch
+) -> None:
+    """The two sources are guarded separately because one of them commits before it returns.
+
+    `poll()` marks a quiet spell reported as it decides the pane went quiet, and re-arms only
+    when the pane changes again. Under one shared `try`, a drain that raised after a successful
+    poll threw that observation away with its dedup state already committed — so the spell
+    became unreportable, permanently, and nothing counted anything as lost. The owner simply
+    never hears that the agent stopped.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+
+    class _QuietWatcher:
+        async def poll(self):
+            return (
+                AgentActivity(
+                    session_id=str(record.session_id),
+                    kind=ActivityKind.QUIET,
+                    detail=None,
+                    observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+                    confidence=ActivityConfidence.INFERRED,
+                ),
+            )
+
+    def _explode(_directory):
+        raise RuntimeError("the spool could not be listed")
+
+    monkeypatch.setattr("remote_agents.bootstrap.drain_activity", _explode)
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary,
+            _SilentTerminal(),
+            _SilentReconciler(),
+            _QuietWatcher(),
+            activity_directory=tmp_path / "activity",
+        )
+    )
+
+    assert len(bot.sends) == 1, "the drain's failure took the quiet observation with it"
+    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
+
+
+async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tmp_path) -> None:
+    """Returning early on an empty pass would strand a backlog until something else happened.
+
+    The retry queue is drained by `deliver`, not by the sources, so a quiet host with a held
+    notification must still deliver it — which is exactly the state a Telegram outage leaves.
+    """
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == []
+    assert boundary.notifier.pending_count() == 1
+
+    # Nothing new to observe: the spool is empty and there is no quiet watcher.
+    await _watch_quiet_once(composition)
+
+    assert len(bot.sends) == 1
+    assert boundary.notifier.pending_count() == 0

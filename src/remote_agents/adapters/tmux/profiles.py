@@ -16,6 +16,7 @@ from remote_agents.domain.profiles import (
     ProfileDefinition,
     ProfileError,
 )
+from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _RESUME_ARGUMENTS = {
     "claude": ("--resume",),
@@ -120,11 +121,21 @@ def build_launch_profile(
     return LaunchProfile(
         str(executable),
         argv,
-        environment,
+        _with_session_identity(environment, session_id),
         _READINESS_MARKERS[str(definition.profile_id)],
         definition.graceful_keys,
         _READINESS_BLOCKERS.get(str(definition.profile_id), ()),
     )
+
+
+def _with_session_identity(environment: dict[str, str], session_id: SessionId) -> dict[str, str]:
+    """Name the session in its own environment, without writing into the shared curated one.
+
+    `bootstrap._local_runtime` builds one allowed-environment mapping and closes over it for
+    every profile factory, so mutating it would leak one session's identity into the next
+    launch. A copy per profile is what keeps the variable per-session.
+    """
+    return environment | {SESSION_ID_VARIABLE: str(session_id)}
 
 
 def build_resume_profile(
@@ -144,7 +155,7 @@ def build_resume_profile(
     return LaunchProfile(
         str(executable),
         argv,
-        environment,
+        _with_session_identity(environment, session_id),
         # A resumed agent never reprints the banner in _READINESS_MARKERS, so requiring one
         # here marked every resumed session failed once its startup window elapsed, while
         # its pane carried on working. Blockers still apply: those are drawn on resume too.

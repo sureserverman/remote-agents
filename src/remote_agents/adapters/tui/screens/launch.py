@@ -39,6 +39,7 @@ class ProjectsScreen(ChoiceScreen):
     It is the app's default screen rather than a pushed one, which is what makes "the stack
     can never empty" structural instead of a rule every back path has to remember.
     """
+
     empty_state = "No project matches that filter."
 
     position = "PROJECTS"
@@ -198,6 +199,7 @@ class ProjectsScreen(ChoiceScreen):
 
 class ProfilesScreen(ChoiceScreen):
     """The curated agents, each named with the reason it cannot be launched here."""
+
     #: The curated profile list is the host's own configuration; a host offering none could
     #: not launch anything at all, so an empty agent list is a broken install, not a state.
     empty_state = NEVER_EMPTY
@@ -234,9 +236,7 @@ class ProfilesScreen(ChoiceScreen):
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:
             reason = profile.reason if profile is not None else "unknown profile"
-            self.announce(
-                f"That agent cannot be launched here: {reason}", severity="warning"
-            )
+            self.announce(f"That agent cannot be launched here: {reason}", severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
         await self.advance_to(LabelScreen())
@@ -244,6 +244,7 @@ class ProfilesScreen(ChoiceScreen):
 
 class LabelScreen(ChoiceScreen):
     """One optional free-text label, bounded by the configured length."""
+
     #: a text entry, not a list.
     empty_state = NEVER_EMPTY
 
@@ -309,6 +310,7 @@ class LabelScreen(ChoiceScreen):
 
 class ReviewScreen(ChoiceScreen):
     """The last position before a launch is issued, resting on Back rather than Launch."""
+
     #: Launch, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
 
@@ -321,7 +323,6 @@ class ReviewScreen(ChoiceScreen):
         choices sits one keystroke from being discarded with no way back to them.
         """
         return True
-
 
     position = "REVIEW"
     crumb = "Review"

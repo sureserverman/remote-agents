@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fake_telegram import LoneMessageBot
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -15,6 +16,7 @@ from remote_agents.domain.projects import ProjectIdentity
 
 OWNER = 4242
 CHAT = 8484
+MESSAGE = 100
 
 
 class FakeCreator:
@@ -41,9 +43,16 @@ class FakeCreator:
 class FakeMessage:
     """Capture what the boundary would send without touching Telegram."""
 
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", message_id: int = 1) -> None:
         self.text = text
+        self.message_id = message_id
         self.replies: list[dict[str, object]] = []
+        self.deletions: list[int] = []
+        self.documents: list[dict[str, object]] = []
+        self.bot = LoneMessageBot(self)
+
+    def get_bot(self) -> LoneMessageBot:
+        return self.bot
 
     async def reply_text(self, **arguments: object) -> None:
         self.replies.append(arguments)
@@ -126,19 +135,22 @@ async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> No
 async def test_a_name_outside_the_slug_rule_is_refused_before_any_effect(name: str) -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, name)
 
     assert "lowercase letters" in str(rendered["text"])
     assert creator.commands == []
-    assert boundary._awaiting_text[(OWNER, CHAT)] == ("project.name", "infra")
+    still_asking = boundary._awaiting_text[(OWNER, CHAT)]
+    assert (still_asking.action, still_asking.entity_id) == ("project.name", "infra"), (
+        "a refused name leaves the step open; only the prompt it replied to is replaced"
+    )
 
 
 async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, "new-project")
 
@@ -154,7 +166,7 @@ async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
 async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
 
     rendered = await _send(boundary, reply)
 
@@ -166,24 +178,24 @@ async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> 
 async def test_confirming_creates_exactly_once_even_when_the_callback_is_replayed() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, MESSAGE)
 
-    first = await boundary._reply_for("project.confirm", "infra|new-project", token=token)
-    replayed = await boundary._reply_for("project.confirm", "infra|new-project", token=token)
+    first = await _confirm(boundary, "infra|new-project", token)
+    replayed = await _confirm(boundary, "infra|new-project", token)
 
     assert "Project created" in str(first["text"])
-    assert "expired" in str(replayed["text"])
+    assert "already run" in str(replayed["text"])
     assert creator.commands == [CreateProjectCommand("infra", "new-project")]
 
 
 async def test_a_refused_creation_is_reported_without_raising() -> None:
     creator = FakeCreator(error=ProjectCreationError("project directory already exists"))
     boundary = _boundary(creator)
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, MESSAGE)
 
-    rendered = await boundary._reply_for("project.confirm", "infra|new-project", token=token)
+    rendered = await _confirm(boundary, "infra|new-project", token)
 
     assert "Project not created" in str(rendered["text"])
     assert "already exists" in str(rendered["text"])
@@ -193,7 +205,6 @@ async def test_a_created_project_is_offered_by_launch_without_a_restart() -> Non
     creator = FakeCreator()
     created = CatalogProject("opaque-new", "new-project", "infra", "Registered")
     boundary = _boundary(creator, catalogue_source=lambda: (created,))
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
 
     await boundary._reply_for("project.confirm", "infra|new-project", token=token)
@@ -225,31 +236,32 @@ async def test_refreshing_home_re_reads_a_project_created_by_another_process() -
 async def test_a_confirmation_without_a_resolvable_selection_creates_nothing() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "malformed-entity", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, MESSAGE)
 
-    rendered = await boundary._reply_for("project.confirm", "malformed-entity", token=token)
+    rendered = await _confirm(boundary, "malformed-entity", token)
 
-    assert "expired" in str(rendered["text"])
+    assert "already run" in str(rendered["text"])
     assert creator.commands == []
 
 
 async def test_add_project_actions_are_inert_without_a_creator() -> None:
     boundary = _boundary()
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, MESSAGE)
 
     areas = await boundary._reply_for("project.open", "areas")
-    confirm = await boundary._reply_for("project.confirm", "infra|new-project", token=token)
+    confirm = await _confirm(boundary, "infra|new-project", token)
 
     assert "unavailable" in str(areas["text"])
-    assert "expired" in str(confirm["text"])
+    # Not "already run": nothing ran, and with no creator wired nothing ever could.
+    assert "Adding a project is unavailable." in str(confirm["text"])
 
 
 async def test_name_entry_ignores_a_sender_who_is_not_the_owner() -> None:
     creator = FakeCreator()
     boundary = _boundary(creator)
-    boundary._awaiting_text[(OWNER, CHAT)] = ("project.name", "infra")
+    boundary._awaiting_text[(OWNER, CHAT)] = _TextEntry("project.name", "infra")
     message = FakeMessage("new-project")
 
     await boundary.text(FakeUpdate(message, user_id=OWNER + 1), None)
@@ -271,18 +283,23 @@ def test_every_add_project_action_is_behind_the_single_owner_chat_gate() -> None
 async def test_a_failure_outside_the_error_contract_is_reported_not_dropped() -> None:
     creator = FakeCreator(error=RuntimeError("an adapter broke its contract"))
     boundary = _boundary(creator)
-    boundary._next_revision(OWNER, CHAT)
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, MESSAGE)
 
-    rendered = await boundary._reply_for("project.confirm", "infra|new-project", token=token)
+    rendered = await _confirm(boundary, "infra|new-project", token)
 
     assert "Project not created" in str(rendered["text"])
     assert "an adapter broke its contract" not in str(rendered["text"])
 
 
-async def test_confirming_before_any_view_revision_exists_does_not_raise() -> None:
+async def test_confirming_with_a_token_this_message_never_carried_does_not_raise() -> None:
     boundary = _boundary(FakeCreator())
 
-    rendered = await boundary._reply_for("project.confirm", "infra|new-project", token="c1_absent")
+    rendered = await _confirm(boundary, "infra|new-project", "c1_absent")
 
-    assert "expired" in str(rendered["text"])
+    assert "already run" in str(rendered["text"])
+
+
+async def _confirm(boundary: PrivateBotBoundary, entity_id: str, token: str) -> dict[str, object]:
+    """Press Create the way the callback dispatcher would, from the message that drew it."""
+    return await boundary._reply_for("project.confirm", entity_id, token=token, message_id=MESSAGE)

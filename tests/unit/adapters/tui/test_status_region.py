@@ -584,9 +584,7 @@ async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() ->
     assert seen["textual-dark"] != seen["gruvbox"], (
         f"the error colour is theme-independent, so it is a literal, not a token: {seen}"
     )
-    assert neutral_rgb != seen["textual-dark"], (
-        "a neutral status renders in the error colour"
-    )
+    assert neutral_rgb != seen["textual-dark"], "a neutral status renders in the error colour"
 
 
 async def test_a_failed_read_still_says_what_failed_after_its_toast_has_gone() -> None:

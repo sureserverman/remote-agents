@@ -8,7 +8,7 @@ import logging
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from math import ceil
 
@@ -23,7 +23,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
+from telegram.error import TelegramError
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -35,14 +35,18 @@ from telegram.ext import (
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
+from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
+from remote_agents.adapters.telegram.notifications import (
+    NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
+)
+from remote_agents.adapters.telegram.notifications import ActivityNotifier
 from remote_agents.adapters.telegram.presenters import (
     Button,
-    NavigationCallbacks,
     RenderedMessage,
     render_home,
     render_message,
 )
-from remote_agents.adapters.telegram.stops import StopController
+from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import (
     InspectQuery,
@@ -51,16 +55,18 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
-from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
+    rank_by_recent_use,
     search_catalogue,
 )
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
+    CLEANUP,
     FORCE,
     GRACEFUL,
     StopFailure,
@@ -70,9 +76,19 @@ from remote_agents.application.session_actions import (
 )
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
+from remote_agents.domain.models import (
+    MAX_LABEL_LENGTH,
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+    normalize_label,
+)
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.callback_state import CallbackStatePort
+from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
@@ -97,13 +113,22 @@ _GUIDED_TEXT_ENTRY = {
         "Reply with the new project name. Send Cancel or Back to leave this step.",
         "New project name",
     ),
+    "session.rename": (
+        "Reply with a name for this session. Send Skip to clear it, or Cancel to leave it.",
+        "Session name",
+    ),
 }
 _ENTRY_INSTRUCTIONS = {
     "launch.search": "Reply below with a project name.",
     "resume.search": "Reply below with a project name.",
     "project.name": "Reply below with the new project name.",
+    "session.rename": "Reply below with a name for this session.",
 }
 _SEARCH_ACTIONS = {"launch.search": "launch", "resume.search": "resume"}
+_TEXT_ENTRY_ACTIONS = frozenset(
+    {"launch.search", "resume.search", "project.area", "session.rename"}
+)
+"""The actions that open a guided step, and so the only ones that may leave a box open."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,11 +165,36 @@ _PROJECT_PICKERS = {
         instruction="Select the project for the prior conversation.",
     ),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _TextEntry:
+    """One guided text step: what is being asked, what for, and where the input box is.
+
+    The input box's message id lives here rather than in a second dictionary keyed the same
+    way, because it has exactly the same lifetime as the request — created when the step
+    opens, dead when the step is answered or abandoned.
+
+    Process-local, like the request itself. **Accepted cost, stated plainly because it is
+    the one hole left in this stage's invariant:** a restart between opening a step and
+    answering it forgets both what was asked and where the box is, and the Bot API gives no
+    way to enumerate a chat, so nothing can find that box again. It stays until the owner
+    removes it by hand. Every in-process way of abandoning a step — any command, any button
+    that navigates away, opening another step — does take it with it; only a restart in
+    that window does not. Closing it properly means giving this id the same durable home
+    the anchor already has, which is a schema change this stage did not carry.
+    """
+
+    action: str
+    entity_id: str
+    input_message_id: int = 0
+
+
 _PENDING_NOTICES = {
     "graceful": "Stopping the session — waiting for the agent to exit…",
     "cleanup": "Cleaning up the session…",
-    "force": "Force stopping the session…",
-    "launch.confirm": "Launching — waiting for the agent to become ready…",
+    CONFIRMED_FORCE: "Force stopping the session…",
+    "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
 }
 """The actions that make the owner wait, and what to show them while they do.
@@ -154,6 +204,16 @@ readiness marker, a graceful stop waits for the pane to exit, and both are bound
 same startup timeout — twenty seconds in the deployed composition. Everything absent from
 this table answers from the store or from one tmux call, fast enough that a notice would
 flash and be gone.
+"""
+
+_LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+"""The actions that draw the **session list** rather than a screen about their own session.
+
+`_release_attachment` is told what the next screen is about, and every other action can
+answer that with the entity it carries. These cannot: they carry a session id and then land
+somewhere that is not about it, so a captured document would be retained on behalf of a
+session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it draws
+the confirmation, which *is* about that session.
 """
 
 
@@ -169,30 +229,70 @@ class PrivateBotBoundary:
     conversations: ConversationService | None = None
     creator: object | None = None
     capture: Callable[[SessionId], Awaitable[str]] | None = None
-    callbacks: CallbackStateStore = field(default_factory=CallbackStateStore)
+    callbacks: CallbackStatePort = field(default_factory=CallbackStateStore)
+    anchors: ChatViewPort = field(default_factory=ChatViewStore)
     stops: StopController = field(init=False)
-    _view_revisions: dict[tuple[int, int], int] = field(default_factory=dict)
-    _force_confirmed: set[str] = field(default_factory=set)
-    _awaiting_text: dict[tuple[int, int], tuple[str, str]] = field(default_factory=dict)
-    _labels: dict[str, str] = field(default_factory=dict)
+    view: LiveView = field(init=False)
+    notifier: ActivityNotifier = field(init=False)
+    _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
+    _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     project_page_size: int = 10
     session_page_size: int = 8
+    #: The host's configured bound, which may be tighter than the domain ceiling but never
+    #: looser — `config.py` clamps the setting to 1..40. Defaulted so a boundary built without
+    #: a config (every test that does not care) still refuses what the domain would refuse.
+    max_label_length: int = MAX_LABEL_LENGTH
     catalogue_source: Callable[[], tuple[CatalogProject, ...]] | None = None
 
     def __post_init__(self) -> None:
         self.stops = StopController(self.callbacks)
+        self.view = LiveView(
+            chat_id=self.owner_chat_id, callbacks=self.callbacks, anchors=self.anchors
+        )
+        # Built here rather than by the composition root because everything it needs is
+        # already assembled here, and because a boundary without one would leave every
+        # caller checking whether the service can speak before telling it to.
+        self.notifier = ActivityNotifier(
+            view=self.view,
+            callbacks=self.callbacks,
+            owner_user_id=self.owner_user_id,
+            display=self._display_for,
+        )
 
     async def refresh_catalogue(self) -> None:
         """Re-read the projects so one created at runtime becomes selectable immediately.
 
         The registry read and development-root walk run off the event loop, so refreshing
         never stalls unrelated Telegram interactions or tmux polling.
+
+        The recency ranking is applied **here**, once, rather than in either picker. Launch,
+        Resume and search all render `self.catalogue` — the two pickers share `_projects_reply`
+        and search filters the same tuple — so ordering it at the source reaches all three
+        without a ranking call per rendered row, and without either picker knowing that a
+        ranking exists. It is also why a session launched during the run changes the next
+        render's order: the usage read happens on the refresh that follows it.
         """
         if self.catalogue_source is None:
             return
-        self.catalogue = await asyncio.to_thread(self.catalogue_source)
+        catalogue = await asyncio.to_thread(self.catalogue_source)
+        self.catalogue = await self._ranked(catalogue)
         self._project_views.clear()
+
+    async def _ranked(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
+        """Order the catalogue by recent use, or leave it exactly as it came.
+
+        A launcher that cannot report usage is not an error: the unranked catalogue is the
+        honest answer rather than an empty one. Every real composition wires `SessionService`,
+        which does report usage (`bootstrap.py`), so in practice this branch is reached only
+        by a boundary built without a launcher and by test doubles that do not model usage —
+        which is most of them. `now` is read here, at the one place with a reason to know the
+        time; `rank_by_recent_use` stays pure.
+        """
+        usage = getattr(self.launcher, "project_usage", None)
+        if usage is None:
+            return catalogue
+        return rank_by_recent_use(catalogue, await usage(), datetime.now(UTC))
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user
@@ -210,90 +310,208 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-        await update.effective_message.reply_text(**(await self._home_reply()))
+        await self._answer_command(update.effective_message, await self._home_reply())
+
+    async def _answer_command(self, message, arguments: dict[str, object]) -> None:
+        """Draw a command's answer into the live view and take the command back out of the chat.
+
+        Render first, delete second. If the render fails, the owner still has the message
+        they sent and can see that nothing answered it; the other order would consume the
+        command and leave the chat silent about what happened to it. A delete that fails
+        after a successful render is the harmless direction — the screen is right and one
+        stale command line survives — which is why `discard` swallows it.
+
+        A command used to `reply_text`, which is what made the chat a transcript: four
+        commands meant four screens, and since Stage 1 every one of them kept working
+        buttons.
+
+        Takes the message rather than the update because every caller has already narrowed
+        it, and a second check here would be a branch no test could ever reach.
+        """
+        bot = message.get_bot()
+        await self.view.render(bot, arguments)
+        await self._release_attachment(bot, None)
+        await self._abandon_entry(bot)
+        await self.view.discard(bot, message.message_id)
 
     async def text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Accept bounded local catalogue search or a session label while explicitly requested."""
+        """Accept bounded local catalogue search or a session label while explicitly requested.
+
+        Every path here ends the same way: the answer is drawn into the live view, and the
+        question and the answer both leave the chat. What used to happen instead is that
+        each reply added two more messages — the owner's, and a fresh screen — so a search
+        that took three attempts left seven things behind it.
+        """
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        request = self._awaiting_text.get((self.owner_user_id, self.owner_chat_id))
-        if request is None:
+        entry = self._awaiting_text.get(self._entry_key)
+        if entry is None:
             return
-        value = update.effective_message.text or ""
-        action, entity_id = request
+        message = update.effective_message
+        bot = message.get_bot()
+        value = message.text or ""
         if value.casefold() in {"cancel", "back"}:
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            await update.effective_message.reply_text(**(await self._home_reply()))
+            await self._finish_entry(bot, entry, message, await self._home_reply())
             return
-        if action in _SEARCH_ACTIONS:
+        if entry.action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
             if not projects:
-                await update.effective_message.reply_text(
-                    **self._guided_text_reply(action, "No projects found. Try another name.")
-                )
+                await self._ask_again(bot, entry, message, "No projects found. Try another name.")
                 return
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
             # The search returns to the flow it was opened from, so a project picked here
             # resumes a conversation rather than silently starting a fresh session.
-            await update.effective_message.reply_text(
-                **_reply_arguments(
-                    self._projects_reply(projects, view_id="search", flow=_SEARCH_ACTIONS[action])
-                )
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(
+                    self._projects_reply(
+                        projects, view_id="search", flow=_SEARCH_ACTIONS[entry.action]
+                    )
+                ),
             )
             return
-        if action == "project.name":
+        if entry.action == "project.name":
             try:
-                identity = ProjectIdentity(area=entity_id, name=value.strip())
+                identity = ProjectIdentity(area=entry.entity_id, name=value.strip())
             except ValueError as error:
-                await update.effective_message.reply_text(
-                    **self._guided_text_reply("project.name", str(error))
+                await self._ask_again(bot, entry, message, str(error))
+                return
+            await self._finish_entry(
+                bot, entry, message, _reply_arguments(self._project_review_reply(identity))
+            )
+            return
+        if entry.action == "session.rename":
+            # `getattr`, not just a None check: `launcher` is duck-typed, and a composition
+            # wiring one without `rename` would otherwise raise mid-step — leaving the input
+            # box open and every later reply re-raising, which is exactly the failure Stage 2's
+            # Critical was. Production wires `SessionService`, so this is latent; latent is
+            # what the last one was too.
+            rename = getattr(self.launcher, "rename", None)
+            if rename is None:
+                await self._finish_entry(
+                    bot, entry, message, _reply_arguments(self._message("Renaming is unavailable."))
                 )
                 return
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
-            await update.effective_message.reply_text(
-                **_reply_arguments(self._project_review_reply(identity))
-            )
-            return
-        if value.casefold() == "skip":
-            self._labels.pop(entity_id, None)
-            self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
-            await update.effective_message.reply_text(
-                **_reply_arguments(self._confirm_reply(entity_id))
-            )
-            return
-        try:
-            self._labels[entity_id] = _label(value)
-        except ValueError:
-            await update.effective_message.reply_text(
-                **self._guided_text_reply(
-                    "launch.label", "Use a visible label of up to 40 characters."
+            # "Skip" leaves the session as it is and closes the step. Clearing a name is a
+            # different intent from declining to set one, and the store supports it
+            # (`set_label(None)`) — but no screen offers it yet, so a step that quietly
+            # cleared on Skip would be the only way to lose a name and would do it by
+            # accident.
+            if value.casefold() == "skip":
+                await self._finish_entry(
+                    bot, entry, message, _reply_arguments(await self._detail_reply(entry.entity_id))
                 )
+                return
+            try:
+                label = normalize_label(value, max_length=self.max_label_length)
+            except ValueError:
+                await self._ask_again(
+                    bot,
+                    entry,
+                    message,
+                    f"Use a visible name of up to {self.max_label_length} characters.",
+                )
+                return
+            try:
+                await rename(SessionId.parse(entry.entity_id), label)
+            except (SessionNotFoundError, KeyError):
+                # The session ended under the owner while the box was open. Its detail screen
+                # is gone too, so the list is the only honest place to land.
+                #
+                # Both types, and neither is redundant: `SessionService.rename` raises
+                # `SessionNotFoundError` from its own `_require_session`, while the store port
+                # raises `KeyError`. They are **siblings** under `LookupError`, not one a
+                # subclass of the other, so catching only `KeyError` caught nothing that this
+                # path can actually raise — which is how this branch shipped as dead code
+                # behind a green test whose double raised the wrong type.
+                await self._finish_entry(
+                    bot,
+                    entry,
+                    message,
+                    _reply_arguments(
+                        await self._sessions_reply(notice="That session is no longer available.")
+                    ),
+                )
+                return
+            await self._finish_entry(
+                bot,
+                entry,
+                message,
+                _reply_arguments(await self._detail_reply(entry.entity_id)),
             )
             return
-        self._awaiting_text.pop((self.owner_user_id, self.owner_chat_id), None)
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        await update.effective_message.reply_text(
-            **_reply_arguments(self._confirm_reply(entity_id))
-        )
+        # Every remaining text step returns above. A step that reaches here is one whose
+        # action was added to `_TEXT_ENTRY_ACTIONS` without a branch to answer it, which would
+        # otherwise consume the owner's reply and draw nothing.
+        raise AssertionError(f"no text handler for {entry.action!r}")
+
+    @property
+    def _entry_key(self) -> tuple[int, int]:
+        return (self.owner_user_id, self.owner_chat_id)
+
+    async def _finish_entry(self, bot, entry: _TextEntry, message, arguments) -> None:
+        """Draw the answer, then take the question and the answer out of the chat.
+
+        Render first for the same reason a command does: if the screen cannot be drawn, the
+        owner keeps what they typed and can see that nothing came of it.
+        """
+        await self.view.render(bot, arguments)
+        self._awaiting_text.pop(self._entry_key, None)
+        await self._release_attachment(bot, None)
+        await self._clear_entry(bot, entry, message)
+
+    async def _ask_again(self, bot, entry: _TextEntry, message, notice: str) -> None:
+        """Refuse a value and ask again, without leaving the refusal or the old question.
+
+        A rejected attempt is still a consumed input — it was read, judged, and answered —
+        so it goes, and the box it replied to goes with it. What replaces them is one new
+        box, so three failed attempts cost the chat exactly what one does.
+
+        Ask before clearing, the same order `_finish_entry` uses and for the same reason. If
+        the new box cannot be sent, the owner keeps the old one and what they typed, and can
+        try again; clearing first would leave them with no way to answer a step the service
+        still believes is open. The cost is that both boxes exist for one call, which nobody
+        can see.
+        """
+        asked = await self.view.send_apart(bot, self._guided_text_reply(entry.action, notice))
+        await self._clear_entry(bot, entry, message)
+        self._awaiting_text[self._entry_key] = replace(entry, input_message_id=asked)
+
+    async def _abandon_entry(self, bot) -> None:
+        """Take an unanswered question out of the chat when the owner moves on.
+
+        The input box is the one bot message deliberately outside the live view, so it is
+        the one thing a redraw cannot replace: navigating away used to leave it sitting
+        under the new screen, still accepting input for a step nobody was in — and its only
+        record, a single slot, was then overwritten by the next step or cleared by the next
+        command, so nothing could ever remove it again. Two abandoned searches and the chat
+        is a transcript, which is the state this stage exists to remove.
+        """
+        entry = self._awaiting_text.pop(self._entry_key, None)
+        if entry is not None and entry.input_message_id:
+            await self.view.discard(bot, entry.input_message_id)
+
+    async def _clear_entry(self, bot, entry: _TextEntry, message) -> None:
+        """Take the owner's answer, and the box it replied to, back out of the chat."""
+        await self.view.discard(bot, message.message_id)
+        if entry.input_message_id:
+            await self.view.discard(bot, entry.input_message_id)
 
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
-            await update.effective_message.reply_text(
-                **_reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+            await self._answer_command(
+                update.effective_message,
+                _reply_arguments(self._projects_reply(self.catalogue, view_id="all")),
             )
 
     async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
-            await update.effective_message.reply_text(
-                **_reply_arguments(await self._sessions_reply())
+            await self._answer_command(
+                update.effective_message, _reply_arguments(await self._sessions_reply())
             )
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -316,7 +534,7 @@ class PrivateBotBoundary:
             lines.append("<b>Resume</b> continues a saved conversation in a new session.")
         lines.append(
             "<b>Sessions</b> lists what is running. Open one to read its output, copy an "
-            "attach command, or stop it."
+            "attach command, rename it, or stop it."
         )
         if self.creator is not None:
             lines.append("<b>Add Project</b> registers a new project to launch into.")
@@ -328,8 +546,8 @@ class PrivateBotBoundary:
             f"<b>{ACTION_LABELS[FORCE]}</b> kills a session that cannot exit, and asks for "
             "confirmation before it does.",
         ]
-        await update.effective_message.reply_text(
-            **_reply_arguments(self._message("\n".join(lines)))
+        await self._answer_command(
+            update.effective_message, _reply_arguments(self._message("\n".join(lines)))
         )
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -340,29 +558,63 @@ class PrivateBotBoundary:
         query = update.callback_query
         owner_id = self.owner_user_id
         chat_id = self.owner_chat_id
-        revision = self._view_revisions.get((owner_id, chat_id), 0)
+        # Never 0: that is UNBOUND, and resolving against it would match every token minted
+        # for a screen that has not been delivered yet -- an authorization comparison whose
+        # fallback collides with a sentinel. -1 matches nothing, which is the honest answer
+        # for a press whose message the API did not give us.
+        message_id = query.message.message_id if query.message is not None else -1
         state = self.callbacks.resolve(
-            query.data or "", owner_id=owner_id, chat_id=chat_id, view_revision=revision
+            query.data or "", owner_id=owner_id, chat_id=chat_id, message_id=message_id
         )
+        # A callback query in this chat can only have come from an inline keyboard this bot
+        # sent, and `permits` has already established the chat. So the message it was
+        # pressed on is a screen of ours — enough to recover an anchor a composition never
+        # recorded.
+        #
+        # It only ever fills an *absent* anchor and never moves a recorded one. Adopting the
+        # pressed message unconditionally would walk the live view backwards onto an older
+        # screen — which is wrong whatever else is in the chat, so the rule outlives the
+        # transitional reason it was first written for.
+        #
+        # One message of ours is deliberately **not** a screen, and it is the reason this now
+        # resolves first rather than adopting blind. A notification is sent apart from the live
+        # view; adopting it would make the next render edit the session detail *over* the
+        # notification, so the message the runbook promises survives pruning would instead be
+        # consumed by it. The exemption travels in the token's action rather than in a set held
+        # in this process, because the vulnerable state — a chat with no recorded anchor and a
+        # notification already in it — is exactly what a restored database leaves behind, and a
+        # process-local set is empty precisely then.
+        if state is None or state.action != _NOTIFIED_DETAIL:
+            self.view.adopt(message_id)
+        notified = state is not None and state.action == _NOTIFIED_DETAIL
+        if notified:
+            # Normalized once, here, so no downstream branch has to know the distinction
+            # exists: it is about where the press came *from*, not about what it does.
+            state = replace(state, action="session.detail")
         if state is None:
-            # An alert rather than a toast: the press did nothing, and the screen is about
-            # to be replaced by Home. A silent jump back to the dashboard reads like the bot
-            # misfired, and this is an error rather than one of the routine presses that
-            # would make a modal into noise.
-            await query.answer("This view has expired.", show_alert=True)
-            try:
-                await query.edit_message_text(**(await self._home_reply()))
-            except BadRequest as error:
-                if "Message is not modified" not in str(error):
-                    raise
+            # A press this screen cannot account for: the button belongs to a keyboard this
+            # message no longer carries. Nothing expired — the token was pruned when the
+            # screen that drew it was replaced — so this is a race between a thumb and a
+            # redraw, not an error, and it gets a toast rather than the modal alert the
+            # expiry used to raise. The words say what happened without claiming a deadline
+            # that no longer exists.
+            await query.answer("That screen has moved on.")
+            await self._render(query, await self._home_reply())
             return
-        pending = self._pending_notice(state.action, query.data or "")
+        pending = self._pending_notice(state.action)
         await query.answer(pending)
         try:
+            # Whatever this press draws, it answers "is that session still on screen". Inside
+            # the try, so an unexpected failure lands on the recovery screen below rather
+            # than leaving a cleared spinner and nothing drawn.
+            showing = None if state.action in _LIST_LANDING_ACTIONS else state.entity_id
+            await self._release_attachment(query.get_bot(), showing)
+            if state.action not in _TEXT_ENTRY_ACTIONS:
+                await self._abandon_entry(query.get_bot())
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
-            if state.action in {"launch.search", "resume.search", "launch.label", "project.area"}:
+            if state.action in _TEXT_ENTRY_ACTIONS:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
             if pending is not None:
@@ -371,36 +623,62 @@ class PrivateBotBoundary:
                 # timeout would otherwise leave the previous screen sitting there, unchanged
                 # and unexplained, for up to twenty seconds. Show the wait, and drop the
                 # keyboard while it runs so the same button cannot be pressed twice.
-                await query.edit_message_text(**_reply_arguments(render_message(pending)))
-            await query.edit_message_text(
-                **(await self._reply_for(state.action, state.entity_id, token=query.data or ""))
+                # `retire=False`: the token being processed is bound to this very message,
+                # so a retiring render here would prune the action out from under itself.
+                await self._render(query, _reply_arguments(render_message(pending)), retire=False)
+            await self._render(
+                query,
+                await self._reply_for(
+                    state.action,
+                    state.entity_id,
+                    token=query.data or "",
+                    message_id=message_id,
+                ),
             )
-        except Exception as error:
-            if isinstance(error, BadRequest) and "Message is not modified" in str(error):
-                return
+            if notified:
+                # The notification has been acted on, so it is an answered question of ours --
+                # the second category `discard` permits. Leaving it turned the chat into a
+                # pile of alerts the owner had already dealt with, each still offering the
+                # button they had just pressed, and each pushing the menu further up.
+                # Pruned first: the message is going, and a token outliving its message is the
+                # dead-button state this store exists to make impossible.
+                self.callbacks.prune_for_message(chat_id, message_id)
+                await self.view.discard(query.get_bot(), message_id)
+        except Exception:
             if pending is None:
                 raise
             # The pending screen carries no buttons, so failing after it is drawn would
             # strand the owner on a dead message. Put them back on something they can act on.
             _LOG.exception("callback action failed while its pending notice was on screen")
-            await query.edit_message_text(
-                **_reply_arguments(
-                    self._message(
-                        "That action did not complete, and the session was left as it is.\n"
-                        "Open it again to see where it is now.",
-                        back=self._callback("sessions.open", "sessions"),
+            await self._render(
+                query,
+                _reply_arguments(
+                    await self._sessions_reply(
+                        notice="That action did not complete, and the session was left as it is."
                     )
-                )
+                ),
             )
+
+    async def _render(self, query, arguments: dict[str, object], *, retire: bool = True) -> None:
+        """Draw a screen into this chat's live view, whichever message that currently is.
+
+        Addressed by anchor rather than by the message the press came from. Those are the
+        same message in the ordinary case, and deliberately not the same one after a re-send
+        — the chat has one screen, so a render's target is a property of the chat rather
+        than of whatever update happened to trigger it.
+
+        `LiveView` owns the edit-then-prune-then-bind order and the no-op guard; what is
+        left here is telling it which bot to speak through.
+        """
+        await self.view.render(query.get_bot(), arguments, retire=retire)
 
     async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
         if refresh:
             await self.refresh_catalogue()
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
         records = await self._records()
         return _reply_arguments(
             render_home(
-                self._navigation_callbacks(),
+                refresh=self._callback("nav.refresh", "home"),
                 launch=self._callback("launch.open", "projects"),
                 resume=(self._callback("resume.open", "projects") if self.conversations else None),
                 sessions=self._callback("sessions.open", "sessions"),
@@ -411,21 +689,18 @@ class PrivateBotBoundary:
         )
 
     async def _reply_for(
-        self, action: str, entity_id: str, *, token: str = ""
+        self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
             return await self._home_reply(refresh=action == "nav.refresh")
-        if action == "launch.confirm":
-            return await self._launch_reply(entity_id, token)
         if action == "resume.confirm":
-            return await self._resume_reply(entity_id, token)
+            return await self._resume_reply(entity_id, token, message_id)
         if action == "remote.confirm":
-            return await self._remote_control_reply(entity_id, token)
+            return await self._remote_control_reply(entity_id, token, message_id)
         if action == "project.confirm":
-            return await self._project_reply(entity_id, token)
-        if action in {"graceful", "cleanup", "force"}:
-            return await self._stop_reply(action, token)
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
+            return await self._project_reply(entity_id, token, message_id)
+        if action in {"graceful", "cleanup", "force", CONFIRMED_FORCE}:
+            return await self._stop_reply(action, token, message_id)
         if action == "project.open":
             return _reply_arguments(await self._project_areas_reply())
         if action == "launch.open":
@@ -435,7 +710,7 @@ class PrivateBotBoundary:
         if action == "launch.project":
             return _reply_arguments(self._profiles_reply(entity_id))
         if action == "launch.profile":
-            return _reply_arguments(self._confirm_reply(entity_id))
+            return await self._launch_reply(entity_id, token, message_id)
         if action == "sessions.open":
             return _reply_arguments(await self._sessions_reply())
         if action == "sessions.page":
@@ -451,33 +726,46 @@ class PrivateBotBoundary:
         if action == "resume.select":
             return _reply_arguments(await self._resume_confirm_reply(entity_id))
         if action == "session.detail":
-            return _reply_arguments(await self._detail_reply(entity_id))
+            return _reply_arguments(await self._detail_reply(entity_id, message_id))
         if action == "session.attach":
             return _reply_arguments(await self._attach_reply(entity_id))
         if action == "remote.control":
             return _reply_arguments(await self._remote_control_confirm_reply(entity_id))
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
-        return _reply_arguments(self._message("This view has expired."))
+        return _reply_arguments(self._message("That action is no longer available."))
 
-    async def _launch_reply(self, entity_id: str, token: str) -> dict[str, object]:
-        if self.launcher is None or not self.callbacks.claim_mutation(
+    async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
+        if self.launcher is None:
+            return _reply_arguments(self._message("Launching is unavailable."))
+        project_id, profile_id = _split_launch(entity_id)
+        # Re-derived before the claim, not after. The confirmation screen checked both when it
+        # drew the button, and a button now outlives the screen that drew it by any amount of
+        # time -- so claiming first would burn the one-shot on a project that has since left
+        # the catalogue and leave a FAILED row behind with no way to retry.
+        if not any(project.opaque_id == project_id for project in self.catalogue):
+            return _reply_arguments(self._message("The project is no longer available."))
+        if not any(
+            profile.profile_id == profile_id and profile.available for profile in self.profiles
+        ):
+            return _reply_arguments(self._message("That agent is unavailable."))
+        if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+            message_id=message_id,
         ):
-            return _reply_arguments(self._message("That request has expired."))
-        project_id, profile_id = _split_launch(entity_id)
+            return _reply_arguments(self._message("That action has already run."))
         record = await self.launcher.launch(
             LaunchCommand(
                 ProjectId(project_id),
                 ProfileId(profile_id),
                 token,
-                self._labels.pop(entity_id, None),
+                # No label at launch: choosing the agent starts the session, and naming it is
+                # a later, optional act from the session's own menu (Task 2.3).
+                None,
             )
         )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
         if record is None:
             return _reply_arguments(self._message("Session launch requested."))
         if record.state is SessionState.FAILED:
@@ -509,18 +797,18 @@ class PrivateBotBoundary:
             )
         )
 
-    async def _resume_reply(self, reference_value: str, token: str) -> dict[str, object]:
-        if (
-            self.launcher is None
-            or self.conversations is None
-            or not self.callbacks.claim_mutation(
-                token,
-                owner_id=self.owner_user_id,
-                chat_id=self.owner_chat_id,
-                view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
-            )
+    async def _resume_reply(
+        self, reference_value: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        if self.launcher is None or self.conversations is None:
+            return _reply_arguments(self._message("Resuming is unavailable."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
         ):
-            return _reply_arguments(self._message("That request has expired."))
+            return _reply_arguments(self._message("That action has already run."))
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
             return _reply_arguments(self._message("That conversation is no longer available."))
@@ -532,7 +820,6 @@ class PrivateBotBoundary:
                 token,
             )
         )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -588,31 +875,32 @@ class PrivateBotBoundary:
             ),
         )
 
-    async def _project_reply(self, entity_id: str, token: str) -> dict[str, object]:
+    async def _project_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
         """Create at most once per confirmation, then re-read the catalogue off the loop."""
-        if self.creator is None or not self.callbacks.claim_mutation(
+        if self.creator is None:
+            return _reply_arguments(self._message("Adding a project is unavailable."))
+        if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions.get((self.owner_user_id, self.owner_chat_id), 0),
+            message_id=message_id,
         ):
-            return _reply_arguments(self._message("That request has expired."))
+            return _reply_arguments(self._message("That action has already run."))
         area, separator, name = entity_id.partition("|")
         if not separator:
-            return _reply_arguments(self._message("That request has expired."))
+            return _reply_arguments(self._message("That action has already run."))
         try:
             created = await asyncio.to_thread(self.creator.create, CreateProjectCommand(area, name))
         except ProjectCreationError as error:
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
             return _reply_arguments(
                 self._message(f"<b>Project not created</b>\n{escape(str(error))}")
             )
         except Exception:
             _LOG.exception("project creation failed outside the application's error contract")
-            self._next_revision(self.owner_user_id, self.owner_chat_id)
             return _reply_arguments(self._message("<b>Project not created</b>\nCheck this host."))
         await self.refresh_catalogue()
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
         return _reply_arguments(
             self._message(
                 f"<b>Project created</b>\n{escape(str(created.identity))}",
@@ -620,20 +908,30 @@ class PrivateBotBoundary:
             )
         )
 
-    async def _sessions_reply(self, page: int = 1) -> RenderedMessage:
+    async def _sessions_reply(self, page: int = 1, *, notice: str | None = None) -> RenderedMessage:
         """Render one page of managed sessions, newest page navigation last.
 
         This list is unbounded in a way the project list is not — every launch adds a row
         and only reconciliation takes one away — so it pages for the same reason: a keyboard
         tall enough to push the message off the screen is unusable on a phone, and Telegram
         caps the buttons one keyboard may carry.
+
+        `notice` is the lead line an action that *ended somewhere else* leaves here — the
+        outcome of a stop, which now lands on this list rather than on a screen of its own.
+        It is escaped because it carries wording derived from a `StopFailure`, and it is
+        rendered above the heading rather than below it so the owner reads what happened
+        before they read the list it happened to.
+
+        It reaches the empty branch too. Stopping the last running session is exactly when
+        the list is empty, so a notice that only the populated branch rendered would be
+        dropped precisely when it mattered most.
         """
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
         if not records:
             return self._message(
-                "<b>Sessions</b>\nNothing is running.",
+                f"{self._notice_line(notice)}<b>Sessions</b>\nNothing is running.",
                 ((Button("Launch", self._callback("launch.open", "projects")),),),
                 refresh=self._callback("sessions.page", "1"),
             )
@@ -657,12 +955,21 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         return self._message(
-            f"<b>Sessions {index}/{page_count}</b>",
+            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>",
             tuple(buttons),
             refresh=self._callback("sessions.page", str(index)),
         )
 
-    async def _detail_reply(self, session_value: str) -> RenderedMessage:
+    @staticmethod
+    def _notice_line(notice: str | None) -> str:
+        """The lead line, or nothing at all — never an empty line where a notice would be.
+
+        `None` has to render byte-identically to the screen before this parameter existed,
+        or every test pinning the sessions list becomes a test of this function instead.
+        """
+        return "" if notice is None else f"{escape(notice)}\n"
+
+    async def _detail_reply(self, session_value: str, message_id: int = 0) -> RenderedMessage:
         record = await self._record(session_value)
         if record is None:
             # Reached by opening a row that ended under the owner, so the list they came
@@ -671,7 +978,12 @@ class PrivateBotBoundary:
                 "That session is no longer available.",
                 back=self._callback("sessions.open", "sessions"),
             )
-        buttons = [(Button("Inspect", self._callback("session.inspect", session_value)),)]
+        buttons = [
+            (Button("Inspect", self._callback("session.inspect", session_value)),),
+            # A full-width row of its own, like every other read-only action: renaming changes
+            # what the session is called and nothing about what it is doing.
+            (Button("Rename", self._callback("session.rename", session_value)),),
+        ]
         if await self._can_copy_attach(record):
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
@@ -707,7 +1019,6 @@ class PrivateBotBoundary:
                 action,
                 self.owner_user_id,
                 self.owner_chat_id,
-                self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
             )
             if token is not None:
                 stops.append(Button(ACTION_LABELS[action], token))
@@ -740,7 +1051,7 @@ class PrivateBotBoundary:
     async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
         session_value, separator, state_value = entity_id.partition("|")
         if not separator or state_value not in {"active", "inactive"}:
-            return self._message("That Remote Control request has expired.")
+            return self._message("That Remote Control request is incomplete.")
         record = await self._record(session_value)
         if record is None or record.profile_id != ProfileId("claude"):
             return self._message("Remote Control is unavailable for this session.")
@@ -758,22 +1069,30 @@ class PrivateBotBoundary:
             ),
         )
 
-    async def _remote_control_reply(self, entity_id: str, token: str) -> dict[str, object]:
-        if self.launcher is None or not self.callbacks.claim_mutation(
+    async def _remote_control_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        if self.launcher is None:
+            return _reply_arguments(self._message("Remote Control is unavailable."))
+        session_value, separator, state_value = entity_id.partition("|")
+        if not separator:
+            return _reply_arguments(self._message("That Remote Control request is incomplete."))
+        # Re-read before the claim, for the reason `_launch_reply` gives: the session this
+        # button names may have ended since the screen was drawn, and spending the one-shot
+        # on it would answer the retry with "already run".
+        if await self._record(session_value) is None:
+            return _reply_arguments(self._message("That session is no longer available."))
+        if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            view_revision=self._view_revisions[(self.owner_user_id, self.owner_chat_id)],
+            message_id=message_id,
         ):
-            return _reply_arguments(self._message("That request has expired."))
-        session_value, separator, state_value = entity_id.partition("|")
-        if not separator:
-            return _reply_arguments(self._message("That request has expired."))
+            return _reply_arguments(self._message("That action has already run."))
         state = RemoteControlState(state_value)
         result = await self.launcher.set_remote_control(
             RemoteControlCommand(SessionId.parse(session_value), state, token)
         )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
 
     async def _can_copy_attach(self, record: SessionRecord) -> bool:
@@ -809,22 +1128,62 @@ class PrivateBotBoundary:
         result = await self._inspection_result(session_value)
         back = self._callback("session.detail", session_value)
         if result is None:
-            await query.edit_message_text(
-                **_reply_arguments(self._message("Inspection is unavailable.", back=back))
+            await self._render(
+                query, _reply_arguments(self._message("Inspection is unavailable.", back=back))
             )
             return
-        await query.edit_message_text(
-            **_reply_arguments(self._message(f"<pre>{escape(result.text)}</pre>", back=back))
+        await self._render(
+            query,
+            _reply_arguments(self._message(f"<pre>{escape(result.text)}</pre>", back=back)),
         )
         if result.attachment is not None and result.filename is not None:
             # Captured panes carry whatever the agent printed — credentials, paths, whole
             # conversations — so the document is marked unforwardable rather than left
-            # saveable from every other client the owner is signed into.
-            await query.message.reply_document(
-                document=io.BytesIO(result.attachment),
-                filename=result.filename,
-                protect_content=True,
+            # saveable from every other client the owner is signed into. That is also why
+            # it is remembered: it is the one thing here that cannot be redrawn, so it has
+            # to be taken back out deliberately when its session leaves the screen.
+            # Unconditionally, and before the new one is sent: a second inspect of the
+            # *same* session passes the release check above untouched, so without this the
+            # first document is orphaned in the chat with nothing left tracking it.
+            await self._release_attachment(query.get_bot(), None)
+            self._attachment = (
+                session_value,
+                await self.view.send_document_apart(
+                    query.get_bot(),
+                    document=io.BytesIO(result.attachment),
+                    filename=result.filename,
+                    protect_content=True,
+                ),
             )
+
+    async def _release_attachment(self, bot, showing: str | None) -> None:
+        """Take a captured document out of the chat once its session is off the screen.
+
+        `showing` is the entity the screen being drawn is about. It is compared by its
+        *session* rather than whole, because several actions carry a composite id —
+        `session:profile` for a stop, `session|state` for remote control — and an exact
+        comparison reads a confirmation dialog *about* a session as a screen about
+        something else. That took the document away while the owner was still looking at
+        the session, and gave it back to nobody when they cancelled.
+
+        `None` means the screen is about no session at all, which is what a command and a
+        finished text step always are.
+        """
+        if self._attachment is None:
+            return
+        if showing is not None and self._attachment[0] == _session_scope(showing):
+            return
+        try:
+            removed = await self.view.discard(bot, self._attachment[1])
+        except TelegramError:
+            # Housekeeping must never cost the owner the screen they pressed for. The
+            # document stays and the next navigation tries again — the alternative is a
+            # cleared spinner and nothing drawn, which is the dead button this plan exists
+            # to remove.
+            _LOG.warning("could not remove the captured document; leaving it in the chat")
+            return
+        if removed:
+            self._attachment = None
 
     async def _inspection_result(self, session_value: str):
         if self.capture is None:
@@ -839,76 +1198,124 @@ class PrivateBotBoundary:
         return inspect_capture(captured.encode())
 
     async def _begin_guided_text_entry(self, query, action: str, entity_id: str) -> None:
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        entry = "project.name" if action == "project.area" else action
-        self._awaiting_text[(self.owner_user_id, self.owner_chat_id)] = (entry, entity_id)
-        await query.edit_message_text(**_reply_arguments(self._message(_entry_instruction(entry))))
-        await query.message.reply_text(**self._guided_text_reply(entry))
+        """Ask for a value: the instruction in the live view, the input box beside it.
 
-    def _pending_notice(self, action: str, token: str) -> str | None:
-        """What to show while `action` runs, or None when it answers fast enough not to."""
-        if action == "force" and token not in self._force_confirmed:
-            # The first press only opens the confirmation; nothing is killed yet.
-            return None
+        The split is not a style choice. `ForceReply` cannot be attached to a message being
+        *edited* while it carries an inline keyboard — Telegram answers `Inline keyboard
+        expected` — so the input box has to be its own message, and its id is remembered so it
+        can be taken back out once it has been answered.
+        """
+        # A str, unlike the `_TextEntry` that `entry` names everywhere else in this class.
+        entry_action = "project.name" if action == "project.area" else action
+        bot = query.get_bot()
+        # A step opened while another is still open would otherwise overwrite the only
+        # record of the first one's box.
+        await self._abandon_entry(bot)
+        await self._render(query, _reply_arguments(self._message(_entry_instruction(entry_action))))
+        asked = await self.view.send_apart(bot, self._guided_text_reply(entry_action))
+        self._awaiting_text[self._entry_key] = _TextEntry(entry_action, entity_id, asked)
+
+    def _pending_notice(self, action: str) -> str | None:
+        """What to show while `action` runs, or None when it answers fast enough not to.
+
+        A bare `force` is absent from the table on purpose: the first press only opens the
+        confirmation, and nothing is killed until the second press arrives under a different
+        action. That used to be a lookup of remembered confirmation state; it is now readable
+        from the action alone.
+        """
         return _PENDING_NOTICES.get(action)
 
-    async def _stop_reply(self, action: str, token: str) -> dict[str, object]:
-        revision = self._view_revisions[(self.owner_user_id, self.owner_chat_id)]
-        if action == "force" and token not in self._force_confirmed:
-            return _reply_arguments(await self._force_confirm_reply(token, revision))
-        request = self.stops.claim(token, self.owner_user_id, self.owner_chat_id, revision)
+    async def _stop_reply(self, action: str, token: str, message_id: int) -> dict[str, object]:
+        if action == FORCE:
+            return _reply_arguments(await self._force_confirm_reply(token, message_id))
+        request = self.stops.claim(token, self.owner_user_id, self.owner_chat_id, message_id)
         if request is None or self.launcher is None:
-            return _reply_arguments(self._message("That request has expired."))
+            # DEC-008 drops the repeat rather than servicing it; where the *answer* is drawn
+            # is a separate question, and it lands on the list like every other stop outcome
+            # rather than on the one Home-only screen a stop button could still reach.
+            return _reply_arguments(
+                await self._sessions_reply(notice="That action has already run.")
+            )
         record = await self._record(str(request.session_id))
         result = (
             await self.stops.execute(request, self.launcher, record) if record is not None else None
         )
         if result is None or not result.dispatched:
+            # Lands on the list like every other outcome. Covers both halves of the guard:
+            # the session moved on between the offer and the press, or its record is gone
+            # entirely. The second sentence this used to carry — "Open the list again to see
+            # where it is now." — was an instruction to navigate somewhere the owner now
+            # already is, so the refusal keeps only the half that says what happened.
             return _reply_arguments(
-                self._message(
-                    "That session moved on before this could run, so nothing was done.\n"
-                    "Open the list again to see where it is now.",
-                    back=self._callback("sessions.open", "sessions"),
+                await self._sessions_reply(
+                    notice="That session moved on before this could run, so nothing was done."
                 )
             )
-        self._next_revision(self.owner_user_id, self.owner_chat_id)
-        return _reply_arguments(await self._stop_outcome_reply(action, record, result.failure))
+        # `request.action` rather than the pressed one: a confirmed force arrives under an
+        # adapter-internal action name, and the outcome is reported in the domain's terms.
+        return _reply_arguments(
+            await self._stop_outcome_landing(request.action, record, result.failure)
+        )
 
-    async def _force_confirm_reply(self, token: str, revision: int) -> RenderedMessage:
+    async def _force_confirm_reply(self, token: str, message_id: int) -> RenderedMessage:
         """Name the session and the cost before offering the only irreversible button.
 
         Cancel comes first and on its own row. Home is not a cancel — it is a way out of
         the whole screen — and the destructive button should not be the one the thumb is
         already resting near.
+
+        The confirming button is a **new** token carrying a different action, not the one the
+        owner just pressed. Re-offering the pressed token cannot work when the screen is
+        redrawn in place: the render that draws this screen prunes what the previous keyboard
+        left on the message, and the re-offered token is part of exactly that set.
         """
         state = self.callbacks.resolve(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            view_revision=revision,
+            message_id=message_id,
         )
-        if state is None or not self.stops.confirm_force(
-            token, self.owner_user_id, self.owner_chat_id, revision
-        ):
-            return self._message("That request has expired.")
-        self._force_confirmed.add(token)
-        session_value = state.entity_id.split(":", maxsplit=1)[0]
+        if state is None:
+            return self._message("That action is no longer available.")
+        session_value, _, profile_value = state.entity_id.partition(":")
         record = await self._record(session_value)
-        subject = escape(record.display.rendered) if record is not None else "this session"
+        if record is None:
+            return self._message(
+                "That session is no longer available.",
+                back=self._callback("sessions.open", "sessions"),
+            )
+        confirmed = self.stops.offer_confirmed_force(
+            record.session_id,
+            ProfileId(profile_value),
+            record.state,
+            self.owner_user_id,
+            self.owner_chat_id,
+        )
+        if confirmed is None:
+            return self._message(
+                "Force stop is no longer available for this session.",
+                back=self._callback("session.detail", session_value),
+            )
         return self._message(
-            f"<b>Force stop {subject}?</b>\n"
+            f"<b>Force stop {escape(record.display.rendered)}?</b>\n"
             "This kills the agent immediately and cannot be undone. Anything it has not "
             "saved is lost.",
             (
                 (Button("Cancel", self._callback("session.detail", session_value)),),
-                (Button(ACTION_LABELS[FORCE], token),),
+                (Button(ACTION_LABELS[FORCE], confirmed),),
             ),
         )
 
-    async def _stop_outcome_reply(
+    async def _stop_outcome_landing(
         self, action: str, record: SessionRecord, failure: StopFailure | None = None
     ) -> RenderedMessage:
-        """Report what the session actually did, named, rather than that a command ran.
+        """Report what the session actually did, named, as the lead line of the session list.
+
+        The outcome used to be a screen of its own whose only exits were `Back` and `Home`,
+        which left the owner one dead end away from the list they almost always wanted next.
+        It is now the notice on that list: the same words, over the rows they describe. The
+        wording is plain text rather than markup because `_sessions_reply` escapes the notice
+        once — see `_notice_line` — and that is also what keeps `failure`'s words intact.
 
         A graceful stop that times out leaves the session RUNNING and removes nothing, so
         "completed" would have been false for the one outcome the owner most needs to act
@@ -926,10 +1333,11 @@ class PrivateBotBoundary:
         The words come from `application.session_actions`, which is where the local surface
         takes them from too — DEC-007 wants the two surfaces to agree about what a stop did,
         and being handed the same sentence is the cheapest form of agreeing. They are escaped
-        despite being ours because `stop_failure`'s fallback interpolates the raw `detail` the
-        terminal adapter reported, which this module does not author.
+        despite being ours — now by the notice rather than here — because `stop_failure`'s
+        fallback interpolates the raw `detail` the terminal adapter reported, which this
+        module does not author.
         """
-        subject = escape(record.display.rendered)
+        subject = record.display.rendered
         session_value = str(record.session_id)
         current = await self._record(session_value)
         if current is not None:
@@ -942,18 +1350,18 @@ class PrivateBotBoundary:
             # reached at all, this branch is a session that outlived a command that claimed to
             # end it, and telling that operator to wait for a graceful exit would be a guess.
             said = (
-                f"{escape(failure.summary)} {escape(failure.remedy)}"
+                f"{failure.summary} {failure.remedy}"
                 if failure is not None
                 else (
                     "Nothing was removed and it was left as it is.\n"
                     "Open it again to see where it is now."
                 )
             )
-            return self._message(
-                f"<b>{subject} is still running</b>\n{said}",
-                ((Button("Open session", self._callback("session.detail", session_value)),),),
-                back=self._callback("sessions.open", "sessions"),
-            )
+            # The session is still listed, so the row the owner needs is on the screen they
+            # are about to land on. That is what replaced the "Open session" button this
+            # branch used to carry: a list they can act from beats a screen about one session
+            # they then have to leave.
+            return await self._sessions_reply(notice=f"{subject} is still running\n{said}")
         if failure is not None:
             # The session has left the list, but the stop still reported that it did not take
             # effect — the other writer DEC-005 permits ended it in the window between the two.
@@ -961,21 +1369,19 @@ class PrivateBotBoundary:
             # was to stop inferring the outcome from the record, and "Stopped X" over an
             # observation that says nothing was stopped is the reading DEC-006 forbids. Found
             # by the Stage 2 gate's evaluator and its second pass independently.
-            return self._message(
-                f"<b>{subject} is no longer listed</b>\n"
-                f"{escape(failure.summary)} {escape(failure.remedy)}",
-                back=self._callback("sessions.open", "sessions"),
+            return await self._sessions_reply(
+                notice=f"{subject} is no longer listed\n{failure.summary} {failure.remedy}"
             )
         endings = {
             "graceful": (
-                f"<b>Stopped {subject}</b>\n"
+                f"Stopped {subject}\n"
                 "The session has ended. Its pane is gone, so its output is no longer there "
                 "to inspect."
             ),
-            "cleanup": f"<b>Cleaned up {subject}</b>\nThe session has ended and its pane is gone.",
-            "force": f"<b>Force stopped {subject}</b>\nThe session has ended.",
+            "cleanup": f"Cleaned up {subject}\nThe session has ended and its pane is gone.",
+            "force": f"Force stopped {subject}\nThe session has ended.",
         }
-        return self._message(endings[action], back=self._callback("sessions.open", "sessions"))
+        return await self._sessions_reply(notice=endings[action])
 
     async def _records(self) -> tuple[SessionRecord, ...]:
         if self.launcher is None:
@@ -992,6 +1398,24 @@ class PrivateBotBoundary:
             (record for record in await self._records() if str(record.session_id) == session_value),
             None,
         )
+
+    async def _display_for(self, session_value: str) -> str | None:
+        """Name a session for a message the owner did not ask for.
+
+        Deliberately not `_record`, and the difference is the whole point: that one reads
+        `_records`, which hides an ENDED session because the sessions *list* should not show
+        history. A `SessionEnd` activity is precisely the one whose record is ENDED by the time
+        it is delivered, so resolving a notification's name through the list would have dropped
+        every ending — the notification most worth having — while every other kind worked.
+        """
+        if self.launcher is None:
+            return None
+        project_names = {project.opaque_id: project.name for project in self.catalogue}
+        for record in await self.launcher.list_sessions():
+            if str(record.session_id) == session_value:
+                named = _with_project_name(record, project_names.get(str(record.project_id)))
+                return named.display.rendered
+        return None
 
     def _projects_reply(
         self,
@@ -1011,7 +1435,7 @@ class PrivateBotBoundary:
         try:
             rendered = paginate_catalogue(projects, page, self.project_page_size)
         except ValueError:
-            return self._message("That project view has expired.")
+            return self._message("That project list is no longer open. Open Launch again.")
         buttons = [
             (
                 Button(
@@ -1042,14 +1466,20 @@ class PrivateBotBoundary:
     def _project_page_reply(self, entity_id: str, flow: str = "launch") -> RenderedMessage:
         view_id, separator, page_value = entity_id.partition("|")
         if not separator or view_id not in {"all", "search"}:
-            return self._message("That project view has expired.")
+            return self._message("That project list is no longer open. Open Launch again.")
         try:
             page = int(page_value)
         except ValueError:
-            return self._message("That project view has expired.")
+            return self._message("That project list is no longer open. Open Launch again.")
         projects = self._project_views.get(f"{flow}:{view_id}")
+        if projects is None and view_id == "all":
+            # The stored view is process-local, so a restart empties it while the button that
+            # reads it now survives. "all" is reconstructible -- it is the current catalogue --
+            # so paging re-renders rather than refusing, and only a search, whose query nobody
+            # kept, has to send the owner back.
+            projects = self.catalogue
         if projects is None:
-            return self._message("That project view has expired.")
+            return self._message("That search is no longer open. Search again.")
         return self._projects_reply(projects, view_id=view_id, page=page, flow=flow)
 
     def _resume_projects_reply(self) -> RenderedMessage:
@@ -1096,7 +1526,7 @@ class PrivateBotBoundary:
     async def _resume_catalogue_reply(self, entity_id: str) -> RenderedMessage:
         parsed = _split_resume_page(entity_id)
         if parsed is None or self.conversations is None:
-            return self._message("That continuation view has expired.")
+            return self._message("That conversation list is no longer open.")
         project_id, profile_id, page = parsed
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
@@ -1105,7 +1535,7 @@ class PrivateBotBoundary:
                 ConversationCatalogueQuery(page, 10, ProfileId(profile_id), ProjectId(project_id))
             )
         except ValueError:
-            return self._message("That continuation view has expired.")
+            return self._message("That conversation list is no longer open.")
         if result.unavailable_reason is not None:
             return self._message(f"Resume is unavailable ({escape(result.unavailable_reason)}).")
         buttons = tuple(
@@ -1195,7 +1625,13 @@ class PrivateBotBoundary:
         buttons = tuple(
             Button(
                 _profile_name(profile.profile_id),
-                self._callback("launch.profile", f"{project_id}|{profile.profile_id}"),
+                # The mutation is claimed here rather than on a review screen that no longer
+                # exists. DEC-008 is what makes one press safe: a second press of the same
+                # button is dropped by the one-shot claim, never serviced into a second
+                # session, and Sub-plan 1 made that claim durable rather than process-local.
+                self._callback(
+                    "launch.profile", f"{project_id}|{profile.profile_id}", mutation=True
+                ),
             )
             for profile in self.profiles
             if profile.available
@@ -1203,27 +1639,6 @@ class PrivateBotBoundary:
         return self._message(
             "<b>Select an agent</b>",
             _button_rows(buttons) + ((Button("Back", self._callback("launch.open", "projects")),),),
-        )
-
-    def _confirm_reply(self, entity_id: str) -> RenderedMessage:
-        project_id, profile_id = _split_launch(entity_id)
-        if not any(project.opaque_id == project_id for project in self.catalogue):
-            return self._message("The project is no longer available.")
-        if not any(
-            profile.profile_id == profile_id and profile.available for profile in self.profiles
-        ):
-            return self._message("That agent is unavailable.")
-        project = next(project for project in self.catalogue if project.opaque_id == project_id)
-        label = self._labels.get(entity_id)
-        return self._message(
-            f"<b>Review launch</b>\nProject: {escape(project.name)}\n"
-            f"Agent: {_profile_name(profile_id)}\nLabel: {escape(label) if label else 'None'}",
-            (
-                (Button("Launch", self._callback("launch.confirm", entity_id, mutation=True)),),
-                (Button("Add label", self._callback("launch.label", entity_id)),),
-                (Button("Back", self._callback("launch.project", project_id)),),
-                (Button("Cancel", self._callback("nav.home", "home")),),
-            ),
         )
 
     def _message(
@@ -1253,23 +1668,17 @@ class PrivateBotBoundary:
         return render_message(text, keyboard + (tuple(navigation),))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
-        revision = self._view_revisions.get((self.owner_user_id, self.owner_chat_id), 0)
+        """Mint a token for a screen that has not been delivered yet.
+
+        The keyboard is built before the message exists, so the token is created unbound and
+        `LiveView` attaches it once Telegram has answered with a message id.
+        """
         return self.callbacks.create(
             action,
             entity_id,
             self.owner_user_id,
             self.owner_chat_id,
-            revision,
             mutation=mutation,
-        )
-
-    def _navigation_callbacks(self) -> NavigationCallbacks:
-        return NavigationCallbacks(
-            home=self._callback("nav.home", "home"),
-            back=self._callback("nav.home", "home"),
-            refresh=self._callback("nav.refresh", "home"),
-            previous=self._callback("nav.home", "home"),
-            next=self._callback("nav.home", "home"),
         )
 
     def _guided_text_reply(self, action: str, text: str | None = None) -> dict[str, object]:
@@ -1281,28 +1690,34 @@ class PrivateBotBoundary:
             "reply_markup": ForceReply(input_field_placeholder=placeholder),
         }
 
-    def _next_revision(self, owner_id: int, chat_id: int) -> int:
-        key = (owner_id, chat_id)
-        revision = self._view_revisions.get(key, 0) + 1
-        self._view_revisions[key] = revision
-        return revision
-
 
 async def run_private_bot(
     secrets: TelegramSecrets, boundary: PrivateBotBoundary | None = None
 ) -> None:
     """Long-poll the approved bot until SIGTERM/SIGINT, refusing a competing webhook."""
     boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
-    application = ApplicationBuilder().token(secrets.bot_token).build()
+    # Sequential update handling is load-bearing rather than incidental: a render mints its
+    # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
+    # unbound token in the chat. Two renders in flight at once would let one screen's buttons
+    # be adopted by the other's message. This is python-telegram-bot's default; it is written
+    # out so a change made for throughput cannot quietly reopen that interleaving.
+    application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))
     application.add_handler(CommandHandler("help", boundary.help_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, boundary.text))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE, boundary.text)
+    )
     stopping = asyncio.Event()
     _install_stop_signals(stopping)
     await application.initialize()
+    # The one thing the boundary cannot build for itself. Every other message this bot sends
+    # answers an update and reaches Telegram through that update's own bot handle; a
+    # notification answers nothing, so it needs the application's, and the application does
+    # not exist until here.
+    boundary.notifier.attach(application.bot)
     try:
         await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
         webhook = await application.bot.get_webhook_info()
@@ -1369,6 +1784,18 @@ def _install_stop_signals(stopping: asyncio.Event) -> None:
             loop.add_signal_handler(event, stopping.set)
         except NotImplementedError:
             signal.signal(event, lambda _number, _frame: stopping.set())
+
+
+def _session_scope(entity_id: str) -> str:
+    """The session an entity id is about, for the composite ids some actions carry.
+
+    A stop token names `session:profile` and a remote-control token names `session|state`.
+    Everything else is left whole — a project id or `home` has no session in it, and will
+    simply never match one.
+    """
+    for separator in (":", "|"):
+        entity_id = entity_id.split(separator, 1)[0]
+    return entity_id
 
 
 def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
@@ -1455,19 +1882,6 @@ def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
     return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
-
-
-def _label(value: str) -> str:
-    normalized = " ".join(value.split())
-    if (
-        not normalized
-        or len(normalized) > 40
-        or any(not character.isprintable() for character in value)
-    ):
-        raise ValueError("label is invalid")
-    return normalized
-
-
 
 
 def _session_row_label(record: SessionRecord) -> str:

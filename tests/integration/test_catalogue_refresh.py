@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 
@@ -13,14 +13,17 @@ from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.application.commands import InspectQuery, LaunchCommand
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
+from remote_agents.application.project_catalog import search_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import ProjectCatalogueProvider
 from remote_agents.domain.models import ProfileId, ProjectId
+from remote_agents.ports.session_store import ProjectUsage
 
 
 class _StubRunner:
@@ -263,3 +266,119 @@ async def test_boundary_refresh_is_inert_without_a_catalogue_source() -> None:
     await boundary.refresh_catalogue()
 
     assert boundary.catalogue == ()
+
+
+class _UsageLauncher:
+    """A launcher that reports usage and nothing else — the ranking's only dependency."""
+
+    def __init__(self, usage) -> None:
+        self.usage = usage
+        self.reads = 0
+
+    async def project_usage(self):
+        self.reads += 1
+        return self.usage
+
+    async def list_sessions(self):
+        return []
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+
+def _usage(opaque_id: str, count: int, days_ago: int) -> ProjectUsage:
+    return ProjectUsage(ProjectId(opaque_id), count, datetime.now(UTC) - timedelta(days=days_ago))
+
+
+async def _ranked_boundary(dev_root: Path, registry_path: Path, usage) -> PrivateBotBoundary:
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    launcher = _UsageLauncher(usage)
+    boundary = PrivateBotBoundary(
+        1,
+        2,
+        catalogue=provider.refresh().catalogue,
+        catalogue_source=lambda: provider.refresh().catalogue,
+        launcher=launcher,
+        profiles=(ProfileAvailability("claude", True),),
+    )
+    await boundary.refresh_catalogue()
+    return boundary
+
+
+async def test_ranked_catalogue_puts_the_recently_used_project_first_everywhere(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """One ranking at the source reaches Launch, Resume and search alike.
+
+    The two pickers share `_projects_reply` and search filters the same tuple, so ordering
+    `self.catalogue` on refresh is what makes all three agree — and is why no picker has to
+    know a ranking exists. Asserted on all three rather than on the tuple, because "the
+    catalogue is sorted" is not the claim the owner cares about.
+    """
+    _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    catalogue = provider.refresh().catalogue
+    newest = next(project for project in catalogue if project.name == "new-project")
+    assert catalogue[0].name != "new-project", "unranked, it is not already first"
+
+    boundary = await _ranked_boundary(dev_root, registry_path, [_usage(newest.opaque_id, 3, 1)])
+
+    launch = boundary._projects_reply(boundary.catalogue, view_id="all")
+    resume = boundary._projects_reply(boundary.catalogue, view_id="all", flow="resume")
+    found = boundary._projects_reply(search_catalogue(boundary.catalogue, "e"), view_id="search")
+    assert boundary.catalogue[0].name == "new-project"
+    for screen in (launch, resume, found):
+        assert screen.keyboard[0][0].text == "new-project", screen.text
+
+
+async def test_a_ranked_catalogue_is_re_read_on_the_next_refresh(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """A session launched during the run changes the next render's order, not this one's.
+
+    Usage is read on refresh rather than per render, so the order is stable while the owner
+    pages through it and moves when the catalogue is next re-read. Both halves matter: the
+    first is why a list does not reshuffle under a thumb, the second is why yesterday's
+    ranking does not outlive the day.
+    """
+    _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    catalogue = provider.refresh().catalogue
+    newest = next(project for project in catalogue if project.name == "new-project")
+    existing = next(project for project in catalogue if project.name == "existing")
+    launcher = _UsageLauncher([_usage(existing.opaque_id, 5, 1)])
+    boundary = PrivateBotBoundary(
+        1,
+        2,
+        catalogue=catalogue,
+        catalogue_source=lambda: provider.refresh().catalogue,
+        launcher=launcher,
+    )
+
+    await boundary.refresh_catalogue()
+    assert boundary.catalogue[0].name == "existing"
+    assert launcher.reads == 1, "one usage read per refresh, not one per project"
+
+    # A session for the other project lands while the bot is running.
+    launcher.usage = [_usage(existing.opaque_id, 5, 1), _usage(newest.opaque_id, 40, 0)]
+    assert boundary.catalogue[0].name == "existing", "the drawn order does not move under them"
+
+    await boundary.refresh_catalogue()
+
+    assert boundary.catalogue[0].name == "new-project"
+    assert launcher.reads == 2
+
+
+async def test_an_unranked_catalogue_survives_a_launcher_that_cannot_report_usage(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """Not a degraded mode: it is the composition every TUI-less test uses."""
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    unranked = provider.refresh().catalogue
+    boundary = PrivateBotBoundary(
+        1, 2, catalogue=unranked, catalogue_source=lambda: provider.refresh().catalogue
+    )
+
+    await boundary.refresh_catalogue()
+
+    assert boundary.catalogue == unranked

@@ -20,6 +20,7 @@ from remote_agents.adapters.tmux.remote_control import (
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
@@ -140,7 +141,10 @@ class TmuxTerminal:
                 session_id, live=False, preserved=False, detail="invalid_intent"
             )
         intent_directory = self._gateway.intent_directory
-        intent_directory.mkdir(parents=True, exist_ok=True)
+        if open_private_directory(intent_directory) is None:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail="invalid_intent"
+            )
         document = {
             "session_id": str(session_id),
             "profile_id": str(profile_id),
@@ -153,8 +157,45 @@ class TmuxTerminal:
             document["session_id"] = str(SessionId.new())
             self.invalidate_next_intent = False
         path = intent_directory / f"{session_id}.json"
-        path.write_text(json.dumps(document), encoding="utf-8")
-        os.chmod(path, 0o600)
+        # The mode belongs to the open, so a *new* file is never briefly world-readable. This
+        # document carries the launch environment and argv, which is exactly what must not be
+        # read in that window. O_TRUNC rather than O_EXCL, because relaunching one session
+        # rewrites its intent.
+        # Refusing anywhere below is the same answer the directory guard above gives, for the
+        # same class of failure. O_NOFOLLOW exists here to refuse a link planted at this exact
+        # name, and refusing by raising would have gone uncaught all the way out through the
+        # Telegram handler, leaving the record STARTING for reconciliation to find. A launch
+        # that cannot write its intent has not launched.
+        refused = TerminalObservation(
+            session_id, live=False, preserved=False, detail="invalid_intent"
+        )
+        try:
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            return refused
+        try:
+            # Not redundant with that mode: open applies it only when it creates the file, so
+            # an intent left behind at a looser mode by an older build would keep it forever.
+            # Before the write, not after, because the window being closed is precisely the
+            # one where the document is on disk -- repairing the mode afterwards left the
+            # launch environment and argv readable for exactly as long as the write took. On
+            # the descriptor rather than the path, so the name is not resolved a second time:
+            # O_NOFOLLOW has already decided what this frame is writing to.
+            os.fchmod(descriptor, 0o600)
+            handle = os.fdopen(descriptor, "w", encoding="utf-8")
+        except OSError:
+            # Only reachable while the descriptor is still this frame's to close. Once
+            # `fdopen` returns, the file object owns it and the `with` below is what closes
+            # it -- closing here as well would be a double close. Splitting the steps is the
+            # whole point: one `try` around all of them leaked the descriptor on every failed
+            # launch, and this service runs for weeks.
+            os.close(descriptor)
+            return refused
+        try:
+            with handle:
+                handle.write(json.dumps(document))
+        except OSError:
+            return refused
         try:
             await self._gateway.launch(session_id, project_id, profile_id, cwd)
         except RuntimeError:

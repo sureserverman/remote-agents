@@ -39,3 +39,37 @@ def sanitize_terminal_text(
         if pattern:
             text = text.replace(pattern, "[REDACTED]")
     return "\n".join(text.splitlines()[:max_lines]).strip()
+
+
+def encodable_text(text: str) -> str:
+    """Replace every code point no encoder will carry, so downstream text handling is total.
+
+    Here, beside `sanitize_terminal_text`, because it answers the same kind of question about a
+    different input. That one takes bytes this project decoded itself and is safe by
+    construction; this one takes a `str` that arrived **already decoded by somebody else**, and
+    such a string can hold a lone surrogate — legal in memory, refused by every encoder.
+
+    Two producers do exactly that today, and neither is exotic:
+
+    - `json.loads` turns a `\\udXXX` escape in a spooled hook payload back into a lone
+      surrogate, and the spool tolerates a foreign writer by design;
+    - `os.listdir` decodes an undecodable filename with `surrogateescape`, so a project
+      directory whose name is not valid UTF-8 carries one into the project list.
+
+    Both reached a UTF-16 budget calculation and raised `UnicodeEncodeError` out of the render.
+    U+FFFD is the replacement, matching what `sanitize_terminal_text`'s decode already produces,
+    so one marker means "this was not text" wherever the reader meets it.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return "".join(character if _encodable(character) else "�" for character in text)
+    return text
+
+
+def _encodable(character: str) -> bool:
+    try:
+        character.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True

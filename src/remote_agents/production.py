@@ -48,6 +48,17 @@ class ProductionPaths:
     def intent_directory(self) -> Path:
         return self.state_directory / "intents"
 
+    @property
+    def activity_directory(self) -> Path:
+        """Where an agent hook spools what it observed, before the service drains it.
+
+        Private for the same reason `intent_directory` is: what lands here is written by a
+        hook running inside the agent's own process, so it carries whatever that agent was
+        last saying. Nothing drains it yet; the drain that deletes each file once it has been
+        turned into activity arrives with the application service that reads this directory.
+        """
+        return self.state_directory / "activity"
+
     def ensure_directories(self) -> None:
         """Create only declared directories and repair their private modes."""
         for path in (
@@ -55,12 +66,38 @@ class ProductionPaths:
             self.state_directory,
             self.unit_directory,
             self.intent_directory,
+            self.activity_directory,
         ):
             self._reject_symlink_ancestors(path)
             if path.exists() and not path.is_dir():
                 raise ConfigError(f"production path is not a directory: {path}")
-            path.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(path, 0o700)
+            self._create_privately(path)
+
+    def _create_privately(self, path: Path) -> None:
+        """Create each component owner-only, re-checking for a link as it goes.
+
+        `_reject_symlink_ancestors` above clears the whole path and then returns, so a single
+        `mkdir(parents=True, exist_ok=True)` afterwards would act several syscalls later on a
+        conclusion already drawn — and `exist_ok=True` resolves a symlink and reports success,
+        which is what makes that gap worth closing rather than merely noting.
+
+        `ports.private_directory` makes the same *symlink* decisions for the two spools, and
+        the duplication is deliberate rather than overlooked: this module is the composition
+        root, which ARCH-02 forbids from importing `ports`. Keeping the boundary costs these
+        six lines.
+
+        The two are not interchangeable, and the difference is the point of this one. Only
+        this version is bounded by the configured home: it creates nothing outside it, and
+        `_reject_symlink_ancestors` refuses loudly when a path escapes. The `ports` version
+        has no home to refuse against and will build out whatever tree it is pointed at, which
+        is right for a hook told where its spool is and wrong for the declared boundary.
+        """
+        for parent in (*reversed(path.parents), path):
+            if parent.is_symlink():
+                raise ConfigError(f"production paths cannot traverse symlinks: {parent}")
+            if parent.is_relative_to(self.home) and not parent.exists():
+                parent.mkdir(mode=0o700)
+        os.chmod(path, 0o700)
 
     def _reject_symlink_ancestors(self, path: Path) -> None:
         try:

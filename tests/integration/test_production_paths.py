@@ -30,6 +30,7 @@ def test_production_paths_create_only_private_declared_directories_and_database(
         Path(".local"),
         Path(".local/state"),
         Path(".local/state/remote-agents"),
+        Path(".local/state/remote-agents/activity"),
         Path(".local/state/remote-agents/intents"),
         Path(".local/state/remote-agents/sessions.sqlite3"),
     }
@@ -67,6 +68,37 @@ def test_production_environment_must_be_owner_only(tmp_path: Path) -> None:
     paths.environment_path.chmod(0o600)
 
     assert paths.require_private_environment() == paths.environment_path
+
+
+def test_activity_directory_is_private_and_under_the_state_directory(tmp_path: Path) -> None:
+    paths = ProductionPaths.for_home(tmp_path)
+
+    paths.ensure_directories()
+
+    assert paths.activity_directory == paths.state_directory / "activity"
+    assert paths.activity_directory.is_dir()
+    assert stat.S_IMODE(paths.activity_directory.stat().st_mode) == 0o700
+
+
+def test_activity_directory_repairs_a_loosened_mode(tmp_path: Path) -> None:
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.ensure_directories()
+    paths.activity_directory.chmod(0o755)
+
+    paths.ensure_directories()
+
+    assert stat.S_IMODE(paths.activity_directory.stat().st_mode) == 0o700
+
+
+def test_activity_directory_refuses_to_be_a_symlink(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.state_directory.mkdir(parents=True)
+    paths.activity_directory.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ConfigError, match="symlinks"):
+        paths.ensure_directories()
 
 
 def test_production_paths_refuse_a_symlinked_parent(tmp_path: Path) -> None:

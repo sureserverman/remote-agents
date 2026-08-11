@@ -34,6 +34,8 @@ database_path = "{tmp_path}/sessions.sqlite3"
 [limits]
 max_label_length = 40
 project_page_size = 10
+activity_poll_seconds = 30
+activity_quiet_polls = 3
 ''',
         encoding="utf-8",
     )

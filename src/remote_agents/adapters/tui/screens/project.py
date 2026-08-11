@@ -32,6 +32,7 @@ _LOG = logging.getLogger(__name__)
 
 class AreasScreen(ChoiceScreen):
     """The areas of the development root a new project may be created in."""
+
     empty_state = "No area in the development root can hold a new project."
 
     position = "AREAS"
@@ -79,6 +80,7 @@ class AreasScreen(ChoiceScreen):
 
 class NameScreen(ChoiceScreen):
     """The typed name for the new project. Nothing is created on this keystroke."""
+
     #: a text entry, not a list.
     empty_state = NEVER_EMPTY
 
@@ -132,6 +134,7 @@ class NameScreen(ChoiceScreen):
 
 class ProjectReviewScreen(ChoiceScreen):
     """Name the project before creating it, exactly as the bot's Review does."""
+
     #: Create, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
 
@@ -144,7 +147,6 @@ class ProjectReviewScreen(ChoiceScreen):
         choices sits one keystroke from being discarded with no way back to them.
         """
         return True
-
 
     position = "PROJECT_REVIEW"
     crumb = "Review"
@@ -164,9 +166,7 @@ class ProjectReviewScreen(ChoiceScreen):
         # The area is in the breadcrumb; this line names what will be created and nothing the
         # header already said.
         self.set_status(f"Create {self.area}/{self.project_name}?")
-        self.show_choices(
-            (("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1
-        )
+        self.show_choices((("create", "Create"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def choose(self, key: str) -> None:
         if key == _BACK:

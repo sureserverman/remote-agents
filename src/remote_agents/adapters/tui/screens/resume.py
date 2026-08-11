@@ -231,6 +231,7 @@ class ResumeProfilesScreen(ChoiceScreen):
 
 class ResumeConversationsScreen(ChoiceScreen):
     """One bounded page of safe metadata; provider IDs never leave the server."""
+
     empty_state = "No saved conversations for this agent and project."
 
     position = "RESUME_CONVERSATIONS"
@@ -337,6 +338,7 @@ class ResumeConfirmScreen(ChoiceScreen):
     The abort entry is first, so it is what the cursor rests on and what a stray enter
     activates — the same mitigation every other confirmation in this surface carries.
     """
+
     #: Resume, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
 

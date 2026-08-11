@@ -15,6 +15,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
+from remote_agents.ports.session_store import ProjectUsage
 
 
 class SQLiteSessionStore:
@@ -169,6 +170,76 @@ class SQLiteSessionStore:
             ),
         )
 
+    async def set_label(self, session_id: SessionId, label: str | None) -> SessionRecord:
+        """Rename a session, or clear its name, by rewriting the identity it already stores.
+
+        The label is the optional fifth part of `display_identity`, not a column of its own, so
+        this is an UPDATE of an existing column rather than a migration. `SessionDisplayIdentity`
+        re-validates on construction, which is what makes the write safe: an invalid label
+        raises here, before the UPDATE, so a rejected rename leaves the row exactly as it was.
+
+        Raises `KeyError` for a session that is not stored. Answering "renamed" for a session
+        that does not exist would let a stale button report success against nothing — the same
+        fail-dangerous default the stop path removed.
+        """
+        current = await self.get(session_id)
+        if current is None:
+            raise KeyError(f"unknown session: {session_id}")
+        display = SessionDisplayIdentity(
+            current.display.project_slug,
+            current.display.agent_label,
+            current.display.mode,
+            current.display.sequence,
+            label,
+        )
+        updated = SessionRecord(
+            current.session_id,
+            current.project_id,
+            current.profile_id,
+            display,
+            current.state,
+            current.created_at,
+            current.resume_profile_id,
+            current.resume_source_id,
+            current.terminal_reason,
+        )
+        with self._connection:
+            self._connection.execute(
+                "UPDATE sessions SET display_identity = ? WHERE session_id = ?",
+                (display.rendered, str(session_id)),
+            )
+        return updated
+
+    async def project_usage(self) -> tuple[ProjectUsage, ...]:
+        """Summarize every project's whole launch history in one aggregate, not one per project.
+
+        A ranking is drawn for a page of projects, so the naive shape — count the rows for the
+        project you are about to render — is a query per rendered row, paid again on every
+        refresh. This is one GROUP BY over the table instead: the statement count does not move
+        when the catalogue grows.
+
+        Projects with no sessions are simply absent. There is no row to group, and inventing a
+        zero would be a claim this table cannot make — the sessions table knows nothing about
+        which projects exist, so an absent project here means "never launched from here", not
+        "not a project".
+
+        `MAX(created_at)` is a lexicographic max over the ISO strings `save` writes. That is
+        the chronological max because every one of them is normalized to UTC before it is
+        stored, so they share an offset and a field order; it would not be, were a local offset
+        ever written into this column.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT project_id, COUNT(*), MAX(created_at)
+            FROM sessions
+            GROUP BY project_id
+            ORDER BY project_id
+            """
+        ).fetchall()
+        return tuple(
+            ProjectUsage(ProjectId(row[0]), int(row[1]), _instant_from_row(row[2])) for row in rows
+        )
+
     async def claim_idempotency_key(self, key: str) -> bool:
         """Atomically claim a callback key without creating a fake session event."""
         with self._connection:
@@ -180,6 +251,17 @@ class SQLiteSessionStore:
             except sqlite3.IntegrityError:
                 return False
         return True
+
+
+def _instant_from_row(value: str) -> datetime:
+    """Read a stored timestamp back as an aware instant, even if the row predates the rule.
+
+    Everything `save` writes is UTC, so a column value without an offset is an old or
+    hand-edited row rather than a local time — reading it as UTC is the honest interpretation,
+    and `astimezone` would instead silently reinterpret it in the machine's zone.
+    """
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _record_from_row(

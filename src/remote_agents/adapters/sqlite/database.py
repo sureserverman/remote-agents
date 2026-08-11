@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations, current_version
+from remote_agents.ports.private_directory import open_private_directory
 
 
 def open_database(
@@ -19,7 +20,11 @@ def open_database(
     """Open a metadata database and apply pending migrations with a prior backup."""
     if busy_timeout_ms < 0:
         raise ValueError("database busy timeout cannot be negative")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Through the guard rather than a bare mkdir, so this function is safe called on its own
+    # and not only after ProductionPaths.ensure_directories has already vetted the parent.
+    # The database is owner-only state; the directory holding it is owner-only too.
+    if open_private_directory(path.parent) is None:
+        raise ValueError("database directory cannot traverse a symlink")
     needs_backup = path.exists()
     connection = sqlite3.connect(path, timeout=busy_timeout_ms / 1_000)
     connection.execute("PRAGMA foreign_keys = ON")

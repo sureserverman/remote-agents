@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from html import escape
 from math import ceil
 
+from remote_agents.ports.terminal_text import encodable_text
+
 MAX_TELEGRAM_TEXT_UNITS = 4096
 _ELLIPSIS = "…"
 
@@ -55,6 +57,7 @@ def bounded_text(text: str, *, limit: int = MAX_TELEGRAM_TEXT_UNITS) -> str:
 
     if limit < 1:
         raise ValueError("Telegram text limit must be positive")
+    text = encodable_text(text)
     if _utf16_units(text) <= limit:
         return text
 
@@ -85,8 +88,8 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
 
 
 def render_home(
-    callbacks: NavigationCallbacks,
     *,
+    refresh: str,
     launch: str,
     sessions: str,
     active: int,
@@ -98,19 +101,24 @@ def render_home(
 
     The counts here are the one number on the dashboard that moves without the owner
     touching anything — a session can end, or a launch can become ready, while this screen
-    sits on their phone. `callbacks.refresh` used to be minted and then dropped on the floor
-    by this function, which left the bot with a live `nav.refresh` handler that no button in
-    the interface could reach, and an error message elsewhere telling the owner to refresh.
+    sits on their phone. `refresh` used to be minted and then dropped on the floor by this
+    function, which left the bot with a live `nav.refresh` handler that no button in the
+    interface could reach, and an error message elsewhere telling the owner to refresh.
+
+    It takes that one callback rather than a whole `NavigationCallbacks`, which obliged the
+    caller to mint five tokens for a screen that shows one. Four of them were minted, bound
+    to the message, and never rendered — free while tokens expired in fifteen minutes, and
+    real rows against a size-bounded store once they stopped expiring.
     """
 
-    _validate_callbacks(callbacks)
+    _validate_callback(refresh)
     return _message(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
         ((Button("Launch", launch),),)
         + (((Button("Resume", resume),),) if resume is not None else ())
         + ((Button("Sessions", sessions),),)
         + (((Button("Add Project", add_project),),) if add_project is not None else ())
-        + ((Button("Refresh", callbacks.refresh),),),
+        + ((Button("Refresh", refresh),),),
     )
 
 
@@ -165,6 +173,10 @@ def render_paginated(
 
 
 def _message(text: str, keyboard: tuple[tuple[Button, ...], ...]) -> RenderedMessage:
+    # The last gate every screen passes, and the one that makes the guarantee hold for text
+    # this module did not compose: `service` builds most of its screens with f-strings around
+    # `escape(...)`, which is HTML-safe but says nothing about what UTF-16 can carry.
+    text = encodable_text(text)
     if _utf16_units(text) > MAX_TELEGRAM_TEXT_UNITS:
         raise ValueError("presenter text exceeds the Telegram message limit")
     return RenderedMessage(text=text, keyboard=keyboard)
@@ -200,13 +212,21 @@ def _validate_callbacks(callbacks: NavigationCallbacks) -> None:
         callbacks.previous,
         callbacks.next,
     ):
-        encoded = callback.encode("utf-8")
-        if not callback.startswith("c1_") or not 1 <= len(encoded) <= 64 or not callback.isascii():
-            raise ValueError("Telegram navigation callbacks must be opaque c1_ tokens")
+        _validate_callback(callback)
+
+
+def _validate_callback(callback: str) -> None:
+    encoded = callback.encode("utf-8")
+    if not callback.startswith("c1_") or not 1 <= len(encoded) <= 64 or not callback.isascii():
+        raise ValueError("Telegram navigation callbacks must be opaque c1_ tokens")
 
 
 def _utf16_units(text: str) -> int:
-    return len(text.encode("utf-16-le")) // 2
+    # Total, because `encodable_text` has already removed everything an encoder would refuse.
+    # Without it a lone surrogate — from a hook payload or from an undecodable directory name
+    # — raised `UnicodeEncodeError` out of the middle of a render, and every budget in this
+    # module runs through this one line.
+    return len(encodable_text(text).encode("utf-16-le")) // 2
 
 
 def _bounded_escaped(text: str, limit: int) -> str:
@@ -214,6 +234,7 @@ def _bounded_escaped(text: str, limit: int) -> str:
 
     if limit < 1:
         return ""
+    text = encodable_text(text)
     escaped = escape(text)
     if _utf16_units(escaped) <= limit:
         return escaped

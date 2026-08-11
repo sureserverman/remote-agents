@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from remote_agents.application.commands import (
@@ -24,7 +25,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
-from remote_agents.ports.session_store import SessionStore
+from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
 
@@ -129,6 +130,27 @@ class SessionService:
                     if observation.live:
                         await self._store.record_event(current.session_id, LifecycleEvent.READY)
             return tuple(await self._store.list())
+
+    async def rename(self, session_id: SessionId, label: str | None) -> SessionRecord:
+        """Name a running session, or clear its name. Metadata only — nothing is signalled.
+
+        Under the session lock like every other mutation of a record, so a rename cannot
+        interleave with a stop walking the same row to ENDED. It deliberately does not check
+        the state: naming an ended session is harmless and the list still shows it until
+        reconciliation removes it, so refusing would be a rule with nothing behind it.
+        """
+        async with self._locks.for_session(session_id):
+            await self._require_session(session_id)
+            return await self._store.set_label(session_id, label)
+
+    async def project_usage(self) -> Sequence[ProjectUsage]:
+        """Per-project launch history, for ordering the pickers by what is actually used.
+
+        A pass-through to the store rather than a computation: the ranking is a pure function
+        the caller applies, and putting the decay here would tie the order to whoever asked
+        instead of to the screen being drawn.
+        """
+        return await self._store.project_usage()
 
     async def inspect(self, query: InspectQuery) -> TerminalObservation | None:
         return await self._terminal.inspect(query.session_id)
