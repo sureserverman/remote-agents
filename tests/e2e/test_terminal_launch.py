@@ -153,6 +153,12 @@ async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_pat
         # had. Under load the agent needs longer than 60ms to print READY and the recheck
         # below saw `not_ready`: 7 failures in 12 runs of the e2e tree at 2x CPU
         # oversubscription. `confirm_ready` is single-shot, so the polling belongs here.
+        #
+        # This does weaken the test's temporal guarantee, and that is a deliberate trade
+        # rather than a side effect of renaming a constant: it used to assert recovery
+        # within ~60ms and now asserts it within the polling bound. What the test is for --
+        # that a timed-out launch is rechecked rather than written off -- is unchanged, and
+        # the old guarantee was not one the machine could actually keep.
         assert await settle_ready(terminal, session_id, ProfileId("fake"))
     finally:
         try:
@@ -259,8 +265,11 @@ async def settle_ready(
     check by design -- it answers "is it ready *now*" -- so a caller that wants "is it ready
     *yet*" has to do the polling, and doing it here keeps that out of every test.
 
-    200 tries at 10ms is a 2s ceiling: far past the fake agent's 0.05s delay even on a
-    loaded machine, and still a bound rather than a hang if readiness never arrives.
+    200 tries is a bound rather than a hang if readiness never arrives. The wall-clock
+    ceiling is *at least* 2s and in practice more: each iteration also runs `confirm_ready`,
+    which costs two tmux round-trips (`list-panes` then `capture-pane`) before the 10ms
+    sleep. Deliberately not stated as a flat "2s" -- that would be the same kind of
+    arithmetic-shaped claim that is only true if you ignore the work between the sleeps.
     """
     for _ in range(tries):
         if (await terminal.confirm_ready(session_id, profile_id)).live:
