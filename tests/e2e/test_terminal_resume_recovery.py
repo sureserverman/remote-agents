@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+from test_terminal_launch import STARTUP_BUDGET
+
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -53,7 +55,7 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
         gateway,
         {project_id: tmp_path},
         {},
-        startup_timeout=0.3,
+        startup_timeout=STARTUP_BUDGET,
         resume_profile_factories={profile_id: resume_profile},
     )
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
@@ -74,7 +76,9 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
         intent = (tmp_path / "intents" / f"{session_id}.json").read_text(encoding="utf-8")
         assert '"--resume", "provider-opaque-id"' in intent
 
-        restarted = TmuxTerminal(gateway, {project_id: tmp_path}, {}, startup_timeout=0.3)
+        restarted = TmuxTerminal(
+            gateway, {project_id: tmp_path}, {}, startup_timeout=STARTUP_BUDGET
+        )
         recovered = await ReconciliationService(store, settle_after=timedelta(0)).reconcile(
             await restarted.managed_observations()
         )
