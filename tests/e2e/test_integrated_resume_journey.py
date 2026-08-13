@@ -65,7 +65,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         source,
     )
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(10)\n", encoding="utf-8")
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     gateway = TmuxGateway(
         f"remote-agents-test-{uuid4().hex}",
         AsyncTmuxRunner(),

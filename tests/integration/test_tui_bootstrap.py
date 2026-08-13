@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,45 @@ def test_the_local_context_offers_the_catalogue_profiles_and_creation_service(
         }
         assert context.max_label_length == 40
         assert context.creator.available_areas() == ("infra",)
+    finally:
+        connection.close()
+
+
+def test_a_version_probe_that_timed_out_does_not_stop_the_surface_starting(
+    home: Path, paths: ProductionPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slow host must not be an unstartable one.
+
+    `probe_profiles` answers a probe that raised with `available=True` and the note
+    `version_probe_failed` -- available because the executable resolved; the version is
+    simply unread. `ProfileChoice` treats any reason on an available profile as a
+    contradiction and refuses to construct, so `local_context` raised `ValueError: an
+    available profile has no blocking reason` and the local surface would not start at all.
+
+    Reached in the real world by `_run_version`'s `subprocess.run(..., timeout=5)` expiring
+    under load -- `TimeoutExpired` is a `SubprocessError` -- which is a statement about the
+    machine, not about whether the agent can be launched. DEC-002 already says local agent
+    versions are owner-managed and do not gate launching, so the note must not arrive as a
+    blocking reason.
+    """
+    from remote_agents.adapters.tmux import profiles as profiles_module
+    from remote_agents.config import load_config
+
+    def always_times_out(argv: tuple[str, ...]) -> str:
+        raise subprocess.TimeoutExpired(cmd=list(argv), timeout=5)
+
+    monkeypatch.setattr(profiles_module, "_run_version", always_times_out)
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+
+        assert context.profiles, "the surface must still be offered its profiles"
+        for profile in context.profiles:
+            assert not (profile.available and profile.reason), (
+                f"{profile.profile_id} is available and carries a blocking reason"
+            )
     finally:
         connection.close()
 

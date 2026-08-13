@@ -581,7 +581,17 @@ def local_context(config, connection, paths: ProductionPaths):
         launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
         creator=_project_creator(config),
         profiles=tuple(
-            ProfileChoice(profile.profile_id, profile.available, profile.reason)
+            # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
+            # uses `reason` for two things -- why a profile is blocked, and a note about a
+            # probe that did not answer -- while `ProfileChoice` reads any reason as
+            # blocking and refuses to construct alongside `available=True`. Passing it
+            # through unconditionally meant a version probe that merely timed out took the
+            # whole local surface down with `an available profile has no blocking reason`.
+            ProfileChoice(
+                profile.profile_id,
+                profile.available,
+                None if profile.available else profile.reason,
+            )
             for profile in runtime.profiles
         ),
         refresh_catalogue=lambda: projects.refresh().catalogue,

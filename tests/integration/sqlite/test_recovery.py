@@ -164,7 +164,9 @@ def _terminal(tmp_path: Path) -> tuple[TmuxTerminal, TmuxGateway]:
                     "READY",
                 )
             },
-            startup_timeout=1,
+            # Generous on purpose: line 127 asserts the launch went live, which is a
+            # positive-readiness assertion and so the load-sensitive direction (BL-017).
+            startup_timeout=5.0,
         ),
         gateway,
     )
