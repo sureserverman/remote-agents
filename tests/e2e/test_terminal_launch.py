@@ -56,6 +56,17 @@ READINESS_UNUSED = 0.05
 READY_DELAY = 2.0
 AGENT_LIFETIME = 30
 
+# How long `settle_ready` will wait for readiness, expressed as a multiple of the thing it
+# is waiting for rather than as a literal -- because the first version of this was a literal
+# 200 tries (a 2.0s sleep-only floor) sitting beside READY_DELAY = 2.0, i.e. a wait whose
+# budget exactly equalled the delay it had to outlast. It passed only on the tmux round-trip
+# time each iteration spends outside the sleep, measured at 130-620ms of real margin under
+# 2-4x oversubscription. That is accidental headroom, and it is the same species of thin
+# margin this whole change exists to remove -- reintroduced, three lines away, by the commit
+# removing it. Deriving the bound is what stops the two drifting back together.
+_SETTLE_INTERVAL = 0.01
+_SETTLE_TRIES = int(READY_DELAY * 3 / _SETTLE_INTERVAL)  # 3x the delay, sleeps alone
+
 
 @pytest.mark.parametrize(
     ("mode", "expected_live", "budget"),
@@ -276,7 +287,7 @@ async def settle_ready(
     session_id: SessionId,
     profile_id: ProfileId,
     *,
-    tries: int = 200,
+    tries: int = _SETTLE_TRIES,
 ) -> bool:
     """Poll `confirm_ready` until the pane reports live, or the tries run out.
 
@@ -286,16 +297,14 @@ async def settle_ready(
     check by design -- it answers "is it ready *now*" -- so a caller that wants "is it ready
     *yet*" has to do the polling, and doing it here keeps that out of every test.
 
-    200 tries is a bound rather than a hang if readiness never arrives. The wall-clock
-    ceiling is *at least* 2s and in practice more: each iteration also runs `confirm_ready`,
-    which costs two tmux round-trips (`list-panes` then `capture-pane`) before the 10ms
-    sleep. Deliberately not stated as a flat "2s" -- that would be the same kind of
-    arithmetic-shaped claim that is only true if you ignore the work between the sleeps.
+    The bound is derived from READY_DELAY rather than written as a literal, because the two
+    have to stay apart and a pair of independent constants is exactly how they would drift
+    back together. See `_SETTLE_TRIES` for why equal values were a bug.
     """
     for _ in range(tries):
         if (await terminal.confirm_ready(session_id, profile_id)).live:
             return True
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(_SETTLE_INTERVAL)
     return False
 
 
