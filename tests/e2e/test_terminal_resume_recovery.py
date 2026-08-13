@@ -30,7 +30,9 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
     tmp_path: Path,
 ) -> None:
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(1)\n", encoding="utf-8")
+    # 30s, not 1s: every test here kills its own session, so the agent only has to
+    # outlive the test body. At 1s a loaded run watched the pane die underneath it.
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     source_id = ProviderConversationId("provider-opaque-id")
     project_id = ProjectId("opaque-editor")
     profile_id = ProfileId("claude")

@@ -144,7 +144,9 @@ async def test_terminal_inspection_remains_read_only_when_store_is_unavailable(
 
 def _terminal(tmp_path: Path) -> tuple[TmuxTerminal, TmuxGateway]:
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(1)\n", encoding="utf-8")
+    # 30s, not 1s: every test here kills its own session, so the agent only has to
+    # outlive the test body. At 1s a loaded run watched the pane die underneath it.
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     gateway = TmuxGateway(
         f"remote-agents-test-{uuid4().hex}",
         AsyncTmuxRunner(),

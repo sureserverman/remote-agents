@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.projects.registry import RegisteredProject
 from remote_agents.adapters.sqlite.database import open_database
@@ -112,7 +113,7 @@ def _terminal(tmp_path: Path, project_id: ProjectId) -> tuple[TmuxTerminal, Tmux
         gateway,
         {project_id: tmp_path / "dev" / "opaque-editor"},
         {ProfileId("claude"): profile},
-        startup_timeout=1,
+        startup_timeout=STARTUP_BUDGET,
     ), gateway
 
 
@@ -301,7 +302,7 @@ def _chatty_terminal(
         # `codex` rather than `claude`: the watcher deliberately skips the profiles whose own
         # hooks report for them, so launching this as claude would prove nothing.
         {ProfileId("codex"): profile},
-        startup_timeout=2,
+        startup_timeout=STARTUP_BUDGET,
     ), gateway
 
 

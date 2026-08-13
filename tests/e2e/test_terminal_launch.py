@@ -27,7 +27,7 @@ from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 #
 #   STARTUP_BUDGET   -- the agent will reach READY; the budget is a safety net, not a subject
 #   TIMEOUT_FIRES    -- the timeout firing is what the test asserts; must stay shorter than
-#                       the fake agent's 0.05s delay, and is safe because 0.05 > 0.01 always
+#                       READY_DELAY below, by a margin no contention can close
 #   NEVER_READY      -- nothing will ever satisfy readiness; the budget bounds giving up
 #   READINESS_UNUSED -- the test never consults readiness at all (it asserts the written
 #                       intent, which lands before the loop starts), so the budget only
@@ -36,6 +36,25 @@ STARTUP_BUDGET = 5.0
 TIMEOUT_FIRES = 0.01
 NEVER_READY = 0.05
 READINESS_UNUSED = 0.05
+
+# The fake agent's own two clocks, and they are load-sensitive in a way the budgets above
+# are not, because a test racing *the agent* cannot be fixed by giving *the test* longer.
+#
+# READY_DELAY is the window in which "not ready yet" is true. It was 0.05s, and measured,
+# that left about 37ms of margin: `confirm_ready` completes ~43ms after launch begins while
+# READY lands at interpreter-startup + 50ms. Two tmux round-trips dilating under contention
+# is all it takes to invert, and then a test asserting `not live` fails for a reason that has
+# nothing to do with what it tests. Widened so the negative assertion has seconds of margin
+# rather than milliseconds -- the assertion is about ordering, so the window must be big
+# enough that no machine can reorder it.
+#
+# AGENT_LIFETIME is how long the agent stays alive after READY. It was 1s, which meant any
+# test whose sequence outran a second watched its pane die underneath it: test_resilience's
+# reconciliation expects three sessions still RUNNING and observed PRESERVED instead. Every
+# test kills its own session in a `finally`, so a long life costs nothing and the short one
+# was a deadline nobody declared.
+READY_DELAY = 2.0
+AGENT_LIFETIME = 30
 
 
 @pytest.mark.parametrize(
@@ -169,7 +188,9 @@ async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_pat
 
 async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_path: Path) -> None:
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(1)\n", encoding="utf-8")
+    # 30s, not 1s: every test here kills its own session, so the agent only has to
+    # outlive the test body. At 1s a loaded run watched the pane die underneath it.
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     session_id = SessionId.new()
     created_for: list[SessionId] = []
 
@@ -284,8 +305,9 @@ def make_terminal(
     agent = tmp_path / "fake_agent.py"
     agent.write_text(
         "import sys, time\n"
-        "if sys.argv[1] == 'delayed': time.sleep(0.05)\n"
-        "if sys.argv[1] != 'immediate_exit': print('READY', flush=True); time.sleep(1)\n",
+        f"if sys.argv[1] == 'delayed': time.sleep({READY_DELAY})\n"
+        "if sys.argv[1] != 'immediate_exit': "
+        f"print('READY', flush=True); time.sleep({AGENT_LIFETIME})\n",
         encoding="utf-8",
     )
     socket = f"remote-agents-test-{uuid4().hex}"

@@ -164,6 +164,23 @@ def _keys(app: RemoteAgentsTui) -> list[str | None]:
     return [option.id for option in _choices(app).options]
 
 
+async def _settle_position(app, pilot, expected: str) -> None:
+    """Wait for the surface to reach a position, rather than assuming one pump got it there.
+
+    A single `pilot.pause()` drains whatever happened to be queued at that moment, which is
+    not the same claim as "the screen has been pushed". Under contention the modal probes
+    lost that race and failed with the previous position -- a failure about the machine, not
+    about the surface. Same reason `settle()` replaced a lone `pause()` in the snapshot
+    harness, and the same reason `settle_ready` replaced a fixed sleep in the e2e launch
+    tests: wait for the condition the assertion is about.
+    """
+    for _ in range(200):
+        if position(app) == expected:
+            return
+        await pilot.pause()
+    assert position(app) == expected
+
+
 async def _choose(app, pilot, key: str) -> None:
     """Select a rendered entry by key, refusing to act on one the surface never offered.
 
@@ -197,7 +214,7 @@ async def _open_detail(app, launcher, pilot) -> None:
 async def _probe_sessions_list(app, launcher, pilot) -> None:
     await pilot.press("ctrl+s")
     await pilot.pause()
-    assert position(app) == "SESSIONS"
+    await _settle_position(app, pilot, "SESSIONS")
     assert any("existing" in row for row in _rows(app))
 
 
@@ -205,7 +222,7 @@ async def _probe_detail(app, launcher, pilot) -> None:
     await app.action_sessions()
     await pilot.pause()
     await _choose(app, pilot, str(launcher.record.session_id))
-    assert position(app) == "SESSION_DETAIL"
+    await _settle_position(app, pilot, "SESSION_DETAIL")
     # Parity is unchanged; which region says what is not. The session's name is the header's
     # breadcrumb and its state is the one-line status, so both halves of "the local surface
     # names the session and its state" are still asserted, from the two places they moved to.
@@ -242,7 +259,7 @@ async def _probe_force(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     asking = asyncio.create_task(_choose(app, pilot, "force"))
     await pilot.pause()
-    assert position(app) == "FORCE_MODAL"
+    await _settle_position(app, pilot, "FORCE_MODAL")
     assert launcher.issued == [], "force must not fire on the first selection"
     await pilot.press("down")
     await pilot.press("enter")
@@ -254,7 +271,7 @@ async def _probe_remote_control(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     asking = asyncio.create_task(_choose(app, pilot, "remote-control-active"))
     await pilot.pause()
-    assert position(app) == "REMOTE_CONTROL_MODAL"
+    await _settle_position(app, pilot, "REMOTE_CONTROL_MODAL")
     await pilot.press("down")
     await pilot.press("enter")
     await asyncio.wait_for(asking, timeout=5)
@@ -264,7 +281,7 @@ async def _probe_remote_control(app, launcher, pilot) -> None:
 async def _probe_inspect(app, launcher, pilot) -> None:
     await _open_detail(app, launcher, pilot)
     await _choose(app, pilot, "inspect")
-    assert position(app) == "INSPECT"
+    await _settle_position(app, pilot, "INSPECT")
     assert "Claude Code ready" in app.screen.query_one("#output", TextArea).text
 
 
@@ -274,7 +291,7 @@ async def _probe_resume(app, launcher, pilot) -> None:
     await _choose(app, pilot, "opaque-existing")
     await _choose(app, pilot, "claude")
     await _choose(app, pilot, _REFERENCE)
-    assert position(app) == "RESUME_CONFIRM"
+    await _settle_position(app, pilot, "RESUME_CONFIRM")
     assert launcher.issued == [], "resume must not fire on the selection alone"
     await _choose(app, pilot, "resume-confirm")
     assert any(isinstance(item, ResumeCommand) for item in launcher.issued)
