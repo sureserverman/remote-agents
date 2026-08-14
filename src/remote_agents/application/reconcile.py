@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -61,6 +61,9 @@ def reconcile(
     return tuple(results)
 
 
+_ConfirmReady = Callable[[SessionId, ProfileId], Awaitable[TerminalObservation]]
+
+
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
 
@@ -70,10 +73,12 @@ class ReconciliationService:
         *,
         settle_after: timedelta = timedelta(minutes=2),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        confirm_ready: _ConfirmReady | None = None,
     ) -> None:
         self._store = store
         self._settle_after = settle_after
         self._now = now
+        self._confirm_ready = confirm_ready
 
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
@@ -87,9 +92,35 @@ class ReconciliationService:
                 await self._save_trusted_orphan(result, observations)
                 continue
             event = _event_for_reconciliation(record, result)
+            if event is LifecycleEvent.READY and not await self._is_ready(record):
+                # A live pane is not a running agent. The promotion below reads pane
+                # liveness as proof the agent recovered, which is true for the case it was
+                # written for -- slow or quiet output judged FAILED inside a bounded window
+                # -- and false for an agent stopped on a question it cannot answer. Both
+                # look identical from `managed_observations`, so the difference has to come
+                # from the readiness check that already knows it.
+                continue
             if event is not None:
                 await self._store.record_event(record.session_id, event)
         return results
+
+    async def _is_ready(self, record: SessionRecord) -> bool:
+        """Whether the agent behind a live pane is actually ready to be called RUNNING.
+
+        Answers True when no check was supplied, which keeps every existing caller and the
+        pure `reconcile()` function exactly as they were: this narrows a promotion, and a
+        composition that does not wire the check gets the old behaviour rather than a
+        silently different one.
+        """
+        if self._confirm_ready is None:
+            return True
+        try:
+            return (await self._confirm_ready(record.session_id, record.profile_id)).live
+        except Exception:
+            # A readiness check that cannot run is not evidence of readiness. Refusing the
+            # promotion leaves the record where it was, which is the recoverable direction:
+            # the next pass tries again, and nothing has claimed a blocked agent is running.
+            return False
 
     def _has_settled(self, record: SessionRecord) -> bool:
         """Leave a launch or stop that is still running to the call that started it.

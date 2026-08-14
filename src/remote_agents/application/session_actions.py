@@ -136,6 +136,12 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
 
 
+#: Both spellings of Claude, because both run the same binary and both show the same dialog.
+#: `claude-remote` is `claude --remote-control`; scoping this to "claude" alone hid the button
+#: on exactly the session that first hit the bug in the wild.
+_TRUST_ANSWERABLE = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
+
+
 def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     """Whether a surface should offer to answer the folder-trust question for `record`.
 
@@ -156,7 +162,7 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     sending anything, so a surface that offers this on a stale observation still cannot fire
     a keypress into a session that is no longer asking.
     """
-    return record.profile_id == ProfileId("claude") and observed is TrustState.AWAITING
+    return record.profile_id in _TRUST_ANSWERABLE and observed is TrustState.AWAITING
 
 
 UNKNOWN_SESSION = "unknown_session"

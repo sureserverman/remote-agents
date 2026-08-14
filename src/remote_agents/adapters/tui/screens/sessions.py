@@ -36,7 +36,7 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     trust_available,
 )
-from remote_agents.domain.models import SessionRecord, SessionState
+from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal_text import sanitize_terminal_text
@@ -329,15 +329,15 @@ class SessionDetailScreen(ChoiceScreen):
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
-        """Read the pane's trust state, and only where it could possibly be AWAITING.
+        """Read the pane's trust state. No session-state gate; see the bot's twin for why.
 
-        The state guard is a cost decision, matching the bot's: a capture is a tmux
-        round-trip and the detail is the most-rendered screen there is. FAILED is where a
-        trust-blocked launch lands; STARTING is where it sits on the way. Failures are
-        swallowed to UNKNOWN rather than reported -- a pane we cannot read is one we must
-        not offer to answer, and it is not worth replacing the detail with an error.
+        In short: a trust-blocked `claude-remote` launch can land RUNNING, because its
+        readiness marker can be observed before the dialog renders. State is not evidence
+        about the dialog; only the pane is. Failures are swallowed to UNKNOWN rather than
+        reported -- a pane we cannot read is one we must not offer to answer, and it is not
+        worth replacing the detail with an error.
         """
-        if record.state not in {SessionState.FAILED, SessionState.STARTING}:
+        if not trust_available(record, TrustState.AWAITING):
             return TrustState.UNKNOWN
         read = getattr(self.services, "trust_state", None)
         if read is None:

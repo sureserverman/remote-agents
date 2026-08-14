@@ -32,6 +32,7 @@ _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
 # to think. Shorter than every remote-control wait above because nothing is being started --
 # a keypress is being acknowledged.
 _TRUST_ANSWER_WAIT_SECONDS = 1
+_TRUST_ANSWERABLE = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
 
 
 class AsyncTmuxRunner(TmuxRunner):
@@ -377,7 +378,7 @@ class TmuxTerminal:
         if (
             observation is None
             or not observation.live
-            or observation.profile_id != ProfileId("claude")
+            or observation.profile_id not in _TRUST_ANSWERABLE
         ):
             return TrustState.UNKNOWN
         return classify_trust_capture(await self._gateway.capture(session_id))

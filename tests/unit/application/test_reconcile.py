@@ -127,6 +127,61 @@ async def test_reconciliation_persists_each_deterministic_change_once() -> None:
     assert store.events == [LifecycleEvent.READY, LifecycleEvent.RECONCILED_TERMINAL_MISSING]
 
 
+async def test_a_live_pane_that_is_not_ready_is_not_promoted_to_running() -> None:
+    """The bug this exists for: a session blocked on a question is live, and not running.
+
+    Reconciliation's `terminal_live` promotion reads a live pane as a working agent, which
+    is right for the case its comment names -- an agent that is slow or quiet, recorded
+    FAILED while its pane keeps working. It is wrong for an agent stopped dead on a prompt
+    it cannot answer: the pane is live, the process is up, and nothing is running.
+
+    Observed in the wild on 2026-08-14: a `claude-remote` session launched into a directory
+    Claude Code had not been trusted for failed its readiness check correctly, then a
+    service restart ran reconciliation, which promoted it FAILED -> RUNNING. The bot then
+    reported a session as running while it sat on an unanswered dialog. `confirm_ready`
+    already distinguishes the two; reconciliation simply never asked it.
+    """
+    failed = record(SessionState.FAILED)
+    store = InMemoryStore((failed,))
+    asked: list[SessionId] = []
+
+    async def never_ready(session_id, profile_id):
+        del profile_id
+        asked.append(session_id)
+        return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
+
+    service = ReconciliationService(
+        store, settle_after=timedelta(0), confirm_ready=never_ready
+    )
+
+    await service.reconcile(
+        (TerminalObservation(failed.session_id, live=True, preserved=False),)
+    )
+
+    assert asked == [failed.session_id], "readiness must actually be consulted"
+    assert store.records[failed.session_id].state is SessionState.FAILED
+    assert store.events == [], "no promotion, so no lifecycle event"
+
+
+async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
+    """The repair the promotion exists for must survive the new check."""
+    failed = record(SessionState.FAILED)
+    store = InMemoryStore((failed,))
+
+    async def ready(session_id, profile_id):
+        del profile_id
+        return TerminalObservation(session_id, live=True, preserved=False)
+
+    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=ready)
+
+    await service.reconcile(
+        (TerminalObservation(failed.session_id, live=True, preserved=False),)
+    )
+
+    assert store.records[failed.session_id].state is SessionState.RUNNING
+    assert store.events == [LifecycleEvent.READY]
+
+
 async def test_reconciliation_never_creates_an_orphan_without_trusted_identity() -> None:
     store = InMemoryStore(())
     service = ReconciliationService(store, settle_after=timedelta(0))

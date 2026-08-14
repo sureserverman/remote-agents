@@ -184,6 +184,14 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
         async def confirm_ready(self, *_args, **_kwargs):
             raise AssertionError("a rename must not reach the terminal")
 
+        async def trust_state(self, *_args, **_kwargs):
+            # The detail screen asks whether the pane is on the folder-trust dialog. Like
+            # `inspect` above this is a read the screen legitimately makes; unlike
+            # `confirm_ready` it is not a thing a rename must never do.
+            from remote_agents.domain.trust import TrustState
+
+            return TrustState.UNKNOWN
+
     store = _store(tmp_path)
     await store.save(_record())
     service = SessionService(store, _NoTerminal())

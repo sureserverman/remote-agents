@@ -1113,19 +1113,21 @@ class PrivateBotBoundary:
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
-        """Whether to offer the trust row, spending a pane capture only when it could matter.
+        """Whether to offer the trust row. Costs one pane capture per detail render.
 
-        The state guard is a cost decision, not a policy one -- `trust_available` is the
-        policy and it asks only about the pane. A capture is a tmux round-trip, and the
-        detail screen is the most-rendered screen there is, so paying it for every RUNNING
-        session to answer a question that can only be true for a launch that never became
-        ready would be a round-trip per render for nothing. FAILED is where a trust-blocked
-        launch lands; STARTING is where it sits on the way there.
+        There is deliberately no session-state gate, and the first version of this had one
+        (FAILED and STARTING only) on the reasoning that a trust-blocked launch never
+        becomes ready. That reasoning was wrong, and it hid the button on the very first
+        real session to hit the bug. `claude-remote` prints a banner containing its
+        readiness marker *before* the trust dialog renders, so the launch loop can observe
+        "Claude Code" and no blocker in the same pass and report the session RUNNING while
+        it is in fact stuck on a question. Whether a trust-blocked launch lands in FAILED or
+        RUNNING is a race, so state says nothing about it and the pane is the only authority.
         """
-        if self.launcher is None or record.state not in {
-            SessionState.FAILED,
-            SessionState.STARTING,
-        }:
+        if self.launcher is None or not trust_available(record, TrustState.AWAITING):
+            # Asked with AWAITING as a hypothetical: if the answer is False even then, the
+            # record alone rules the row out (wrong profile) and the pane never has to be
+            # read. Only a session that *could* be answered costs a capture.
             return False
         read = getattr(self.launcher, "trust_state", None)
         if read is None:

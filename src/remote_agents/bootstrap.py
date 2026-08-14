@@ -531,7 +531,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             catalogue_source=lambda: projects.refresh().catalogue,
         ),
         terminal,
-        ReconciliationService(store),
+        # Readiness is wired in deliberately: without it, reconciliation promotes any
+        # FAILED session with a live pane to RUNNING, including one stopped dead on a
+        # trust dialog it cannot answer. Observed in the wild 2026-08-14.
+        ReconciliationService(store, confirm_ready=terminal.confirm_ready),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
         paths.activity_directory,
     )
