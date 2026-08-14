@@ -89,7 +89,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.domain.trust import TrustState
+from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -1140,9 +1140,17 @@ class PrivateBotBoundary:
         if self.launcher is None:
             return _reply_arguments(self._message("Answering the trust question is unavailable."))
         # Re-read before the claim, for the reason `_launch_reply` and `_remote_control_reply`
-        # both give: this button outlives the screen that drew it.
-        if await self._record(entity_id) is None:
+        # both give: this button outlives the screen that drew it. The profile is re-checked
+        # here too, and that is not belt-and-braces -- the service raises on a profile it
+        # cannot answer, and claiming first meant a refused press still burned the one-shot,
+        # so the retry answered "already run" for a button that had never worked once.
+        record = await self._record(entity_id)
+        if record is None:
             return _reply_arguments(self._message("That session is no longer available."))
+        if record.profile_id not in TRUST_ANSWERABLE:
+            return _reply_arguments(
+                self._message("That session's agent does not ask this question.")
+            )
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,

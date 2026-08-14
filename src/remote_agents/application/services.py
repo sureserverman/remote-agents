@@ -26,7 +26,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
-from remote_agents.domain.trust import TrustState
+from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
@@ -200,7 +200,7 @@ class SessionService:
         """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
-            if record.profile_id != ProfileId("claude"):
+            if record.profile_id not in TRUST_ANSWERABLE:
                 raise ValueError("folder trust is available only for Claude")
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("trust callback was already handled")

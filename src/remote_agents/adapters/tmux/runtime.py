@@ -21,7 +21,7 @@ from remote_agents.adapters.tmux.trust import TRUST_KEYS, classify_trust_capture
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.domain.trust import TrustState
+from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
@@ -32,7 +32,6 @@ _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
 # to think. Shorter than every remote-control wait above because nothing is being started --
 # a keypress is being acknowledged.
 _TRUST_ANSWER_WAIT_SECONDS = 1
-_TRUST_ANSWERABLE = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
 
 
 class AsyncTmuxRunner(TmuxRunner):
@@ -378,7 +377,7 @@ class TmuxTerminal:
         if (
             observation is None
             or not observation.live
-            or observation.profile_id not in _TRUST_ANSWERABLE
+            or observation.profile_id not in TRUST_ANSWERABLE
         ):
             return TrustState.UNKNOWN
         return classify_trust_capture(await self._gateway.capture(session_id))

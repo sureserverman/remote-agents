@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, SessionState
-from remote_agents.domain.trust import TrustState
+from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 
 GRACEFUL = "graceful"
 CLEANUP = "cleanup"
@@ -136,10 +136,6 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
 
 
-#: Both spellings of Claude, because both run the same binary and both show the same dialog.
-#: `claude-remote` is `claude --remote-control`; scoping this to "claude" alone hid the button
-#: on exactly the session that first hit the bug in the wild.
-_TRUST_ANSWERABLE = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
 
 
 def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
@@ -162,7 +158,7 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     sending anything, so a surface that offers this on a stale observation still cannot fire
     a keypress into a session that is no longer asking.
     """
-    return record.profile_id in _TRUST_ANSWERABLE and observed is TrustState.AWAITING
+    return record.profile_id in TRUST_ANSWERABLE and observed is TrustState.AWAITING
 
 
 UNKNOWN_SESSION = "unknown_session"
