@@ -39,6 +39,7 @@ from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
+    AnswerTrustCommand,
     CleanupCommand,
     ForceStopCommand,
     GracefulStopCommand,
@@ -63,6 +64,7 @@ from remote_agents.application.session_actions import (
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.trust import TrustState
 
 _LOG = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -565,6 +567,22 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # session that had ended. Found as a class after a Tier-1 review named two of the branches,
     # and extracted after the stage's Tier-2 review found the repair written out by hand at
     # every one of them.
+
+    async def answer_trust(self, record, screen) -> TrustState | None:
+        """Answer the folder-trust question for `record`, or report why it did not happen.
+
+        Returns None when nothing was issued -- the screen has already been told why -- so
+        the caller can tell "did not run" from "ran and the pane is still asking", which are
+        different things to say to the owner.
+        """
+        try:
+            return await self._services.launcher.answer_trust(
+                AnswerTrustCommand(record.session_id, _idempotency_key())
+            )
+        except Exception as error:
+            _LOG.exception("answering the trust question failed")
+            screen.set_status(f"The trust answer did not go through: {error}")
+            return None
 
     async def set_remote_control(
         self, session_value: str, desired: RemoteControlState, screen: ChoiceScreen

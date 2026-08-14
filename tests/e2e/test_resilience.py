@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from test_terminal_launch import make_terminal
+from test_terminal_launch import STARTUP_BUDGET, make_terminal
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -106,7 +106,7 @@ async def test_restart_reconciles_launch_running_stop_requested_and_preserved_st
     tmp_path: Path,
 ) -> None:
     """A fresh reconciler recovers every persisted state from the isolated tmux evidence."""
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     database_path = tmp_path / "sessions.sqlite3"
     store = SQLiteSessionStore(open_database(database_path))
     starting, running, stopping, preserved = (SessionId.new() for _ in range(4))
@@ -151,7 +151,7 @@ async def test_restart_reconciles_launch_running_stop_requested_and_preserved_st
 
 async def test_restart_can_gracefully_stop_a_running_managed_session(tmp_path: Path) -> None:
     """Restart recovery must retain profile-owned stop behavior, not only inspection."""
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     database_path = tmp_path / "sessions.sqlite3"
     store = SQLiteSessionStore(open_database(database_path))
     service = SessionService(store, terminal)
@@ -172,7 +172,7 @@ async def test_restart_can_gracefully_stop_a_running_managed_session(tmp_path: P
                     "READY",
                 )
             },
-            startup_timeout=0.3,
+            startup_timeout=STARTUP_BUDGET,
         )
         stopped = await SessionService(
             SQLiteSessionStore(open_database(database_path)), restarted
@@ -219,7 +219,7 @@ async def test_polling_retries_a_transient_outage_without_authorizing_foreign_up
 
 
 async def test_duplicate_launch_delivery_creates_one_real_session(tmp_path: Path) -> None:
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     service = SessionService(store, terminal)
     command = LaunchCommand(ProjectId("opaque-editor"), ProfileId("fake"), "duplicate-update")
@@ -242,7 +242,7 @@ async def test_duplicate_launch_delivery_creates_one_real_session(tmp_path: Path
 
 
 async def test_concurrent_inspect_and_graceful_stop_preserve_one_session(tmp_path: Path) -> None:
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     service = SessionService(store, terminal)
     try:
@@ -426,7 +426,7 @@ class RecordingDrainer:
 
 async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path) -> None:
     """Production hands the terminal no static profiles, so the factories must carry the stop."""
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     database_path = tmp_path / "sessions.sqlite3"
     store = SQLiteSessionStore(open_database(database_path))
     service = SessionService(store, terminal)
@@ -440,7 +440,7 @@ async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path
             gateway,
             {ProjectId("opaque-editor"): tmp_path},
             {},
-            startup_timeout=0.3,
+            startup_timeout=STARTUP_BUDGET,
             profile_factories={
                 ProfileId("fake"): lambda session_id: LaunchProfile(
                     sys.executable,

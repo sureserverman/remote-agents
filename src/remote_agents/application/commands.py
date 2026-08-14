@@ -51,6 +51,21 @@ class ForceStopCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerTrustCommand:
+    """Answer the folder-trust question for one exact session, at most once.
+
+    Carries an idempotency key for the same reason `RemoteControlCommand` does: the button
+    that issues it is a durable callback the owner can press twice, and the effect is a
+    keypress into somebody's agent. Replaying it would send a second Enter after the dialog
+    is gone, which is no longer answering a question -- it is typing into whatever replaced
+    it.
+    """
+
+    session_id: SessionId
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class RemoteControlCommand:
     session_id: SessionId
     desired_state: RemoteControlState

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from remote_agents.application.commands import (
+    AnswerTrustCommand,
     CleanupCommand,
     ForceStopCommand,
     GracefulStopCommand,
@@ -25,6 +26,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
@@ -177,6 +179,32 @@ class SessionService:
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("remote control callback was already handled")
             return await self._terminal.remote_control(command.session_id, command.desired_state)
+
+    async def trust_state(self, session_id: SessionId) -> TrustState:
+        """Read whether this session's pane is waiting on the folder-trust question.
+
+        Read-only and unlocked, like the other read paths: it answers a question about a
+        pane right now, and holding the operation lock to do so would let a surface
+        rendering a list block a stop the owner is trying to issue.
+        """
+        return await self._terminal.trust_state(session_id)
+
+    async def answer_trust(self, command: AnswerTrustCommand) -> TrustState:
+        """Answer the folder-trust question once for an exact Claude session.
+
+        The profile is re-checked here rather than trusted from the caller, exactly as
+        `set_remote_control` does, so a surface that offers the row on a stale observation
+        still cannot drive a non-Claude pane. The *pane* half is re-checked one layer
+        further down, in `answer_trust` on the terminal, because only the terminal can see
+        whether the dialog is still on screen.
+        """
+        async with self._locks.operation(), self._locks.for_session(command.session_id):
+            record = await self._require_session(command.session_id)
+            if record.profile_id != ProfileId("claude"):
+                raise ValueError("folder trust is available only for Claude")
+            if not await self._store.claim_idempotency_key(command.idempotency_key):
+                raise DuplicateCommandError("trust callback was already handled")
+            return await self._terminal.answer_trust(command.session_id)
 
     async def graceful_stop(self, command: GracefulStopCommand) -> TerminalObservation:
         """Stop the agent on its own terms and remove its pane in the same operation.

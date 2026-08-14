@@ -18,15 +18,69 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileDefinition
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
+# Startup budgets are split by what the test asserts, because only one direction is
+# load-sensitive. `_launch_profile` polls until its deadline and returns the moment the
+# readiness marker appears, so a *generous* budget costs nothing when the agent does become
+# ready -- and a tight one is a race the machine can lose under load (BL-017). A test
+# asserting the agent never becomes ready is the opposite: the budget IS the wait, load can
+# only make it give up later, and it cannot be made to wrongly pass. So:
+#
+#   STARTUP_BUDGET   -- the agent will reach READY; the budget is a safety net, not a subject
+#   TIMEOUT_FIRES    -- the timeout firing is what the test asserts; must stay shorter than
+#                       READY_DELAY below, by a margin no contention can close
+#   NEVER_READY      -- nothing will ever satisfy readiness; the budget bounds giving up
+#   READINESS_UNUSED -- the test never consults readiness at all (it asserts the written
+#                       intent, which lands before the loop starts), so the budget only
+#                       decides how long the test wastes before returning
+STARTUP_BUDGET = 5.0
+TIMEOUT_FIRES = 0.01
+NEVER_READY = 0.05
+READINESS_UNUSED = 0.05
+
+# The fake agent's own two clocks, and they are load-sensitive in a way the budgets above
+# are not, because a test racing *the agent* cannot be fixed by giving *the test* longer.
+#
+# READY_DELAY is the window in which "not ready yet" is true. It was 0.05s, and measured,
+# that left about 37ms of margin: `confirm_ready` completes ~43ms after launch begins while
+# READY lands at interpreter-startup + 50ms. Two tmux round-trips dilating under contention
+# is all it takes to invert, and then a test asserting `not live` fails for a reason that has
+# nothing to do with what it tests. Widened so the negative assertion has seconds of margin
+# rather than milliseconds -- the assertion is about ordering, so the window must be big
+# enough that no machine can reorder it.
+#
+# AGENT_LIFETIME is how long the agent stays alive after READY. It was 1s, which meant any
+# test whose sequence outran a second watched its pane die underneath it: test_resilience's
+# reconciliation expects three sessions still RUNNING and observed PRESERVED instead. Every
+# test kills its own session in a `finally`, so a long life costs nothing and the short one
+# was a deadline nobody declared.
+READY_DELAY = 2.0
+AGENT_LIFETIME = 30
+
+# How long `settle_ready` will wait for readiness, expressed as a multiple of the thing it
+# is waiting for rather than as a literal -- because the first version of this was a literal
+# 200 tries (a 2.0s sleep-only floor) sitting beside READY_DELAY = 2.0, i.e. a wait whose
+# budget exactly equalled the delay it had to outlast. It passed only on the tmux round-trip
+# time each iteration spends outside the sleep, measured at 130-620ms of real margin under
+# 2-4x oversubscription. That is accidental headroom, and it is the same species of thin
+# margin this whole change exists to remove -- reintroduced, three lines away, by the commit
+# removing it. Deriving the bound is what stops the two drifting back together.
+_SETTLE_INTERVAL = 0.01
+_SETTLE_TRIES = int(READY_DELAY * 3 / _SETTLE_INTERVAL)  # 3x the delay, sleeps alone
+
 
 @pytest.mark.parametrize(
-    ("mode", "expected_live"),
-    (("ready", True), ("delayed", True), ("immediate_exit", False), ("invalid_intent", False)),
+    ("mode", "expected_live", "budget"),
+    (
+        ("ready", True, STARTUP_BUDGET),
+        ("delayed", True, STARTUP_BUDGET),
+        ("immediate_exit", False, NEVER_READY),
+        ("invalid_intent", False, NEVER_READY),
+    ),
 )
 async def test_terminal_launch_reports_real_readiness(
-    tmp_path: Path, mode: str, expected_live: bool
+    tmp_path: Path, mode: str, expected_live: bool, budget: float
 ) -> None:
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3, mode=mode)
+    terminal, gateway = make_terminal(tmp_path, timeout=budget, mode=mode)
     session_id = SessionId.new()
     try:
         if mode == "invalid_intent":
@@ -43,7 +97,7 @@ async def test_terminal_launch_reports_real_readiness(
 
 
 async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Path) -> None:
-    terminal, gateway = make_terminal(tmp_path, timeout=0.01, mode="delayed")
+    terminal, gateway = make_terminal(tmp_path, timeout=TIMEOUT_FIRES, mode="delayed")
     session_id = SessionId.new()
     try:
         observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
@@ -65,7 +119,7 @@ async def test_a_link_planted_at_the_intent_name_refuses_the_launch(tmp_path: Pa
     nothing between here and the Telegram handler would have caught it -- leaving the record
     STARTING for reconciliation to find and no launch behind it.
     """
-    terminal, _ = make_terminal(tmp_path, timeout=0.3)
+    terminal, _ = make_terminal(tmp_path, timeout=NEVER_READY)
     session_id = SessionId.new()
     intents = tmp_path / "intents"
     intents.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -93,7 +147,7 @@ async def test_an_intent_is_owner_only_before_its_contents_are_written(
     place the ordering is visible: by the time the file has been written it reads 0600 either
     way.
     """
-    terminal, _ = make_terminal(tmp_path, timeout=0.01, mode="immediate_exit")
+    terminal, _ = make_terminal(tmp_path, timeout=NEVER_READY, mode="immediate_exit")
     session_id = SessionId.new()
     intents = tmp_path / "intents"
     intents.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -117,16 +171,25 @@ async def test_an_intent_is_owner_only_before_its_contents_are_written(
 
 
 async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_path: Path) -> None:
-    terminal, gateway = make_terminal(tmp_path, timeout=0.01, mode="delayed")
+    terminal, gateway = make_terminal(tmp_path, timeout=TIMEOUT_FIRES, mode="delayed")
     session_id = SessionId.new()
     try:
         launched = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
         assert not launched.live
         assert not (await terminal.confirm_ready(session_id, ProfileId("fake"))).live
 
-        await asyncio.sleep(0.06)
-
-        assert (await terminal.confirm_ready(session_id, ProfileId("fake"))).live
+        # Waiting on the condition, not on a clock. This was `asyncio.sleep(0.06)` -- chosen
+        # to be just past the fake agent's 0.05s delay -- which is the whole margin the test
+        # had. Under load the agent needs longer than 60ms to print READY and the recheck
+        # below saw `not_ready`: 7 failures in 12 runs of the e2e tree at 2x CPU
+        # oversubscription. `confirm_ready` is single-shot, so the polling belongs here.
+        #
+        # This does weaken the test's temporal guarantee, and that is a deliberate trade
+        # rather than a side effect of renaming a constant: it used to assert recovery
+        # within ~60ms and now asserts it within the polling bound. What the test is for --
+        # that a timed-out launch is rechecked rather than written off -- is unchanged, and
+        # the old guarantee was not one the machine could actually keep.
+        assert await settle_ready(terminal, session_id, ProfileId("fake"))
     finally:
         try:
             await gateway.mutate("kill-session", f"ra-{session_id}")
@@ -136,7 +199,9 @@ async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_pat
 
 async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_path: Path) -> None:
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(1)\n", encoding="utf-8")
+    # 30s, not 1s: every test here kills its own session, so the agent only has to
+    # outlive the test body. At 1s a loaded run watched the pane die underneath it.
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     session_id = SessionId.new()
     created_for: list[SessionId] = []
 
@@ -158,7 +223,7 @@ async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_pa
         gateway,
         {ProjectId("opaque-editor"): tmp_path},
         {},
-        startup_timeout=0.3,
+        startup_timeout=STARTUP_BUDGET,
         profile_factories={ProfileId("fake"): profile_factory},
     )
     try:
@@ -200,7 +265,7 @@ async def test_the_written_intent_carries_the_session_environment(tmp_path: Path
         gateway,
         {ProjectId("opaque-editor"): tmp_path},
         {},
-        startup_timeout=0.05,
+        startup_timeout=READINESS_UNUSED,
         profile_factories={ProfileId("claude"): profile_factory},
     )
     try:
@@ -217,14 +282,41 @@ async def test_the_written_intent_carries_the_session_environment(tmp_path: Path
             pass
 
 
+async def settle_ready(
+    terminal: TmuxTerminal,
+    session_id: SessionId,
+    profile_id: ProfileId,
+    *,
+    tries: int = _SETTLE_TRIES,
+) -> bool:
+    """Poll `confirm_ready` until the pane reports live, or the tries run out.
+
+    The counterpart to `settle()` in `test_tui_snapshots.py`, and it exists for the same
+    reason: a single wall-clock wait encodes a guess about how long another process needs,
+    and the guess is what the machine's load invalidates. `confirm_ready` is a single-shot
+    check by design -- it answers "is it ready *now*" -- so a caller that wants "is it ready
+    *yet*" has to do the polling, and doing it here keeps that out of every test.
+
+    The bound is derived from READY_DELAY rather than written as a literal, because the two
+    have to stay apart and a pair of independent constants is exactly how they would drift
+    back together. See `_SETTLE_TRIES` for why equal values were a bug.
+    """
+    for _ in range(tries):
+        if (await terminal.confirm_ready(session_id, profile_id)).live:
+            return True
+        await asyncio.sleep(_SETTLE_INTERVAL)
+    return False
+
+
 def make_terminal(
     tmp_path: Path, *, timeout: float, mode: str = "ready"
 ) -> tuple[TmuxTerminal, TmuxGateway]:
     agent = tmp_path / "fake_agent.py"
     agent.write_text(
         "import sys, time\n"
-        "if sys.argv[1] == 'delayed': time.sleep(0.05)\n"
-        "if sys.argv[1] != 'immediate_exit': print('READY', flush=True); time.sleep(1)\n",
+        f"if sys.argv[1] == 'delayed': time.sleep({READY_DELAY})\n"
+        "if sys.argv[1] != 'immediate_exit': "
+        f"print('READY', flush=True); time.sleep({AGENT_LIFETIME})\n",
         encoding="utf-8",
     )
     socket = f"remote-agents-test-{uuid4().hex}"

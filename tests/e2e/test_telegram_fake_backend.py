@@ -28,10 +28,20 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 
 def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
+    """The roster is pinned here so widening the surface takes two deliberate edits.
+
+    `trust` joined it on 2026-08-14 (DEC-016): a managed launch into a directory Claude Code
+    has not been trusted for blocks on a dialog nobody can answer, so the launch times out
+    and the owner is told only that it failed. The bot may already launch an agent into that
+    project, which is strictly more power than trusting it -- so the addition removes a
+    confusing failure rather than granting a new capability. It is the first addition since
+    the surface was closed, and this test is what makes the next one visible too.
+    """
     completed = subprocess.run(
         [sys.executable, "tests/architecture/check_telegram_actions.py"],
         check=True,
@@ -40,7 +50,7 @@ def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
     )
 
     assert (
-        "launch/resume/list/inspect/graceful/cleanup/force/create-project/navigation"
+        "launch/resume/list/inspect/graceful/cleanup/force/create-project/trust/navigation"
         in completed.stdout
     )
 
@@ -537,6 +547,107 @@ def _a_running_session(state: SessionState = SessionState.RUNNING) -> SessionRec
         state,
         datetime(2026, 8, 10, tzinfo=UTC),
     )
+
+
+class _TrustLauncher:
+    """One FAILED Claude session whose pane is waiting on the folder-trust question."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.states = [TrustState.AWAITING]
+        self.answered: list[SessionId] = []
+
+    async def list_sessions(self):
+        return [self.record]
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def trust_state(self, session_id):
+        del session_id
+        return self.states[0]
+
+    async def answer_trust(self, command):
+        self.answered.append(command.session_id)
+        # What the real terminal does: answering clears the dialog, so the next capture no
+        # longer matches and the row stops being offered.
+        self.states[0] = TrustState.UNKNOWN
+        return TrustState.UNKNOWN
+
+
+def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
+    launcher = _TrustLauncher(_a_running_session(SessionState.FAILED))
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    return boundary, launcher
+
+
+async def _open_detail(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo \u00b7 Claude \u00b7 regular \u00b7 #1")),
+        None,
+    )
+    return anchor
+
+
+@pytest.mark.asyncio
+async def test_a_session_waiting_on_folder_trust_is_offered_the_answer() -> None:
+    """The whole point: a launch that failed on a question nobody could see gets a button.
+
+    Before this the owner saw a FAILED session with no cause, because the pane was alive and
+    blocked on a dialog the readiness check has no vocabulary for.
+    """
+    boundary, _ = _trust_blocked()
+    chat = FakeChat()
+
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        button.text
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Trust this project" in labels, labels
+
+
+@pytest.mark.asyncio
+async def test_pressing_trust_answers_the_question_and_the_row_goes() -> None:
+    """Answered once, and the button does not survive the thing it answered."""
+    boundary, launcher = _trust_blocked()
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Trust this project")), None)
+
+    assert launcher.answered == [launcher.record.session_id], "answered exactly once"
+    assert "Trusted" in chat.messages[anchor].text, chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_a_session_not_waiting_on_trust_is_offered_no_such_row() -> None:
+    """The guard that keeps a bare Enter away from a working agent.
+
+    `TRUST_KEYS` is a single Enter, which means something to every agent in every pane, so a
+    row offered when no dialog is on screen is a keypress into somebody's work.
+    """
+    boundary, launcher = _trust_blocked()
+    launcher.states[0] = TrustState.UNKNOWN
+    chat = FakeChat()
+
+    anchor = await _open_detail(chat, boundary)
+
+    labels = [
+        button.text
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
+    ]
+    assert "Trust this project" not in labels, labels
 
 
 @pytest.mark.asyncio

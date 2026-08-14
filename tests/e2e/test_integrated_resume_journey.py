@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from test_terminal_launch import STARTUP_BUDGET
+
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -63,7 +65,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         source,
     )
     agent = tmp_path / "fake_agent.py"
-    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(10)\n", encoding="utf-8")
+    agent.write_text("import time\nprint('READY', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
     gateway = TmuxGateway(
         f"remote-agents-test-{uuid4().hex}",
         AsyncTmuxRunner(),
@@ -84,7 +86,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         gateway,
         {project_id: project_path},
         {},
-        startup_timeout=1,
+        startup_timeout=STARTUP_BUDGET,
         resume_profile_factories={ProfileId("claude"): resume_profile},
     )
     service = SessionService(

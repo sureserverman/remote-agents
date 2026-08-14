@@ -17,15 +17,21 @@ from remote_agents.adapters.tmux.remote_control import (
     REMOTE_CONTROL_OPEN_MENU_KEYS,
     classify_remote_control_capture,
 )
+from remote_agents.adapters.tmux.trust import TRUST_KEYS, classify_trust_capture
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.private_directory import open_private_directory
 from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
 _REMOTE_CONTROL_DISABLE_WAIT_SECONDS = 2
+# The dialog clears in one redraw; this is the pump's time to repaint, not the agent's time
+# to think. Shorter than every remote-control wait above because nothing is being started --
+# a keypress is being acknowledged.
+_TRUST_ANSWER_WAIT_SECONDS = 1
 
 
 class AsyncTmuxRunner(TmuxRunner):
@@ -358,6 +364,38 @@ class TmuxTerminal:
             await self._gateway.send_keys(session_id, REMOTE_CONTROL_DISCONNECT_KEYS)
             await asyncio.sleep(_REMOTE_CONTROL_DISABLE_WAIT_SECONDS)
         return _remote_control_state(await self._gateway.capture(session_id))
+
+    async def trust_state(self, session_id: SessionId) -> TrustState:
+        """Report whether this pane is sitting on the folder-trust question.
+
+        Read-only, and deliberately answerable for a pane whose *record* is FAILED: that is
+        precisely the state a trust-blocked launch lands in, because the readiness marker
+        never arrives and the startup budget expires. Requiring a live-and-RUNNING session
+        here would make the one state this exists to rescue the one state it refuses.
+        """
+        observation = await self.inspect(session_id)
+        if (
+            observation is None
+            or not observation.live
+            or observation.profile_id != ProfileId("claude")
+        ):
+            return TrustState.UNKNOWN
+        return classify_trust_capture(await self._gateway.capture(session_id))
+
+    async def answer_trust(self, session_id: SessionId) -> TrustState:
+        """Answer the folder-trust question, and only when it is actually on screen.
+
+        The guard is the whole safety story. `TRUST_KEYS` is a bare Enter, which is
+        meaningful to every agent that ever runs in a pane -- so sending it to a session
+        that is *not* asking this question is sending a stray keypress into somebody's
+        work. Re-reading the pane here, rather than trusting the caller's earlier read,
+        closes the window between a surface rendering the button and the owner pressing it.
+        """
+        if await self.trust_state(session_id) is not TrustState.AWAITING:
+            return TrustState.UNKNOWN
+        await self._gateway.send_keys(session_id, TRUST_KEYS)
+        await asyncio.sleep(_TRUST_ANSWER_WAIT_SECONDS)
+        return classify_trust_capture(await self._gateway.capture(session_id))
 
     async def managed_observations(self) -> tuple[TerminalObservation, ...]:
         """Return trusted dedicated-server evidence for read-only reconciliation.

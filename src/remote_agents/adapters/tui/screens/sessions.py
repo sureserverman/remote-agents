@@ -34,9 +34,11 @@ from remote_agents.application.session_actions import (
     available_actions,
     explain_state,
     remote_control_available,
+    trust_available,
 )
-from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.models import SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
@@ -324,9 +326,30 @@ class SessionDetailScreen(ChoiceScreen):
         self._display = record.display.rendered
         self.show_breadcrumb()
         self.set_status(f"State: {record.state.value}. {explain_state(record.state)}")
-        self.show_choices(self.detail_entries(record))
+        self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
-    def detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
+    async def _observed_trust(self, record: SessionRecord) -> TrustState:
+        """Read the pane's trust state, and only where it could possibly be AWAITING.
+
+        The state guard is a cost decision, matching the bot's: a capture is a tmux
+        round-trip and the detail is the most-rendered screen there is. FAILED is where a
+        trust-blocked launch lands; STARTING is where it sits on the way. Failures are
+        swallowed to UNKNOWN rather than reported -- a pane we cannot read is one we must
+        not offer to answer, and it is not worth replacing the detail with an error.
+        """
+        if record.state not in {SessionState.FAILED, SessionState.STARTING}:
+            return TrustState.UNKNOWN
+        read = getattr(self.services, "trust_state", None)
+        if read is None:
+            return TrustState.UNKNOWN
+        try:
+            return await read(record.session_id)
+        except Exception:
+            return TrustState.UNKNOWN
+
+    def detail_entries(
+        self, record: SessionRecord, trust: TrustState = TrustState.UNKNOWN
+    ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
         The stop entries are exactly `available_actions(record.state)` in the order it
@@ -336,6 +359,12 @@ class SessionDetailScreen(ChoiceScreen):
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.capture is not None:
             entries.append(("inspect", "Inspect output"))
+        if trust_available(record, trust):
+            # Above the stop rows and below the read-only ones, because it is neither: it
+            # unblocks a session rather than reading or ending it. Defaults to absent --
+            # `trust` is UNKNOWN unless a caller went and looked, so a surface that forgets
+            # to observe renders no row rather than a row that cannot work.
+            entries.append(("trust", "Trust this project"))
         if remote_control_available(record):
             # One row per direction, so the decision is taken here and the confirmation that
             # follows has exactly one thing to confirm. The single "Claude Remote Control"
@@ -358,6 +387,8 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_attach()
         elif key == "inspect":
             await self.show_inspect()
+        elif key == "trust":
+            await self.answer_trust()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
             await self.confirm_remote_control(_REMOTE_CONTROL_DIRECTIONS[key])
         elif key == FORCE:
@@ -369,6 +400,35 @@ class SessionDetailScreen(ChoiceScreen):
             # Restructuring this chain into a dispatch table would silently remove the
             # confirmation step, and no existing test asserts the ordering itself.
             await self.tui.stop(key, self.session_value, self)
+
+    async def answer_trust(self) -> None:
+        """Answer the folder-trust question, re-reading the record and the pane first.
+
+        Not modal-confirmed, and that is a judgment worth writing down rather than an
+        omission. DEC-008's confirmations guard *destructive* actions -- force stop, Remote
+        Control -- and this one destroys nothing: it answers a question the agent is already
+        asking, with the answer the owner would have to give at the keyboard for the session
+        to be usable at all. A confirmation here would ask "are you sure you want to unblock
+        the thing you launched".
+
+        What it is guarded by instead is the pane itself. `answer_trust` on the terminal
+        re-reads the capture and refuses unless the dialog is still on screen, so the worst
+        a stale row can do is nothing.
+        """
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
+            if record is None:
+                await self.refuse()
+                return
+            async with self.awaiting("Trusting the project…"):
+                answered = await self.tui.answer_trust(record, self)
+            if answered is None:
+                return
+            if answered is TrustState.AWAITING:
+                self.set_status("The project is still waiting to be trusted. Try again.")
+            else:
+                self.set_status("Trusted. Relaunch the session if the agent already gave up.")
+            await self.render_detail()
 
     async def confirm_force(self) -> None:
         """Re-read the record, ask the modal, and issue only on a `True`.

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from test_terminal_launch import make_terminal
+from test_terminal_launch import STARTUP_BUDGET, make_terminal
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -29,7 +29,7 @@ def starting_record(session_id: SessionId) -> SessionRecord:
 
 
 async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_path):
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
@@ -62,7 +62,7 @@ async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_
 
 
 async def test_reconciliation_quarantines_a_trusted_live_session_without_a_database_row(tmp_path):
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     store = SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3"))
     reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
@@ -99,7 +99,7 @@ async def test_reconciliation_marks_a_crash_before_launch_commit_as_failed(tmp_p
 
 
 async def test_trusted_tmux_inspection_is_available_without_a_database(tmp_path):
-    terminal, gateway = make_terminal(tmp_path, timeout=0.3)
+    terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     session_id = SessionId.new()
     try:
         assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
