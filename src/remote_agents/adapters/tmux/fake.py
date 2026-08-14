@@ -6,6 +6,7 @@ from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.terminal import TerminalObservation
 
 
@@ -14,6 +15,12 @@ class FakeTerminal:
 
     def __init__(self) -> None:
         self._observations: dict[SessionId, TerminalObservation] = {}
+        #: Queued answers for `trust_state`, consumed one per call. A list rather than a
+        #: single value so a test can drive the sequence a real pane produces -- AWAITING
+        #: before the answer, UNKNOWN after it -- which is the only way to assert that a
+        #: surface stopped offering the row once the question was gone.
+        self.trust_states: list[TrustState] = []
+        self.trust_answers = 0
 
     async def managed_process_roots(self) -> tuple[int, ...]:
         return ()
@@ -65,6 +72,20 @@ class FakeTerminal:
             if await self.inspect(session_id) is not None
             else RemoteControlState.UNKNOWN
         )
+
+    async def trust_state(self, session_id: SessionId) -> TrustState:
+        """Answer from a set the test arms, so a fake never invents a blocked pane.
+
+        Defaults to UNKNOWN: a fake that reported AWAITING by default would offer the trust
+        row on every session in every test that never thought about trust.
+        """
+        del session_id
+        return self.trust_states.pop(0) if self.trust_states else TrustState.UNKNOWN
+
+    async def answer_trust(self, session_id: SessionId) -> TrustState:
+        del session_id
+        self.trust_answers += 1
+        return TrustState.UNKNOWN
 
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId

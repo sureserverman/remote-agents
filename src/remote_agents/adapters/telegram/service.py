@@ -49,6 +49,7 @@ from remote_agents.adapters.telegram.presenters import (
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.commands import (
+    AnswerTrustCommand,
     InspectQuery,
     LaunchCommand,
     RemoteControlCommand,
@@ -73,6 +74,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     explain_state,
     remote_control_available,
+    trust_available,
 )
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference, ConversationState
@@ -87,6 +89,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.trust import TrustState
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -731,6 +734,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._attach_reply(entity_id))
         if action == "remote.control":
             return _reply_arguments(await self._remote_control_confirm_reply(entity_id))
+        if action == "session.trust":
+            return await self._trust_reply(entity_id, token, message_id)
         if action == "session.inspect":
             return _reply_arguments(await self._inspect_reply(entity_id))
         return _reply_arguments(self._message("That action is no longer available."))
@@ -988,6 +993,18 @@ class PrivateBotBoundary:
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
             )
+        if await self._awaiting_trust(record):
+            buttons.append(
+                (
+                    Button(
+                        "Trust this project",
+                        # A mutation token: this button sends a keypress into a live pane, so
+                        # it is claimed once and never replayed, exactly like the confirmed
+                        # stop and resume buttons.
+                        self._callback("session.trust", session_value, mutation=True),
+                    ),
+                )
+            )
         if remote_control_available(record):
             buttons.append(
                 (
@@ -1094,6 +1111,56 @@ class PrivateBotBoundary:
             RemoteControlCommand(SessionId.parse(session_value), state, token)
         )
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
+
+    async def _awaiting_trust(self, record: SessionRecord) -> bool:
+        """Whether to offer the trust row, spending a pane capture only when it could matter.
+
+        The state guard is a cost decision, not a policy one -- `trust_available` is the
+        policy and it asks only about the pane. A capture is a tmux round-trip, and the
+        detail screen is the most-rendered screen there is, so paying it for every RUNNING
+        session to answer a question that can only be true for a launch that never became
+        ready would be a round-trip per render for nothing. FAILED is where a trust-blocked
+        launch lands; STARTING is where it sits on the way there.
+        """
+        if self.launcher is None or record.state not in {
+            SessionState.FAILED,
+            SessionState.STARTING,
+        }:
+            return False
+        read = getattr(self.launcher, "trust_state", None)
+        if read is None:
+            return False
+        return trust_available(record, await read(record.session_id))
+
+    async def _trust_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        if self.launcher is None:
+            return _reply_arguments(self._message("Answering the trust question is unavailable."))
+        # Re-read before the claim, for the reason `_launch_reply` and `_remote_control_reply`
+        # both give: this button outlives the screen that drew it.
+        if await self._record(entity_id) is None:
+            return _reply_arguments(self._message("That session is no longer available."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        result = await self.launcher.answer_trust(
+            AnswerTrustCommand(SessionId.parse(entity_id), token)
+        )
+        # UNKNOWN is the expected answer, not a failure: answering clears the dialog, so the
+        # capture taken afterwards no longer matches. Reporting it as an outcome would tell
+        # the owner the thing worked only when it did not.
+        if result is TrustState.AWAITING:
+            return _reply_arguments(
+                self._message("The project is still waiting to be trusted. Try again.")
+            )
+        return _reply_arguments(
+            self._message("Trusted. The agent can continue; relaunch if it already gave up.")
+        )
 
     async def _can_copy_attach(self, record: SessionRecord) -> bool:
         if self.launcher is None:

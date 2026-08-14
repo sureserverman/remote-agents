@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, SessionState
+from remote_agents.domain.trust import TrustState
 
 GRACEFUL = "graceful"
 CLEANUP = "cleanup"
@@ -133,6 +134,29 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     offering the toggle; do not treat the service as a backstop for the state half.
     """
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
+
+
+def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
+    """Whether a surface should offer to answer the folder-trust question for `record`.
+
+    Availability turns on the **pane**, not the record, which is why the observed state is a
+    parameter rather than something this function goes and reads. A record cannot tell you
+    whether a dialog is on screen, and the answer stops being true the moment anyone answers
+    it -- so a surface consults this with a fresh observation or not at all.
+
+    Deliberately *not* folded into `available_actions`. That function is the stop-action
+    policy the parity contract pins (DEC-007), and its answer is a pure function of
+    `SessionState`; adding a pane-dependent row to it would make the contract's comparison
+    depend on what an agent happened to be printing. This follows `remote_control_available`
+    instead, which is the established shape for an action that is not a stop.
+
+    Unlike Remote Control, no session state is required. The state a trust-blocked launch
+    lands in is FAILED -- the readiness marker never arrived -- so gating on RUNNING would
+    refuse the one case this exists for. `TmuxRuntime.answer_trust` re-reads the pane before
+    sending anything, so a surface that offers this on a stale observation still cannot fire
+    a keypress into a session that is no longer asking.
+    """
+    return record.profile_id == ProfileId("claude") and observed is TrustState.AWAITING
 
 
 UNKNOWN_SESSION = "unknown_session"
