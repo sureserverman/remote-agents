@@ -24,11 +24,11 @@ flake on a machine that is merely configured differently:
    dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
 2. **The theme** (`_THEME`). `TEXTUAL_THEME` is read into `constants.DEFAULT_THEME` at import
    time, so a developer who exports it renders every colour differently. Unpinned,
-   `TEXTUAL_THEME=textual-light` fails all 26 at once — and the documented remedy for a mass
+   `TEXTUAL_THEME=textual-light` fails all 28 at once — and the documented remedy for a mass
    failure is to regenerate, which would silently replace the whole net with one person's
    theme.
 3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
-   that variable alone also fails all 26.
+   that variable alone also fails all 28.
 4. **The age column.** `application.relative_time.age()` renders `datetime.now(UTC) -
    created_at`, so every fixture record is stamped at capture time to render a stable
    `0m ago`. That stamping is also why the sub-plan-4 humanization — minutes, then hours,
@@ -47,14 +47,21 @@ rendered colour under two themes that genuinely differ and requires them to diff
 hex literal cannot satisfy.
 
 The two gaps that stood beside it are what the state axis below closed, and they are the
-reason BL-010 was worth paying for. **Severity is now captured:** measured across all 26
-committed baselines, exactly two render an error status (`AREAS_UNREADABLE` and
-`SESSIONS_STORE_FAILURE`, at `#b93c5b`), twenty-two render the informational default
-(`#e0e0e0`) and the two modals dim theirs (`#646464`) — so deleting the `-error` rule now
-moves a file, where before it moved none. `$warning` still reaches no status row in any
-capture, because the only warning-severity feedback on these paths is a toast. **And the
+reason BL-010 was worth paying for. **Severity is now captured:** measured across all 28
+committed baselines, four render an error status at `#b93c5b` (`AREAS_UNREADABLE`,
+`SESSIONS_STORE_FAILURE`, `RESUME_PROFILES_UNAVAILABLE`, `RESUME_PROFILES_UNLISTABLE`),
+twenty-two render the informational default (`#e0e0e0`) and the two modals dim theirs
+(`#646464`) — so deleting the `-error` rule now moves four files, where before it moved none.
+`$warning` still reaches no status row in any capture, because the only warning-severity
+feedback on these paths is a toast and `run_test` leaves notifications disabled. **And the
 empty renders are covered:** `SESSIONS_EMPTY` and `RESUME_PROFILES_NONE_CAPABLE` baseline the
 empty-state rows that `test_empty_states.py` used to assert alone.
+
+The last two of those four error baselines were added at the Stage 2 gate, not by BL-010, and
+they are the sharpest argument for the whole axis: both renders were **already wrong** — a
+status that pointed at the exit without naming what had failed, at no severity — and nothing
+caught it because neither had a baseline. The net's value is not that it saw them break; it is
+that having to look at a render is what showed they were broken already.
 5. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
@@ -109,7 +116,7 @@ _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
 _SIZE = (100, 30)
 # Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
-# `NO_COLOR` in the environment re-renders every colour in the document, failing all 16
+# `NO_COLOR` in the environment re-renders every colour in the document, failing all 28
 # baselines at once and inviting a regeneration that would bake one person's terminal
 # configuration into the net.
 _THEME = "textual-dark"
@@ -410,9 +417,10 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
 # `_POSITIONS` above is an axis of *screens*, tied to the registry by an equality that
 # `test_every_position_has_a_baseline` calls deliberate — a name outliving its screen has to
 # fail. The renders below are not screens: the empty list, the unreadable store, the refused
-# capture, a detail rendered for a state whose action rows differ. Seven of the ten share a
-# position with a baseline already committed under that name, so adding them to `_POSITIONS`
-# would break that equality instead of closing a gap. Hence a second axis, with
+# capture, a detail rendered for a state whose action rows differ. Every one of them shares a
+# position with a baseline already committed under that name — all twelve, across the five
+# positions SESSIONS, SESSION_DETAIL, INSPECT, AREAS and RESUME_PROFILES — so adding them to
+# `_POSITIONS` would break that equality instead of closing a gap. Hence a second axis, with
 # `test_every_state_names_a_live_position` as its own tie back to the registry.
 #
 # What these ten cannot show, stated because a green run here otherwise reads as more than
@@ -445,6 +453,37 @@ class _NoneCapable(_Conversations):
                 selected_resume_available=False,
             ),
         )
+
+
+class _UnavailableResume(_Conversations):
+    """The capability probe fails on the **re**-ask, which is the only path that reaches it.
+
+    Failing the first ask would be caught one screen earlier, by `ResumeProjectsScreen.choose`,
+    and would never leave the project list — so a fake that always raises does not drive this
+    render at all. `ResumeProfilesScreen.on_reveal` re-asks only on the way back from the
+    conversation list, and that is the branch being baselined.
+    """
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def capabilities(self):
+        self.asked += 1
+        if self.asked > 1:
+            raise RuntimeError("the agent could not be asked")
+        return await super().capabilities()
+
+
+class _UnlistableCatalogue(_Conversations):
+    """Every agent can resume, but the page read fails.
+
+    `fetch_page` reports onto the screen that asked, and the first page is asked for by the
+    profile choice — so this render only appears once a profile has been chosen, not on
+    arriving at the profile list.
+    """
+
+    async def catalogue(self, query):
+        raise RuntimeError("the catalogue could not be read")
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,6 +528,20 @@ async def _to_resume_profiles(app: RemoteAgentsTui, pilot) -> None:
     await app.action_resume()
     await pilot.pause()
     await app.screen.choose("opaque-existing")
+
+
+async def _to_resume_profiles_after_choosing(app: RemoteAgentsTui, pilot) -> None:
+    """One step further than the profile list: the choice that asks for the first page."""
+    await _to_resume_profiles(app, pilot)
+    await pilot.pause()
+    await app.screen.choose("claude")
+
+
+async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
+    """Back onto the profile list from the conversation list, which is what re-asks."""
+    await _to_resume_profiles_after_choosing(app, pilot)
+    await pilot.pause()
+    await app.action_back()
 
 
 _STATES = (
@@ -541,6 +594,23 @@ _STATES = (
         "RESUME_PROFILES",
         lambda: _context(conversations=_NoneCapable()),
         _to_resume_profiles,
+    ),
+    # The last two were added by the Stage 2 gate rather than by BL-010, and the reason is
+    # worth keeping: the evaluator found both of these renders already defective — a status
+    # that pointed at the exit without saying what had failed, at no severity — and the
+    # reason nothing had caught it is precisely that neither had a baseline. Fixing the
+    # defect without baselining it would have left the next one just as invisible.
+    _State(
+        "RESUME_PROFILES_UNAVAILABLE",
+        "RESUME_PROFILES",
+        lambda: _context(conversations=_UnavailableResume()),
+        _to_resume_profiles_revealed,
+    ),
+    _State(
+        "RESUME_PROFILES_UNLISTABLE",
+        "RESUME_PROFILES",
+        lambda: _context(conversations=_UnlistableCatalogue()),
+        _to_resume_profiles_after_choosing,
     ),
 )
 
