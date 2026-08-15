@@ -21,7 +21,11 @@ from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    GatheredSelectionScreen,
+)
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.project_catalog import search_catalogue
 
@@ -125,11 +129,17 @@ class ProjectsScreen(ChoiceScreen):
         but the decision's own text carves out exactly this case ("a debounced filter or a
         catalogue refresh"), because what is abandoned here is a *read* whose answer is
         already stale. What DEC-008 actually forbids is Textual's cancel-on-re-entry worker
-        mode — the `exclusive` flag on a `@work` group — and it enforces that with an
-        unconditional grep for the literal flag assignment. So this is a timer: the behaviour
-        the decision permits, expressed without the token its check bans. This sentence is
-        written around that token for the same reason, having first been written with it and
-        turned the decision's own sweep red from a comment explaining why it is obeyed.
+        mode — the `exclusive` flag on a `@work` group. So this is a `Timer`: the behaviour
+        the decision permits, without the worker mode it does not.
+
+        **Corrected at Task 2.1's Tier-1 review.** This paragraph used to claim the decision
+        "enforces that with an unconditional grep for the literal flag assignment", and that
+        the sentence had been written around the token to avoid tripping that sweep. **No such
+        check exists** — searched across `tests/architecture/` and the whole tree, the flag
+        appears only in prose like this and in `run_worker`/`@work` calls that never pass it.
+        The claim was also self-refuting, since the sentence making it names the token twice.
+        DEC-008 is held by review and by comments like this one, which is a weaker guarantee
+        than the old wording promised and is the one actually in force.
         """
         event.stop()
         self._pending_query = event.value
@@ -308,21 +318,11 @@ class LabelScreen(ChoiceScreen):
         self.app.push_screen(ReviewScreen())
 
 
-class ReviewScreen(ChoiceScreen):
+class ReviewScreen(GatheredSelectionScreen):
     """The last position before a launch is issued, resting on Back rather than Launch."""
 
     #: Launch, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
-
-    @property
-    def work_in_flight(self) -> bool:
-        """Leaving here throws away the project, agent and label gathered across three screens.
-
-        The entry is empty at this point — the value was committed a screen ago — so the
-        default answer would be "nothing in flight" while a whole flow's worth of the owner's
-        choices sits one keystroke from being discarded with no way back to them.
-        """
-        return True
 
     position = "REVIEW"
     crumb = "Review"

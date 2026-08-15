@@ -472,10 +472,22 @@ def test_exactly_these_positions_protect_work_in_flight() -> None:
     against the input widget misses, which is what a stage review found by walking to Review
     with a label committed and pressing Ctrl+S.
     """
+    # `"work_in_flight" in vars(screen)` was the original predicate and stopped seeing two of
+    # these when the launch and project reviews were given a shared `GatheredSelectionScreen`
+    # base: an inherited override is not in the subclass's own `__dict__`. What this asks is
+    # whether a position protects work in flight, and inheriting the protection is still
+    # protecting it — so the comparison is against `ChoiceScreen`'s own default, which is what
+    # "overrides it" means. The expected set is unchanged; only the detection was wrong.
+    from remote_agents.adapters.tui.screens.base import ChoiceScreen
+
     actual = {
         screen.__name__
         for screen in ALL_SCREENS
-        if getattr(screen, "entry_is_a_commitment", False) or "work_in_flight" in vars(screen)
+        if getattr(screen, "entry_is_a_commitment", False)
+        or (
+            issubclass(screen, ChoiceScreen)
+            and screen.work_in_flight is not ChoiceScreen.work_in_flight
+        )
     }
     assert actual == _PROTECTS_WORK
 

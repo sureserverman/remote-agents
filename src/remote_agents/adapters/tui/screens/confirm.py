@@ -40,6 +40,40 @@ the modal and is unchanged by it — `initial_focus_is_mutating` is what the gat
 registered confirm for, and `ALL_CONFIRMS` is what makes a third one added later fail that
 sweep rather than ship without it.
 
+**A confirmation is only ever asked from a screen handler, and that is a rule rather than an
+accident (DEC-025).**
+
+If you are about to `await ask_to_confirm(...)` from anywhere that is not a screen's own
+handler — a worker, a timer, a background task, a message pump callback, a global binding —
+stop. That is the caller this paragraph exists to warn you about.
+
+Here is what will happen. `ask_to_confirm` pushes a modal and suspends your coroutine until
+the modal answers. Nothing guarantees the modal is answered: it can be popped for reasons that
+have nothing to do with the owner's decision — a navigation that unwinds the stack, an error
+path that resets the screen, a second entry point arriving mid-flight. When that happens your
+`await` is never satisfied and never fails. It simply waits, holding whatever your caller was
+holding.
+
+The reason this has never bitten anyone is **not** that the code prevents it. It is that every
+confirmation in the tree today is asked from a screen handler, and a screen handler runs on the
+message pump — so while it is suspended, the pump is not delivering the events that would pop
+the modal out from under it. **The protection is a side effect of where the calls happen to be
+made from.** Move one call off the pump and the protection is gone, silently.
+
+DEC-008 is why the obvious guard is absent: a destructive action deliberately does not pass
+`exclusive`, because a repeat must be dropped rather than cancel the action already in flight.
+That choice is right and is not being revisited. It does mean nothing in the framework will
+catch this for you — and DEC-025 declined a timeout on purpose, because a timed-out force-stop
+confirmation can neither proceed (nobody confirmed) nor cancel (the owner may be mid-decision),
+which would replace a hang nobody has hit with an ambiguity everybody would.
+
+What does catch it is
+`tests/architecture/test_confirmations_are_asked_from_screen_handlers.py`, which sweeps this
+package for any lexical path from one of those forbidden callers to `ask_to_confirm`. That is
+a check on the *rule*, not a guard on the *runtime*: it fails the suite when someone writes the
+bad caller, which is the one thing a paragraph on its own cannot do. It does not make the hang
+unreachable, and DEC-025 is explicit that it stays unreachable by convention.
+
 **Both confirmations are modals now, and the Remote Control one changed shape to get here.**
 It used to be a three-row screen — Cancel, Enable, Disable — which is a *chooser*, not a
 confirmation: the direction was still undecided when the question was asked. The direction is

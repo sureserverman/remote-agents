@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import TypeVar
 
-from textual import work
+from textual import events, work
 from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.notifications import SeverityLevel
@@ -178,6 +178,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._catalogue = context.catalogue
         self.selection = LaunchSelection()
         self._busy = False
+        # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
+        # different questions and only one of them is temporary.
+        self._leaving = False
+        #: The (position, work) the quit warning was last given for — see `action_quit`. Keyed
+        #: to the work so that typing more re-arms it rather than leaving on a stale yes.
+        self._quit_armed: tuple[str, str] | None = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Ask the position on screen whether one of *these* bindings applies to it.
@@ -229,11 +235,54 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     @property
     def busy(self) -> bool:
-        """Whether an action is mid-flight and no other may start."""
-        return self._busy
+        """Whether an action is mid-flight and no other may start.
+
+        **Two reasons, not one, and the second was found by testing a queued keypress.** A
+        command in flight is the temporary reason. A surface that has decided to leave is the
+        permanent one: `exit()` does not tear the app down synchronously, so between the
+        decision and the teardown the position is still mounted, still focused, and still has
+        whatever the owner queued sitting in the pump behind the handler that just ran.
+
+        Asked here rather than at each guard so the two cannot drift. Folding the second
+        reason in here covers the handler guard (`ChoiceScreen.on_option_list_option_selected`),
+        the auto-reload guard (`SessionsScreen._auto_reload`) and the five app-level actions at
+        once, rather than in three places that would then each need their own version of it.
+
+        **`action_quit` is the exception and reads `_leaving` directly**, which is worth
+        stating because an earlier version of this paragraph claimed every consumer routes
+        through here and a stage review caught that it did not. Quit is deliberately exempt
+        from `check_action`'s rules — an app that cannot be closed is worse than one that
+        loses work — so it cannot take the broad `busy` answer without reintroducing exactly
+        that complaint. It refuses only in the narrower leaving window, and its own docstring
+        carries the reason.
+        """
+        return self._busy or self._leaving
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
+
+    def _leave(self, request: AttachRequest) -> None:
+        """Exit the surface, and refuse everything from this moment on.
+
+        **The flag is why this is not a one-liner in each of the two flows.**
+        Both `launch` and `issue_resume` clear `_busy` in a `finally` and *then* exit, without
+        leaving the position — so the second of two enters queued in one terminal read found
+        the same screen, the same row and an open guard, and issued a second real command.
+        Two managed sessions where one was asked for.
+
+        Clearing the guard there is right: it is scoped to the awaited call, and the failure
+        paths below it return to a screen that must be usable again. What was missing is that
+        success does not return to anything, and until the app is actually gone the surface
+        must stop answering. `_leaving` is therefore set and never cleared — there is no state
+        after this one.
+
+        DEC-008 is honoured rather than worked around: `exclusive` is still not passed
+        anywhere, and nothing in flight is cancelled. The repeat is *dropped*, which is what
+        that decision asks for; this only extends the window in which dropping happens to
+        cover the gap between deciding to leave and being gone.
+        """
+        self._leaving = True
+        self.exit(request)
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.
@@ -411,7 +460,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         where the owner came from. There are no exceptions left: the last two, the destructive
         confirmations, are screens of their own as of this task.
         """
-        if self._busy:
+        if self.busy:
             return
         await self.go_back()
 
@@ -429,7 +478,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         implies moving, and the catalogue re-read the projects list still wants is now its
         own `refresh_contents` rather than something every other screen inherits.
         """
-        if self._busy:
+        if self.busy:
             return
         screen = self.body
         if screen is None:
@@ -458,8 +507,119 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return False
         return True
 
+    async def on_event(self, event: events.Event) -> None:
+        """Disarm the quit warning on any key that is not another `ctrl+q`.
+
+        **Without this the warning re-opens the defect it closes, and a Tier-1 review
+        reproduced it.** `_quit_armed` was compared by value alone — position plus the text at
+        risk — and nothing ever cleared it. So: type `orbit-relay`, press ctrl+q and be warned,
+        decline, backspace the entry clean, retype the same name, press ctrl+q once — and the
+        app left immediately, because the freshly computed signature happened to equal a
+        signature armed against work that no longer existed. Correcting a typo back to its
+        original value is an ordinary thing to do, and it silently discarded the work again.
+
+        Keying the arm to the *work* was the right instinct and the wrong mechanism: a value
+        cannot express "this same continuous stretch of typing". What actually needs to hold
+        is that the owner has not changed the work since being warned, and that is a statement
+        about *input*, not about text.
+
+        **`Paste` as well as `Key`, and the first version of this missed it — a second
+        Critical from the same review.** `events.Paste` is not an `events.Key`; it is not even
+        an `events.InputEvent`, and `App.on_event` routes it down a separate branch. So
+        `Input._on_paste` can replace a mouse-made selection with identical clipboard text
+        while emitting no key at all, leaving the arm standing over work that was destroyed
+        and rebuilt — the same defect as the retype case, through a path the key check could
+        not see. Re-pasting a name to confirm it is an ordinary thing to do.
+
+        **`MouseEvent` is deliberately excluded**, which is why this names two classes instead
+        of taking `events.InputEvent`. That base is `Key` and `MouseEvent` only — `Paste` is
+        not under it, so it would not have helped — and it would disarm on every mouse *move*.
+        A terminal reporting motion would then re-warn on every second press, which is a
+        refusal wearing a warning's clothes: the one outcome worse than the bug being fixed.
+        A click can move a cursor; it cannot change what is at risk, and a change by any other
+        route still moves the signature.
+
+        One override rather than a disarm in each of the five actions, which is the
+        arrangement `action_quit`'s own docstring argues against for the same reason: five
+        sites is five chances to forget, and the sixth action added later would forget.
+        """
+        if isinstance(event, events.Paste) or (
+            isinstance(event, events.Key) and event.key != "ctrl+q"
+        ):
+            self._quit_armed = None
+        await super().on_event(event)
+
+    async def action_quit(self) -> None:
+        """Leave — but say what is about to be lost first, and only ask once.
+
+        `ctrl+q` used to discard typed work silently, and it was reproduced: type a
+        label, press it, the app is gone and the label with it. `screens/base.py` deliberately
+        left quit out of the set of keys greyed while `work_in_flight`, and that reasoning
+        stands — a jump means "go elsewhere in this app" and losing the work is a side effect
+        nobody asked for, while quit means "leave". **The fix is a warning, never a refusal.**
+        An app that will not close until an entry is cleared is a worse answer than the silent
+        discard it replaces, so the second press always leaves.
+
+        **Not a modal, and DEC-025 is why.** The obvious implementation is `ask_to_confirm`,
+        as the force-stop and Remote Control confirmations do it. That decision forbids
+        exactly this caller: a confirmation may only be asked from a screen's own handler,
+        and it names "a global binding" among the callers it exists to warn off. The
+        protection those confirmations rely on is that a screen handler holds the pump while
+        it waits, so nothing can pop the modal out from under the await. A global binding
+        holds no such thing, and an unanswered `push_screen_wait` neither returns nor raises.
+        So the question is asked on the key itself: nothing suspends, and nothing can hang.
+
+        **Armed against the work, not against a clock or a bare flag.** What is remembered is
+        the position and the text that was at risk when the warning was given. Keep typing and
+        that signature moves, so the next press warns again about the *new* work rather than
+        leaving on a yes that answered a smaller question. A bare flag would have had to be
+        cleared by every other action to get the same property — five call sites today and a
+        sixth one forgotten later.
+
+        Owner text reaches the toast through `announce`, which is the one place `markup=False`
+        is decided (DEC-014); a label containing an unbalanced bracket is a rendering fault
+        this surface has already paid for once.
+        """
+        if self._leaving:
+            # **The one rule quit does obey, and it is not `busy`.** `check_action` exempts
+            # quit from every other rule on the argument that an app which cannot be closed is
+            # worse than one that loses work — and that argument is right, but it predates
+            # `_leaving` and does not reach this case. Here the surface has *already* decided
+            # to leave and is carrying the attach request the launch or resume just produced;
+            # `App.exit()` overwrites `_return_value` unconditionally and `App.action_quit`
+            # calls it with no argument, so answering this key would replace that request with
+            # `None`. The session would keep running with nothing attaching to it.
+            #
+            # Not `self.busy`: that would also refuse quit while an ordinary command is in
+            # flight, which is exactly the "cannot be closed" complaint. `_leaving` is the
+            # narrower claim — the app is already going, so the key has nothing left to do.
+            #
+            # Found by the Stage 2 gate's Tier-2 pass, the first review to see this task and
+            # `_leave` together.
+            return
+        screen = self.screen if self.screen_stack else None
+        if isinstance(screen, ChoiceScreen) and screen.work_in_flight:
+            at_risk = screen.work_at_risk
+            signature = (screen.position, at_risk)
+            if self._quit_armed != signature:
+                self._quit_armed = signature
+                screen.announce(
+                    (
+                        f"Quitting now discards {at_risk!r}, which has not been saved. "
+                        "Press ctrl+q again to leave anyway."
+                    )
+                    if at_risk
+                    else (
+                        "Quitting now discards what you have built on this screen. "
+                        "Press ctrl+q again to leave anyway."
+                    ),
+                    severity="warning",
+                )
+                return
+        await super().action_quit()
+
     async def action_add_project(self) -> None:
-        if not self._busy:
+        if not self.busy:
             await self.show_areas()
 
     async def show_areas(self) -> None:
@@ -467,7 +627,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_sessions(self) -> None:
         """Show every managed session, including ones this process never launched."""
-        if self._busy:
+        if self.busy:
             return
         await self.show_sessions()
 
@@ -495,7 +655,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
-        if self._busy or self._services.conversations is None:
+        if self.busy or self._services.conversations is None:
             return
         await self.switch_flow(ResumeProjectsScreen())
 
@@ -547,7 +707,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
             return
         session_id = str(record.session_id)
-        self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
     # The destructive path ---------------------------------------------------------
     #
@@ -655,7 +815,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session detail for every action including force — there is no confirmation screen
         still on the stack by the time this runs.
         """
-        if self._busy:
+        if self.busy:
             return
         self._busy = True
         try:
@@ -901,7 +1061,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 ),
             )
         session_id = str(record.session_id)
-        self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
         return None
 
 

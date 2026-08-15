@@ -19,10 +19,15 @@ from __future__ import annotations
 
 import logging
 
+from textual import work
 from textual.widgets import Input
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, selectable_area
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    GatheredSelectionScreen,
+)
 from remote_agents.adapters.tui.screens.validation import NameIsAProjectIdentity
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.domain.projects import ProjectIdentity
@@ -132,21 +137,11 @@ class NameScreen(ChoiceScreen):
         self.app.push_screen(ProjectReviewScreen(self.area, value.strip()))
 
 
-class ProjectReviewScreen(ChoiceScreen):
+class ProjectReviewScreen(GatheredSelectionScreen):
     """Name the project before creating it, exactly as the bot's Review does."""
 
     #: Create, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
-
-    @property
-    def work_in_flight(self) -> bool:
-        """Leaving here throws away the area and the project name gathered across two screens.
-
-        The entry is empty at this point — the value was committed a screen ago — so the
-        default answer would be "nothing in flight" while a whole flow's worth of the owner's
-        choices sits one keystroke from being discarded with no way back to them.
-        """
-        return True
 
     position = "PROJECT_REVIEW"
     crumb = "Review"
@@ -177,6 +172,50 @@ class ProjectReviewScreen(ChoiceScreen):
             return
         if key != "create":
             return
+        # **The guard is taken here, synchronously, and released by the worker.** Starting the
+        # worker without it would open a window between this handler returning and the worker
+        # reaching `holding_the_guard` in which the review is fully interactive with its Create
+        # row still drawn — which is the queued-repeat defect BL-015 recorded on launch and
+        # resume, reintroduced on a third flow. `set_busy` is idempotent, so the worker
+        # re-taking it below and releasing once is correct.
+        self.tui.set_busy(True)
+        self._create_project()
+
+    @work(exit_on_error=False)
+    async def _create_project(self) -> None:
+        """Create the project on a worker, so the message pump stays free while it runs.
+
+        **This is what makes `ctrl+q` answer during a create**, and it is a deliberate reversal
+        of how this flow used to work. Awaited inline from `choose`, the whole create ran *on
+        the screen's message pump* — and every key enters through that same pump, so for the
+        duration of a slow create the surface accepted no input at all. The owner pressing quit
+        got nothing until the call returned: no timeout, no affordance, nothing to distinguish
+        it from a hang. Measured before the change (`ctrl+q press BLOCKED while create parked;
+        did action_quit run? []`).
+
+        **The cost is that BL-014's hazard becomes reachable, and that is accepted knowingly.**
+        Holding the pump was what made the teardown serialise behind this handler, so a failure
+        could never land on a pruned screen. Off the pump it can: the app can finish shutting
+        down while this is still in flight. That state is exactly what
+        `tests/unit/adapters/tui/test_teardown_during_flight.py` already constructs and proves
+        the `showing` guards contain — those three cases stopped describing a hypothetical the
+        moment this landed, and are now the coverage that keeps BL-014 closed rather than a
+        defence against a state nothing could produce.
+
+        **The guard `choose` takes is released by `holding_the_guard` below, and that depends
+        on this worker actually reaching it.** Nothing cancels this worker except full app
+        shutdown — DEC-008 keeps `exclusive` off every `@work` here, and no other code shares
+        this screen's worker group — so the only way to skip the `async with` is a teardown
+        that is discarding the guard anyway. Stated because the prose otherwise reads as if
+        `holding_the_guard` alone guarantees the release, and a future `exclusive` would make
+        that false silently.
+
+        `exit_on_error=False` for the reason `in_thread` passes it: the decorator's default is
+        to take the app down on an unhandled exception, and the `except` below exists precisely
+        so a failed create leaves the owner on the review with an explanation. `exclusive` is
+        not passed and must not be (DEC-008) — a repeat is refused by the guard `choose` takes
+        before this starts, never by cancelling the create already running.
+        """
         tui = self.tui
         # Both awaited calls are inside both windows, and the catalogue re-read was outside
         # both. It runs a development-root scan on a worker thread, so it yields to the pump —
