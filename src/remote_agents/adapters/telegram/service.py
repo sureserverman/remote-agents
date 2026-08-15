@@ -55,7 +55,11 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
+from remote_agents.application.conversations import (
+    ConversationCatalogueQuery,
+    ConversationService,
+    resume_available,
+)
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
@@ -77,7 +81,7 @@ from remote_agents.application.session_actions import (
     trust_available,
 )
 from remote_agents.config import TelegramSecrets
-from remote_agents.domain.conversations import ConversationReference, ConversationState
+from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import (
     MAX_LABEL_LENGTH,
     ProfileId,
@@ -1645,7 +1649,7 @@ class PrivateBotBoundary:
                 ),
             )
             for summary in result.conversations
-            if summary.state is ConversationState.RESUMABLE
+            if resume_available(summary)
         )
         navigation = []
         if result.page > 1:
@@ -1687,7 +1691,7 @@ class PrivateBotBoundary:
         if resolved is None or resolved.summary.project_id is None:
             return self._message("That conversation is no longer available.")
         summary = resolved.summary
-        if summary.state is not ConversationState.RESUMABLE:
+        if not resume_available(summary):
             return self._message("That conversation cannot be resumed safely.")
         project = next(
             (item for item in self.catalogue if item.opaque_id == str(summary.project_id)), None

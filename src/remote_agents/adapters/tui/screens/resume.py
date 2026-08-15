@@ -34,7 +34,7 @@ from remote_agents.adapters.tui.model import (
     conversation_row,
 )
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
-from remote_agents.application.conversations import ConversationCatalogueQuery
+from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -295,7 +295,16 @@ class ResumeConversationsScreen(ChoiceScreen):
             self.set_status("There are no saved conversations for that agent and project.")
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
-        entries = [(str(item.reference), conversation_row(item)) for item in page.conversations]
+        # Filtered by the shared policy, which this surface did not consult at all until
+        # BL-004 — it rendered whatever the catalogue returned. The bot had the rule twice and
+        # this had it nowhere, and nothing had gone wrong only because `ConversationState` has
+        # one member. `resume_available` is now the single authority, beside
+        # `ConversationService` as `remote_control_available` sits beside `available_actions`.
+        entries = [
+            (str(item.reference), conversation_row(item))
+            for item in page.conversations
+            if resume_available(item)
+        ]
         if page.page > 1:
             entries.append((_PREVIOUS, "Previous page"))
         if page.page < page.page_count:
@@ -398,6 +407,15 @@ class ResumeConfirmScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         if key != "resume-confirm":
+            await self.tui.go_back()
+            return
+        # Re-asked here, not trusted from the row that got the owner to this screen — the same
+        # shape as `RemoteAgentsTui.stop` re-checking `available_actions` against a re-read
+        # record rather than against the entry it rendered. The resolve happened a screen ago
+        # and the answer can have moved since. The bot has always had this second check; this
+        # surface had neither it nor the first (BL-004).
+        if not resume_available(self.resolved.summary):
+            self.announce("That conversation can no longer be resumed.", severity="warning")
             await self.tui.go_back()
             return
         await self.tui.issue_resume(self, self.project, self.profile, self.resolved)

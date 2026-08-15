@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
+    ConversationState,
+    ConversationSummary,
     ProfileResumeCapability,
     ResolvedConversation,
 )
@@ -50,3 +52,29 @@ class ConversationService:
 
     async def capabilities(self) -> tuple[ProfileResumeCapability, ...]:
         return await self._catalog.resume_capabilities()
+
+
+def resume_available(summary: ConversationSummary) -> bool:
+    """Whether a surface should offer to resume the conversation `summary` describes.
+
+    The single authority over which conversation states may be resumed, here rather than in a
+    driver adapter for the same reason `available_actions` is (DEC-001): it is a property of
+    the conversation, not of whichever surface happens to render it. This sits beside
+    `ConversationService` exactly as `remote_control_available` and `trust_available` sit
+    beside `available_actions`, and for the same reason — it is a policy question about one
+    record, not an operation on the catalogue.
+
+    **The defect this closes (BL-004) is that the rule was written down twice on one surface
+    and not at all on the other.** The bot filtered its list on `state is RESUMABLE` and
+    re-checked the same expression at its confirmation; the local surface checked neither, so
+    it would have rendered a non-resumable conversation as a choosable row and carried it all
+    the way to a launch. Nothing had gone wrong yet only because `ConversationState` has
+    exactly one member today — the divergence was real and unobservable, which is the worst
+    combination and the reason this exists before a second state does.
+
+    Deliberately a function of the **summary** rather than of the state alone. A resolved
+    conversation and a catalogue row both carry one, so both surfaces ask the same question of
+    the same shape, and a future rule that needs a second field of the summary can be written
+    here without moving every call site.
+    """
+    return summary.state is ConversationState.RESUMABLE
