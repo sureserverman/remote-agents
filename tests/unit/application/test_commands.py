@@ -317,6 +317,41 @@ async def test_copy_attach_offers_a_preserved_pane_read_only() -> None:
     assert "attach-session -r -t" in command, f"the offer must be read-only, but it was {command!r}"
 
 
+async def test_the_fake_carries_ownership_across_a_preserving_stop() -> None:
+    """The fake's preserved observation names its owner, as the real runtime's does.
+
+    Ownership is what `copy_attach` compares against the record, so a fake that blanked it on
+    the transition modelled a terminal whose preserved panes have no owner — and the real one
+    does keep them: a dead pane still answers `parse_pane` with its `@remote_agents_*` session
+    options, verified against tmux 3.4 during the Stage 3 gate.
+
+    **This does not assert that a gracefully stopped session is attachable, and an earlier
+    draft did — wrongly, on a premise a reviewer and I both accepted without checking.**
+    `SessionService.graceful_stop` calls `terminal.cleanup` immediately after `PANE_EXITED`,
+    so the pane is removed and the record reaches ENDED; there is nothing left to attach to.
+    PRESERVED as an *attachable* state comes from reconciliation finding a dead pane
+    (`RECONCILED_PANE_DEAD`), which is why the DEC-021 tests above build that observation
+    directly rather than by driving a stop. What is pinned here is the fidelity of the
+    transition itself, which is the thing that was actually wrong.
+    """
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(FakeStore(), terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+
+    observation = await service.graceful_stop(
+        GracefulStopCommand(record.session_id, record.profile_id)
+    )
+
+    assert observation.preserved
+    assert observation.project_id == record.project_id, (
+        "the preserved observation lost its project, so an ownership check against the record "
+        "would refuse a pane the record owns"
+    )
+    assert observation.profile_id == record.profile_id
+
+
 async def test_copy_attach_still_refuses_a_pane_that_is_neither_live_nor_preserved() -> None:
     """The half the relaxation must not take with it.
 
