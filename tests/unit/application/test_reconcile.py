@@ -150,9 +150,13 @@ async def test_a_live_pane_that_is_not_ready_is_not_promoted_to_running() -> Non
         asked.append(session_id)
         return TerminalObservation(session_id, live=False, preserved=False, detail="not_ready")
 
-    service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=never_ready)
+    service = ReconciliationService(
+        store, settle_after=timedelta(0), confirm_ready=never_ready
+    )
 
-    await service.reconcile((TerminalObservation(failed.session_id, live=True, preserved=False),))
+    await service.reconcile(
+        (TerminalObservation(failed.session_id, live=True, preserved=False),)
+    )
 
     assert asked == [failed.session_id], "readiness must actually be consulted"
     assert store.records[failed.session_id].state is SessionState.FAILED
@@ -170,7 +174,9 @@ async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
 
     service = ReconciliationService(store, settle_after=timedelta(0), confirm_ready=ready)
 
-    await service.reconcile((TerminalObservation(failed.session_id, live=True, preserved=False),))
+    await service.reconcile(
+        (TerminalObservation(failed.session_id, live=True, preserved=False),)
+    )
 
     assert store.records[failed.session_id].state is SessionState.RUNNING
     assert store.events == [LifecycleEvent.READY]

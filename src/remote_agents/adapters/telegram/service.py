@@ -1134,7 +1134,9 @@ class PrivateBotBoundary:
             return False
         return trust_available(record, await read(record.session_id))
 
-    async def _trust_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
+    async def _trust_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
         if self.launcher is None:
             return _reply_arguments(self._message("Answering the trust question is unavailable."))
         # Re-read before the claim, for the reason `_launch_reply` and `_remote_control_reply`
