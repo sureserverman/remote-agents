@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import pytest
@@ -204,6 +205,28 @@ def test_force_reads_the_detail_because_every_force_leaves_preserved_false() -> 
     assert lost is not None
     assert lost.detail == OWNERSHIP_LOST
     assert lost.summary and lost.remedy
+
+
+def test_an_unrecognised_force_detail_is_reported_to_the_log_but_a_clean_kill_is_not(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Failing open quietly is not the same as failing open. Found by the Stage 3 evaluator.
+
+    An empty detail is the ordinary kill and must stay silent — logging there would warn on
+    every successful force. A detail this table does not know is a cause somebody added without
+    coming here, and answering `None` for it makes both surfaces report "the session has ended"
+    over an observation nobody has read. On the one path that kills, that is worth a line in
+    the log; the alternative is that the defect BL-026 closed returns silently.
+    """
+    with caplog.at_level(logging.WARNING):
+        assert force_stop_failure(_Observation(preserved=False, detail="")) is None
+    assert not caplog.records, "a completed force stop must not warn"
+
+    with caplog.at_level(logging.WARNING):
+        assert force_stop_failure(_Observation(preserved=False, detail="something_new")) is None
+    assert "something_new" in caplog.text, (
+        "a cause nobody has words for was reported as a completed kill with nothing said"
+    )
 
 
 def test_an_unrecognised_detail_is_not_a_force_failure() -> None:

@@ -27,11 +27,14 @@ transition and a recorded decision, not a policy edit.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import ProfileId, SessionState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+
+_LOG = logging.getLogger(__name__)
 
 GRACEFUL = "graceful"
 CLEANUP = "cleanup"
@@ -320,12 +323,27 @@ def force_stop_failure(observation: _StopObservation) -> StopFailure | None:
     unknown to a failure here would announce one on every successful force the moment a future
     detail is added for some unrelated reason, which is the louder wrong answer.
 
+    **Failing open quietly is not the same as failing open**, which is the correction the Stage
+    3 gate evaluator made to the paragraph above. An *empty* detail is the ordinary kill and
+    says nothing is wrong; a detail this table does not know is a cause somebody added without
+    coming here, and answering `None` for it means both surfaces report "the session has ended"
+    over an observation nobody has read. So the empty case is silent and the unrecognised case
+    is logged. This is the same shape `SessionService.graceful_stop` uses for its own unknown
+    cause, where the comment says it out loud: the log is what makes a new cause somebody's
+    problem instead of nobody's.
+
     What this does **not** do is change the outcome. DEC-017 keeps `SessionService.force_stop`
     recording `VERIFIED_FORCE_STOP` and the record reaching ENDED either way, because a row the
     owner cannot clear is a worse failure than an over-confident message. This is the message.
     """
     known = _FORCE_FAILURES.get(observation.detail)
     if known is None:
+        if observation.detail:
+            _LOG.warning(
+                "force stop reported %r, which is not a cause this has words for; reporting it "
+                "as a completed kill, which may overstate what happened",
+                observation.detail,
+            )
         return None
     summary, remedy = known
     return StopFailure(observation.detail, summary, remedy)

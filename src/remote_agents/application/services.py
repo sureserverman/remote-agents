@@ -295,6 +295,27 @@ class SessionService:
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
 
     async def force_stop(self, command: ForceStopCommand) -> TerminalObservation:
+        """End the session, and hand back what the terminal actually observed.
+
+        **`VERIFIED_FORCE_STOP` is written whether or not a kill happened, and the event name
+        overstates the one case where it did not.** When no managed pane matches, the terminal
+        reports `ownership_lost` and kills nothing — and this still records the event, so the
+        record reaches ENDED and the row clears. That is DEC-017, chosen deliberately: a row
+        the owner cannot clear is a worse failure than an over-confident message, and failing
+        closed would strand the destroyed-outside-the-app case with no way to retire it.
+
+        DEC-017's accepted cost 1 is exactly this line. The durable history cannot distinguish
+        a kill that happened from one that did not; only the **returned observation** carries
+        that, which is why this method returns it rather than `None`, and why both surfaces
+        read it through `session_actions.force_stop_failure` (BL-026). Anyone reconstructing
+        what happened from `session_events` alone will over-read this event, and there is no
+        fix for that short of reopening the decision.
+
+        Stated here because this is where a reader chasing the audit log lands. The sibling
+        `graceful_stop` above splits its two causes into two events (DEC-022) — a contrast that
+        otherwise invites the inference that force has only one cause. It has two; they are
+        just not distinguishable *here*.
+        """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
             transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)

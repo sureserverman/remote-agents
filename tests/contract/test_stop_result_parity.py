@@ -400,11 +400,9 @@ async def test_a_force_that_killed_the_pane_still_reads_as_a_stop_that_worked(
     assertion that catches it: a force that found its pane and killed it must still read as a
     stop that worked, and must not carry the ownership_lost wording.
     """
-    from remote_agents.application.session_actions import _FORCE_FAILURES, OWNERSHIP_LOST
-
     rendered = await said(_record(), "")
 
-    assert _FORCE_FAILURES[OWNERSHIP_LOST][0] not in rendered, (
+    assert "This host had no pane left to stop." not in rendered, (
         f"{surface_name} reported a completed force stop as a failure: {rendered!r}"
     )
     assert "ended" in rendered.casefold() or "force stopped" in rendered.casefold(), (
