@@ -203,9 +203,10 @@ class SessionLocks:
     is not. But the set is bounded by the **caller** rather than by the kind of change, and
     saying "every state-changing mutation" would assert a guarantee this class does not give.
     `ReconciliationService` above is the counter-example, and it is not a hypothetical one: it
-    is constructed with a store and nothing else (`bootstrap.py`), runs on a timer, and writes
-    `record_event` directly, so a reconciliation pass racing an owner's stop on the same
-    session is not serialized by anything here.
+    is constructed with a store and a readiness check and no locks at all (`bootstrap.py`), runs
+    on a timer beside the service (`_reconcile_periodically`), and writes `record_event`
+    directly, so a reconciliation pass racing an owner's stop on the same session is not
+    serialized by anything here.
 
     Which lock covers what also differs, because a session id is not always in hand yet:
     `launch` and `resume` take `operation()` alone — the record does not exist to key on — and
