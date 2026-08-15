@@ -46,8 +46,27 @@ the same guard:
 
 The guards in `screens/base.py` are what make this file green; they are not decoration.
 
-**Result: BL-014 does not reproduce.** No exception escapes any of the three, so there is no
-`xfail` in this file. What it now defends is the guarantee rather than the defect.
+**Two arrangements, and the difference matters — corrected at the Stage 1 gate.** The three
+cases above run the handler on `asyncio.create_task`, which detaches it from the message
+pump. That detachment is what lets the shutdown finish while the call is parked, and
+therefore what *produces* the pruned screen they report against. **The real surface does not
+do this.** `ProjectReviewScreen.choose` is awaited inline from
+`ChoiceScreen.on_option_list_option_selected`, so it runs on the screen's own pump, and
+`App._close_all` waits for that pump — park a call there and the shutdown cannot proceed at
+all. The last test in this file drives that path and measures it.
+
+The first version of this file claimed the opposite in this docstring and built a premise
+test around it, asserting the pruned screen was what the owner's own path produced. It is
+not. The distinction is worth stating rather than quietly fixing, because the conclusion
+survived and the evidence given for it did not — and those are separable things.
+
+**Result: BL-014 does not reproduce**, and now for two independent reasons rather than one.
+On the real pump path the state it feared is *unreachable*: the teardown is serialised behind
+the handler, so a failure cannot land on a pruned screen. Constructed off-pump, where it can,
+the guards in `screens/base.py` hold it anyway. There is no `xfail` in this file. What it
+defends is the guarantee rather than the defect — and both halves are worth keeping, since
+the guards are what a future off-pump caller would need and the pump ordering is why no
+present one does.
 """
 
 from __future__ import annotations
@@ -208,6 +227,14 @@ async def test_a_failure_landing_after_the_quit_escapes_no_exception(group, reac
     puts the failure on the far side of `App._shutdown`; releasing inside the block leaves
     the screen mounted and the guards untouched, which is a different and much weaker test —
     measured while writing this one, where removing a guard changed nothing at all.
+
+    **This arrangement is constructed, not observed.** Running the handler on a task is what
+    detaches it from the pump and so lets the shutdown complete underneath it; on the real
+    path the pump holds the teardown and none of this ordering is reachable (see the last
+    test in this file, and the module docstring's note on the two arrangements). What these
+    three cases establish is therefore conditional and worth having in that form: *if* a
+    failure ever reaches a pruned screen — which a future caller running off the pump could
+    arrange — the guards in `screens/base.py` contain it.
     """
     app = RemoteAgentsTui(_context())
     reported: list[str] = []
@@ -281,6 +308,11 @@ async def test_the_screen_really_is_gone_when_the_failure_lands() -> None:
     `showing` answers `False`. It is the reason a mutation of `_set_working` is visible from
     here at all.
 
+    **Scope, corrected at the Stage 1 gate: this is the premise of the three cases above, not
+    of the production flow.** It holds because the handler was detached onto a task, exactly
+    as they detach it. Read as a claim about what the owner's own path produces it would be
+    false, and the first version of this file did read that way.
+
     Asked from a **task created inside** the running app, exactly as the suspended handler is,
     and that is not a stylistic choice. `showing` reaches `self.app`, which resolves Textual's
     `active_app` context variable and falls back to walking `_parent` — and a pruned screen has
@@ -317,4 +349,105 @@ async def test_the_screen_really_is_gone_when_the_failure_lands() -> None:
     assert answers["stacked"] is False, (
         "the screen stack survived the shutdown; `showing` must be answering `False` for "
         "some other reason than the teardown this file is about"
+    )
+
+
+async def test_on_the_real_pump_path_the_failure_lands_while_the_screen_is_still_up() -> None:
+    """What the *production* arrangement does, which is not what the cases above arrange.
+
+    Added by the Stage 1 gate's second review pass, which found that the file was sound about
+    its guards and wrong about its premise — a distinction worth the extra test, because the
+    conclusion it reached survives and the evidence it gave for it did not.
+
+    Every case above runs the handler on `asyncio.create_task`. That is what lets the
+    shutdown finish while the call is parked, and it is therefore what produces the pruned
+    screen those cases report against. The real surface does not do this:
+    `ProjectReviewScreen.choose` is awaited inline from
+    `ChoiceScreen.on_option_list_option_selected`, so it runs **on the screen's own message
+    pump** — and `App._close_all` waits for that pump. Park a call there and the shutdown
+    cannot proceed at all.
+
+    So this drives the selection the way the framework does, by posting the message and
+    letting the pump dispatch it, and measures the ordering that actually ships:
+
+    * with the create parked, `app.exit()` cannot advance — the screen is still stacked, and
+      that assertion is deterministic rather than timed, because a blocked pump cannot
+      process the shutdown at all;
+    * when the failure lands, the screen is still mounted and `showing` is still `True`;
+    * nothing escapes.
+
+    **This is the stronger half of BL-014's answer.** The cases above show the guards hold
+    *if* a failure ever reaches a pruned screen; this shows that on the path the owner
+    actually takes, it cannot — the pump serialises the teardown behind the handler, so the
+    state BL-014 feared is unreachable rather than merely survivable. Both are worth keeping:
+    the guards are what a future off-pump caller would need, and this is why no present one
+    needs them.
+    """
+    app = RemoteAgentsTui(_context())
+    reported: list[tuple[str, bool, bool]] = []
+    stacked_while_parked: bool | None = None
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _drive_to_the_review(app, pilot)
+        review = app.screen
+        suspend = _Suspending(app.in_thread, "create-project")
+        app.in_thread = suspend  # type: ignore[method-assign]
+
+        # Records the screen's state *at the moment the recovery path speaks*, which is the
+        # whole measurement — asking afterwards would report the state after the pump
+        # resumed and the shutdown completed, i.e. a different instant than the one BL-014
+        # is about.
+        real = review.announce
+
+        def recording(message: str, **keywords: Any) -> None:
+            reported.append((message, review.showing, review in app.screen_stack))
+            real(message, **keywords)
+
+        review.announce = recording  # type: ignore[method-assign]
+
+        choices = review.query_one("#choices", OptionList)
+        index = choices.get_option_index("create")
+        # Posted rather than awaited: this is the one difference from `_select`, and it is
+        # the difference the whole test is about — the pump dispatches the handler, so the
+        # handler holds the pump.
+        review.post_message(
+            OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
+        )
+
+        await asyncio.wait_for(suspend.started.wait(), timeout=5)
+        app.exit(None)
+
+        # The discriminating probe, and the reason this test is not just the cases above
+        # with a different spelling. `pilot.pause()` waits for the app to finish processing
+        # what it has pending — which it cannot do while this very handler is parked on the
+        # pump. Asserted as a timeout in the *expecting-timeout* direction on purpose: a
+        # slower machine can only make a blocked pump look more blocked, never less, so this
+        # cannot flake toward a false pass. The `await pumped` after the release is what
+        # rules out the other reading, that `pause` was hanging for some unrelated reason.
+        pumped = asyncio.create_task(pilot.pause())
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(pumped), timeout=0.5)
+        stacked_while_parked = review in app.screen_stack
+
+        suspend.release.set()
+        await pumped
+        await settle(app, pilot)
+
+    assert stacked_while_parked is True, (
+        "the review screen left the stack while a create was still parked on its pump, so "
+        "the shutdown is not serialised behind the handler after all — which would make the "
+        "pruned-screen state the cases above construct reachable in production too"
+    )
+    assert reported and "Project not created" in reported[-1][0], (
+        f"the `except` branch did not reach its report on the real pump path; the surface "
+        f"said {[message for message, _, _ in reported]}"
+    )
+    _, showing_when_reported, stacked_when_reported = reported[-1]
+    assert (showing_when_reported, stacked_when_reported) == (True, True), (
+        "on the real pump path the failure is supposed to land while the screen is still up "
+        f"— it reported with showing={showing_when_reported}, stacked={stacked_when_reported}"
+    )
+    assert app._exception is None, (
+        f"an exception escaped the recovery path on the real pump path: {app._exception!r}"
     )
