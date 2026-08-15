@@ -283,9 +283,14 @@ class ChoiceScreen(Screen[None]):
         two keys mean different things to the person pressing them. The jumps mean "go somewhere
         else in this app", and losing the work is a side effect nobody asked for; quit means
         "leave", and an app that refuses to close until an entry is cleared is a worse answer
-        than the one it replaces. What it *should* have is a warning rather than a refusal —
-        recorded as BL-025, and it belongs with the notification work rather than here, because
-        the surface currently has nowhere to put such a warning.
+        than the one it replaces.
+
+        **It now warns instead**, which is the shape that argument always pointed at:
+        `RemoteAgentsTui.action_quit` announces what is about to be lost and arms, and the
+        second press leaves regardless. So quit stays out of this set on purpose — greying it
+        would be the refusal — and the protection lives on the action rather than in the
+        footer. `work_at_risk` is the companion to `work_in_flight` that lets the warning name
+        what it is warning about.
         """
         if action == "back":
             # `go_back` refuses to pop the last screen, so at the resting position escape is
@@ -330,8 +335,51 @@ class ChoiceScreen(Screen[None]):
         # and twenty unawaited-push bursts), because every real consumer runs from the pump
         # after mount. Guarded anyway: an exception out of a footer redraw is the class that
         # has already cost this app once, and "unreachable today" is what that was too.
+        return self._live_entry() is not None
+
+    def _live_entry(self) -> Input | None:
+        """The entry, but only when it is shown and holds something — else `None`.
+
+        The one guarded dereference `work_in_flight` and `work_at_risk` both read, so the two
+        cannot answer from different premises. They were written with a near-verbatim copy of
+        this each, differing only in what they returned once the entry was found live, and a
+        Tier-1 review pointed out that widening what counts as "shown" would then have to be
+        done twice to stay correct.
+
+        The entry has to be *shown* as well as non-empty because `hide_entry` leaves the
+        widget in the tree with a stale value, so reading the value alone reports work in
+        flight on positions that have no entry at all.
+
+        `query_one` raises `NoMatches` before the screen has composed, and this runs from
+        `check_action` and from a global binding — the same path `App.check_action` already
+        guards its own dereference on. No driven sequence reaches it (a gate evaluator tried,
+        across a full keyed walk and twenty unawaited-push bursts), because every real consumer
+        runs from the pump after mount. Guarded anyway: an exception out of a footer redraw is
+        the class that has already cost this app once, and "unreachable today" is what that
+        was too.
+        """
         entry = self.query("#filter").first(Input) if self.query("#filter") else None
-        return bool(entry is not None and entry.display and entry.value)
+        return entry if entry is not None and entry.display and entry.value else None
+
+    @property
+    def work_at_risk(self) -> str:
+        """What leaving would discard, named so a warning can quote it back.
+
+        `work_in_flight` answers *whether* there is something to lose; this answers *what*, and
+        the two are separate because a warning that cannot name what is at risk is not much of
+        a warning — "you have unsaved work" is the message every owner has learned to dismiss.
+
+        The default is the entry's own text, which is the thing the owner just typed. A screen
+        that overrides `work_in_flight` because it holds gathered state rather than a typed
+        entry should override this too; the empty string is the honest answer for a screen
+        that cannot name its work, and the quit warning falls back to a general sentence
+        rather than quoting nothing.
+
+        Reads `_live_entry` rather than repeating its guard, so this and `work_in_flight`
+        cannot disagree about whether there is an entry to speak of.
+        """
+        entry = self._live_entry()
+        return entry.value if entry is not None else ""
 
     # Rendering -----------------------------------------------------------------
 

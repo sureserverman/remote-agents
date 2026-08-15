@@ -8,7 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import TypeVar
 
-from textual import work
+from textual import events, work
 from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.notifications import SeverityLevel
@@ -181,6 +181,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
         # different questions and only one of them is temporary.
         self._leaving = False
+        #: The (position, work) the quit warning was last given for — see `action_quit`. Keyed
+        #: to the work so that typing more re-arms it rather than leaving on a stale yes.
+        self._quit_armed: tuple[str, str] | None = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Ask the position on screen whether one of *these* bindings applies to it.
@@ -496,6 +499,100 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.exception("catalogue refresh failed")
             return False
         return True
+
+    async def on_event(self, event: events.Event) -> None:
+        """Disarm the quit warning on any key that is not another `ctrl+q`.
+
+        **Without this the warning re-opens the defect it closes, and a Tier-1 review
+        reproduced it.** `_quit_armed` was compared by value alone — position plus the text at
+        risk — and nothing ever cleared it. So: type `orbit-relay`, press ctrl+q and be warned,
+        decline, backspace the entry clean, retype the same name, press ctrl+q once — and the
+        app left immediately, because the freshly computed signature happened to equal a
+        signature armed against work that no longer existed. Correcting a typo back to its
+        original value is an ordinary thing to do, and it silently discarded the work again.
+
+        Keying the arm to the *work* was the right instinct and the wrong mechanism: a value
+        cannot express "this same continuous stretch of typing". What actually needs to hold
+        is that the owner has not changed the work since being warned, and that is a statement
+        about *input*, not about text.
+
+        **`Paste` as well as `Key`, and the first version of this missed it — a second
+        Critical from the same review.** `events.Paste` is not an `events.Key`; it is not even
+        an `events.InputEvent`, and `App.on_event` routes it down a separate branch. So
+        `Input._on_paste` can replace a mouse-made selection with identical clipboard text
+        while emitting no key at all, leaving the arm standing over work that was destroyed
+        and rebuilt — the same defect as the retype case, through a path the key check could
+        not see. Re-pasting a name to confirm it is an ordinary thing to do.
+
+        **`MouseEvent` is deliberately excluded**, which is why this names two classes instead
+        of taking `events.InputEvent`. That base is `Key` and `MouseEvent` only — `Paste` is
+        not under it, so it would not have helped — and it would disarm on every mouse *move*.
+        A terminal reporting motion would then re-warn on every second press, which is a
+        refusal wearing a warning's clothes: the one outcome BL-025 says is worse than the bug.
+        A click can move a cursor; it cannot change what is at risk, and a change by any other
+        route still moves the signature.
+
+        One override rather than a disarm in each of the five actions, which is the
+        arrangement `action_quit`'s own docstring argues against for the same reason: five
+        sites is five chances to forget, and the sixth action added later would forget.
+        """
+        if isinstance(event, events.Paste) or (
+            isinstance(event, events.Key) and event.key != "ctrl+q"
+        ):
+            self._quit_armed = None
+        await super().on_event(event)
+
+    async def action_quit(self) -> None:
+        """Leave — but say what is about to be lost first, and only ask once.
+
+        `ctrl+q` used to discard typed work silently, and it was reproduced: type a
+        label, press it, the app is gone and the label with it. `screens/base.py` deliberately
+        left quit out of the set of keys greyed while `work_in_flight`, and that reasoning
+        stands — a jump means "go elsewhere in this app" and losing the work is a side effect
+        nobody asked for, while quit means "leave". **The fix is a warning, never a refusal.**
+        An app that will not close until an entry is cleared is a worse answer than the silent
+        discard it replaces, so the second press always leaves.
+
+        **Not a modal, and DEC-025 is why.** The obvious implementation is `ask_to_confirm`,
+        as the force-stop and Remote Control confirmations do it. That decision forbids
+        exactly this caller: a confirmation may only be asked from a screen's own handler,
+        and it names "a global binding" among the callers it exists to warn off. The
+        protection those confirmations rely on is that a screen handler holds the pump while
+        it waits, so nothing can pop the modal out from under the await. A global binding
+        holds no such thing, and an unanswered `push_screen_wait` neither returns nor raises.
+        So the question is asked on the key itself: nothing suspends, and nothing can hang.
+
+        **Armed against the work, not against a clock or a bare flag.** What is remembered is
+        the position and the text that was at risk when the warning was given. Keep typing and
+        that signature moves, so the next press warns again about the *new* work rather than
+        leaving on a yes that answered a smaller question. A bare flag would have had to be
+        cleared by every other action to get the same property — five call sites today and a
+        sixth one forgotten later.
+
+        Owner text reaches the toast through `announce`, which is the one place `markup=False`
+        is decided (DEC-014); a label containing an unbalanced bracket is a rendering fault
+        this surface has already paid for once.
+        """
+        screen = self.screen if self.screen_stack else None
+        if isinstance(screen, ChoiceScreen) and screen.work_in_flight:
+            at_risk = screen.work_at_risk
+            signature = (screen.position, at_risk)
+            if self._quit_armed != signature:
+                self._quit_armed = signature
+                screen.announce(
+                    (
+                        f"Quitting now discards {at_risk!r}, which has not been saved. "
+                        "Press ctrl+q again to leave anyway."
+                    )
+                    if at_risk
+                    else (
+                        "Quitting now discards what you have built on this screen. "
+                        "Press ctrl+q again to leave anyway."
+                    ),
+                    severity="warning",
+                )
+                return
+        await super().action_quit()
 
     async def action_add_project(self) -> None:
         if not self.busy:

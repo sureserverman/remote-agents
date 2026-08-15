@@ -148,6 +148,21 @@ class ProjectReviewScreen(ChoiceScreen):
         """
         return True
 
+    @property
+    def work_at_risk(self) -> str:
+        """Nothing nameable — the work here is a gathered selection, not a typed string.
+
+        Declared rather than inherited, and `test_quit_warning.py`'s pairing sweep is what
+        makes that mandatory. The inherited default would answer `""` anyway, but only because
+        `populate` happens to have called `hide_entry()`; a Tier-1 review pointed out that
+        this was correct by an unenforced precondition rather than by declaration, which is
+        the exact shape DEC-009 exists to generalize a check for. A screen that later grew a
+        visible entry holding something unrelated would have quoted it as the work at risk.
+
+        The empty string is the honest answer, and the quit warning has a sentence for it.
+        """
+        return ""
+
     position = "PROJECT_REVIEW"
     crumb = "Review"
 
