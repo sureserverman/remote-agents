@@ -129,10 +129,11 @@ class ResumeProjectsScreen(ChoiceScreen):
                 if capability.catalogue_available and capability.selected_resume_available
             )
             # Inside the guard, not after it. `push_screen` yields while the new screen
-            # mounts, so clearing first leaves a window in which a second global binding
-            # pops the screen being mounted and the fetched capabilities are discarded with
-            # no error — the same "a second entry point mid-navigation" class the guard
-            # exists for, just failing silently instead of stranding.
+            # mounts, so clearing first leaves a window in which a second of this app's
+            # bindings pops the screen being mounted and the fetched capabilities are
+            # discarded with no error — the same "a second entry point mid-navigation" class
+            # the guard exists for, just failing silently instead of stranding. What the
+            # guard does *not* cover is written down once, on `ChoiceScreen.advance_to`.
             await self.advance_to(ResumeProfilesScreen(project, capable))
 
 
@@ -340,8 +341,10 @@ class ResumeConversationsScreen(ChoiceScreen):
                 return
             # Inside the guard, not after it, for the reason `ResumeProjectsScreen.choose`
             # gives: `push_screen` yields while the new screen mounts, so releasing first
-            # leaves a window in which a global binding pops the screen being mounted and the
-            # resolved conversation is discarded with no error at all.
+            # leaves a window in which one of this app's bindings pops the screen being
+            # mounted and the resolved conversation is discarded with no error at all.
+            # `ChoiceScreen.advance_to` records what this narrows and what it does not —
+            # Textual's own `ctrl+p` is a priority binding and gets through regardless.
             await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
     async def turn_page(self, step: int) -> None:

@@ -533,6 +533,22 @@ class ChoiceScreen(Screen[None]):
         `ModalScreen` awaited through `ask_to_confirm` now and does not come this way at all,
         so the hazard is the same and the illustration had to change with the call sites: the
         inspect screen and the three resume pushes are what still travel through this.
+
+        **The navigation guard narrows this window; it does not close it, and the callers'
+        comments should not be read as saying otherwise.** Holding the guard across a fetch
+        stops *this app's* bindings from leaving mid-read, because they consult `busy` — but
+        Textual installs the command palette's `ctrl+p` with `priority=True`, so it is checked
+        on the App's own pump, which a suspended screen handler does not hold, and
+        `check_action` here lets it through. Opening the palette during a guarded fetch
+        therefore still reaches this early return. Measured against Textual 8.2.8; the palette
+        binding is added in `App.__init__` when `ENABLE_COMMAND_PALETTE` is set.
+
+        That return is also the one exit from a resume `choose` that says nothing at all —
+        every other branch announces — so the owner sees their selection do nothing. It is not
+        a regression and nothing unsafe happens (the palette's own entries all gate on `busy`),
+        but giving it a voice is a UX call with a real argument on both sides: a screen the
+        owner has already left is a questionable place to put a message. Recorded rather than
+        decided here.
         """
         if not self.showing:
             return

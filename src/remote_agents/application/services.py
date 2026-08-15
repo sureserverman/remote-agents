@@ -255,10 +255,16 @@ class SessionService:
                 #
                 # A detail neither branch knows falls back to the timeout — which is what this
                 # method recorded for every cause before DEC-022, so the fallback introduces no
-                # claim that was not already being made — but it says so out loud. Silently
-                # defaulting is the fail-dangerous shape `stop_failure` removed from its own
-                # dispatch for this same field, and it is how a future "nothing left the host"
-                # cause would be written to the audit log as a wait that never happened.
+                # claim that was not already being made — but it says so out loud.
+                #
+                # **`stop_failure` resolves the same unknown the other way, and the difference
+                # is not an inconsistency.** There, the choice is between "a failure" and "a
+                # success", and an unknown plainly belongs on the failure side. Here both
+                # answers are equally specific *claims* about what happened — one asserts a
+                # wait, the other asserts that nothing left the host — so there is no
+                # conservative side to fall to, and picking either silently would be inventing
+                # evidence. Hence the warning: the fallback keeps the pre-DEC-022 behaviour and
+                # the log is what makes a new cause somebody's problem instead of nobody's.
                 event = _STOP_EVENTS.get(observation.detail)
                 if event is None:
                     _LOG.warning(

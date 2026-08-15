@@ -164,14 +164,21 @@ async def test_a_live_pane_under_a_stop_request_is_a_timeout_and_not_a_stop_neve
 
     `SessionService.graceful_stop` stopped writing `GRACEFUL_STOP_TIMED_OUT` for
     `unknown_session`, because nothing was signalled there. This producer is the other one and
-    it keeps the event: it finds a live pane under a record that has been in STOP_REQUESTED
-    since a stop that was sent, which is a real timeout.
+    it keeps the event: it finds a live pane under a record in STOP_REQUESTED, which in the
+    ordinary case is a stop that was sent and did not take.
 
-    Written because the argument for keeping them apart lived only in a comment. Two call
-    sites recording two events for what reads like the same failure is the shape that invites
-    a "consistency" edit, and until this existed such an edit passed the whole suite — the
-    defence was prose a refactor never has to read. Found by the Stage 2 gate evaluator, which
-    noted the domain test one layer down had already been given exactly this treatment.
+    **It cannot prove that, and this test does not claim it does.** The record stores the
+    event, not the observation that produced it, so a record left in STOP_REQUESTED by a crash
+    between `graceful_stop`'s first write and its terminal call is indistinguishable here —
+    the same argument DEC-022 makes for why historical rows are not migrated, in a narrower
+    place. What is pinned is only that *this* producer keeps recording the timeout, because
+    the alternative would name every ordinary case wrongly in order to catch the rare one.
+
+    Written because the argument for keeping the two producers apart lived only in a comment.
+    Two call sites recording two events for what reads like the same failure is the shape that
+    invites a "consistency" edit, and until this existed such an edit passed the whole suite —
+    the defence was prose a refactor never has to read. Found by the Stage 2 gate evaluator,
+    which noted the domain test one layer down already had exactly this treatment.
     """
     stopping = record(SessionState.STOP_REQUESTED)
     store = InMemoryStore((stopping,))
@@ -180,8 +187,9 @@ async def test_a_live_pane_under_a_stop_request_is_a_timeout_and_not_a_stop_neve
     await service.reconcile((TerminalObservation(stopping.session_id, live=True, preserved=False),))
 
     assert store.events == [LifecycleEvent.GRACEFUL_STOP_TIMED_OUT], (
-        "reconciliation saw a live pane under a stop that was sent — that is a timeout, and "
-        "recording GRACEFUL_STOP_NEVER_SENT here would claim nothing left the host"
+        "this producer must keep recording a timeout: it cannot see whether the exit sequence "
+        "was sent, and GRACEFUL_STOP_NEVER_SENT would assert nothing left the host for every "
+        "ordinary case in order to be right about the rare one"
     )
     assert store.records[stopping.session_id].state is SessionState.RUNNING
 
