@@ -54,6 +54,23 @@ class SessionState(StrEnum):
     ORPHANED = "orphaned"
 
 
+class OrphanProvenance(StrEnum):
+    """Which producer put a record into ORPHANED, because the two get different actions.
+
+    ORPHANED conflates two situations that reconciliation can already tell apart and then
+    forgets (DEC-020). `ADOPTED` is a trusted managed pane found with **no record at all**
+    and taken into the register — frequently a live agent the database lost, and the case
+    that justifies offering a force stop. `AMBIGUOUS` is a record whose pane was found but
+    was neither live nor preserved, where the evidence supports no action at all.
+
+    Only the *policy* meaning belongs here; which rows may be acted on is
+    `session_actions.py`'s to say.
+    """
+
+    ADOPTED = "adopted"
+    AMBIGUOUS = "ambiguous"
+
+
 @dataclass(frozen=True, slots=True)
 class SessionId:
     """Opaque immutable session key, backed by a UUID."""
@@ -168,6 +185,27 @@ class SessionRecord:
 
     Without it a session killed out from under the service is indistinguishable from one
     the owner stopped deliberately, because both simply read ENDED.
+    """
+    orphan_provenance: OrphanProvenance | None = None
+    """Which producer put this record into ORPHANED, or `None` if none did.
+
+    `None` means exactly one thing about a record written since migration 6: this record has
+    never been ORPHANED. Both producers stamp — `reconcile._save_trusted_orphan` writes
+    `ADOPTED` when it creates a record, and `record_event` writes `AMBIGUOUS` when a
+    transition lands an existing record there — so the field is total, and a reader does not
+    have to treat "no provenance" as a third possibility.
+
+    A row that predates migration 6 also reads `None`, and that is the one genuine ambiguity.
+    It is deliberate: provenance cannot be back-derived, because once a pane is adopted a
+    record exists and reconciliation matches it by id from then on, never seeing an unknown
+    pane again (DEC-020). Such a row takes the conservative branch rather than gaining a
+    destructive action on the strength of a guess.
+
+    It is written to outlive ORPHANED. Nothing can leave ORPHANED today — the matrix has no
+    outgoing transition and `TERMINAL_STATES` is derived from that — so the carry-through is
+    currently unreachable. Once DEC-020's one new transition lands, a force-stopped adopted
+    record will reach ENDED still carrying `ADOPTED`, which is what will let the audit trail
+    answer *what was killed*.
     """
 
     def __post_init__(self) -> None:

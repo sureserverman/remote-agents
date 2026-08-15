@@ -1,6 +1,7 @@
 """Reconciliation tests: terminal evidence wins and ambiguity is read-only."""
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from remote_agents.application.reconcile import (
     reconcile,
 )
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionDisplayIdentity,
@@ -41,15 +43,12 @@ class InMemoryStore:
         return tuple(self.records.values())
 
     async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord:
+        # `replace` rather than a positional rebuild: this fake used to reconstruct the record
+        # from its first six fields and silently drop every later one, which is the same
+        # defect Task 4.1 closed in the real store. A fake that loses a field the store keeps
+        # passes tests the production path would fail.
         current = self.records[session_id]
-        updated = SessionRecord(
-            current.session_id,
-            current.project_id,
-            current.profile_id,
-            current.display,
-            transition(current.state, event).to_state,
-            current.created_at,
-        )
+        updated = replace(current, state=transition(current.state, event).to_state)
         self.records[session_id] = updated
         self.events.append(event)
         return updated
@@ -209,6 +208,30 @@ async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
 
     assert store.records[failed.session_id].state is SessionState.RUNNING
     assert store.events == [LifecycleEvent.READY]
+
+
+async def test_an_adopted_orphan_records_which_producer_created_it() -> None:
+    """The whole of DEC-020 rests on this stamp: it is what separates a live adopted agent
+    from a muddled-evidence record, and it can only be known here, at the moment of adoption.
+    """
+    store = InMemoryStore(())
+    service = ReconciliationService(store, settle_after=timedelta(0))
+    unknown = SessionId.new()
+
+    await service.reconcile(
+        (
+            TerminalObservation(
+                unknown,
+                live=True,
+                preserved=False,
+                project_id=ProjectId("opaque-editor"),
+                profile_id=ProfileId("claude"),
+            ),
+        )
+    )
+
+    assert store.records[unknown].state is SessionState.ORPHANED
+    assert store.records[unknown].orphan_provenance is OrphanProvenance.ADOPTED
 
 
 async def test_reconciliation_never_creates_an_orphan_without_trusted_identity() -> None:

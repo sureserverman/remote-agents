@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     SessionDisplayIdentity,
     SessionId,
@@ -157,6 +158,9 @@ class ReconciliationService:
                 ),
                 SessionState.ORPHANED,
                 datetime.now(UTC),
+                # Keyword, not positional: provenance is the tenth field and every rebuild
+                # that reached it positionally is exactly how it gets dropped.
+                orphan_provenance=OrphanProvenance.ADOPTED,
             )
         )
 
