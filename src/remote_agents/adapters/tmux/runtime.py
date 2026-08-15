@@ -333,11 +333,21 @@ class TmuxTerminal:
         return await self._gateway.capture(session_id)
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
-        """Recheck exact trusted pane liveness immediately before rendering its attach command."""
+        """Recheck the exact trusted pane immediately before rendering its attach command.
+
+        Two panes qualify now, and they get different commands (DEC-021). A live pane attaches
+        writably, as it always has. A **preserved** pane — the agent exited and tmux kept its
+        output — attaches read-only: tmux will allow it, the output is the thing PRESERVED
+        exists to keep, and the previous refusal read as though tmux forbade it.
+
+        The recheck itself is unchanged and still the point: this answers from a fresh
+        observation rather than from the record, so a pane that has gone since the row was
+        drawn still yields nothing.
+        """
         observation = await self.inspect(session_id)
-        if observation is None or not observation.live:
+        if observation is None or not (observation.live or observation.preserved):
             return None
-        return attach_command(session_id)
+        return attach_command(session_id, read_only=not observation.live)
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState

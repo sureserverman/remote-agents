@@ -606,9 +606,13 @@ class SessionDetailScreen(ChoiceScreen):
                 self.tui.report_store_failure(error, self)
                 return
         if command is None:
+            # "no pane left", not "not live": a preserved pane attaches read-only now
+            # (DEC-021), so liveness stopped being what this refusal turns on. Saying it still
+            # did would send an owner looking for a way to revive a session whose output is
+            # sitting right there.
             self.announce(
-                "Attach is not available: this session's pane is not live, or the pane "
-                f"found for it belongs to a different project or agent. "
+                "Attach is not available: this session has no pane on this host any more, or "
+                f"the pane found for it belongs to a different project or agent. "
                 f"{explain_state(record.state)}",
                 severity="warning",
             )

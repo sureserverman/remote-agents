@@ -226,6 +226,10 @@ class _Launcher:
     # one and only trigger for `report_store_failure`.
     records: tuple[SessionRecord, ...] | None = None
     list_error: Exception | None = None
+    #: What `copy_attach` hands back. The default is the writable form a live pane earns; the
+    #: PRESERVED attach case swaps in the read-only one, because DEC-021 makes the *command*
+    #: the difference between the two states rather than the presence of the row.
+    attach: str = "tmux -L remote-agents attach-session -t =ra-session:"
 
     def _listing(self) -> tuple[SessionRecord, ...]:
         return (self.record,) if self.records is None else self.records
@@ -239,7 +243,7 @@ class _Launcher:
         return self._listing()
 
     async def copy_attach(self, _session_id):
-        return "tmux -L remote-agents attach-session -t =ra-session:"
+        return self.attach
 
     async def set_remote_control(self, _command):
         return RemoteControlState.ACTIVE
@@ -576,6 +580,22 @@ _STATES = (
         _to_detail,
     ),
     _State("SESSION_DETAIL_ATTACH", "SESSION_DETAIL", _context, _to_attach),
+    # DEC-021's whole visible result: the same position, the same row, one flag different in
+    # what it hands over. Baselined separately from the live attach because "read-only" is a
+    # claim the owner reads off this screen and nowhere else — the record still says PRESERVED
+    # either way, so a regression that dropped `-r` would leave every other assertion green.
+    _State(
+        "SESSION_DETAIL_ATTACH_PRESERVED",
+        "SESSION_DETAIL",
+        lambda: _context(
+            state=SessionState.PRESERVED,
+            launcher=_Launcher(
+                record=_record(SessionState.PRESERVED),
+                attach="tmux -L remote-agents attach-session -r -t =ra-session:",
+            ),
+        ),
+        _to_attach,
+    ),
     _State(
         "INSPECT_BINARY",
         "INSPECT",

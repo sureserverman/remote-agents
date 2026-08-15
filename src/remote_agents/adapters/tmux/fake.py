@@ -62,7 +62,9 @@ class FakeTerminal:
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
         observation = await self.inspect(session_id)
-        return attach_command(session_id) if observation is not None and observation.live else None
+        if observation is None or not (observation.live or observation.preserved):
+            return None
+        return attach_command(session_id, read_only=not observation.live)
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState

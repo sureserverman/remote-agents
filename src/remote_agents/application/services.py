@@ -173,12 +173,19 @@ class SessionService:
         return await self._terminal.inspect(query.session_id)
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
-        """Return a copyable command only after current record and terminal ownership agree."""
+        """Return a copyable command only after current record and terminal ownership agree.
+
+        A **preserved** pane qualifies alongside a live one (DEC-021), and it is the terminal
+        that decides which command that earns — read-only for preserved. This layer's job is
+        unchanged and is the half that matters here: the ownership check. A pane whose project
+        or profile disagrees with the record is refused whether it is live or preserved, so
+        widening liveness does not widen *whose* pane may be handed over.
+        """
         record = await self._require_session(session_id)
         observation = await self._terminal.inspect(session_id)
         if (
             observation is None
-            or not observation.live
+            or not (observation.live or observation.preserved)
             or observation.project_id != record.project_id
             or observation.profile_id != record.profile_id
         ):

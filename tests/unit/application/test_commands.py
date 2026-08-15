@@ -294,6 +294,49 @@ async def test_copy_attach_refuses_a_pane_that_belongs_to_another_project() -> N
     assert await service.copy_attach(record.session_id) is None
 
 
+async def test_copy_attach_offers_a_preserved_pane_read_only() -> None:
+    """DEC-021: PRESERVED gets its output back, and gets it read-only.
+
+    The refusal this replaces read as though tmux forbade attaching to a preserved pane. It
+    does not — the pane is still there, holding exactly the output PRESERVED exists to keep,
+    and refusing to show it made the state less useful than the thing it replaced. What the
+    agent's exit does remove is anything to type *to*, which is why the form is `-r`.
+    """
+    store = FakeStore()
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    observation = await terminal.inspect(record.session_id)
+    terminal._observations[record.session_id] = replace(observation, live=False, preserved=True)
+
+    command = await service.copy_attach(record.session_id)
+
+    assert command is not None, "a preserved pane still has the output PRESERVED exists to keep"
+    assert "attach-session -r -t" in command, f"the offer must be read-only, but it was {command!r}"
+
+
+async def test_copy_attach_still_refuses_a_pane_that_is_neither_live_nor_preserved() -> None:
+    """The half the relaxation must not take with it.
+
+    Widening the gate to accept `preserved` is one step from accepting anything that is not
+    `None`, and an observation that is neither live nor preserved is a pane whose evidence is
+    ambiguous — the ORPHANED producer. Handing over an attach command for it would be
+    inventing a pane.
+    """
+    store = FakeStore()
+    terminal = OwnershipAwareTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    observation = await terminal.inspect(record.session_id)
+    terminal._observations[record.session_id] = replace(observation, live=False, preserved=False)
+
+    assert await service.copy_attach(record.session_id) is None
+
+
 async def test_copy_attach_refuses_a_pane_running_another_profile() -> None:
     store = FakeStore()
     terminal = OwnershipAwareTerminal()

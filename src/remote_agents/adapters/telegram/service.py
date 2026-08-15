@@ -1053,13 +1053,15 @@ class PrivateBotBoundary:
         back = self._callback("session.detail", session_value)
         if record is None or not await self._can_copy_attach(record):
             return self._message(
-                "Copy Attach is unavailable until this managed pane is live.", back=back
+                "Copy Attach is unavailable: this session has no pane on this host any more.",
+                back=back,
             )
         copy = getattr(self.launcher, "copy_attach", None)
         command = await copy(record.session_id) if copy is not None else None
         if command is None:
             return self._message(
-                "Copy Attach is unavailable until this managed pane is live.", back=back
+                "Copy Attach is unavailable: this session has no pane on this host any more.",
+                back=back,
             )
         return self._message(
             f"<b>Copy attach command</b>\n<code>{escape(command)}</code>", back=back
@@ -1171,6 +1173,13 @@ class PrivateBotBoundary:
         )
 
     async def _can_copy_attach(self, record: SessionRecord) -> bool:
+        """Whether this session has a pane the owner can be handed a command for.
+
+        Preserved counts as well as live (DEC-021). This surface *hides* the button when the
+        answer is no, where the local one renders the row always and explains when chosen — so
+        this predicate is what decides whether the bot offers a PRESERVED session its attach
+        at all, and DEC-021 requires both surfaces to offer it or neither.
+        """
         if self.launcher is None:
             return False
         inspect = getattr(self.launcher, "inspect", None)
@@ -1179,7 +1188,7 @@ class PrivateBotBoundary:
         observation = await inspect(InspectQuery(record.session_id))
         return bool(
             observation is not None
-            and observation.live
+            and (observation.live or observation.preserved)
             and observation.project_id == record.project_id
             and observation.profile_id == record.profile_id
         )
