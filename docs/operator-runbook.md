@@ -574,8 +574,9 @@ force remains available when a graceful stop cannot be resolved.
 
 The two-writer caveat above still applies, and it now governs stops as well as launches.
 `SessionLocks` serializes the mutations issued through `SessionService`, and only inside the
-process holding them — reconciliation's own writes do not take it at all — so a stop from the terminal and a stop from the service are not serialized against each
-other; across the two processes the only arbitration is SQLite's one-second busy timeout and the
+process holding them — reconciliation's own writes do not take it at all — so a stop from the
+terminal and a stop from the service are not serialized against each other; across the two
+processes the only arbitration is SQLite's one-second busy timeout and the
 durable idempotency keys. That is sound for a single owner on one host and would not be for
 concurrent operators. Drive a given session from one surface at a time, and let the other
 surface's next list read the result.
