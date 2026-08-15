@@ -378,27 +378,55 @@ def test_quit_can_name_what_every_screen_would_discard(screen: type) -> None:
     )
 
 
-def test_quit_disarm_still_covers_every_input_event_textual_defines() -> None:
-    """Pin the enumeration `on_event`'s disarm is a closed-world assumption over.
+def test_quit_disarm_still_covers_every_way_an_input_can_change() -> None:
+    """Pin the surface `on_event`'s disarm is a closed-world assumption over.
 
     `RemoteAgentsTui.on_event` disarms on `events.Key` and `events.Paste` and deliberately not
-    on `events.MouseEvent`, and that trio is the whole of what can reach an `Input` and change
-    its value in the pinned Textual version. **This enumeration has been got wrong twice**, in
-    both Criticals this task's review raised — first by omitting the retype path entirely, then
-    by matching only `Key` and missing `Paste`, which is not even an `InputEvent`.
+    on `events.MouseEvent`. **This enumeration has been got wrong twice**, in both Criticals
+    this task's review raised — first by omitting the retype path entirely, then by matching
+    only `Key` and missing `Paste`, which is not even an `InputEvent`.
 
-    So the taxonomy is pinned rather than re-read by hand a third time. A Textual upgrade that
-    adds an input-adjacent event class — IME composition, a drag-and-drop text drop — fails
-    here, where the failure names the decision that has to be revisited, instead of silently
-    reopening BL-025 for whoever pastes their project name.
+    **The first version of this pin was itself too narrow, and a gate evaluator caught it.** It
+    asserted `set(events.InputEvent.__subclasses__()) == {Key, MouseEvent}` and claimed in its
+    docstring that "a Textual upgrade that adds an input-adjacent event class — IME
+    composition, a drag-and-drop text drop — fails here". It would not have. `Paste` is one of
+    roughly thirty *direct* `Event` subclasses, so it never appeared under `InputEvent` at all
+    — and a future text-drop event, modelled the way `Paste` is, would sail past a pin that
+    only constrains the `InputEvent` branch. A guard test overstating its own coverage is the
+    exact species this sub-plan exists to eliminate, so it is pinned on the right axis now.
 
-    `Paste` is asserted separately and pointedly: it is a bare `Event`, *not* an `InputEvent`,
-    which is exactly why the first fix could not see it.
+    **The right axis is `Input`'s own handlers**, not the event hierarchy. What the disarm
+    actually needs to cover is every way the widget's value can change under the owner's
+    hands, and that is decided by which events `Input` chooses to handle — a new event class
+    Textual adds but `Input` ignores cannot change anything. So this freezes the handlers
+    `Input` itself defines. Two of them mutate `value` today (`_on_key`, `_on_paste`) and both
+    are covered; the four mouse handlers touch only selection and cursor, which is why
+    `MouseEvent` is excluded from the disarm.
+
+    A Textual upgrade that gives `Input` a new handler — `_on_drop`, an IME composition
+    handler — fails here, where the failure names the decision to revisit, rather than
+    silently reopening the discard for whoever pastes their project name.
     """
-    assert set(events.InputEvent.__subclasses__()) == {events.Key, events.MouseEvent}, (
-        "Textual's InputEvent taxonomy has changed. RemoteAgentsTui.on_event disarms the quit "
-        "warning on Key and Paste only, and excludes MouseEvent deliberately — re-derive that "
-        "decision against the new class before updating this test."
+    from textual.widgets import Input
+
+    handlers = {name for name in vars(Input) if name.startswith(("_on_", "on_"))}
+    assert handlers == {
+        "_on_blur",
+        "_on_focus",
+        "_on_key",
+        "_on_mount",
+        "_on_mouse_down",
+        "_on_mouse_move",
+        "_on_mouse_release",
+        "_on_mouse_up",
+        "_on_paste",
+        "_on_suggestion_ready",
+    }, (
+        f"`Input`'s handler set has changed: {sorted(handlers)}. "
+        f"`RemoteAgentsTui.on_event` disarms the quit warning on Key and Paste only, because "
+        f"those are the two handlers that mutate `value` — the mouse handlers touch selection "
+        f"and cursor alone. Re-derive that against the new handler before updating this test: "
+        f"if it can change what the owner typed, the disarm has to see it."
     )
     assert not issubclass(events.Paste, events.InputEvent), (
         "Paste is now an InputEvent. The disarm names it separately precisely because it was "
