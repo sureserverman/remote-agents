@@ -26,8 +26,9 @@ written before migration 6, which cannot have its provenance back-derived. That 
 the whole reason `available_actions` takes a second argument.
 
 This was previously a flat refusal, and the reasoning recorded here for it was sound at the
-time: the domain had no transition out of ORPHANED, so an offered force raised
-InvalidTransition before the terminal was reached. DEC-020 supplies exactly one transition
+time: the lifecycle matrix then permitted ORPHANED no way out at all, so an offered force
+raised InvalidTransition before the terminal was reached. DEC-020 supplies exactly one
+transition
 (`VERIFIED_FORCE_STOP → ENDED`) and no bare retire, so the row still clears only as the
 consequence of an observed action, never by dismissing it. The safety question the old text
 raised — a one-tap kill on a possibly-live pane this app does not own — was answered rather

@@ -106,9 +106,16 @@ class SQLiteSessionStore:
         if current is None:
             raise KeyError(f"unknown session: {session_id}")
         to_state = transition(current.state, event).to_state
-        # Only a terminal state gets a reason, and only the first one: the matrix offers no
-        # way out of ENDED or ORPHANED, so the event that landed there is the whole answer
-        # to why the session stopped.
+        # Only a terminal state gets a reason: the matrix offers no way out of ENDED, so the
+        # event that landed there is the whole answer to why the session stopped.
+        #
+        # ORPHANED used to qualify and no longer does, and nothing here was edited to change
+        # that — `TERMINAL_STATES` is derived from the transition table, and DEC-020's one new
+        # row made ORPHANED an origin. The result is right: a held-aside record has not
+        # stopped, so claiming an ending for it would be false, and an adopted one that is
+        # later force-stopped gets `verified_force_stop` as its reason at the moment it
+        # actually ends. `else current.terminal_reason` is what carries a real reason through
+        # any later non-terminal transition rather than clearing it.
         terminal_reason = event.value if to_state in TERMINAL_STATES else current.terminal_reason
         # The second of ORPHANED's two producers. `reconcile._save_trusted_orphan` stamps
         # ADOPTED when it *creates* a record; the ambiguous producer never creates one, it

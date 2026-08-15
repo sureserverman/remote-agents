@@ -540,11 +540,23 @@ uv run --locked remote-agents tui
    confirming means moving to the other row on purpose. No screen rests the cursor on an entry
    that mutates, and a stop that fails leaves the cursor on Back rather than on the button
    that just failed, so a second enter is never a blind retry of a kill.
-6. ORPHANED offers no stop at all. It does not mean the pane is gone — that ends the session — it
-   means the record and this host's panes could not be reconciled, so the session is quarantined
-   for local attention and the lifecycle permits no transition out of it. Inspect it with
-   `tmux -L remote-agents list-panes -a` and resolve it at the tmux level, only after its
-   ownership and output have been established.
+6. ORPHANED is two situations, and what is offered depends on which. It never meant the pane is
+   gone — that ends the session. It means the record and this host's panes could not be
+   reconciled, and reconciliation knows two ways that happens, so the record now remembers which
+   applied.
+   - **A running agent was found with no record of it**, and was taken back into the list. This
+     is usually a live agent the database lost. It offers **Force stop**, which is the action its
+     pane actually supports, and the screen says so in as many words. The lifecycle permits
+     exactly this one transition out of ORPHANED and nothing else — there is no way to simply
+     dismiss the row, because clearing it without acting would hide a working agent rather than
+     stop it.
+   - **The pane was found but was neither live nor preserved.** The evidence supports no action,
+     so none is offered. Every record written before the provenance column existed reads this
+     way too, because how it got there cannot be worked out after the fact.
+
+   Either way, inspect it with `tmux -L remote-agents list-panes -a` and resolve it at the tmux
+   level, only after its ownership and output have been established. Forcing the first kind kills
+   a pane this tool never properly owned — that is intended, and it is still a kill.
 
 Ctrl+O opens Resume, which starts a new managed session continuing a saved conversation, and it
 is offered only for profiles that report themselves resume-capable on this host. When a session
