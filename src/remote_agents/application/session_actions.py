@@ -197,10 +197,13 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     it -- so a surface consults this with a fresh observation or not at all.
 
     Deliberately *not* folded into `available_actions`. That function is the stop-action
-    policy the parity contract pins (DEC-007), and its answer is a pure function of
-    `SessionState`; adding a pane-dependent row to it would make the contract's comparison
-    depend on what an agent happened to be printing. This follows `remote_control_available`
-    instead, which is the established shape for an action that is not a stop.
+    policy the parity contract pins (DEC-007), and its answer is a function of the *stored
+    record* alone — its state, and since DEC-020 its `orphan_provenance`. Adding a
+    pane-dependent row would make the contract's comparison depend on what an agent happened
+    to be printing, which is a different kind of input entirely: a record's fields are the
+    same for both surfaces at the moment they render, and a pane's output is not. This
+    follows `remote_control_available` instead, which is the established shape for an action
+    that is not a stop.
 
     Unlike Remote Control, no session state is required. The state a trust-blocked launch
     lands in is FAILED -- the readiness marker never arrived -- so gating on RUNNING would

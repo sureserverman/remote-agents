@@ -406,9 +406,14 @@ class SessionDetailScreen(ChoiceScreen):
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
-        The stop entries are exactly `available_actions(record.state)` in the order it
-        returns them, which puts force last. Adding, filtering, or reordering here is what
-        `tests/contract/test_session_actions_parity.py` exists to catch.
+        The stop entries are exactly `available_actions(record.state, record.orphan_provenance)`
+        in the order it returns them, which puts force last. Adding, filtering, or reordering
+        here is what `tests/contract/test_session_actions_parity.py` exists to catch.
+
+        Provenance is passed rather than dropped because an ORPHANED record's rows depend on
+        it (DEC-020), and a surface that passed only the state would silently render the
+        conservative set — a divergence the parity contract cannot see if the other surface
+        does the same thing.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.capture is not None:
