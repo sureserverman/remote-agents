@@ -30,9 +30,23 @@ class ReconciliationResult:
 
 
 def reconcile(
-    records: tuple[SessionRecord, ...], observations: tuple[TerminalObservation, ...]
+    records: tuple[SessionRecord, ...],
+    observations: tuple[TerminalObservation, ...],
+    *,
+    also_known: frozenset[SessionId] = frozenset(),
 ) -> tuple[ReconciliationResult, ...]:
-    """Derive safe states from terminal evidence without terminal mutation."""
+    """Derive safe states from terminal evidence without terminal mutation.
+
+    `also_known` names sessions that exist in the store but are deliberately **not** being
+    reconciled on this pass — today, the ones still inside their settle window. They must
+    still count as known, because "known" here answers "does a row exist for this pane", not
+    "is this pane being reconciled". Conflating the two made every launch look like an
+    unknown pane for the length of the settle window: `_save_trusted_orphan` then tried to
+    INSERT a row whose primary key already existed, the `UNIQUE` constraint raised, and the
+    whole pass aborted — taking the runtime coordinator down with it, since it does not
+    swallow that. Found by the Stage 4 gate's adversarial pass, reproduced against a real
+    store.
+    """
     by_id = {observation.session_id: observation for observation in observations}
     results: list[ReconciliationResult] = []
     for record in records:
@@ -51,9 +65,15 @@ def reconcile(
         elif observation.live:
             state, reason = SessionState.RUNNING, "terminal_live"
         else:
+            # Unreachable from the real adapter, and kept deliberately. `codec.parse_pane`
+            # derives both flags from one validated `pane_dead` field, so `live` and
+            # `preserved` are exact complements and this `else` needs a pane that is neither.
+            # Only a hand-built observation reaches it. Kept because it is the honest
+            # fallthrough for a runtime that learns to report a third condition, and because
+            # deleting it would make the next such runtime silently take the `live` branch.
             state, reason = SessionState.ORPHANED, "ambiguous_terminal"
         results.append(ReconciliationResult(record.session_id, state, reason))
-    known = {record.session_id for record in records}
+    known = {record.session_id for record in records} | set(also_known)
     results.extend(
         ReconciliationResult(observation.session_id, SessionState.ORPHANED, "unknown_session")
         for observation in observations
@@ -84,8 +104,12 @@ class ReconciliationService:
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
     ) -> tuple[ReconciliationResult, ...]:
-        records = tuple(record for record in await self._store.list() if self._has_settled(record))
-        results = reconcile(records, observations)
+        stored = tuple(await self._store.list())
+        records = tuple(record for record in stored if self._has_settled(record))
+        settling = frozenset(record.session_id for record in stored) - {
+            record.session_id for record in records
+        }
+        results = reconcile(records, observations, also_known=settling)
         by_id = {record.session_id: record for record in records}
         for result in results:
             record = by_id.get(result.session_id)

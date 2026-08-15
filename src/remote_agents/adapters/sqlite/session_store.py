@@ -114,8 +114,12 @@ class SQLiteSessionStore:
         # row made ORPHANED an origin. The result is right: a held-aside record has not
         # stopped, so claiming an ending for it would be false, and an adopted one that is
         # later force-stopped gets `verified_force_stop` as its reason at the moment it
-        # actually ends. `else current.terminal_reason` is what carries a real reason through
-        # any later non-terminal transition rather than clearing it.
+        # actually ends. The `else current.terminal_reason` branch carries an existing reason
+        # forward rather than clearing it — though no reachable transition lands there with a
+        # non-None value today: ENDED is the only state that can hold one, and ENDED has no
+        # way out, so `transition` raises before this line is reached. It is written as the
+        # honest general form rather than as `None`, because the alternative encodes "no
+        # non-terminal state ever follows a terminal one" as a silent assumption.
         terminal_reason = event.value if to_state in TERMINAL_STATES else current.terminal_reason
         # The second of ORPHANED's two producers. `reconcile._save_trusted_orphan` stamps
         # ADOPTED when it *creates* a record; the ambiguous producer never creates one, it
@@ -328,10 +332,15 @@ def _provenance_from_row(value: str | None) -> OrphanProvenance | None:
     """Read a stored provenance, falling to the conservative branch on anything unknown.
 
     An unrecognized value is a hand-edited row, a partial write, or — the realistic case — a
-    member written by a newer build and read back after a downgrade. Raising here would be
-    the wrong kind of strict: `list` rebuilds every row in one comprehension, so a single bad
-    value would take out the whole session list on both surfaces *and* stop reconciliation
-    from reaching every other session on the tick.
+    member written by a newer build and read back after a downgrade.
+
+    The blast radius is real but is **not** what distinguishes this column: `_record_from_row`
+    already raises for a malformed display identity, a non-UUID id and an unknown state, so
+    "one bad row costs the whole page" is this function's existing behaviour for four other
+    columns, and claiming otherwise would describe a policy this file does not hold. What is
+    different here is that a *conservative reading exists*. There is no safe substitute for an
+    unparseable `state`, but there is one for provenance — `None` offers strictly less than
+    either real value, so falling to it is exactly as safe as refusing and costs nothing.
 
     Refusing is not the only alternative to guessing permissively, which is how this was first
     written. This column decides whether a destructive action is offered, and `None` is the

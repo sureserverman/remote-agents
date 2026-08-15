@@ -23,6 +23,7 @@ from remote_agents.application.errors import (
 )
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.session_actions import (
+    CLEANUP,
     FORCE,
     GRACEFUL_TIMEOUT,
     UNKNOWN_SESSION,
@@ -297,8 +298,26 @@ class SessionService:
             return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:
+        """Discard a preserved pane, refusing any state the policy does not offer it from.
+
+        The policy check is not redundant with the `transition` below, and the gap it covers
+        long predates DEC-020: `CLEANUP_CONFIRMED` is domain-legal from RUNNING and
+        STOP_REQUESTED, while `available_actions` offers cleanup **only** from PRESERVED. So
+        for two states the matrix would happily walk a live session to ENDED and ask the
+        terminal to kill its tmux session, on an action no surface offers and no confirmation
+        guards. Both surfaces gate on `available_actions` before calling, so this was not
+        reachable by an owner — it was simply undefended at the layer that owns the action.
+
+        Found by the Stage 4 gate's adversarial pass, which noticed that the sibling guard in
+        `force_stop` had been justified by the claim that no such gap existed.
+        """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
+            if CLEANUP not in available_actions(record.state, record.orphan_provenance):
+                raise StopNotPermittedError(
+                    f"cleanup is not offered for a session in {record.state.value}: it "
+                    "discards a preserved pane, and there is none to discard here"
+                )
             transition(record.state, LifecycleEvent.CLEANUP_CONFIRMED)
             await self._terminal.cleanup(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)

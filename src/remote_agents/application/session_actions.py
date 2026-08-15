@@ -20,20 +20,32 @@ either that the evidence was ambiguous (a pane found but neither live nor preser
 that a trusted managed pane was found with **no store row at all** and adopted. The record
 remembers which, as `SessionRecord.orphan_provenance`, so this module can tell them apart.
 
-The adopted case is frequently a *live agent the database lost*, and it gets force stop —
-the action its pane actually supports. The ambiguous case gets nothing, and so does any row
-written before migration 6, which cannot have its provenance back-derived. That asymmetry is
-the whole reason `available_actions` takes a second argument.
+The adopted case gets force stop — the action its pane actually supports. The ambiguous case
+gets nothing, and so does any row written before migration 6, which cannot have its
+provenance back-derived. That asymmetry is the whole reason `available_actions` takes a
+second argument.
+
+**One half of that split is currently inert against the real adapter, and a reader should
+know it.** `adapters/tmux/codec.py` derives `live` and `preserved` from one `pane_dead`
+field validated to be exactly `"0"` or `"1"`, so the two are exact complements and "neither
+live nor preserved" is a state the runtime cannot report. `reconcile`'s `ambiguous_terminal`
+branch is therefore unreachable in production, and `AMBIGUOUS` is written only by tests that
+hand-build such an observation. The conservative branch that *does* fire in production is
+the `None` one — every row predating migration 6. This is a defect in DEC-020's premise
+rather than in its implementation here: the decision describes evidence this adapter cannot
+produce. It is recorded for the owner as a register correction; nothing here should be
+"simplified" on the strength of it, because the branch becomes live the moment a runtime
+learns to report a third pane condition.
 
 This was previously a flat refusal, and the reasoning recorded here for it was sound at the
 time: the lifecycle matrix then permitted ORPHANED no way out at all, so an offered force
 raised InvalidTransition before the terminal was reached. DEC-020 supplies exactly one
-transition
-(`VERIFIED_FORCE_STOP → ENDED`) and no bare retire, so the row still clears only as the
-consequence of an observed action, never by dismissing it. The safety question the old text
-raised — a one-tap kill on a possibly-live pane this app does not own — was answered rather
-than dropped: it is accepted cost 3 of DEC-020, and it is confined to the branch where
-reconciliation positively identified the pane as a trusted managed one.
+transition (`VERIFIED_FORCE_STOP → ENDED`) and no bare retire, so the row still clears only
+as the consequence of an observed action, never by dismissing it. The safety question the old
+text raised — a one-tap kill on a possibly-live pane this app does not own — was answered
+rather than dropped: it is accepted cost 3 of DEC-020. Note what that branch actually
+establishes, which is narrower than "a live agent": `_save_trusted_orphan` adopts on the
+strength of a *parseable managed tag with no store row*, and never reads `observation.live`.
 """
 
 from __future__ import annotations
@@ -139,15 +151,30 @@ _EXPLANATIONS = {
 }
 
 _ADOPTED_ORPHAN_EXPLANATION = (
-    "A running agent was found on this host with no record of it, so it was taken back into "
-    "the list. It is probably still working. Force stop is the only action that can reach it."
+    "An agent's pane was found on this host with no record of it, so it was taken back into "
+    "the list. It may still be running. Force stop is the only stop that can reach it."
 )
 """The adopted branch, in the owner's words rather than in the register's.
 
 DEC-020 is a capability decision, so the two branches have to be distinguishable *on screen*
 — if they read identically the branch exists in the code and not in the product. The word
-"provenance" deliberately does not appear: what the owner needs is that this one is probably
-alive and that force is what reaches it.
+"provenance" deliberately does not appear: what the owner needs is that something may still
+be running and that force is what reaches it.
+
+**Two claims this deliberately does not make**, both found by the Stage 4 gate's adversarial
+pass after an earlier draft made them:
+
+- Not "a *running* agent", and not "probably still working". `_save_trusted_orphan` adopts a
+  managed pane with no store row **whether or not that pane is live** — it never reads
+  `observation.live`. So this text is rendered for a dead-but-preserved pane too, and the
+  earlier wording was simply false for it.
+- Not "the only *action*". This sentence is rendered on a screen that also offers Copy attach
+  and Inspect output. It is the only *stop*, which is the claim the policy actually supports.
+
+It also cannot go stale gracefully: `reconcile` short-circuits every ORPHANED record to
+`quarantined` before it looks at observations, so an adopted record is never observed again.
+"may still be running" is therefore the strongest honest tense — a record adopted weeks ago
+whose pane died the same afternoon still renders this line.
 """
 
 

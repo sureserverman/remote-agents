@@ -8,7 +8,12 @@ from dataclasses import replace
 import pytest
 
 from remote_agents.adapters.tmux.fake import FakeTerminal as OwnershipAwareTerminal
-from remote_agents.application.commands import ForceStopCommand, GracefulStopCommand, LaunchCommand
+from remote_agents.application.commands import (
+    CleanupCommand,
+    ForceStopCommand,
+    GracefulStopCommand,
+    LaunchCommand,
+)
 from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionRecord, SessionState
@@ -279,6 +284,80 @@ async def test_a_stop_the_policy_refuses_also_raises_in_the_service(provenance) 
     with pytest.raises(StopNotPermittedError):
         await service.force_stop(ForceStopCommand(record.session_id))
     assert terminal.force_stop_calls == 0
+
+
+@pytest.mark.parametrize("state", [SessionState.RUNNING, SessionState.STOP_REQUESTED])
+async def test_cleanup_is_refused_from_a_state_the_policy_never_offers_it_from(
+    state: SessionState,
+) -> None:
+    """The gap a false premise had been hiding, and it predates DEC-020 entirely.
+
+    `CLEANUP_CONFIRMED` is domain-legal from RUNNING and STOP_REQUESTED, while
+    `available_actions` offers cleanup only from PRESERVED. So for these two states the
+    matrix would walk a live session to ENDED and ask the terminal to kill its tmux session,
+    on an action no surface offers and no confirmation guards. Both surfaces check the policy
+    before calling, so an owner could not reach it — it was simply undefended at the layer
+    that owns the action.
+
+    Found by the Stage 4 gate's adversarial pass, which noticed that the sibling guard added
+    to `force_stop` had been justified by a docstring claiming no such gap existed. The
+    architecture test asserting the policy is *narrower* than the domain had been asserting
+    the opposite of that claim all along.
+    """
+    from remote_agents.application.errors import StopNotPermittedError
+    from remote_agents.application.session_actions import CLEANUP, available_actions
+    from remote_agents.domain.state_machine import LifecycleEvent, transition
+
+    assert CLEANUP not in available_actions(state, None)
+    assert transition(state, LifecycleEvent.CLEANUP_CONFIRMED).to_state is SessionState.ENDED, (
+        "the premise: the domain would allow this, so only the policy can refuse it"
+    )
+
+    store = FakeStore()
+    terminal = FakeTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    store.records[record.session_id] = SessionRecord(
+        record.session_id,
+        record.project_id,
+        record.profile_id,
+        record.display,
+        state,
+        record.created_at,
+    )
+
+    with pytest.raises(StopNotPermittedError):
+        await service.cleanup(CleanupCommand(record.session_id))
+
+    assert store.records[record.session_id].state is state
+
+
+async def test_cleanup_still_works_from_the_state_the_policy_does_offer_it_from() -> None:
+    """So the guard above cannot be tightened into refusing the only case that matters."""
+    from remote_agents.application.session_actions import CLEANUP, available_actions
+
+    assert CLEANUP in available_actions(SessionState.PRESERVED, None)
+
+    store = FakeStore()
+    terminal = FakeTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    store.records[record.session_id] = SessionRecord(
+        record.session_id,
+        record.project_id,
+        record.profile_id,
+        record.display,
+        SessionState.PRESERVED,
+        record.created_at,
+    )
+
+    await service.cleanup(CleanupCommand(record.session_id))
+
+    assert store.records[record.session_id].state is SessionState.ENDED
 
 
 async def test_the_service_lets_a_force_reach_an_adopted_orphan() -> None:

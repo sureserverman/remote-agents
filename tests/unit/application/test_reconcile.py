@@ -210,6 +210,42 @@ async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
     assert store.events == [LifecycleEvent.READY]
 
 
+async def test_a_session_inside_its_settle_window_is_not_mistaken_for_an_unknown_pane() -> None:
+    """A launching session is *known*, even while it is deliberately not being reconciled.
+
+    The settle filter exists so a pass does not overwrite a state its own caller is about to
+    record. But "known" answers a different question — does a row exist for this pane — and
+    computing it from the filtered set conflated the two. Every launch then looked like an
+    unknown pane for the whole settle window, `_save_trusted_orphan` tried to INSERT a
+    primary key that already existed, and the UNIQUE constraint aborted the entire pass.
+    `RuntimeCoordinator._reconcile_once` does not swallow that, so it took the runtime down.
+
+    Reproduced against a real SQLite store by the Stage 4 gate's adversarial pass; pinned
+    here at the unit tier because this is where the classification is decided.
+    """
+    settling = record(SessionState.STARTING)
+    store = InMemoryStore((settling,))
+    service = ReconciliationService(store, settle_after=timedelta(minutes=2))
+
+    results = await service.reconcile(
+        (
+            TerminalObservation(
+                settling.session_id,
+                live=True,
+                preserved=False,
+                project_id=ProjectId("opaque-editor"),
+                profile_id=ProfileId("claude"),
+            ),
+        )
+    )
+
+    assert [item.reason for item in results] == [], (
+        "a settling session should be skipped entirely, not classified as an unknown pane"
+    )
+    assert store.records[settling.session_id].state is SessionState.STARTING
+    assert store.events == []
+
+
 async def test_an_adopted_orphan_records_which_producer_created_it() -> None:
     """The whole of DEC-020 rests on this stamp: it is what separates a live adopted agent
     from a muddled-evidence record, and it can only be known here, at the moment of adoption.

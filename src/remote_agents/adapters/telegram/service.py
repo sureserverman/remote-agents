@@ -1399,10 +1399,17 @@ class PrivateBotBoundary:
                 "Force stop is no longer available for this session.",
                 back=self._callback("session.detail", session_value),
             )
+        # The state line is carried onto the confirmation, not only onto the detail screen.
+        # Its twin `ForceStopConfirmModal` on the local surface has always rendered it, and
+        # after DEC-020 it is what tells the owner they are about to kill a pane this app
+        # adopted rather than launched — which is exactly the sentence the one screen that
+        # authorises a kill should not be the one screen to omit. The parity contract compares
+        # rendered *action sets*, so this divergence was invisible to it.
         return self._message(
             f"<b>Force stop {escape(record.display.rendered)}?</b>\n"
             "This kills the agent immediately and cannot be undone. Anything it has not "
-            "saved is lost.",
+            "saved is lost.\n"
+            f"{escape(_state_explanation(record.state, record.orphan_provenance))}",
             (
                 (Button("Cancel", self._callback("session.detail", session_value)),),
                 (Button(ACTION_LABELS[FORCE], confirmed),),

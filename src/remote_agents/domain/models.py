@@ -189,11 +189,22 @@ class SessionRecord:
     orphan_provenance: OrphanProvenance | None = None
     """Which producer put this record into ORPHANED, or `None` if none did.
 
-    `None` means exactly one thing about a record written since migration 6: this record has
-    never been ORPHANED. Both producers stamp — `reconcile._save_trusted_orphan` writes
-    `ADOPTED` when it creates a record, and `record_event` writes `AMBIGUOUS` when a
-    transition lands an existing record there — so the field is total, and a reader does not
-    have to treat "no provenance" as a third possibility.
+    `None` has three causes, and they are worth keeping straight because all three take the
+    same conservative branch and only one of them is ordinary:
+
+    1. **This record has never been ORPHANED** — the ordinary case. Both producers stamp:
+       `reconcile._save_trusted_orphan` writes `ADOPTED` when it creates a record, and
+       `record_event` writes `AMBIGUOUS` when a transition lands an existing record there.
+    2. **The row predates migration 6.** Deliberate, and the subject of the next paragraph.
+    3. **The stored value was not one this build recognizes** — a hand-edited row, or one
+       written by a newer build and read back after a downgrade. `_provenance_from_row` logs
+       it and falls to `None` rather than raising, because raising would cost the caller
+       every *other* session on the page.
+
+    Cause 3 is the one an earlier version of this docstring denied, claiming `None` meant
+    exactly one thing. The conservative fallback that creates it was added to this same file's
+    sibling in the same commit, and `tests/integration/sqlite/test_orphan_provenance.py`
+    demonstrates it against a genuinely ORPHANED post-migration record.
 
     A row that predates migration 6 also reads `None`, and that is the one genuine ambiguity.
     It is deliberate: provenance cannot be back-derived, because once a pane is adopted a

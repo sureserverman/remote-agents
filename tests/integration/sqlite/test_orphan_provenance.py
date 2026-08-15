@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.application.session_actions import FORCE, available_actions
 from remote_agents.domain.models import (
     OrphanProvenance,
     ProfileId,
@@ -302,3 +303,63 @@ def _corrupt_provenance(path, session_id: SessionId, value: str) -> None:
             (value, str(session_id)),
         )
     connection.close()
+
+
+async def test_an_unrecognised_provenance_withholds_force_rather_than_granting_it(
+    tmp_path,
+) -> None:
+    """Makes the conservative fallback self-enforcing at the layer that matters.
+
+    The sibling above proves an unreadable value survives the *read*. This proves what the
+    read is for: a record that would otherwise be forceable stops being so. Without it, a
+    future edit could make `_provenance_from_row` fall to `ADOPTED` and every storage test
+    would still pass.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    store = SQLiteSessionStore(open_database(path))
+    session_id = SessionId.new()
+    await store.save(_adopted(session_id))
+    assert FORCE in available_actions(SessionState.ORPHANED, OrphanProvenance.ADOPTED)
+
+    _corrupt_provenance(path, session_id, "a-newer-builds-member")
+
+    reloaded = await SQLiteSessionStore(open_database(path)).get(session_id)
+    assert reloaded is not None
+    assert FORCE not in available_actions(reloaded.state, reloaded.orphan_provenance)
+
+
+async def test_the_raw_event_survives_even_when_no_terminal_reason_is_written(tmp_path) -> None:
+    """ "Nothing is lost" as an assertion rather than as something only a source read confirms.
+
+    Entering ORPHANED stopped writing a `terminal_reason` when the state stopped being
+    terminal. The claim that this loses no information rests on `_append_event` firing
+    unconditionally, independent of the projection update — which was true, but was verified
+    by reading the method rather than by any test.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    connection = open_database(path)
+    store = SQLiteSessionStore(connection)
+    session_id = SessionId.new()
+    await store.save(
+        SessionRecord(
+            session_id,
+            ProjectId("opaque-editor"),
+            ProfileId("claude"),
+            SessionDisplayIdentity("opaque-editor", "claude", "regular", 1),
+            SessionState.RUNNING,
+            datetime.now(UTC),
+        )
+    )
+
+    updated = await store.record_event(session_id, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE)
+
+    assert updated.terminal_reason is None, "the projection records no ending, by design"
+    events = [
+        row[0]
+        for row in connection.execute(
+            "SELECT event_type FROM session_events WHERE session_id = ?", (str(session_id),)
+        )
+    ]
+    assert events == ["ambiguous_terminal_evidence"], (
+        "the durable history keeps the event regardless of the projection"
+    )
