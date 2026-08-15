@@ -159,6 +159,33 @@ async def test_a_live_pane_that_is_not_ready_is_not_promoted_to_running() -> Non
     assert store.events == [], "no promotion, so no lifecycle event"
 
 
+async def test_a_live_pane_under_a_stop_request_is_a_timeout_and_not_a_stop_never_sent() -> None:
+    """The one branch DEC-022 deliberately left recording the old event.
+
+    `SessionService.graceful_stop` stopped writing `GRACEFUL_STOP_TIMED_OUT` for
+    `unknown_session`, because nothing was signalled there. This producer is the other one and
+    it keeps the event: it finds a live pane under a record that has been in STOP_REQUESTED
+    since a stop that was sent, which is a real timeout.
+
+    Written because the argument for keeping them apart lived only in a comment. Two call
+    sites recording two events for what reads like the same failure is the shape that invites
+    a "consistency" edit, and until this existed such an edit passed the whole suite — the
+    defence was prose a refactor never has to read. Found by the Stage 2 gate evaluator, which
+    noted the domain test one layer down had already been given exactly this treatment.
+    """
+    stopping = record(SessionState.STOP_REQUESTED)
+    store = InMemoryStore((stopping,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile((TerminalObservation(stopping.session_id, live=True, preserved=False),))
+
+    assert store.events == [LifecycleEvent.GRACEFUL_STOP_TIMED_OUT], (
+        "reconciliation saw a live pane under a stop that was sent — that is a timeout, and "
+        "recording GRACEFUL_STOP_NEVER_SENT here would claim nothing left the host"
+    )
+    assert store.records[stopping.session_id].state is SessionState.RUNNING
+
+
 async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
     """The repair the promotion exists for must survive the new check."""
     failed = record(SessionState.FAILED)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -17,7 +18,7 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.application.session_actions import UNKNOWN_SESSION
+from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -30,6 +31,19 @@ from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
+
+_LOG = logging.getLogger(__name__)
+
+#: What each non-preserving graceful stop is recorded as in the durable history (DEC-022).
+#: Enumerated rather than "`unknown_session`, else a timeout", because the two are different
+#: claims about the same field and an `else` makes the weaker one a silent default. The
+#: exhaustiveness of this mapping rests on `TmuxRuntime.graceful_stop` emitting exactly these
+#: two details, which is a fact living in another file with nothing tying them together — so a
+#: third detail must land somewhere that says so rather than somewhere that guesses.
+_STOP_EVENTS: dict[str, LifecycleEvent] = {
+    UNKNOWN_SESSION: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
+}
 
 
 class SessionService:
@@ -237,14 +251,23 @@ class SessionService:
                 # Two causes, two events (DEC-022). `unknown_session` means the terminal never
                 # matched the session to a live pane it owns, so no exit sequence left this
                 # host and nothing was waited for; recording a timeout for it made the durable
-                # history assert something that did not happen. Everything else that fails to
-                # preserve did send the sequence and did wait, and stays a timeout.
-                await self._store.record_event(
-                    command.session_id,
-                    LifecycleEvent.GRACEFUL_STOP_NEVER_SENT
-                    if observation.detail == UNKNOWN_SESSION
-                    else LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
-                )
+                # history assert something that did not happen.
+                #
+                # A detail neither branch knows falls back to the timeout — which is what this
+                # method recorded for every cause before DEC-022, so the fallback introduces no
+                # claim that was not already being made — but it says so out loud. Silently
+                # defaulting is the fail-dangerous shape `stop_failure` removed from its own
+                # dispatch for this same field, and it is how a future "nothing left the host"
+                # cause would be written to the audit log as a wait that never happened.
+                event = _STOP_EVENTS.get(observation.detail)
+                if event is None:
+                    _LOG.warning(
+                        "graceful stop reported %r, which is not a cause this records an event "
+                        "for; logging it as a timeout, which may overstate what happened",
+                        observation.detail,
+                    )
+                    event = LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+                await self._store.record_event(command.session_id, event)
                 return observation
             await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
             await self._terminal.cleanup(command.session_id)

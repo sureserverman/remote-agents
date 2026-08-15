@@ -1,6 +1,7 @@
 """Use-case tests prove the sealed command surface and durable ordering."""
 
 import asyncio
+import logging
 from collections.abc import Collection, Sequence
 from dataclasses import replace
 
@@ -190,6 +191,35 @@ async def test_a_stop_that_was_never_sent_is_not_recorded_as_a_timeout() -> None
         LifecycleEvent.GRACEFUL_STOP_REQUESTED,
         LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     ]
+
+
+async def test_a_stop_reporting_an_unknown_cause_says_so_rather_than_defaulting_quietly(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unrecognised `detail` still records something, and does not do it silently.
+
+    `stop_failure` already refuses the fail-dangerous reading of this exact field — "an
+    unrecognised `detail` is a failure, not an unknown" — and the same reasoning applies to
+    the event. The two known causes are different *claims*, so falling through to the timeout
+    without a word is how a future "nothing left the host" cause gets written into the durable
+    history as a wait that never happened, which is the defect DEC-022 exists to remove.
+
+    The timeout is still what gets recorded, because it is what this method recorded for every
+    cause before DEC-022 — the fallback adds no claim that was not already there. What is new
+    is that it is visible. Found by the Stage 2 gate evaluator.
+    """
+    store = FakeStore()
+    terminal = FakeTerminal(graceful_preserved=False, graceful_detail="something_nobody_added_yet")
+    service = SessionService(store, terminal)
+    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+
+    with caplog.at_level(logging.WARNING):
+        await service.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))
+
+    assert store.events[-1] is LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+    assert "something_nobody_added_yet" in caplog.text, (
+        "an unrecognised cause was recorded as a timeout with nothing said about it"
+    )
 
 
 async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> None:
