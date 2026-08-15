@@ -199,7 +199,7 @@ class _StopObservation(Protocol):
 #: The causes a graceful stop can report without preserving the pane, and what each one means
 #: to the owner. Keyed by the `detail` the terminal adapter sets, which is the only place the
 #: two are distinguished — the observation is otherwise identical.
-_STOP_FAILURES: dict[str, tuple[str, str]] = {
+_GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
     UNKNOWN_SESSION: (
         "The stop was never sent.",
         "Nothing was signalled to the agent and nothing was stopped, because this host could "
@@ -215,14 +215,6 @@ _STOP_FAILURES: dict[str, tuple[str, str]] = {
         "nothing was recorded as stopped and nothing was removed. That is about the agent "
         "rather than this host's view of the session. Try again if it may still be finishing, "
         "or force stop it.",
-    ),
-    OWNERSHIP_LOST: (
-        "This host had no pane left to stop.",
-        "The session is no longer in this host's managed inventory, so nothing was killed: it "
-        "was destroyed outside this app, or its ownership metadata drifted. The record has "
-        "been cleared either way, so the session will not come back to the list. If an agent "
-        "may still be running behind it, look for it with "
-        "`tmux -L remote-agents list-panes -a` and end it there.",
     ),
 }
 """Deliberately worded so no two of them can be mistaken for each other.
@@ -250,13 +242,37 @@ was that neither was reported at all — both surfaces discarded `graceful_stop`
 `unknown_session` exists because of DEC-006: a stop fails closed on an unresolved profile
 rather than guessing at one. This makes that refusal legible; it does not soften it.
 
-`ownership_lost` is the third entry and the odd one, because it is the only cause here that
-does **not** describe a stop that left the session where it was. It belongs to *force*, and
-under DEC-017 force keeps clearing the record even when it finds no pane — so the session does
-end, and the row does go away. What was wrong was the claim: both surfaces reported "Force
-stopped X" over a kill nobody observed. It shares this table rather than growing a second one
-because DEC-007's whole argument is that the two surfaces speak one vocabulary, and a cause
-with its own private wording on each surface is how that stops being true.
+**These are the causes `graceful_stop` can report, and only those.** Force's cause lives in
+`_FORCE_FAILURES` below. The two started as one table — DEC-007's argument that the surfaces
+speak one vocabulary was read as an argument for one dict — but that conflated *authoring the
+words once*, which is what DEC-007 actually asks for and which both tables still do, with
+*letting either reader reach either cause*, which nothing asks for. The Stage 3 gate's Tier-2
+review named the consequence: `stop_failure` and `force_stop_failure` each read the whole
+table, disjoint only because the two `TmuxRuntime` methods happen to emit different strings, so
+a graceful stop that ever reported `ownership_lost` would have been handed force's sentence —
+telling the owner to force stop a session that was already gone. Two tables make that
+unreachable rather than merely unlikely.
+"""
+
+#: The cause *force* stop can report, kept apart from the graceful table above so neither
+#: reader can reach the other's wording. One entry today; the separation is structural, not a
+#: reflection of how many there are.
+_FORCE_FAILURES: dict[str, tuple[str, str]] = {
+    OWNERSHIP_LOST: (
+        "This host had no pane left to stop.",
+        "The session is no longer in this host's managed inventory, so nothing was killed: it "
+        "was destroyed outside this app, or its ownership metadata drifted. The record has "
+        "been cleared either way, so the session will not come back to the list. If an agent "
+        "may still be running behind it, look for it with "
+        "`tmux -L remote-agents list-panes -a` and end it there.",
+    ),
+}
+"""The odd one out among the stop causes, because it does not describe a stop that left the
+session where it was.
+
+Under DEC-017 force keeps clearing the record even when it finds no pane — the session does
+end and the row does go away — so what was wrong was never the outcome, only the claim: both
+surfaces reported "Force stopped X" over a kill nobody observed.
 
 Read it with DEC-017's accepted cost 1 in hand: `VERIFIED_FORCE_STOP` is still written to the
 durable history whether or not `kill-session` ran, so the audit log cannot tell these apart and
@@ -277,7 +293,7 @@ def stop_failure(observation: _StopObservation) -> StopFailure | None:
     """
     if observation.preserved:
         return None
-    known = _STOP_FAILURES.get(observation.detail)
+    known = _GRACEFUL_FAILURES.get(observation.detail)
     if known is None:
         return StopFailure(
             observation.detail,
@@ -308,7 +324,7 @@ def force_stop_failure(observation: _StopObservation) -> StopFailure | None:
     recording `VERIFIED_FORCE_STOP` and the record reaching ENDED either way, because a row the
     owner cannot clear is a worse failure than an over-confident message. This is the message.
     """
-    known = _STOP_FAILURES.get(observation.detail)
+    known = _FORCE_FAILURES.get(observation.detail)
     if known is None:
         return None
     summary, remedy = known

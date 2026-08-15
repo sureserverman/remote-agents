@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from html import unescape
 
 import pytest
 from textual.widgets import OptionList
@@ -138,6 +139,78 @@ async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
         rows = app.screen.query_one("#choices", OptionList)
         references = {str(summary.reference) for summary in summaries}
         return {option.id for option in rows.options if option.id in references}
+
+
+async def _telegram_said(summaries: tuple[ConversationSummary, ...]) -> str:
+    """Everything the bot's conversation list put in front of the owner."""
+    boundary = PrivateBotBoundary(
+        7, 11, catalogue=(_PROJECT,), conversations=_Conversations(summaries)
+    )
+    reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
+    return unescape(str(reply.text))
+
+
+async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
+    """Everything the local surface's conversation list put in front of the owner."""
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+
+    app = RemoteAgentsTui(
+        TuiContext(
+            launcher=object(),  # type: ignore[arg-type]
+            creator=object(),  # type: ignore[arg-type]
+            profiles=(ProfileChoice("claude", True),),
+            refresh_catalogue=lambda: (_PROJECT,),
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+            conversations=_Conversations(summaries),  # type: ignore[arg-type]
+            catalogue=(_PROJECT,),
+        )
+    )
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose(_PROJECT_ID)
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        return str(app.screen.query_one("#status").content)
+
+
+SAYING_SURFACES = (
+    ("telegram", _telegram_said),
+    ("tui", _tui_said),
+)
+
+
+@pytest.mark.parametrize("surface_name,said", SAYING_SURFACES)
+async def test_a_page_filtered_empty_says_so_rather_than_inviting_a_choice(
+    surface_name: str, said
+) -> None:
+    """The seam between BL-004's filter and the empty state that predates it.
+
+    Found by the Stage 3 gate's Tier-2 review, and it is a defect the filter itself introduced:
+    the local surface tested `page.conversations` — the page *before* filtering — so a page
+    whose every row was refused fell through to the choose-a-conversation branch, where the
+    entries pick up a Back row and can therefore never be empty. `show_choices` substitutes
+    `empty_state` only for a wholly empty tuple, so it never fired either, and the owner was
+    told to "Choose a conversation. Page 1 of 1." above no conversations at all.
+
+    The bot filtered first and asked `if not buttons:` afterwards, so it was already right —
+    which makes this the one place the two surfaces would have disagreed, in the task whose
+    whole subject is making them agree. Asserted against what each surface *says* rather than
+    what it offers, because the rows were identical (empty) on both sides while the sentence
+    above them was not.
+    """
+    refused = _summary(_FutureConversationState.ARCHIVED)
+
+    rendered = (await said((refused,))).casefold()
+
+    assert "choose a conversation" not in rendered, (
+        f"{surface_name} invited a choice over a page with nothing on it: {rendered!r}"
+    )
+    assert "no" in rendered and "conversation" in rendered, (
+        f"{surface_name} did not say the page is empty: {rendered!r}"
+    )
 
 
 SURFACES = (

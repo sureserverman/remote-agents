@@ -7,9 +7,12 @@ from dataclasses import dataclass
 import pytest
 
 from remote_agents.application.session_actions import (
+    _FORCE_FAILURES,
+    _GRACEFUL_FAILURES,
     GRACEFUL_TIMEOUT,
     OWNERSHIP_LOST,
     UNKNOWN_SESSION,
+    StopFailure,
     available_actions,
     force_stop_failure,
     stop_failure,
@@ -137,14 +140,47 @@ def test_no_two_known_causes_share_wording() -> None:
     have kept passing had the third been written in the second's words — a pairwise assertion
     over a growing table only ever checks the pair somebody remembered to name.
     """
-    causes = [UNKNOWN_SESSION, GRACEFUL_TIMEOUT, OWNERSHIP_LOST]
-    failures = [stop_failure(_Observation(preserved=False, detail=cause)) for cause in causes]
-    assert all(failure is not None for failure in failures)
+    graceful = [
+        stop_failure(_Observation(preserved=False, detail=cause))
+        for cause in (UNKNOWN_SESSION, GRACEFUL_TIMEOUT)
+    ]
+    forced = [force_stop_failure(_Observation(preserved=False, detail=OWNERSHIP_LOST))]
+    failures = [failure for failure in graceful + forced if failure is not None]
+    assert len(failures) == 3, "a cause stopped being recognised by its own reader"
 
-    summaries = {failure.summary for failure in failures if failure is not None}
-    remedies = {failure.remedy for failure in failures if failure is not None}
-    assert len(summaries) == len(causes), f"two causes share a summary: {summaries}"
-    assert len(remedies) == len(causes), f"two causes share a remedy: {remedies}"
+    summaries = {failure.summary for failure in failures}
+    remedies = {failure.remedy for failure in failures}
+    assert len(summaries) == 3, f"two causes share a summary: {summaries}"
+    assert len(remedies) == 3, f"two causes share a remedy: {remedies}"
+
+
+def test_neither_reader_can_reach_the_other_s_causes() -> None:
+    """The disjointness the two readers depend on, enforced rather than assumed.
+
+    Both used to read one table, so they were disjoint only because `TmuxRuntime.graceful_stop`
+    and `TmuxRuntime.force_stop` happen to emit different strings. A graceful stop that ever
+    reported `ownership_lost` would have been handed force's sentence — "the record has been
+    cleared... look for it with tmux" — over a session that is still sitting in the list. Found
+    by the Stage 3 gate's Tier-2 review, which noted nothing typed or tested the partition.
+
+    Asserted over the tables rather than over a sample of details, so a fourth cause added to
+    either one cannot land in both without failing here.
+    """
+    assert not _GRACEFUL_FAILURES.keys() & _FORCE_FAILURES.keys(), (
+        "a cause is reachable through both readers, so one of them can render wording written "
+        "for the other action"
+    )
+    for cause in _FORCE_FAILURES:
+        assert stop_failure(_Observation(preserved=False, detail=cause)) == StopFailure(
+            cause,
+            "The terminal did not report a clean exit.",
+            f"The terminal reported {cause!r} and the session was left as it is. "
+            "Force stop it if you need it ended now.",
+        ), "graceful's reader recognised a force cause instead of falling back"
+    for cause in _GRACEFUL_FAILURES:
+        assert force_stop_failure(_Observation(preserved=False, detail=cause)) is None, (
+            "force's reader recognised a graceful cause"
+        )
 
 
 def test_force_reads_the_detail_because_every_force_leaves_preserved_false() -> None:

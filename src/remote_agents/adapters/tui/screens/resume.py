@@ -291,20 +291,31 @@ class ResumeConversationsScreen(ChoiceScreen):
             )
             self.show_choices(((_BACK, "Back"),))
             return
-        if not page.conversations:
-            self.set_status("There are no saved conversations for that agent and project.")
-            self.show_choices((), trailing=((_BACK, "Back"),))
-            return
         # Filtered by the shared policy, which this surface did not consult at all until
         # BL-004 — it rendered whatever the catalogue returned. The bot had the rule twice and
         # this had it nowhere, and nothing had gone wrong only because `ConversationState` has
         # one member. `resume_available` is now the single authority, beside
         # `ConversationService` as `remote_control_available` sits beside `available_actions`.
-        entries = [
+        #
+        # **Filtered before the empty check, not after it**, and the ordering is the whole of
+        # the fix the Stage 3 gate asked for. The check below used to read
+        # `page.conversations` — the *unfiltered* page — so a page whose rows were all refused
+        # fell through to the choose-a-conversation branch, where `entries` picks up a `Back`
+        # row and can therefore never be empty. `show_choices` substitutes `empty_state` only
+        # when the whole tuple is empty, so it never fired either: the owner got "Choose a
+        # conversation. Page 1 of 1." above no conversations at all. The bot filters first and
+        # then asks `if not buttons:`, so this was also the one place the two surfaces would
+        # have disagreed — in the task whose subject is making them agree.
+        offered = [
             (str(item.reference), conversation_row(item))
             for item in page.conversations
             if resume_available(item)
         ]
+        if not offered:
+            self.set_status("There are no saved conversations for that agent and project.")
+            self.show_choices((), trailing=((_BACK, "Back"),))
+            return
+        entries = list(offered)
         if page.page > 1:
             entries.append((_PREVIOUS, "Previous page"))
         if page.page < page.page_count:
