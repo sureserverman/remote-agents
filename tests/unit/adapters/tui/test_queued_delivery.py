@@ -49,7 +49,7 @@ from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_positions import position
 
-from remote_agents.adapters.tui.app import RemoteAgentsTui
+from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.screens import ResumeConfirmScreen
 from remote_agents.application.project_catalog import CatalogProject
@@ -317,3 +317,77 @@ async def test_two_queued_enters_on_the_resume_confirm_start_exactly_one_session
     )
     # Ordered after the count for the reason given on the launch case above.
     assert reported == [], reported
+
+
+async def test_quit_during_the_leaving_window_keeps_the_attach_request() -> None:
+    """`ctrl+q` after a successful launch must not throw away what the launch returned.
+
+    Found by the Stage 2 gate's Tier-2 pass, which is the first review to see Task 2.1 and
+    Task 2.2 together — and this defect exists only in their interaction, so neither
+    per-task review could have caught it.
+
+    `_leave` sets `_leaving` and calls `self.exit(request)`, and its own docstring says the
+    surface must stop answering until the app is actually gone. `action_quit` was written in
+    the same stage and never consulted that flag: `check_action` deliberately exempts quit
+    from every rule, on the argument that an app which cannot be closed is worse than one
+    that loses work. That argument predates `_leaving` and does not reach this case.
+
+    Textual's `App.exit()` overwrites `_return_value` unconditionally, and `App.action_quit`
+    calls it with no argument — so a `ctrl+q` landing in the teardown window replaced a live
+    `AttachRequest` with `None`. The composition root then attaches to nothing, and the
+    session the owner just started is left running with no handle offered. Silent, on the
+    success path, with the work already done.
+
+    Both flows are driven because they arm differently: `ReviewScreen.work_in_flight` is
+    hardcoded `True`, so the launch case needs a second press to reach the clobber, while
+    `ResumeConfirmScreen` holds no entry and is unarmed, so one press did it.
+    """
+    launcher = _RecordingLauncher()
+    app = RemoteAgentsTui(_context(launcher))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _walk_to_review(app, pilot)
+        await app.screen.choose("launch")
+        assert app._leaving, "the launch did not reach `_leave`, so there is no window to test"
+        launched = app.return_value
+        assert isinstance(launched, AttachRequest), (
+            f"the launch should have handed back an attach request, got {launched!r}"
+        )
+
+        # Twice: the first arms the quit warning on this screen, the second is the press the
+        # owner would make to answer it — and it is the one that used to clobber.
+        await app.action_quit()
+        await app.action_quit()
+
+        assert app.return_value == launched, (
+            f"quitting inside the leaving window replaced the pending attach request with "
+            f"{app.return_value!r}; the session is running and nothing will attach to it"
+        )
+
+
+async def test_quit_during_the_leaving_window_keeps_the_resumed_attach_request() -> None:
+    """The resume half, which needed only one press because its screen holds no entry.
+
+    `ResumeConfirmScreen` neither sets `entry_is_a_commitment` nor overrides
+    `work_in_flight`, so the quit warning never armed and the very first `ctrl+q` went
+    straight through to `App.action_quit`.
+    """
+    launcher = _RecordingLauncher()
+    app = RemoteAgentsTui(_context(launcher))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(ResumeConfirmScreen(_PROJECT, "claude", _conversation()))
+        await settle(app, pilot)
+        await app.screen.choose("resume-confirm")
+        assert app._leaving, "the resume did not reach `_leave`"
+        resumed = app.return_value
+        assert isinstance(resumed, AttachRequest), (
+            f"the resume should have handed back an attach request, got {resumed!r}"
+        )
+
+        await app.action_quit()
+
+        assert app.return_value == resumed, (
+            f"quitting inside the leaving window replaced the resumed attach request with "
+            f"{app.return_value!r}"
+        )

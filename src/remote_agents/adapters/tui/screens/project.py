@@ -22,7 +22,11 @@ import logging
 from textual.widgets import Input
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, selectable_area
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    GatheredSelectionScreen,
+)
 from remote_agents.adapters.tui.screens.validation import NameIsAProjectIdentity
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.domain.projects import ProjectIdentity
@@ -132,36 +136,11 @@ class NameScreen(ChoiceScreen):
         self.app.push_screen(ProjectReviewScreen(self.area, value.strip()))
 
 
-class ProjectReviewScreen(ChoiceScreen):
+class ProjectReviewScreen(GatheredSelectionScreen):
     """Name the project before creating it, exactly as the bot's Review does."""
 
     #: Create, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
-
-    @property
-    def work_in_flight(self) -> bool:
-        """Leaving here throws away the area and the project name gathered across two screens.
-
-        The entry is empty at this point — the value was committed a screen ago — so the
-        default answer would be "nothing in flight" while a whole flow's worth of the owner's
-        choices sits one keystroke from being discarded with no way back to them.
-        """
-        return True
-
-    @property
-    def work_at_risk(self) -> str:
-        """Nothing nameable — the work here is a gathered selection, not a typed string.
-
-        Declared rather than inherited, and `test_quit_warning.py`'s pairing sweep is what
-        makes that mandatory. The inherited default would answer `""` anyway, but only because
-        `populate` happens to have called `hide_entry()`; a Tier-1 review pointed out that
-        this was correct by an unenforced precondition rather than by declaration, which is
-        the exact shape DEC-009 exists to generalize a check for. A screen that later grew a
-        visible entry holding something unrelated would have quoted it as the work at risk.
-
-        The empty string is the honest answer, and the quit warning has a sentence for it.
-        """
-        return ""
 
     position = "PROJECT_REVIEW"
     crumb = "Review"

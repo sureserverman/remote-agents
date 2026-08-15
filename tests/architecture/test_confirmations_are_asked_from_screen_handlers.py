@@ -90,22 +90,55 @@ def _called_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return names
 
 
-def _reaching() -> dict[str, tuple[str, str | None]]:
-    """Every function with a lexical path to `ask_to_confirm`, mapped to where it lives."""
-    bodies: dict[str, tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, str | None]] = {}
-    for path, tree in _modules():
+def _reaching_from(
+    modules: list[tuple[str, ast.Module]],
+) -> dict[str, list[tuple[str, str | None]]]:
+    """Every function name with a lexical path to `ask_to_confirm`, and where each is defined.
+
+    **Keyed by bare name but never collapsing definitions**, which is the bug the Stage 2
+    gate's Tier-2 pass found in the first version of this file. That version stored one body
+    per name in a dict and overwrote on collision — and this codebase deliberately shares
+    method names across screens by convention, so **twelve** definitions of `choose`, fifteen
+    of `populate` and seven of `refresh_contents` collapsed to one apiece. Only the
+    last-processed body was ever examined.
+
+    It happened to produce the right answer, by the accident that `sessions.py` sorts last and
+    `SessionDetailScreen` is defined after `SessionsScreen` within it. A forbidden caller
+    sharing a name with an earlier-sorted legitimate function would simply never have been
+    looked at — while this module's docstring claimed no lexically visible path is missed.
+    That is the opposite of the over-approximation `_called_names` deliberately chooses, and
+    it mattered more than an ordinary test bug because DEC-025 declined a runtime guard on the
+    grounds that this sweep is what stands in its place.
+
+    So a name is reaching if **any** definition of it reaches, and every definition is
+    returned. Split from `_reaching` so the fixed point can be driven over synthetic modules
+    by `test_the_sweep_examines_every_definition_of_a_shared_name`, which pins exactly this.
+    """
+    by_name: dict[str, list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, str | None]]] = {}
+    for module_name, tree in modules:
         for fn, cls in _functions(tree):
-            bodies[fn.name] = (fn, path.name, cls.name if cls else None)
+            by_name.setdefault(fn.name, []).append((fn, module_name, cls.name if cls else None))
 
     reaching = {_GUARDED}
     changed = True
     while changed:
         changed = False
-        for name, (fn, _, _) in bodies.items():
-            if name not in reaching and _called_names(fn) & reaching:
+        for name, definitions in by_name.items():
+            if name in reaching:
+                continue
+            if any(_called_names(fn) & reaching for fn, _, _ in definitions):
                 reaching.add(name)
                 changed = True
-    return {name: (bodies[name][1], bodies[name][2]) for name in reaching if name in bodies}
+    return {
+        name: [(module, cls) for _, module, cls in definitions]
+        for name, definitions in by_name.items()
+        if name in reaching
+    }
+
+
+def _reaching() -> dict[str, list[tuple[str, str | None]]]:
+    """The sweep over the real adapter."""
+    return _reaching_from([(path.name, tree) for path, tree in _modules()])
 
 
 def _scheduled_callbacks() -> set[str]:
@@ -189,7 +222,7 @@ def test_no_confirmation_is_reachable_from_a_caller_dec_025_forbids(forbidden: s
         offenders = {
             name: where
             for name, where in reaching.items()
-            if name.startswith("action_") and where[0] == "app.py"
+            if name.startswith("action_") and any(module == "app.py" for module, _ in where)
         }
         rule = "a global binding runs on the app's pump, which does not block the screen's"
 
@@ -225,3 +258,39 @@ def test_every_confirmation_is_asked_from_a_screen() -> None:
             f"(class={cls}). DEC-025's protection is that the caller runs on the screen's "
             f"message pump; a free function or a non-screen class has no such guarantee."
         )
+
+
+def test_the_sweep_examines_every_definition_of_a_shared_name() -> None:
+    """The soundness property this file's docstring claims, pinned instead of asserted.
+
+    The first version of the sweep stored one body per bare name and overwrote on collision,
+    so of the twelve `choose` methods in this package only the last-processed one was ever
+    examined. It still gave the right answer, by an accident of file and class ordering — and
+    the module docstring above claimed, in terms, that no lexically visible path is missed.
+
+    A claim that reads as proven and is not is worse than no claim, and worse here than
+    elsewhere: DEC-025 declined a runtime guard specifically because this sweep stands in its
+    place on a destructive-action hang.
+
+    So this drives the fixed point over two synthetic modules that both define `choose`, where
+    only the **first-sorted** one reaches the guarded call. Under the old collapsing behaviour
+    the second definition would win the dict slot and the first would never be inspected, so
+    `choose` would not be reported as reaching. If this test ever goes green while the sweep
+    collapses again, it is because the ordering accident came back, not because the bug did
+    not.
+    """
+    first = ast.parse(
+        "class Alpha:\n    async def choose(self):\n        await self.ask_to_confirm(None)\n"
+    )
+    second = ast.parse("class Beta:\n    async def choose(self):\n        return None\n")
+
+    reaching = _reaching_from([("a_first.py", first), ("z_second.py", second)])
+
+    assert "choose" in reaching, (
+        "the sweep missed a definition that reaches `ask_to_confirm` because a same-named "
+        "definition in another module displaced it — the collapse this test exists to prevent"
+    )
+    assert sorted(reaching["choose"]) == [("a_first.py", "Alpha"), ("z_second.py", "Beta")], (
+        f"every definition of a reaching name must be reported so a failure can name the "
+        f"offending one; got {reaching['choose']}"
+    )

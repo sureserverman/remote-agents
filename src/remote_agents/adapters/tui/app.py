@@ -243,11 +243,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         decision and the teardown the position is still mounted, still focused, and still has
         whatever the owner queued sitting in the pump behind the handler that just ran.
 
-        Asked here rather than at each guard so the two cannot drift. Every consumer already
-        routes through this property or `set_busy`, which is why folding the second reason in
-        here fixes the handler guard (`ChoiceScreen.on_option_list_option_selected`), the
-        auto-reload guard (`SessionsScreen._auto_reload`) and the app's own bindings at once,
-        rather than in three places that would then each need their own version of it.
+        Asked here rather than at each guard so the two cannot drift. Folding the second
+        reason in here covers the handler guard (`ChoiceScreen.on_option_list_option_selected`),
+        the auto-reload guard (`SessionsScreen._auto_reload`) and the five app-level actions at
+        once, rather than in three places that would then each need their own version of it.
+
+        **`action_quit` is the exception and reads `_leaving` directly**, which is worth
+        stating because an earlier version of this paragraph claimed every consumer routes
+        through here and a stage review caught that it did not. Quit is deliberately exempt
+        from `check_action`'s rules — an app that cannot be closed is worse than one that
+        loses work — so it cannot take the broad `busy` answer without reintroducing exactly
+        that complaint. It refuses only in the narrower leaving window, and its own docstring
+        carries the reason.
         """
         return self._busy or self._leaving
 
@@ -573,6 +580,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         is decided (DEC-014); a label containing an unbalanced bracket is a rendering fault
         this surface has already paid for once.
         """
+        if self._leaving:
+            # **The one rule quit does obey, and it is not `busy`.** `check_action` exempts
+            # quit from every other rule on the argument that an app which cannot be closed is
+            # worse than one that loses work — and that argument is right, but it predates
+            # `_leaving` and does not reach this case. Here the surface has *already* decided
+            # to leave and is carrying the attach request the launch or resume just produced;
+            # `App.exit()` overwrites `_return_value` unconditionally and `App.action_quit`
+            # calls it with no argument, so answering this key would replace that request with
+            # `None`. The session would keep running with nothing attaching to it.
+            #
+            # Not `self.busy`: that would also refuse quit while an ordinary command is in
+            # flight, which is exactly the "cannot be closed" complaint. `_leaving` is the
+            # narrower claim — the app is already going, so the key has nothing left to do.
+            #
+            # Found by the Stage 2 gate's Tier-2 pass, the first review to see this task and
+            # `_leave` together.
+            return
         screen = self.screen if self.screen_stack else None
         if isinstance(screen, ChoiceScreen) and screen.work_in_flight:
             at_risk = screen.work_at_risk

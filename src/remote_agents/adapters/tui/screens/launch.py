@@ -21,7 +21,11 @@ from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    GatheredSelectionScreen,
+)
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.project_catalog import search_catalogue
 
@@ -314,36 +318,11 @@ class LabelScreen(ChoiceScreen):
         self.app.push_screen(ReviewScreen())
 
 
-class ReviewScreen(ChoiceScreen):
+class ReviewScreen(GatheredSelectionScreen):
     """The last position before a launch is issued, resting on Back rather than Launch."""
 
     #: Launch, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
-
-    @property
-    def work_in_flight(self) -> bool:
-        """Leaving here throws away the project, agent and label gathered across three screens.
-
-        The entry is empty at this point — the value was committed a screen ago — so the
-        default answer would be "nothing in flight" while a whole flow's worth of the owner's
-        choices sits one keystroke from being discarded with no way back to them.
-        """
-        return True
-
-    @property
-    def work_at_risk(self) -> str:
-        """Nothing nameable — the work here is a gathered selection, not a typed string.
-
-        Declared rather than inherited, and `test_quit_warning.py`'s pairing sweep is what
-        makes that mandatory. The inherited default would answer `""` anyway, but only because
-        `populate` happens to have called `hide_entry()`; a Tier-1 review pointed out that
-        this was correct by an unenforced precondition rather than by declaration, which is
-        the exact shape DEC-009 exists to generalize a check for. A screen that later grew a
-        visible entry holding something unrelated would have quoted it as the work at risk.
-
-        The empty string is the honest answer, and the quit warning has a sentence for it.
-        """
-        return ""
 
     position = "REVIEW"
     crumb = "Review"
