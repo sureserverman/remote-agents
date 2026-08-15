@@ -528,7 +528,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         of taking `events.InputEvent`. That base is `Key` and `MouseEvent` only — `Paste` is
         not under it, so it would not have helped — and it would disarm on every mouse *move*.
         A terminal reporting motion would then re-warn on every second press, which is a
-        refusal wearing a warning's clothes: the one outcome BL-025 says is worse than the bug.
+        refusal wearing a warning's clothes: the one outcome worse than the bug being fixed.
         A click can move a cursor; it cannot change what is at risk, and a change by any other
         route still moves the signature.
 
