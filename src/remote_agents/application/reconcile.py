@@ -182,11 +182,22 @@ def _event_for_reconciliation(
             # out of this event for the case where nothing was ever signalled — but that is
             # `SessionService.graceful_stop` seeing `unknown_session` from the terminal, which
             # is a different producer from this one. Here the pane is live and the record has
-            # been sitting in STOP_REQUESTED since a stop that *was* sent: the exit sequence
-            # went out, the wait ran out, and the agent is still there. That is the literal
-            # meaning of the event. Two call sites recording two events for what reads like
-            # one failure is exactly the shape that invites a "consistency" fix, so the
-            # difference is written here rather than left to be inferred.
+            # been sitting in STOP_REQUESTED since a stop that was sent: the exit sequence went
+            # out, the wait ran out, and the agent is still there. Two call sites recording two
+            # events for what reads like one failure is exactly the shape that invites a
+            # "consistency" fix, so the difference is written here rather than left to be
+            # inferred.
+            #
+            # **Not exhaustive, and the gap is worth knowing rather than papering over.**
+            # `graceful_stop` writes GRACEFUL_STOP_REQUESTED — which persists STOP_REQUESTED —
+            # *before* it calls the terminal, so a process that dies in that window leaves a
+            # durable STOP_REQUESTED behind a stop that never left the host. The next pass sees
+            # a live pane and lands here, recording a timeout for it. That is the same
+            # over-claim DEC-022 removed from the other producer, surviving in a narrower
+            # crash-recovery case this branch cannot tell apart: the record stores the event,
+            # not the observation, so nothing here can distinguish it. Named because it is
+            # exactly the reasoning a reader needs, and it is *not* an argument for merging the
+            # two events — that would give the ordinary case the wrong name to fix the rare one.
             return LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
     if result.reason == "pane_dead" and record.state is SessionState.RUNNING:
         return LifecycleEvent.RECONCILED_PANE_DEAD
