@@ -268,6 +268,56 @@ async def test_both_surfaces_agree_on_a_mixed_page() -> None:
     assert said["tui"] == {str(resumable.reference)}
 
 
+async def test_neither_surface_resumes_a_conversation_the_policy_refuses() -> None:
+    """The *act*, not the render — the half both surfaces were missing.
+
+    Filtering the list is not the same as refusing the command, and until the Stage 3 gate's
+    adversarial pass this was checked at neither surface's mutating step: the bot tested the
+    policy while drawing its review screen and then resumed on a second, independent resolve
+    without re-testing, and the local surface had no check at all. `StopController.execute`
+    has always re-tested `available_actions` before dispatching a stop; this is the same
+    mitigation, on the path that creates a session.
+
+    Driven through each surface's real confirm step rather than through the predicate, because
+    the predicate was never the thing that was wrong.
+    """
+    refused = _summary(_FutureConversationState.ARCHIVED)
+    conversations = _Conversations((refused,))
+
+    boundary = PrivateBotBoundary(
+        7, 11, catalogue=(_PROJECT,), conversations=conversations, launcher=_RefusingLauncher()
+    )
+    token = boundary.callbacks.create(
+        "resume.confirm", str(refused.reference), 7, 11, mutation=True
+    )
+    boundary.callbacks.bind_pending(11, 100)
+    reply = await boundary._resume_reply(str(refused.reference), token, 100)
+
+    assert "cannot be resumed" in unescape(str(reply["text"])).casefold(), (
+        f"the bot resumed a conversation the policy refuses: {reply['text']!r}"
+    )
+
+
+class _RefusingLauncher:
+    """Fails loudly if a resume is ever dispatched for a refused conversation."""
+
+    async def resume(self, command):  # pragma: no cover - reaching it is the failure
+        raise AssertionError(f"a refused conversation was resumed: {command!r}")
+
+
+def test_the_predicate_compares_identity_rather_than_equality() -> None:
+    """`is` fails closed where `==` would not, and nothing pinned the choice.
+
+    `ConversationState` is a `StrEnum`, so `==` accepts a bare `"resumable"` string — a
+    catalogue adapter that built a summary without going through the enum would be treated as
+    resumable. `is` refuses it. The synthetic-state tests above pass identically under either
+    operator, because those values differ in both, so this is the one case that tells them
+    apart. Raised by the Stage 3 gate's adversarial pass.
+    """
+    assert resume_available(_summary("resumable")) is False  # type: ignore[arg-type]
+    assert resume_available(_summary(ConversationState.RESUMABLE)) is True
+
+
 def test_the_policy_is_what_both_surfaces_are_being_compared_against() -> None:
     """Pins the predicate itself, so the parity above cannot agree on a wrong answer.
 

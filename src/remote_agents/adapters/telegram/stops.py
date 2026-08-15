@@ -183,5 +183,14 @@ class StopController:
         if request.action == "cleanup":
             await service.cleanup(CleanupCommand(request.session_id))
             return StopResult(True)
-        observation = await service.force_stop(ForceStopCommand(request.session_id))
-        return StopResult(True, force_stop_failure(observation))
+        if request.action == FORCE:
+            observation = await service.force_stop(ForceStopCommand(request.session_id))
+            return StopResult(True, force_stop_failure(observation))
+        # Force is its own named branch and an unrecognised action raises, rather than the kill
+        # being the trailing `else`. It was, and nothing could reach it — the `available_actions`
+        # recheck above admits only the three. But "anything I do not recognise is a kill" is a
+        # fail-dangerous default in the one method that kills, and any future non-destructive
+        # member of `available_actions` would have become a force stop here. The TUI's
+        # `_issue_stop` removed exactly this shape and said why; this is the sibling it was
+        # asymmetric with, found by the Stage 3 gate's adversarial pass.
+        raise ValueError(f"no command is curated for the action {request.action!r}")

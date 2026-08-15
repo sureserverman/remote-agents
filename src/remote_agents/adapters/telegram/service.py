@@ -821,6 +821,16 @@ class PrivateBotBoundary:
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
             return _reply_arguments(self._message("That conversation is no longer available."))
+        # Re-checked at the *act*, not only where the review screen was drawn. This is the
+        # mitigation `StopController.execute` already applies to every stop — the rendered row
+        # is re-tested against the shared policy before the command goes out — and the resume
+        # path did not have it on either surface. `_resume_confirm_reply` checks while building
+        # the screen, which is a different moment: the resolve above is a second, independent
+        # read, so a conversation the policy refuses could be resumed here after passing there.
+        # Found by the Stage 3 gate's adversarial pass, which noted BL-004's own shape — the
+        # rule written down in some places and not others — reappearing on the other surface.
+        if not resume_available(resolved.summary):
+            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
         record = await self.launcher.resume(
             ResumeCommand(
                 resolved.summary.project_id,

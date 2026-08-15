@@ -420,11 +420,20 @@ class ResumeConfirmScreen(ChoiceScreen):
         if key != "resume-confirm":
             await self.tui.go_back()
             return
-        # Re-asked here, not trusted from the row that got the owner to this screen — the same
-        # shape as `RemoteAgentsTui.stop` re-checking `available_actions` against a re-read
-        # record rather than against the entry it rendered. The resolve happened a screen ago
-        # and the answer can have moved since. The bot has always had this second check; this
-        # surface had neither it nor the first (BL-004).
+        # Re-asked at the act rather than trusted from the row that got the owner here. What it
+        # catches is a `resolve_for_resume` that disagrees with the `catalogue` listing — the
+        # two are independent reads of the provider, and only the first was ever filtered.
+        #
+        # **It does not catch staleness while the owner deliberates on this screen**, and an
+        # earlier version of this comment claimed it did, by analogy to `RemoteAgentsTui.stop`.
+        # That analogy is wrong: `stop` genuinely re-reads the record (`current_record`), while
+        # `self.resolved` is a frozen snapshot taken when this screen was pushed, so a pure
+        # function of it cannot see anything move. Covering that window would mean re-resolving
+        # here, which is DEC-024's shape one hop further and is not what BL-004 asked for.
+        #
+        # The same claim also said the bot had always had this check. It had not — it checked
+        # while *rendering* the review screen and then resumed unchecked, which the Stage 3
+        # gate's adversarial pass found and which is now fixed in `_resume_reply`.
         if not resume_available(self.resolved.summary):
             self.announce("That conversation can no longer be resumed.", severity="warning")
             await self.tui.go_back()
