@@ -176,15 +176,20 @@ async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
         return str(app.screen.query_one("#status").content)
 
 
+#: Each surface with the sentence it must actually produce for an emptied page. Spelled out
+#: rather than matched by keyword: the first draft asserted `"no" in rendered and "conversation"
+#: in rendered`, which an unrelated failure like "This conversation cannot be listed" satisfies
+#: — `cannot` contains `no`. A test for a *message* has to name the message, or it is only
+#: testing that some text exists. Caught by the Stage 3 gate's Tier-2 re-review.
 SAYING_SURFACES = (
-    ("telegram", _telegram_said),
-    ("tui", _tui_said),
+    ("telegram", _telegram_said, "this agent has no resumable conversation for this project."),
+    ("tui", _tui_said, "there are no saved conversations for that agent and project."),
 )
 
 
-@pytest.mark.parametrize("surface_name,said", SAYING_SURFACES)
+@pytest.mark.parametrize("surface_name,said,expected", SAYING_SURFACES)
 async def test_a_page_filtered_empty_says_so_rather_than_inviting_a_choice(
-    surface_name: str, said
+    surface_name: str, said, expected: str
 ) -> None:
     """The seam between BL-004's filter and the empty state that predates it.
 
@@ -208,8 +213,9 @@ async def test_a_page_filtered_empty_says_so_rather_than_inviting_a_choice(
     assert "choose a conversation" not in rendered, (
         f"{surface_name} invited a choice over a page with nothing on it: {rendered!r}"
     )
-    assert "no" in rendered and "conversation" in rendered, (
-        f"{surface_name} did not say the page is empty: {rendered!r}"
+    assert expected in rendered, (
+        f"{surface_name} did not tell the owner the page is empty. Expected {expected!r}, "
+        f"got {rendered!r}"
     )
 
 
