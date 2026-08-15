@@ -313,22 +313,36 @@ class ResumeConversationsScreen(ChoiceScreen):
         if key in {_NEXT, _PREVIOUS}:
             await self.turn_page(1 if key == _NEXT else -1)
             return
-        try:
-            # The reference is only ever one this surface rendered from a server-issued
-            # page; constructing it here re-validates its opaque shape, and resolution is
-            # server-side, so a forged or stale value resolves to nothing rather than a path.
-            resolved = await conversations.resolve_for_resume(ConversationReference(key))
-        except ValueError:
-            self.announce("That conversation selection is not valid.", severity="warning")
-            return
-        except Exception as error:
-            _LOG.exception("conversation resolve failed")
-            self.announce(f"That conversation could not be resolved: {error}")
-            return
-        if resolved is None:
-            self.announce("That conversation is no longer available.", severity="warning")
-            return
-        await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
+        # Guarded across the resolve *and* the push, matching `:113` and `:232` — the two
+        # siblings of this fetch — for the reason given there. This one was the exception
+        # (DEC-024), and nothing chose it: the flow was hand-rolled with the other two
+        # guarded, and this fetch was extracted afterwards without inheriting it. The cost is
+        # real and accepted: a second entry point does nothing for the duration of one more
+        # await. `turn_page` below takes the guard for itself and releases before
+        # `render_page`, which is deliberate and stays that way — it redraws this position
+        # rather than pushing another.
+        async with self.holding_the_guard():
+            try:
+                # The reference is only ever one this surface rendered from a server-issued
+                # page; constructing it here re-validates its opaque shape, and resolution is
+                # server-side, so a forged or stale value resolves to nothing rather than a
+                # path.
+                resolved = await conversations.resolve_for_resume(ConversationReference(key))
+            except ValueError:
+                self.announce("That conversation selection is not valid.", severity="warning")
+                return
+            except Exception as error:
+                _LOG.exception("conversation resolve failed")
+                self.announce(f"That conversation could not be resolved: {error}")
+                return
+            if resolved is None:
+                self.announce("That conversation is no longer available.", severity="warning")
+                return
+            # Inside the guard, not after it, for the reason `ResumeProjectsScreen.choose`
+            # gives: `push_screen` yields while the new screen mounts, so releasing first
+            # leaves a window in which a global binding pops the screen being mounted and the
+            # resolved conversation is discarded with no error at all.
+            await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
     async def turn_page(self, step: int) -> None:
         wanted = max(1, min(self.page.page + step, self.page.page_count))

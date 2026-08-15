@@ -466,6 +466,58 @@ async def test_the_navigation_guard_is_held_until_the_next_screen_is_pushed() ->
     )
 
 
+async def test_the_navigation_guard_spans_the_conversation_resolve_and_its_push() -> None:
+    """The third fetch of the resume flow is held like its two siblings (DEC-024).
+
+    `ResumeConversationsScreen.choose` resolves a reference and pushes the confirmation, and
+    it was the one of the three fetches not under the guard. Nothing chose that: the two
+    siblings were guarded when the flow was hand-rolled, this one was extracted afterwards
+    and did not inherit it. An unexplained exception is how the next reader concludes the
+    guard is optional, which is the whole of DEC-024's reasoning.
+
+    Asserted with the same shape the sibling case above uses — the stack depth recorded at
+    each flip, rather than a race — for the same reason: a race reproduces it only sometimes,
+    while "was the confirmation already pushed when the guard was released" is the property
+    itself and fails deterministically if the `finally` is ever narrowed back to the resolve.
+    """
+    flips: list[tuple[bool, int]] = []
+
+    class _Watching(RemoteAgentsTui):
+        def set_busy(self, busy: bool) -> None:
+            flips.append((busy, len(self.screen_stack)))
+            super().set_busy(busy)
+
+    summary = _summary(1)
+    conversations = _Conversations({1: (summary,)}, caps=_capable("claude"))
+    app = _Watching(_context(conversations, _Launcher()))
+
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert position(app) == "RESUME_CONVERSATIONS", "the flow did not reach the page"
+        flips.clear()
+
+        await app.screen.choose(str(summary.reference))
+        await pilot.pause()
+
+        assert position(app) == "RESUME_CONFIRM", "choosing a conversation must advance"
+
+    assert flips, "resolving a chosen conversation must take the navigation guard"
+    taken, depth_when_taken = flips[0]
+    released, depth_when_released = flips[-1]
+    assert taken is True and released is False
+    assert depth_when_released > depth_when_taken, (
+        "the guard was released at stack depth "
+        f"{depth_when_released}, the same depth it was taken at — the confirmation had not "
+        "been pushed yet, so a global binding firing here would discard the resolved "
+        "conversation with no error at all"
+    )
+
+
 async def _reenter_during(app) -> None:
     import asyncio
 
