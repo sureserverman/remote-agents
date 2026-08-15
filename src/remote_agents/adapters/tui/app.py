@@ -709,7 +709,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session_id = str(record.session_id)
         self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
-    # The destructive path ---------------------------------------------------------
+    # The mutating path ------------------------------------------------------------
     #
     # The two confirmations are modals in `screens/confirm.py`, answered through
     # `ask_to_confirm` before either of these is called at all. What is left here is the part

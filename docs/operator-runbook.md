@@ -537,8 +537,8 @@ uv run --locked remote-agents tui
 5. Force stop is confirmed a second time, on a screen of its own that names the session and
    states that the kill is immediate, cannot be undone, and loses whatever the agent has not
    saved. Cancel is the first entry and the highlighted one, so a stray or repeated enter aborts;
-   confirming means moving to the other row on purpose. No screen rests the cursor on a
-   destructive entry, and a stop that fails leaves the cursor on Back rather than on the button
+   confirming means moving to the other row on purpose. No screen rests the cursor on an entry
+   that mutates, and a stop that fails leaves the cursor on Back rather than on the button
    that just failed, so a second enter is never a blind retry of a kill.
 6. ORPHANED offers no stop at all. It does not mean the pane is gone — that ends the session — it
    means the record and this host's panes could not be reconciled, so the session is quarantined
@@ -572,7 +572,7 @@ is the point; check `doctor --profiles` when the surface tells you the stop was 
 Force and cleanup resolve no profile, because they remove the managed tmux session itself, so
 force remains available when a graceful stop cannot be resolved.
 
-The two-writer caveat above still applies, and it now governs destructive actions rather than
+The two-writer caveat above still applies, and it now governs every session mutation rather than
 launches alone. `SessionLocks` serializes per-session mutations only inside the process holding
 them, so a stop from the terminal and a stop from the service are not serialized against each
 other; across the two processes the only arbitration is SQLite's one-second busy timeout and the

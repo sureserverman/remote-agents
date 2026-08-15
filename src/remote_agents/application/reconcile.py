@@ -196,7 +196,7 @@ def _event_for_reconciliation(
 
 
 class SessionLocks:
-    """Per-session asyncio locks serializing concurrent destructive mutations."""
+    """Per-session asyncio locks serializing every concurrent state-changing mutation."""
 
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}

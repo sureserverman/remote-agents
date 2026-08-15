@@ -283,7 +283,7 @@ class SessionsScreen(ChoiceScreen):
             return
         # Restore by row *key*, not by index. A session that ended between two ticks shortens
         # the list above the cursor, so the index the owner was on now names a different
-        # session — and this list's rows are the handles on destructive actions one screen
+        # session — and this list's rows are the handles on the stop actions one screen
         # deeper. A key that has gone falls back to row 0, which is the same non-mutating
         # resting position every other fill uses (DEC-007).
         choices = self.query_one("#choices", OptionList)
@@ -405,8 +405,8 @@ class SessionDetailScreen(ChoiceScreen):
         """The actions this session offers, taken from the policy and not decided here.
 
         The stop entries are exactly `available_actions(record.state)` in the order it
-        returns them, which puts the destructive one last. Adding, filtering, or reordering
-        here is what `tests/contract/test_session_actions_parity.py` exists to catch.
+        returns them, which puts force last. Adding, filtering, or reordering here is what
+        `tests/contract/test_session_actions_parity.py` exists to catch.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.capture is not None:

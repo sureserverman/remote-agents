@@ -50,10 +50,13 @@ learns one vocabulary and meets it everywhere. The bot used to title-case the ac
 the same button did, and `tests/contract/test_session_actions_parity.py` had to carry a
 translation table between them to compare surfaces at all.
 
-`graceful` is labelled by its effect rather than its mechanism. It is a destructive action —
-it ends the session and discards the pane's output — sitting next to read-only ones, and
-"Graceful" described how the agent exits rather than what the owner is about to lose. The
-lifecycle keeps calling the action `graceful`; only its name on screen changed.
+`graceful` is labelled by its effect rather than its mechanism. It ends the session and
+discards the pane's output — a cost the owner does not get a second chance at — sitting next
+to read-only actions, and "Graceful" described how the agent exits rather than what the owner
+is about to lose. Naming the effect is the whole of the mitigation here: DEC-018 declined a
+confirmation for it on both surfaces, because graceful stop is the ordinary way a session ends
+and a confirmation on the common path teaches the owner to dismiss the one guarding force
+stop. The lifecycle keeps calling the action `graceful`; only its name on screen changed.
 """
 
 _FORCEABLE = frozenset(
@@ -67,7 +70,7 @@ _FORCEABLE = frozenset(
 
 
 def available_actions(state: SessionState) -> tuple[str, ...]:
-    """Return the stop actions offerable from `state`, destructive one last.
+    """Return the stop actions offerable from `state`, force last.
 
     STARTING offers nothing: the pane may not exist yet, and the domain has no stop
     transition from it; a stuck STARTING session is resolved by reconciliation instead.

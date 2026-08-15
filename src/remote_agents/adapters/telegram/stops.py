@@ -1,4 +1,4 @@
-"""Replay-safe confirmation state for the approved destructive session actions."""
+"""Replay-safe callback state for the approved session stop actions."""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ _NOT_DISPATCHED = StopResult(False)
 
 
 class StopController:
-    """Mint and claim the tokens behind the approved destructive actions.
+    """Mint and claim the tokens behind the approved stop actions.
 
     **Every token is minted unbound.** A keyboard is built before the message that will carry
     it exists — and, when a screen is redrawn in place, before the render that replaces the

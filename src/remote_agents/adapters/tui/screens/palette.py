@@ -2,7 +2,7 @@
 
 **DEC-007 is the whole design of this file, not a caveat on it.** That decision makes the
 local terminal a full control plane over an application-owned action policy, and rests the
-safety of the destructive path on four mitigations — chief among them that a stop is
+safety of the destructive path on four mitigations — chief among them that a force stop is
 confirmed on a modal whose cursor rests on the abort. A palette is a *second route* to
 whatever it exposes, reached by typing a fragment of a name and pressing enter, and a route
 like that to a force stop would walk straight past every one of those mitigations. So the
