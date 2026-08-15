@@ -10,10 +10,16 @@ Textual serialises handlers on the pump, `_busy` has already been cleared by the
 handler's `finally`, and what refuses the second stop is `_stop` re-reading the record and
 re-checking the policy. Both are covered below, and they are labelled for which is which.
 
-Neither mechanism protects **launch or resume** under queued delivery: both end in
-`self.exit(...)` without leaving the position, so the second enter finds the same screen
-and a cleared flag and issues again. Two fast enters on Review start two managed sessions. That is
-a live defect, pre-existing and outside this plan's blast radius — BL-015.
+Neither mechanism protected **launch or resume** under queued delivery, and for a while that
+was a live defect: both end in `self.exit(...)` without leaving the position, so the second
+enter found the same screen and a cleared flag and issued again. Two fast enters on Review
+started two managed sessions.
+
+**Fixed.** `RemoteAgentsTui._leave` sets a `_leaving` flag that `busy` reports, so the surface
+refuses everything between deciding to leave and being gone — the window `_busy` deliberately
+does not cover, because clearing it is scoped to the awaited call and the failure paths below
+must leave the screen usable again. The queued path is covered by `test_queued_delivery.py`;
+this file still pins the concurrent one, and the two are not interchangeable.
 
 Whatever the mechanism, cancel-and-restart is wrong for a destructive action: it would mean
 the profile's exit sequence has already reached the pane, the kill abandoned midway, and a
@@ -280,11 +286,16 @@ async def test_a_repeated_keypress_issues_exactly_one_stop(state, resolve, expec
 async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> None:
     """The `_busy` guard at `on_option_list_option_selected`, exercised by concurrent delivery.
 
-    Named for the mechanism, not for a guarantee the surface does not give. Under **queued**
-    delivery — what two fast enters actually produce — this flow issues twice: the launch
-    clears `_busy` in a `finally` that runs before `self.exit(...)`, and it never changes
-    the position, so the second enter finds the same screen and an open guard. Verified, and
-    recorded as BL-015. This test pins the concurrent path only.
+    Named for the mechanism rather than for a guarantee, because the two delivery shapes are
+    refused by two different things and this test pins only one of them. Concurrently, the
+    `_busy` flag refuses the second at `on_option_list_option_selected`. Under **queued**
+    delivery — what two fast enters actually produce — `_busy` has already been cleared by the
+    first handler's `finally`, and what refuses the second is `_leaving`, set as the flow exits.
+
+    That second half was a live defect when this test was written and is no longer: the launch
+    cleared `_busy` before `self.exit(...)` without changing position, so the second enter
+    found the same screen and an open guard and started a second session. Fixed by
+    `RemoteAgentsTui._leave`; the queued path is covered by `test_queued_delivery.py`.
     """
     launcher = _SlowLauncher()
     app = RemoteAgentsTui(_context(launcher))
@@ -608,9 +619,11 @@ async def test_a_concurrent_second_remote_control_change_is_refused() -> None:
 async def test_a_concurrent_second_resume_is_refused_by_the_handler_guard() -> None:
     """The other flow Task 2.3 scoped, on the concurrent path only.
 
-    Same caveat as launch, and for the same structural reason: resume ends in `self.exit(...)`
-    without leaving the position, so queued delivery issues twice (BL-015). An earlier version of
-    this test was additionally *named* for the queued model while using concurrent tasks.
+    Same split as launch, and it was live here for the same structural reason: resume ended in
+    `self.exit(...)` without leaving the position, so a queued repeat issued twice. Fixed by
+    `RemoteAgentsTui._leave`, and the queued path is covered by `test_queued_delivery.py`. An
+    earlier version of this test was additionally *named* for the queued model while using
+    concurrent tasks, which is why the name here says `concurrent` and means it.
 
     The conversation is a real `ResolvedConversation`, not a stand-in. An earlier version
     passed a bare `object()`, which made `ResumeCommand.__post_init__` raise before the

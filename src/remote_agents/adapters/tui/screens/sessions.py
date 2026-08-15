@@ -83,6 +83,10 @@ class SessionsScreen(ChoiceScreen):
         self._auto: Timer | None = None
         #: Whether a listing read is already in flight on this screen, keyed or scheduled.
         self._reading = False
+        #: Which *visit* to this screen is current. Bumped every time the owner returns to it,
+        #: and compared by `_auto_reload` across its await — see that method and `_visiting`.
+        #: `showing` cannot answer this, because it is `True` again on the way back.
+        self._visit = 0
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -111,6 +115,26 @@ class SessionsScreen(ChoiceScreen):
             self._auto.pause()
 
     def on_screen_resume(self) -> None:
+        """Resume polling, and retire any read still in flight from the previous visit.
+
+        The bump is the fix for a stale repaint. `on_screen_suspend` pauses the *timer*, which
+        stops new reads being scheduled, but it cannot recall the one already awaiting
+        `load_sessions` when the owner pushed a detail on top. That read resolves whenever the
+        store answers, which may be after the owner has come back — and by then `showing` is
+        `True` again,
+        because it asks `app.screen is self` and this screen is once more what the owner is
+        looking at. So the guard that exists to catch exactly this cannot see it.
+
+        Recorded outcome without the bump: a session that ended during the detour is put back
+        on screen by the stale listing, offering `Stop` against a pane that no longer exists.
+
+        Deliberately a per-visit counter rather than a redefinition of `showing`. `showing`
+        answers "is this screen what the owner is looking at", which is the right question for
+        its eleven other callers and is a *different* question from "is this still the same
+        visit the read was issued during". Conflating them would fix this and quietly change
+        every render guard in the package.
+        """
+        self._visit += 1
         if self._auto is not None:
             self._auto.resume()
 
@@ -144,6 +168,11 @@ class SessionsScreen(ChoiceScreen):
         """
         if not self.showing or self.tui.busy or self._reading:
             return
+        # Captured *before* the await, compared after: the read belongs to the visit it was
+        # issued during, and a visit the owner has since left and returned to is a different
+        # one. `showing` is checked above and again inside `_draw_listing`, and
+        # neither can answer this — see `on_screen_resume`.
+        visiting = self._visit
         self._reading = True
         try:
             records = await self.tui.load_sessions()
@@ -152,10 +181,33 @@ class SessionsScreen(ChoiceScreen):
             return
         finally:
             self._reading = False
+        if visiting != self._visit:
+            return
         self._draw_listing(records, keep_cursor=True)
 
     async def on_reveal(self) -> None:
-        """Re-read on the way back from a detail, as the hand-rolled chain did."""
+        """Re-read on the way back from a detail, as the hand-rolled chain did.
+
+        **The `_visit` bump belongs here and not only in `on_screen_resume`**, and a Tier-1
+        review caught why. `on_screen_resume` is delivered as a `ScreenResume` *message*, so
+        it runs on this screen's own message-pump task whenever that task next drains — while
+        `go_back` calls `pop_screen()` and then awaits this method directly, on the app's
+        task. `go_back`'s own docstring already says so: "Textual's own `ScreenResume` would
+        run after the pop returned, which is outside that guard."
+
+        So bumping only there left the answer dependent on which task the scheduler resumes
+        first once a stale read's store call returns: this screen's pump, delivering
+        `ScreenResume`, or the read itself. Measured, the pump happens to win — the ordering
+        is `go_back returned -> on_screen_resume -> read landed`, and a test cannot pin it
+        either way precisely because nothing promises it. Bumping here removes the dependency
+        rather than winning the race: this is awaited synchronously at the moment the screen
+        is revealed, so the counter has already moved whoever runs next.
+
+        Both bumps are kept — the counter only has to *change*, so bumping twice on a back
+        path is harmless, and `on_screen_resume` still covers the paths that do not come
+        through `go_back`.
+        """
+        self._visit += 1
         await self.reload()
 
     async def refresh_contents(self) -> None:

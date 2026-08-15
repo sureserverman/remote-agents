@@ -178,6 +178,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._catalogue = context.catalogue
         self.selection = LaunchSelection()
         self._busy = False
+        # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
+        # different questions and only one of them is temporary.
+        self._leaving = False
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Ask the position on screen whether one of *these* bindings applies to it.
@@ -229,11 +232,47 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     @property
     def busy(self) -> bool:
-        """Whether an action is mid-flight and no other may start."""
-        return self._busy
+        """Whether an action is mid-flight and no other may start.
+
+        **Two reasons, not one, and the second was found by testing a queued keypress.** A
+        command in flight is the temporary reason. A surface that has decided to leave is the
+        permanent one: `exit()` does not tear the app down synchronously, so between the
+        decision and the teardown the position is still mounted, still focused, and still has
+        whatever the owner queued sitting in the pump behind the handler that just ran.
+
+        Asked here rather than at each guard so the two cannot drift. Every consumer already
+        routes through this property or `set_busy`, which is why folding the second reason in
+        here fixes the handler guard (`ChoiceScreen.on_option_list_option_selected`), the
+        auto-reload guard (`SessionsScreen._auto_reload`) and the app's own bindings at once,
+        rather than in three places that would then each need their own version of it.
+        """
+        return self._busy or self._leaving
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
+
+    def _leave(self, request: AttachRequest) -> None:
+        """Exit the surface, and refuse everything from this moment on.
+
+        **The flag is why this is not a one-liner in each of the two flows.**
+        Both `launch` and `issue_resume` clear `_busy` in a `finally` and *then* exit, without
+        leaving the position — so the second of two enters queued in one terminal read found
+        the same screen, the same row and an open guard, and issued a second real command.
+        Two managed sessions where one was asked for.
+
+        Clearing the guard there is right: it is scoped to the awaited call, and the failure
+        paths below it return to a screen that must be usable again. What was missing is that
+        success does not return to anything, and until the app is actually gone the surface
+        must stop answering. `_leaving` is therefore set and never cleared — there is no state
+        after this one.
+
+        DEC-008 is honoured rather than worked around: `exclusive` is still not passed
+        anywhere, and nothing in flight is cancelled. The repeat is *dropped*, which is what
+        that decision asks for; this only extends the window in which dropping happens to
+        cover the gap between deciding to leave and being gone.
+        """
+        self._leaving = True
+        self.exit(request)
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.
@@ -411,7 +450,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         where the owner came from. There are no exceptions left: the last two, the destructive
         confirmations, are screens of their own as of this task.
         """
-        if self._busy:
+        if self.busy:
             return
         await self.go_back()
 
@@ -429,7 +468,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         implies moving, and the catalogue re-read the projects list still wants is now its
         own `refresh_contents` rather than something every other screen inherits.
         """
-        if self._busy:
+        if self.busy:
             return
         screen = self.body
         if screen is None:
@@ -459,7 +498,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         return True
 
     async def action_add_project(self) -> None:
-        if not self._busy:
+        if not self.busy:
             await self.show_areas()
 
     async def show_areas(self) -> None:
@@ -467,7 +506,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_sessions(self) -> None:
         """Show every managed session, including ones this process never launched."""
-        if self._busy:
+        if self.busy:
             return
         await self.show_sessions()
 
@@ -495,7 +534,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
-        if self._busy or self._services.conversations is None:
+        if self.busy or self._services.conversations is None:
             return
         await self.switch_flow(ResumeProjectsScreen())
 
@@ -547,7 +586,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
             return
         session_id = str(record.session_id)
-        self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
     # The destructive path ---------------------------------------------------------
     #
@@ -655,7 +694,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session detail for every action including force — there is no confirmation screen
         still on the stack by the time this runs.
         """
-        if self._busy:
+        if self.busy:
             return
         self._busy = True
         try:
@@ -901,7 +940,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 ),
             )
         session_id = str(record.session_id)
-        self.exit(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
         return None
 
 

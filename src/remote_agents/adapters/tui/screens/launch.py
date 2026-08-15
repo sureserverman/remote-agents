@@ -125,11 +125,17 @@ class ProjectsScreen(ChoiceScreen):
         but the decision's own text carves out exactly this case ("a debounced filter or a
         catalogue refresh"), because what is abandoned here is a *read* whose answer is
         already stale. What DEC-008 actually forbids is Textual's cancel-on-re-entry worker
-        mode — the `exclusive` flag on a `@work` group — and it enforces that with an
-        unconditional grep for the literal flag assignment. So this is a timer: the behaviour
-        the decision permits, expressed without the token its check bans. This sentence is
-        written around that token for the same reason, having first been written with it and
-        turned the decision's own sweep red from a comment explaining why it is obeyed.
+        mode — the `exclusive` flag on a `@work` group. So this is a `Timer`: the behaviour
+        the decision permits, without the worker mode it does not.
+
+        **Corrected at Task 2.1's Tier-1 review.** This paragraph used to claim the decision
+        "enforces that with an unconditional grep for the literal flag assignment", and that
+        the sentence had been written around the token to avoid tripping that sweep. **No such
+        check exists** — searched across `tests/architecture/` and the whole tree, the flag
+        appears only in prose like this and in `run_worker`/`@work` calls that never pass it.
+        The claim was also self-refuting, since the sentence making it names the token twice.
+        DEC-008 is held by review and by comments like this one, which is a weaker guarantee
+        than the old wording promised and is the one actually in force.
         """
         event.stop()
         self._pending_query = event.value

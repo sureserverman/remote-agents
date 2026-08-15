@@ -44,7 +44,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-import pytest
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -244,7 +243,6 @@ async def test_a_queued_burst_reaches_the_screen_twice() -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="BL-015 live; fixed in Task 2.1")
 async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
     """BL-015's launch half: a doubled enter on Review must not start two managed sessions.
 
@@ -277,13 +275,15 @@ async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
         await pilot.pause()
         reported = announcements(app, severity="error")
 
-    assert reported == [], reported
     assert launcher.issued == ["launch"], (
         f"two queued enters on Review issued {launcher.issued}; exactly one launch was required"
     )
+    # Checked *after* the count, per the Stage 1 gate evaluator: with the order reversed, a
+    # regression that issued one launch and also reported an error would fail here and read
+    # as an unrelated toast rather than as the duplicate-issue defect this test is named for.
+    assert reported == [], reported
 
 
-@pytest.mark.xfail(strict=True, reason="BL-015 live; fixed in Task 2.1")
 async def test_two_queued_enters_on_the_resume_confirm_start_exactly_one_session() -> None:
     """BL-015's resume half, which fails for the same structural reason as the launch.
 
@@ -311,8 +311,9 @@ async def test_two_queued_enters_on_the_resume_confirm_start_exactly_one_session
         await pilot.pause()
         reported = announcements(app, severity="error")
 
-    assert reported == [], reported
     assert launcher.issued == ["resume"], (
         f"two queued enters on the resume confirmation issued {launcher.issued}; exactly one "
         f"resume was required"
     )
+    # Ordered after the count for the reason given on the launch case above.
+    assert reported == [], reported
