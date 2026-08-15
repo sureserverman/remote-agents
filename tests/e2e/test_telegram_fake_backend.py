@@ -61,7 +61,7 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
     inspection = inspect_capture(b"ready\n")
     callbacks = CallbackStateStore()
     stops = StopController(callbacks)
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11)
     callbacks.bind_pending(11, 1)
 
     assert inspection.text == "ready"
@@ -105,7 +105,7 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
 
     callbacks = CallbackStateStore()
     stops = StopController(callbacks)
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11)
     callbacks.bind_pending(11, 1)
     assert token is not None
     request = stops.claim(token, 7, 11, 1)

@@ -1,4 +1,4 @@
-"""Every action a surface renders is exactly the set `available_actions(state)` allows.
+"""Every action a surface renders is exactly the set `available_actions(state, provenance)` allows.
 
 This is the test that catches a surface drifting from the shared policy. It is written
 against the *rendered* buttons rather than the policy call, because a surface that asks the
@@ -36,6 +36,7 @@ from textual.widgets import OptionList
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionDisplayIdentity,
@@ -52,7 +53,9 @@ from remote_agents.domain.models import (
 _LABEL_TO_ACTION = {label: action for action, label in ACTION_LABELS.items()}
 
 
-def _record(state: SessionState) -> SessionRecord:
+def _record(
+    state: SessionState, orphan_provenance: OrphanProvenance | None = None
+) -> SessionRecord:
     return SessionRecord(
         SessionId.new(),
         ProjectId("opaque-editor"),
@@ -60,7 +63,19 @@ def _record(state: SessionState) -> SessionRecord:
         SessionDisplayIdentity("opaque-editor", "claude", "regular", 1),
         state,
         datetime.now(UTC),
+        orphan_provenance=orphan_provenance,
     )
+
+
+# A *situation*, not a state. DEC-020 split ORPHANED into two, and only one of them offers a
+# destructive row -- so a parametrization over `SessionState` alone would leave the branch
+# that carries a kill button compared on neither surface. That is exactly the divergence this
+# file exists to catch, and it would have been invisible to it.
+SITUATIONS: list[tuple[SessionState, OrphanProvenance | None]] = [
+    *((state, None) for state in SessionState),
+    (SessionState.ORPHANED, OrphanProvenance.AMBIGUOUS),
+    (SessionState.ORPHANED, OrphanProvenance.ADOPTED),
+]
 
 
 class _Launcher:
@@ -141,13 +156,14 @@ SURFACES = (
 
 
 @pytest.mark.parametrize("surface_name,render", SURFACES)
-@pytest.mark.parametrize("state", list(SessionState))
+@pytest.mark.parametrize(("state", "provenance"), SITUATIONS)
 async def test_surface_renders_exactly_the_policy_actions(
-    surface_name: str, render, state: SessionState
+    surface_name: str, render, state: SessionState, provenance: OrphanProvenance | None
 ) -> None:
-    rendered = await render(_record(state))
-    assert rendered == set(available_actions(state)), (
-        f"{surface_name} diverged from the policy at state {state.value}"
+    rendered = await render(_record(state, provenance))
+    assert rendered == set(available_actions(state, provenance)), (
+        f"{surface_name} diverged from the policy at state {state.value} "
+        f"with provenance {provenance}"
     )
 
 

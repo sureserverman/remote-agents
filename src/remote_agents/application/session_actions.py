@@ -14,15 +14,25 @@ this module offers must be one `domain.state_machine` will actually perform, or 
 takes an offered action and receives an exception instead of a stopped session.
 `tests/architecture/test_policy_matches_domain.py` enforces that direction.
 
-ORPHANED is deliberately **not** forceable. It is tempting — it is the one state the two
-prior copies never agreed on, and it can be stopped from no surface today — but the domain
-has no transition out of ORPHANED at all, so a force from it raises InvalidTransition before
-the terminal is reached. ORPHANED does not mean "the pane is gone" (that is
-RECONCILED_TERMINAL_MISSING, which ends the session); it means the evidence was ambiguous, or
-a tmux tag was found with no store row. `reconcile.py` quarantines it for local attention on
-purpose. Making it forceable is a real capability with a real safety question — it would put
-a one-tap kill on a possibly-live pane this app does not own — and it needs a domain
-transition and a recorded decision, not a policy edit.
+**ORPHANED is two situations, and they get different answers** (DEC-020). It never meant
+"the pane is gone" — that is RECONCILED_TERMINAL_MISSING, which ends the session. It means
+either that the evidence was ambiguous (a pane found but neither live nor preserved), or
+that a trusted managed pane was found with **no store row at all** and adopted. The record
+remembers which, as `SessionRecord.orphan_provenance`, so this module can tell them apart.
+
+The adopted case is frequently a *live agent the database lost*, and it gets force stop —
+the action its pane actually supports. The ambiguous case gets nothing, and so does any row
+written before migration 6, which cannot have its provenance back-derived. That asymmetry is
+the whole reason `available_actions` takes a second argument.
+
+This was previously a flat refusal, and the reasoning recorded here for it was sound at the
+time: the domain had no transition out of ORPHANED, so an offered force raised
+InvalidTransition before the terminal was reached. DEC-020 supplies exactly one transition
+(`VERIFIED_FORCE_STOP → ENDED`) and no bare retire, so the row still clears only as the
+consequence of an observed action, never by dismissing it. The safety question the old text
+raised — a one-tap kill on a possibly-live pane this app does not own — was answered rather
+than dropped: it is accepted cost 3 of DEC-020, and it is confined to the branch where
+reconciliation positively identified the pane as a trusted managed one.
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from remote_agents.domain.models import ProfileId, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 
 _LOG = logging.getLogger(__name__)
@@ -72,21 +82,41 @@ _FORCEABLE = frozenset(
 )
 
 
-def available_actions(state: SessionState) -> tuple[str, ...]:
+def available_actions(
+    state: SessionState, orphan_provenance: OrphanProvenance | None
+) -> tuple[str, ...]:
     """Return the stop actions offerable from `state`, force last.
 
     STARTING offers nothing: the pane may not exist yet, and the domain has no stop
     transition from it; a stuck STARTING session is resolved by reconciliation instead.
-    ENDED and ORPHANED offer nothing: both are read-only in the state machine.
+    ENDED offers nothing: it is read-only in the state machine.
+
+    `orphan_provenance` is read **only** when `state` is ORPHANED, and is ignored otherwise;
+    `tests/unit/application/test_session_actions.py` pins that inertness. It is a required
+    argument rather than one defaulting to `None` on purpose. A default would let a call site
+    that forgot it silently render the conservative rows, and a surface quietly missing the
+    adopted branch is precisely the divergence DEC-007 makes the parity contract responsible
+    for — a divergence the contract cannot catch if *both* surfaces forget. Required, the
+    same mistake is a TypeError at the call site.
     """
     actions: list[str] = []
     if state is SessionState.RUNNING:
         actions.append(GRACEFUL)
     if state is SessionState.PRESERVED:
         actions.append(CLEANUP)
-    if state in _FORCEABLE:
+    if state in _FORCEABLE or _is_adopted_orphan(state, orphan_provenance):
         actions.append(FORCE)
     return tuple(actions)
+
+
+def _is_adopted_orphan(state: SessionState, orphan_provenance: OrphanProvenance | None) -> bool:
+    """Whether this is the ORPHANED branch DEC-020 gives an action to.
+
+    Written as an equality against ADOPTED rather than as "not AMBIGUOUS", so that `None` —
+    every row older than migration 6 — falls to the conservative side, and so that a third
+    provenance added later is conservative until someone decides otherwise.
+    """
+    return state is SessionState.ORPHANED and orphan_provenance is OrphanProvenance.ADOPTED
 
 
 _EXPLANATIONS = {
@@ -99,24 +129,40 @@ _EXPLANATIONS = {
         "check can still promote it."
     ),
     SessionState.ENDED: "The session is closed; nothing is left to reach.",
-    # Two producers, and the wording has to fit both: a record whose pane evidence was
-    # neither live nor preserved (reconcile.py "ambiguous_terminal"), and a trusted pane
-    # found with no record at all ("unknown_session"). It is quarantined either way, and
-    # nothing the owner does moves it out — there is no transition from ORPHANED.
+    # The ambiguous producer, and the default for any row older than migration 6. The
+    # adopted producer reads differently and is spelled out below.
     SessionState.ORPHANED: (
         "This session and the panes on this host could not be reconciled, so it is held "
         "aside. No action is offered for it."
     ),
 }
 
+_ADOPTED_ORPHAN_EXPLANATION = (
+    "A running agent was found on this host with no record of it, so it was taken back into "
+    "the list. It is probably still working. Force stop is the only action that can reach it."
+)
+"""The adopted branch, in the owner's words rather than in the register's.
 
-def explain_state(state: SessionState) -> str:
+DEC-020 is a capability decision, so the two branches have to be distinguishable *on screen*
+— if they read identically the branch exists in the code and not in the product. The word
+"provenance" deliberately does not appear: what the owner needs is that this one is probably
+alive and that force is what reaches it.
+"""
+
+
+def explain_state(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
     """One line describing `state` to the owner, for any surface that renders a session.
 
     Every member is spelled out rather than defaulted. The bot previously classified four
     states and fell back to "This session is no longer active." for the rest, which was
     false for STARTING — a session that is actively coming up.
+
+    Takes provenance for the same reason `available_actions` does, and is required for the
+    same reason: after DEC-020 the sentence "No action is offered for it" is false for an
+    adopted record, and a caller that forgot the argument would print it anyway.
     """
+    if _is_adopted_orphan(state, orphan_provenance):
+        return _ADOPTED_ORPHAN_EXPLANATION
     return _EXPLANATIONS[state]
 
 

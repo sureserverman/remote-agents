@@ -79,7 +79,7 @@ async def test_detail_explains_every_reachable_lifecycle_state(state: SessionSta
         await pilot.pause()
         status = _status(app)
 
-    assert explain_state(state) in status
+    assert explain_state(state, None) in status
 
 
 async def test_every_state_is_either_reachable_in_detail_or_deliberately_filtered() -> None:

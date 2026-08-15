@@ -235,12 +235,87 @@ async def test_concurrent_force_stops_allow_only_one_terminal_side_effect() -> N
     assert sum(isinstance(result, Exception) for result in results) == 1
 
 
-async def test_a_stop_the_policy_refuses_also_raises_in_the_service() -> None:
-    """Defence in depth: availability is presentation, the state machine is the authority.
+@pytest.mark.parametrize("provenance", [None, "ambiguous"])
+async def test_a_stop_the_policy_refuses_also_raises_in_the_service(provenance) -> None:
+    """Defence in depth: availability is presentation, and something else must be authority.
 
     Written after a policy edit offered force from ORPHANED. Every surface-level test passed,
     because their fakes recorded the dispatch instead of transitioning; only the real service
-    shows that the terminal is never reached.
+    showed that the terminal was never reached.
+
+    **What the authority is changed under DEC-020, and that is the whole point of this test
+    now.** It used to be the state machine: availability narrowed the domain on `SessionState`
+    alone, so anything the policy refused the matrix refused too. DEC-020 gives ORPHANED one
+    outgoing transition and branches the *policy* on `orphan_provenance` — a record field the
+    matrix, a pure function of state, cannot read. So the matrix stopped being able to make
+    this refusal, and for one commit nothing else made it either.
+
+    `SessionService.force_stop` now asks `available_actions` directly for the ORPHANED case.
+    Both conservative provenances are driven here because they are different facts — an
+    unreadable or pre-migration-6 row, and a positively-ambiguous one — that must not diverge.
+    """
+    from remote_agents.application.errors import StopNotPermittedError
+    from remote_agents.application.session_actions import available_actions
+    from remote_agents.domain.models import OrphanProvenance
+
+    resolved = OrphanProvenance.AMBIGUOUS if provenance == "ambiguous" else None
+    store = FakeStore()
+    terminal = FakeTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    store.records[record.session_id] = SessionRecord(
+        record.session_id,
+        record.project_id,
+        record.profile_id,
+        record.display,
+        SessionState.ORPHANED,
+        record.created_at,
+        orphan_provenance=resolved,
+    )
+
+    assert "force" not in available_actions(SessionState.ORPHANED, resolved)
+    with pytest.raises(StopNotPermittedError):
+        await service.force_stop(ForceStopCommand(record.session_id))
+    assert terminal.force_stop_calls == 0
+
+
+async def test_the_service_lets_a_force_reach_an_adopted_orphan() -> None:
+    """The other side of the guard above, so it cannot be tightened into refusing everything.
+
+    A backstop that refused both branches would pass every test asserting a refusal and
+    silently delete the capability DEC-020 exists to add.
+    """
+    from remote_agents.domain.models import OrphanProvenance
+
+    store = FakeStore()
+    terminal = FakeTerminal()
+    service = SessionService(store, terminal)
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("claude"), "one")
+    )
+    store.records[record.session_id] = SessionRecord(
+        record.session_id,
+        record.project_id,
+        record.profile_id,
+        record.display,
+        SessionState.ORPHANED,
+        record.created_at,
+        orphan_provenance=OrphanProvenance.ADOPTED,
+    )
+
+    await service.force_stop(ForceStopCommand(record.session_id))
+
+    assert terminal.force_stop_calls == 1
+    assert store.records[record.session_id].state is SessionState.ENDED
+
+
+async def test_the_service_still_refuses_a_force_from_a_state_with_no_transition() -> None:
+    """The half of the double guard that survives, kept so the whole idea is not lost.
+
+    STARTING offers no force and the matrix permits none from it, so for every state but
+    ORPHANED the service is still the backstop it always was.
     """
     from remote_agents.application.session_actions import available_actions
     from remote_agents.domain.state_machine import InvalidTransition
@@ -256,11 +331,11 @@ async def test_a_stop_the_policy_refuses_also_raises_in_the_service() -> None:
         record.project_id,
         record.profile_id,
         record.display,
-        SessionState.ORPHANED,
+        SessionState.STARTING,
         record.created_at,
     )
 
-    assert "force" not in available_actions(SessionState.ORPHANED)
+    assert "force" not in available_actions(SessionState.STARTING, None)
     with pytest.raises(InvalidTransition):
         await service.force_stop(ForceStopCommand(record.session_id))
     assert terminal.force_stop_calls == 0

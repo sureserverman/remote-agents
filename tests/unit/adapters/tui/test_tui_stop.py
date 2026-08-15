@@ -127,7 +127,7 @@ async def test_detail_offers_exactly_the_policy_actions(state: SessionState) -> 
         await pilot.pause()
         offered = _offered(app)
 
-    assert offered == set(available_actions(state))
+    assert offered == set(available_actions(state, None))
 
 
 async def test_graceful_issues_a_graceful_stop_command() -> None:
@@ -207,7 +207,7 @@ async def test_an_action_the_policy_refuses_is_never_issued(state: SessionState)
         await app.show_detail(str(record.session_id))
         await pilot.pause()
         for action in ("graceful", "cleanup"):
-            if action not in available_actions(state):
+            if action not in available_actions(state, None):
                 await app.screen.choose(action)
                 await pilot.pause()
 

@@ -68,6 +68,22 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     (SessionState.RUNNING, LifecycleEvent.RECONCILED_PANE_DEAD): SessionState.PRESERVED,
     (SessionState.PRESERVED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    # DEC-020's one way out of ORPHANED, and deliberately the only one. The row clears as the
+    # consequence of an *observed* action, never by dismissing it: a bare retire would assert
+    # an ending nobody saw, and for the adopted case it would hide a live agent rather than
+    # stop it — the failure mode inverted rather than fixed.
+    #
+    # Adding this line removes ORPHANED from TERMINAL_STATES below, which is derived from the
+    # origins present here. Two consequences follow with no line naming ORPHANED: the session
+    # store stops writing a terminal_reason when a record enters ORPHANED, and a record can
+    # now leave it. Both are intended.
+    #
+    # The matrix says nothing about *provenance* — it cannot, because provenance lives on the
+    # record and this table is a pure function of state. So the domain permits this transition
+    # from either kind of ORPHANED, and `application/session_actions.py` is what confines the
+    # offer to the adopted branch. That is the established direction (availability narrows the
+    # domain, never widens it), but it does mean the domain alone is not the guard here.
+    (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
 }
 
 

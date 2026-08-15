@@ -114,7 +114,7 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
         launcher=launcher,
     )
     token = boundary.stops.offer(
-        record.session_id, record.profile_id, record.state, "graceful", 7, 11
+        record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
     )
     assert token is not None, "the bot offered no graceful stop, so nothing was exercised"
     # The token is minted unbound, exactly as a real render mints it; delivering the screen
@@ -273,7 +273,7 @@ async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
     # The *confirmed* token, because an unconfirmed force is refused at `claim` by design —
     # the second press is what makes it runnable, and this drives the press that runs.
     token = boundary.stops.offer_confirmed_force(
-        record.session_id, record.profile_id, record.state, 7, 11
+        record.session_id, record.profile_id, record.state, record.orphan_provenance, 7, 11
     )
     assert token is not None, "the bot offered no force stop, so nothing was exercised"
     boundary.callbacks.bind_pending(11, 100)

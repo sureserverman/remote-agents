@@ -114,11 +114,9 @@ class SQLiteSessionStore:
         # ADOPTED when it *creates* a record; the ambiguous producer never creates one, it
         # transitions an existing record, and this is the method that lands it. Stamping here
         # is what lets a NULL provenance mean one thing (a row older than migration 6) rather
-        # than three. Existing provenance is never overwritten, because it is durable history.
-        # That carry-through is unreachable today — nothing leaves ORPHANED, so no record with
-        # a provenance is ever transitioned — and it is written now because DEC-020's one new
-        # outgoing transition will make it live, and a record moving to ENDED under a force
-        # stop has to carry out of ORPHANED which kind of ORPHANED it was.
+        # than three. Existing provenance is never overwritten, because it is durable history:
+        # a record moving to ENDED under DEC-020's force stop has to carry out of ORPHANED
+        # which kind of ORPHANED it was, or the audit trail loses what was killed.
         orphan_provenance = current.orphan_provenance
         if to_state is SessionState.ORPHANED and orphan_provenance is None:
             orphan_provenance = OrphanProvenance.AMBIGUOUS

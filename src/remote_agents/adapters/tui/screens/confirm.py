@@ -283,7 +283,7 @@ class ForceConfirmModal(ConfirmScreen):
             f"Force stop {record.display.rendered}?\n"
             "This kills the agent immediately and cannot be undone. Any work it has not "
             "saved is lost.\n"
-            f"{explain_state(record.state)}"
+            f"{explain_state(record.state, record.orphan_provenance)}"
         )
 
 

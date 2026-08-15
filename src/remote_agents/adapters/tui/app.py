@@ -824,10 +824,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             if record is None:
                 await screen.refuse()
                 return
-            if action not in available_actions(record.state):
+            if action not in available_actions(record.state, record.orphan_provenance):
                 await screen.refuse(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):

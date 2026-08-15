@@ -36,6 +36,7 @@ LEGAL_TRANSITIONS = {
     (SessionState.RUNNING, LifecycleEvent.RECONCILED_PANE_DEAD): SessionState.PRESERVED,
     (SessionState.PRESERVED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
 }
 
 
@@ -96,8 +97,36 @@ def test_preserved_session_is_created_only_by_a_dead_pane_after_graceful_stop() 
     assert result.to_state is SessionState.PRESERVED
 
 
-@pytest.mark.parametrize("state", [SessionState.ENDED, SessionState.ORPHANED])
-def test_terminal_and_orphaned_sessions_are_read_only(state: SessionState) -> None:
+def test_an_ended_session_is_read_only() -> None:
+    """ORPHANED used to be asserted here beside ENDED, and is deliberately gone.
+
+    DEC-020 gives ORPHANED exactly one way out, so a parametrization still covering it would
+    assert the opposite of the decision — and would be the way this task could pass while
+    proving the decision was never implemented. What replaces it is the test below, which
+    pins the *shape* of the exception rather than dropping the guarantee.
+    """
     for event in LifecycleEvent:
         with pytest.raises(InvalidTransition):
-            transition(state, event)
+            transition(SessionState.ENDED, event)
+
+
+def test_orphaned_offers_exactly_one_way_out_and_it_is_not_a_retire() -> None:
+    """DEC-020's "exactly one outgoing transition ... There is no bare retire", pinned.
+
+    The decision's whole safety argument is that an ORPHANED record is cleared by *acting* on
+    the thing the row represents, never by dismissing the row. That is a claim about the size
+    of this set: one event, and specifically the one that observes a kill. A second outgoing
+    transition added later — an owner-initiated retire, a "dismiss" — fails here rather than
+    being noticed in review.
+    """
+    escapes = {
+        event for event in LifecycleEvent if (SessionState.ORPHANED, event) in LEGAL_TRANSITIONS
+    }
+
+    assert escapes == {LifecycleEvent.VERIFIED_FORCE_STOP}
+    assert transition(SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP).to_state is (
+        SessionState.ENDED
+    )
+    for event in set(LifecycleEvent) - escapes:
+        with pytest.raises(InvalidTransition):
+            transition(SessionState.ORPHANED, event)

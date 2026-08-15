@@ -201,11 +201,9 @@ class SessionRecord:
     pane again (DEC-020). Such a row takes the conservative branch rather than gaining a
     destructive action on the strength of a guess.
 
-    It is written to outlive ORPHANED. Nothing can leave ORPHANED today — the matrix has no
-    outgoing transition and `TERMINAL_STATES` is derived from that — so the carry-through is
-    currently unreachable. Once DEC-020's one new transition lands, a force-stopped adopted
-    record will reach ENDED still carrying `ADOPTED`, which is what will let the audit trail
-    answer *what was killed*.
+    It outlives ORPHANED. DEC-020 gives the state one way out, so a force-stopped adopted
+    record reaches ENDED still carrying `ADOPTED` — which is what lets the audit trail answer
+    *what was killed*, rather than only that something was.
     """
 
     def __post_init__(self) -> None:

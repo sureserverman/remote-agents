@@ -69,6 +69,11 @@ _MARKUP = "boom [unclosed and [link=file:///etc/passwd]this[/link]"
 
 @dataclass(slots=True)
 class _FakeRecord:
+    # Mirrors SessionRecord's tenth field. A fake missing it duck-types the record
+    # everywhere except the one branch DEC-020 added, which is the branch that offers a
+    # destructive action.
+    orphan_provenance = None
+
     session_id: SessionId
     state: SessionState
 

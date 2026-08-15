@@ -377,7 +377,9 @@ class SessionDetailScreen(ChoiceScreen):
         # exactly the split the breadcrumb exists to take.
         self._display = record.display.rendered
         self.show_breadcrumb()
-        self.set_status(f"State: {record.state.value}. {explain_state(record.state)}")
+        self.set_status(
+            f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
+        )
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
@@ -427,7 +429,8 @@ class SessionDetailScreen(ChoiceScreen):
             # the feature landed.
             entries.extend((key, label) for key, label, _state in _REMOTE_CONTROL_ROWS)
         entries.extend(
-            (action, ACTION_LABELS[action]) for action in available_actions(record.state)
+            (action, ACTION_LABELS[action])
+            for action in available_actions(record.state, record.orphan_provenance)
         )
         entries.append((_BACK, "Back"))
         return tuple(entries)
@@ -514,14 +517,14 @@ class SessionDetailScreen(ChoiceScreen):
             if record is None:
                 await self.refuse()
                 return
-            if FORCE not in available_actions(record.state):
+            if FORCE not in available_actions(record.state, record.orphan_provenance):
                 # Asked before the question rather than only after the answer. `stop` re-checks
                 # regardless — that is DEC-007's fourth mitigation and it is what makes this
                 # safe rather than necessary — but a surface that opens a kill confirmation it
                 # already knows it will refuse is asking the owner to authorise nothing.
                 await self.refuse(
                     f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             if not self.showing:
@@ -570,7 +573,7 @@ class SessionDetailScreen(ChoiceScreen):
             if not remote_control_available(record):
                 await self.refuse(
                     "Remote Control is not available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             if not self.showing:
@@ -613,7 +616,7 @@ class SessionDetailScreen(ChoiceScreen):
             self.announce(
                 "Attach is not available: this session has no pane on this host any more, or "
                 f"the pane found for it belongs to a different project or agent. "
-                f"{explain_state(record.state)}",
+                f"{explain_state(record.state, record.orphan_provenance)}",
                 severity="warning",
             )
             return

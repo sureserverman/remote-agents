@@ -12,7 +12,7 @@ from remote_agents.application.session_actions import (
     force_stop_failure,
     stop_failure,
 )
-from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionId, SessionState
 from remote_agents.ports.callback_state import CallbackStatePort
 
 CONFIRMED_FORCE = "force.confirmed"
@@ -102,12 +102,18 @@ class StopController:
         session_id: SessionId,
         profile_id: ProfileId,
         state: SessionState,
+        orphan_provenance: OrphanProvenance | None,
         action: str,
         owner_id: int,
         chat_id: int,
     ) -> str | None:
-        """Offer one policy-permitted action, unbound until its screen is delivered."""
-        if action not in available_actions(state):
+        """Offer one policy-permitted action, unbound until its screen is delivered.
+
+        Takes provenance because `available_actions` does: after DEC-020 an ORPHANED
+        record's rows depend on which producer created it, and this method is one of the
+        two places the bot decides what to mint.
+        """
+        if action not in available_actions(state, orphan_provenance):
             return None
         return self._callbacks.create(
             action, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
@@ -118,6 +124,7 @@ class StopController:
         session_id: SessionId,
         profile_id: ProfileId,
         state: SessionState,
+        orphan_provenance: OrphanProvenance | None,
         owner_id: int,
         chat_id: int,
     ) -> str | None:
@@ -126,7 +133,7 @@ class StopController:
         `CONFIRMED_FORCE` is an adapter-internal action: `available_actions` is still the sole
         authority on whether a force is permitted at all (DEC-007), and it is re-asked here.
         """
-        if FORCE not in available_actions(state):
+        if FORCE not in available_actions(state, orphan_provenance):
             return None
         return self._callbacks.create(
             CONFIRMED_FORCE, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
@@ -173,7 +180,7 @@ class StopController:
         # The record is re-read here because it may have moved on since the token was
         # issued, but the rule it is checked against is the shared one. A private copy is
         # what let an offered action be silently refused at dispatch.
-        if request.action not in available_actions(record.state):
+        if request.action not in available_actions(record.state, record.orphan_provenance):
             return _NOT_DISPATCHED
         if request.action == "graceful":
             observation = await service.graceful_stop(

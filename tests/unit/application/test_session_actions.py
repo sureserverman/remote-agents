@@ -18,10 +18,15 @@ from remote_agents.application.session_actions import (
     force_stop_failure,
     stop_failure,
 )
-from remote_agents.domain.models import SessionState
+from remote_agents.domain.models import OrphanProvenance, SessionState
 
 # Enumerated reflectively so a state added to the enum later fails here until it is
 # classified, rather than silently inheriting whatever the last branch returned.
+#
+# Keyed on the *conservative* provenance. Every state but ORPHANED ignores the second
+# argument entirely, and ORPHANED's adopted branch is the one exception, pinned separately
+# below rather than folded in here — a single table keyed on both axes would have six rows
+# that exist only to say "provenance changed nothing".
 EXPECTED: dict[SessionState, tuple[str, ...]] = {
     SessionState.STARTING: (),
     SessionState.RUNNING: ("graceful", "force"),
@@ -29,43 +34,49 @@ EXPECTED: dict[SessionState, tuple[str, ...]] = {
     SessionState.PRESERVED: ("cleanup", "force"),
     SessionState.FAILED: ("force",),
     SessionState.ENDED: (),
-    # Not forceable: the domain has no transition out of ORPHANED, so offering force here
-    # would raise InvalidTransition rather than stop anything. See
-    # tests/architecture/test_policy_matches_domain.py.
+    # The ambiguous branch, and the branch every row written before migration 6 falls to.
+    # The evidence supports no action, so none is offered (DEC-020).
     SessionState.ORPHANED: (),
 }
+
+CONSERVATIVE = (None, OrphanProvenance.AMBIGUOUS)
+"""The two provenances that must render identically: unknown, and known-to-be-ambiguous."""
 
 
 def test_every_state_is_classified() -> None:
     assert set(EXPECTED) == set(SessionState)
 
 
+@pytest.mark.parametrize("provenance", CONSERVATIVE)
 @pytest.mark.parametrize("state", list(SessionState))
-def test_available_actions_for_every_state(state: SessionState) -> None:
-    assert available_actions(state) == EXPECTED[state]
+def test_available_actions_for_every_state(
+    state: SessionState, provenance: OrphanProvenance | None
+) -> None:
+    assert available_actions(state, provenance) == EXPECTED[state]
 
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_only_known_actions_are_ever_offered(state: SessionState) -> None:
-    assert set(available_actions(state)) <= {"graceful", "cleanup", "force"}
+    for provenance in (None, *OrphanProvenance):
+        assert set(available_actions(state, provenance)) <= {"graceful", "cleanup", "force"}
 
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_graceful_only_from_running(state: SessionState) -> None:
-    assert ("graceful" in available_actions(state)) is (state is SessionState.RUNNING)
+    assert ("graceful" in available_actions(state, None)) is (state is SessionState.RUNNING)
 
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_cleanup_only_from_preserved(state: SessionState) -> None:
-    assert ("cleanup" in available_actions(state)) is (state is SessionState.PRESERVED)
+    assert ("cleanup" in available_actions(state, None)) is (state is SessionState.PRESERVED)
 
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_force_reconciles_the_two_prior_copies(state: SessionState) -> None:
     """The token issuer's set wins over the list builder's force-from-everything.
 
-    ORPHANED stays out. It is the one state the two copies never agreed on, and the domain
-    settles it: no event is legal from ORPHANED, so a force there raises rather than stops.
+    ORPHANED is no longer decided by state alone — DEC-020 splits it — so this pins the four
+    states whose answer provenance never touches, and the ORPHANED pair is pinned below.
     """
     forceable = {
         SessionState.RUNNING,
@@ -73,23 +84,64 @@ def test_force_reconciles_the_two_prior_copies(state: SessionState) -> None:
         SessionState.PRESERVED,
         SessionState.FAILED,
     }
-    assert ("force" in available_actions(state)) is (state in forceable)
+    assert ("force" in available_actions(state, None)) is (state in forceable)
+
+
+# DEC-020 — ORPHANED is two situations ----------------------------------------------------
+
+
+def test_an_adopted_orphan_offers_force_and_only_force() -> None:
+    """The live agent the database lost. Force is the action its pane actually supports.
+
+    Only force: graceful needs a managed pane this app can address by its own record, and
+    cleanup is about a *preserved* pane's retained output. An adopted record has neither.
+    """
+    assert available_actions(SessionState.ORPHANED, OrphanProvenance.ADOPTED) == ("force",)
+
+
+@pytest.mark.parametrize("provenance", CONSERVATIVE)
+def test_a_muddled_evidence_orphan_still_offers_nothing(
+    provenance: OrphanProvenance | None,
+) -> None:
+    """The half of DEC-020 that is a refusal, and the half a later edit is likeliest to lose.
+
+    A row that predates migration 6 reads `None`, and it must render exactly as a known
+    ambiguous one does — otherwise the migration's conservative default would be a different
+    product experience from the branch it was chosen to imitate.
+    """
+    assert available_actions(SessionState.ORPHANED, provenance) == ()
+
+
+@pytest.mark.parametrize(
+    "state", [state for state in SessionState if state is not SessionState.ORPHANED]
+)
+def test_provenance_changes_nothing_for_any_state_but_orphaned(state: SessionState) -> None:
+    """The new parameter is inert everywhere else, so a caller passing it cannot skew a row.
+
+    Worth pinning because the argument is now threaded through seven call sites: if it ever
+    started mattering for, say, PRESERVED, a surface that passes it and one that does not
+    would silently disagree — the DEC-007 divergence the parity contract exists to catch.
+    """
+    answers = {available_actions(state, provenance) for provenance in (None, *OrphanProvenance)}
+
+    assert len(answers) == 1
 
 
 def test_a_starting_session_offers_nothing() -> None:
-    assert available_actions(SessionState.STARTING) == ()
+    assert available_actions(SessionState.STARTING, None) == ()
 
 
 def test_an_ended_session_offers_nothing() -> None:
-    assert available_actions(SessionState.ENDED) == ()
+    assert available_actions(SessionState.ENDED, None) == ()
 
 
 def test_ordering_is_stable_and_puts_force_last() -> None:
     """Force is the destructive option; it never leads a menu."""
     for state in SessionState:
-        actions = available_actions(state)
-        if "force" in actions:
-            assert actions[-1] == "force"
+        for provenance in (None, *OrphanProvenance):
+            actions = available_actions(state, provenance)
+            if "force" in actions:
+                assert actions[-1] == "force"
 
 
 # `stop_failure` — the shared vocabulary both surfaces render -----------------------------

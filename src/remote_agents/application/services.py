@@ -16,9 +16,18 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
+from remote_agents.application.errors import (
+    DuplicateCommandError,
+    SessionNotFoundError,
+    StopNotPermittedError,
+)
 from remote_agents.application.reconcile import SessionLocks
-from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
+from remote_agents.application.session_actions import (
+    FORCE,
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    available_actions,
+)
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -318,6 +327,26 @@ class SessionService:
         """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
+            # Defence in depth for the one refusal the matrix below cannot make. Availability
+            # has always narrowed the domain on `SessionState` alone, so until DEC-020 every
+            # stop the policy refused the domain refused too and this line would have been
+            # dead. DEC-020 branches on a *record field*, and `transition` is a pure function
+            # of state — so from here on the policy is the only thing standing between a
+            # caller and a kill on a muddled-evidence ORPHANED record. That is a guard worth
+            # having at the layer that owns the destructive action, not only at the two
+            # surfaces that happen to call it.
+            #
+            # Asked through `available_actions` rather than restated: one authority on what
+            # may be stopped (DEC-001), so this cannot drift away from what the surfaces
+            # render. Scoped to ORPHANED so every other state keeps failing exactly as it
+            # did, through the matrix, with the exception its callers already expect.
+            if record.state is SessionState.ORPHANED and FORCE not in available_actions(
+                record.state, record.orphan_provenance
+            ):
+                raise StopNotPermittedError(
+                    "a force stop is not offered for this session: its pane evidence was "
+                    "ambiguous, so nothing here identifies what would be killed"
+                )
             transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)
             observation = await self._terminal.force_stop(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.VERIFIED_FORCE_STOP)

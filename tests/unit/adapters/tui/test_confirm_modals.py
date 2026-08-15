@@ -171,12 +171,17 @@ class _Arrangement:
 #: hard-coded. The plan's wording is "one case per destructive confirm site"; this is that,
 #: rather than one case per modal.
 _ARRANGED: dict[type[ConfirmScreen], tuple[_Arrangement, ...]] = {
-    # ORPHANED is a state the stop policy offers no force for, so a session that drifts into
+    # A *muddled-evidence* ORPHANED is a state the stop policy offers no force for -- the
+    # fixture leaves orphan_provenance at its default, which is that branch. DEC-020 does
+    # offer force for the adopted branch, so this arrangement names which one it means rather
+    # than saying "ORPHANED" and meaning half of it. A session that drifts into
     # it while the question is open must not be forced by the answer.
     ForceConfirmModal: (
         _Arrangement(
             open_key=FORCE,
-            offered_when=lambda record: FORCE in available_actions(record.state),
+            offered_when=lambda record: (
+                FORCE in available_actions(record.state, record.orphan_provenance)
+            ),
             refused_state=SessionState.ORPHANED,
             refusal_names="force stop",
             expects=lambda command: (

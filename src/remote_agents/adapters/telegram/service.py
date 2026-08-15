@@ -84,6 +84,7 @@ from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import (
     MAX_LABEL_LENGTH,
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionId,
@@ -1042,11 +1043,12 @@ class PrivateBotBoundary:
         # graceful stop is one tap from discarding the pane's output. No state offers more
         # than two stops, so the row stays legible.
         stops: list[Button] = []
-        for action in available_actions(record.state):
+        for action in available_actions(record.state, record.orphan_provenance):
             token = self.stops.offer(
                 record.session_id,
                 record.profile_id,
                 record.state,
+                record.orphan_provenance,
                 action,
                 self.owner_user_id,
                 self.owner_chat_id,
@@ -1057,7 +1059,8 @@ class PrivateBotBoundary:
             buttons.append(tuple(stops))
         return self._message(
             f"<b>{escape(record.display.rendered)}</b>\n"
-            f"State: {record.state.value}\n{_state_explanation(record.state)}",
+            f"State: {record.state.value}\n"
+            f"{_state_explanation(record.state, record.orphan_provenance)}",
             tuple(buttons),
             back=self._callback("sessions.open", "sessions"),
         )
@@ -1386,6 +1389,7 @@ class PrivateBotBoundary:
             record.session_id,
             ProfileId(profile_value),
             record.state,
+            record.orphan_provenance,
             self.owner_user_id,
             self.owner_chat_id,
         )
@@ -2001,6 +2005,6 @@ def _session_row_label(record: SessionRecord) -> str:
     return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
 
 
-def _state_explanation(state: SessionState) -> str:
+def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
     """Defer to the shared mapping so both surfaces describe a state identically."""
-    return explain_state(state)
+    return explain_state(state, orphan_provenance)
