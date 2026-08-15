@@ -196,7 +196,22 @@ def _event_for_reconciliation(
 
 
 class SessionLocks:
-    """Per-session asyncio locks serializing every concurrent state-changing mutation."""
+    """The asyncio locks `SessionService` takes around the mutations it issues.
+
+    Every mutation it issues, not only the ones that end a session: the previous wording said
+    "destructive mutations", which read as though a graceful stop were outside the lock, and it
+    is not. But the set is bounded by the **caller** rather than by the kind of change, and
+    saying "every state-changing mutation" would assert a guarantee this class does not give.
+    `ReconciliationService` above is the counter-example, and it is not a hypothetical one: it
+    is constructed with a store and nothing else (`bootstrap.py`), runs on a timer, and writes
+    `record_event` directly, so a reconciliation pass racing an owner's stop on the same
+    session is not serialized by anything here.
+
+    Which lock covers what also differs, because a session id is not always in hand yet:
+    `launch` and `resume` take `operation()` alone — the record does not exist to key on — and
+    `resume` adds `for_conversation`. `for_session` covers the mutations of a record that is
+    already stored.
+    """
 
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}

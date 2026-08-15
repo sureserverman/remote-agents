@@ -457,8 +457,8 @@ class SessionDetailScreen(ChoiceScreen):
         """Answer the folder-trust question, re-reading the record and the pane first.
 
         Not modal-confirmed, and that is a judgment worth writing down rather than an
-        omission. DEC-008's confirmations guard *destructive* actions -- force stop, Remote
-        Control -- and this one destroys nothing: it answers a question the agent is already
+        omission. The two actions DEC-008 puts a confirmation in front of are force stop and
+        Remote Control, and this one destroys nothing: it answers a question the agent is already
         asking, with the answer the owner would have to give at the keyboard for the session
         to be usable at all. A confirmation here would ask "are you sure you want to unblock
         the thing you launched".

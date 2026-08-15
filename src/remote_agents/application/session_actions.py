@@ -11,7 +11,7 @@ rechecked the live record against a fourth spelling of the same rule.
 
 Availability is a *narrowing* of the domain's legal transitions, never a widening: an action
 this module offers must be one `domain.state_machine` will actually perform, or the owner
-confirms a destructive operation and receives an exception instead of a stopped session.
+takes an offered action and receives an exception instead of a stopped session.
 `tests/architecture/test_policy_matches_domain.py` enforces that direction.
 
 ORPHANED is deliberately **not** forceable. It is tempting — it is the one state the two

@@ -3,8 +3,8 @@
 Stage 1 shipped `force` from ORPHANED on the reasoning that the state could be stopped from
 neither surface. It could not: ORPHANED is read-only in the state machine, so the offered
 button raised InvalidTransition before the terminal was ever reached. Offering an action the
-domain will reject is strictly worse than offering nothing — the owner confirms a destructive
-operation and gets an exception instead of a stopped session.
+domain will reject is strictly worse than offering nothing — the owner takes an offered action
+and gets an exception instead of a stopped session.
 
 This test is the structural guard that makes that class of mistake impossible to reintroduce:
 availability is a *presentation* narrowing of the domain's legal transitions, never a widening.
