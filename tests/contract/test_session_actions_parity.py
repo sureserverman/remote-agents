@@ -1,9 +1,21 @@
-"""Every surface renders exactly `available_actions(state)` — no more, no less.
+"""Every action a surface renders is exactly the set `available_actions(state)` allows.
 
 This is the test that catches a surface drifting from the shared policy. It is written
 against the *rendered* buttons rather than the policy call, because a surface that asks the
 policy and then adds or filters a button afterwards is precisely the defect the two former
 Telegram copies were. Both surfaces are now pinned; see SURFACES below.
+
+The limit of that claim is `_LABEL_TO_ACTION`. Comparing a rendered surface to a set of
+action ids means decoding each label on screen back through `ACTION_LABELS`, and a row whose
+label is not a known action label decodes to nothing — it is filtered out of the rendered
+set before the comparison, so it cannot make the equality fail. What this test therefore
+catches is a surface rendering the *wrong* action: a row that collides with a known action
+label, in a state whose policy does not permit it, or a permitted row that is missing. What
+it does not catch is a surface growing an extra row whose label collides with nothing —
+another button, a menu entry, a heading — because such a row is invisible on both sides of
+the assertion. That is a deliberate limit and not an oversight; see DEC-019, which declined
+an allow-list of recognized rows on the grounds that it must be kept current and fails
+noisily when it is not.
 
 What this test does NOT check: whether the policy itself is right. Both sides of the
 assertion derive from `available_actions`, so changing it moves them together and this file
