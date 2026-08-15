@@ -64,8 +64,8 @@ def resume_available(summary: ConversationSummary) -> bool:
     beside `available_actions`, and for the same reason — it is a policy question about one
     record, not an operation on the catalogue.
 
-    **The defect this closes (BL-004) is that the rule was written down twice on one surface
-    and not at all on the other.** The bot filtered its list on `state is RESUMABLE` and
+    **The defect this closes is that the rule was written down twice on one surface and not
+    at all on the other.** The bot filtered its list on `state is RESUMABLE` and
     re-checked the same expression at its confirmation; the local surface checked neither, so
     it would have rendered a non-resumable conversation as a choosable row and carried it all
     the way to a launch. Nothing had gone wrong yet only because `ConversationState` has

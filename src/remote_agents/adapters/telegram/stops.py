@@ -169,7 +169,7 @@ class StopController:
         **Force is read through `force_stop_failure`, not `stop_failure`.** The latter keys on
         `preserved`, which is the success for a graceful stop and is false on *every* force,
         because force removes the pane rather than keeping it — routing force through it would
-        report every completed kill as a failure. What force reports is BL-026's case: the
+        report every completed kill as a failure. What force reports is the case DEC-017 names: the
         runtime found no managed pane, killed nothing, and the service recorded
         `VERIFIED_FORCE_STOP` anyway (DEC-017, deliberately, so the row still clears). The
         session does end; the claim that a kill was observed is what stops being made.

@@ -874,7 +874,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 # attempted and did not happen.
                 #
                 # **Force gets a different opening, because "did not take effect" would be
-                # false for it (BL-026, DEC-017).** A force that found no pane still ends the
+                # false for it (DEC-017).** A force that found no pane still ends the
                 # session and still clears the row — that is the decision, taken because a row
                 # the owner cannot clear is worse than an over-confident message. So the stop
                 # very much took effect on the record; what it did not do is the kill it used
@@ -915,7 +915,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         routing force through it would report every completed kill as a failure.
         `force_stop_failure` reads the detail instead.
 
-        What it reports is BL-026: `TmuxRuntime.force_stop` returns `detail="ownership_lost"`
+        What it reports: `TmuxRuntime.force_stop` returns `detail="ownership_lost"`
         *without* killing anything when no managed pane matches, and both surfaces used to say
         "Force stopped X" over it. Under DEC-017 the behaviour is deliberately unchanged —
         `SessionService.force_stop` still records `VERIFIED_FORCE_STOP`, the record still

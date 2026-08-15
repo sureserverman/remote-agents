@@ -316,7 +316,7 @@ class SessionService:
         DEC-017's accepted cost 1 is exactly this line. The durable history cannot distinguish
         a kill that happened from one that did not; only the **returned observation** carries
         that, which is why this method returns it rather than `None`, and why both surfaces
-        read it through `session_actions.force_stop_failure` (BL-026). Anyone reconstructing
+        read it through `session_actions.force_stop_failure`. Anyone reconstructing
         what happened from `session_events` alone will over-read this event, and there is no
         fix for that short of reopening the decision.
 

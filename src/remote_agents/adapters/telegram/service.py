@@ -828,8 +828,9 @@ class PrivateBotBoundary:
         # path did not have it on either surface. `_resume_confirm_reply` checks while building
         # the screen, which is a different moment: the resolve above is a second, independent
         # read, so a conversation the policy refuses could be resumed here after passing there.
-        # Found by the Stage 3 gate's adversarial pass, which noted BL-004's own shape — the
-        # rule written down in some places and not others — reappearing on the other surface.
+        # Found by the Stage 3 gate's adversarial pass, which noted the very shape this fix
+        # was for — the rule written down in some places and not others — reappearing on the
+        # other surface.
         if not resume_available(resolved.summary):
             return _reply_arguments(self._message("That conversation cannot be resumed safely."))
         record = await self.launcher.resume(
@@ -1444,7 +1445,8 @@ class PrivateBotBoundary:
         current = await self._record(session_value)
         if current is not None:
             # The `else` is **unreachable today and worded as if it were not**, which is the
-            # honest shape for it. `failure` is non-None for graceful and, since BL-026, for a
+            # honest shape for it. `failure` is non-None for graceful and, since force gained
+            # the same vocabulary, for a
             # force that found no pane — and `cleanup` and `force_stop` both walk the record to
             # ENDED on every non-raising path (`application/services.py`), so a session still
             # listed after one of those is a state no current code produces. The wording is
@@ -1478,7 +1480,8 @@ class PrivateBotBoundary:
             # reading DEC-006 forbids. Found by the Stage 2 gate's evaluator and its second pass
             # independently.
             #
-            # Since BL-026 the common one: a force stop that found no managed pane. It killed
+            # Since force started reporting its own observation, the common one: a force stop
+            # that found no managed pane. It killed
             # nothing, the service recorded `VERIFIED_FORCE_STOP` anyway and the record reached
             # ENDED (DEC-017, deliberately — a row the owner cannot clear is the worse failure),
             # so the session really has gone from the list. This branch is reused rather than

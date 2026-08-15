@@ -68,3 +68,9 @@ on the same day.
 
 `BL-001` and `BL-002` remain open and Telegram-scoped. This work opened `BL-004`, `BL-005`,
 `BL-006`, and `BL-007`.
+
+> Later note, added 2026-08-15: this section describes the state of the backlog on
+> 2026-08-05 and is left as written, because it is a dated record of one acceptance run
+> rather than live documentation. `BL-004`, `BL-005` and `BL-006` have since been closed by
+> the 2026-08-13 backlog-closure plan; the identifiers above no longer resolve to open
+> entries.

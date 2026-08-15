@@ -291,9 +291,10 @@ class ResumeConversationsScreen(ChoiceScreen):
             )
             self.show_choices(((_BACK, "Back"),))
             return
-        # Filtered by the shared policy, which this surface did not consult at all until
-        # BL-004 — it rendered whatever the catalogue returned. The bot had the rule twice and
-        # this had it nowhere, and nothing had gone wrong only because `ConversationState` has
+        # Filtered by the shared policy, which this surface did not consult at all until the
+        # rule was centralized here — it rendered whatever the catalogue returned. The bot had
+        # the rule twice and this had it nowhere, and nothing had gone wrong only because
+        # `ConversationState` has
         # one member. `resume_available` is now the single authority, beside
         # `ConversationService` as `remote_control_available` sits beside `available_actions`.
         #
@@ -429,7 +430,8 @@ class ResumeConfirmScreen(ChoiceScreen):
         # That analogy is wrong: `stop` genuinely re-reads the record (`current_record`), while
         # `self.resolved` is a frozen snapshot taken when this screen was pushed, so a pure
         # function of it cannot see anything move. Covering that window would mean re-resolving
-        # here, which is DEC-024's shape one hop further and is not what BL-004 asked for.
+        # here, which is DEC-024's shape one hop further and is not what centralizing the
+        # rule was for.
         #
         # The same claim also said the bot had always had this check. It had not — it checked
         # while *rendering* the review screen and then resumed unchecked, which the Stage 3
