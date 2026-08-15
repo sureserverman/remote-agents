@@ -189,7 +189,15 @@ class ResumeProfilesScreen(ChoiceScreen):
             capabilities = await conversations.capabilities()
         except Exception as error:
             _LOG.exception("resume capabilities failed")
-            self.set_status("Press escape to go back.")
+            # States the failure rather than pointing at the exit, and says so at error
+            # severity — the same correction `app.report_store_failure` records: once the
+            # toast has gone, a status that only offers escape leaves a failed read
+            # indistinguishable from an ordinary empty list. Not the sibling's "return to
+            # the project list": escape from here goes back one step, to the project
+            # choice, so that wording would trade one wrong claim for another.
+            self.set_status(
+                "Resume is unavailable on this host. Press escape to go back.", severity="error"
+            )
             self.announce(f"Resume is unavailable: {error}")
             self.show_choices(((_BACK, "Back"),))
             return
@@ -401,7 +409,13 @@ async def fetch_page(
         )
     except Exception as error:
         _LOG.exception("conversation catalogue failed")
-        screen.set_status("Press escape to go back.")
+        # The other member of the same class as the one above. `screen` here is either the
+        # profile choice or the conversation list, both of them below the project list, so
+        # the navigation phrase stays "go back" while the sentence gains what it was
+        # missing: what failed, at a severity that renders differently from an empty page.
+        screen.set_status(
+            "The conversations could not be listed. Press escape to go back.", severity="error"
+        )
         screen.announce(f"The conversations could not be listed: {error}")
         screen.show_choices(((_BACK, "Back"),))
         return None

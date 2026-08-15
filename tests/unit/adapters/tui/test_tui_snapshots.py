@@ -24,11 +24,11 @@ flake on a machine that is merely configured differently:
    dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
 2. **The theme** (`_THEME`). `TEXTUAL_THEME` is read into `constants.DEFAULT_THEME` at import
    time, so a developer who exports it renders every colour differently. Unpinned,
-   `TEXTUAL_THEME=textual-light` fails all 16 at once — and the documented remedy for a mass
+   `TEXTUAL_THEME=textual-light` fails all 28 at once — and the documented remedy for a mass
    failure is to regenerate, which would silently replace the whole net with one person's
    theme.
 3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
-   that variable alone also fails all 16.
+   that variable alone also fails all 28.
 4. **The age column.** `application.relative_time.age()` renders `datetime.now(UTC) -
    created_at`, so every fixture record is stamped at capture time to render a stable
    `0m ago`. That stamping is also why the sub-plan-4 humanization — minutes, then hours,
@@ -38,19 +38,30 @@ flake on a machine that is merely configured differently:
    thing that makes them blind to the change. A future task that alters how a *young* age
    renders will move all of them at once.
 
-**Two more holes in this net, disclosed because a green suite here reads as "the surface is
-unchanged" and for these it means nothing of the kind.** Sub-plan 4's colour-token work also
-moved no baseline, and not for a benign reason: `$foreground` on `#status` is already the
-default, `$surface` on the output pane equals the screen's own background, `$text-muted`
-reaches only a disabled empty-state row, and `$error`/`$warning` reach only a severity none
-of these sixteen captures sets. Deleting that whole CSS block would leave every file here
-identical. `test_status_region.py` carries the assertion instead — it resolves the rendered
-colour under two themes that genuinely differ and requires them to differ, which a hex
-literal cannot satisfy.
+**One hole in this net remains, disclosed because a green suite here reads as "the surface is
+unchanged" and for that hole it means nothing of the kind.** Part of sub-plan 4's colour-token
+work still moves no baseline: `$foreground` on `#status` is already the default, `$surface` on
+the output pane equals the screen's own background, and `$text-muted` reaches only a disabled
+empty-state row. `test_status_region.py` carries the assertion instead — it resolves the
+rendered colour under two themes that genuinely differ and requires them to differ, which a
+hex literal cannot satisfy.
 
-The second hole is the same shape: **no baseline renders an empty list**, so the empty-state
-rows added in sub-plan 4 are covered by `test_empty_states.py` alone. Both gaps were found by
-a gate evaluator reading the diff rather than by anything in this file.
+The two gaps that stood beside it are what the state axis below closed, and they are the
+reason BL-010 was worth paying for. **Severity is now captured:** measured across all 28
+committed baselines, four render an error status at `#b93c5b` (`AREAS_UNREADABLE`,
+`SESSIONS_STORE_FAILURE`, `RESUME_PROFILES_UNAVAILABLE`, `RESUME_PROFILES_UNLISTABLE`),
+twenty-two render the informational default (`#e0e0e0`) and the two modals dim theirs
+(`#646464`) — so deleting the `-error` rule now moves four files, where before it moved none.
+`$warning` still reaches no status row in any capture, because the only warning-severity
+feedback on these paths is a toast and `run_test` leaves notifications disabled. **And the
+empty renders are covered:** `SESSIONS_EMPTY` and `RESUME_PROFILES_NONE_CAPABLE` baseline the
+empty-state rows that `test_empty_states.py` used to assert alone.
+
+The last two of those four error baselines were added at the Stage 2 gate, not by BL-010, and
+they are the sharpest argument for the whole axis: both renders were **already wrong** — a
+status that pointed at the exit without naming what had failed, at no severity — and nothing
+caught it because neither had a baseline. The net's value is not that it saw them break; it is
+that having to look at a render is what showed they were broken already.
 5. **The input cursor.** A focused `Input` runs a 0.5s wall-clock blink timer
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
@@ -67,6 +78,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -104,7 +116,7 @@ _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
 _SIZE = (100, 30)
 # Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
-# `NO_COLOR` in the environment re-renders every colour in the document, failing all 16
+# `NO_COLOR` in the environment re-renders every colour in the document, failing all 28
 # baselines at once and inviting a regeneration that would bake one person's terminal
 # configuration into the net.
 _THEME = "textual-dark"
@@ -135,7 +147,12 @@ _POSITIONS = (
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered")
-_SESSION_ID = SessionId.new()
+# Fixed rather than minted per run, which `SessionId.new()` did until the state axis below
+# needed it. Sixteen position baselines never rendered the raw id — `SessionDetailScreen`
+# overwrites the breadcrumb with the record's display identity as soon as it reads one — but
+# the SESSION_DETAIL_MISSING state has no record to read, so the bare id stays in the header
+# and a freshly minted UUID would write a different SVG on every run.
+_SESSION_ID = SessionId.parse("00000000-0000-0000-0000-000000000001")
 
 
 async def settle(app, pilot, *, tries: int = 20) -> None:
@@ -203,12 +220,23 @@ def _summary() -> ConversationSummary:
 @dataclass(slots=True)
 class _Launcher:
     record: SessionRecord = field(default_factory=_record)
+    # Three knobs the state axis needs, each defaulting to the happy path so the sixteen
+    # position baselines are still driven by the launcher they have always been driven by.
+    # `records=()` empties the list; `list_error` makes the store read raise, which is the
+    # one and only trigger for `report_store_failure`.
+    records: tuple[SessionRecord, ...] | None = None
+    list_error: Exception | None = None
+
+    def _listing(self) -> tuple[SessionRecord, ...]:
+        return (self.record,) if self.records is None else self.records
 
     async def refresh_readiness(self):
-        return (self.record,)
+        return self._listing()
 
     async def list_sessions(self):
-        return (self.record,)
+        if self.list_error is not None:
+            raise self.list_error
+        return self._listing()
 
     async def copy_attach(self, _session_id):
         return "tmux -L remote-agents attach-session -t =ra-session:"
@@ -219,7 +247,14 @@ class _Launcher:
 
 @dataclass(slots=True)
 class _Creator:
+    #: Raised out of `available_areas` for the AREAS_UNREADABLE state. The screen reads the
+    #: development root on a worker thread, so this is what an unreadable root looks like
+    #: from the surface's side of that hop.
+    error: Exception | None = None
+
     def available_areas(self):
+        if self.error is not None:
+            raise self.error
         return ("dev-area", "infra")
 
 
@@ -241,11 +276,25 @@ class _Conversations:
         )
 
 
-def _context(*, state: SessionState = SessionState.RUNNING) -> TuiContext:
-    launcher = _Launcher(record=_record(state))
+def _context(
+    *,
+    state: SessionState = SessionState.RUNNING,
+    launcher: object | None = None,
+    creator: object | None = None,
+    conversations: object | None = None,
+    capture=None,
+) -> TuiContext:
+    """The collaborators every capture is driven against.
+
+    The four overrides exist for the state axis, and each one defaults to the collaborator
+    the position axis has always used — so a state case says exactly which collaborator it
+    bends and nothing else, and the sixteen position baselines cannot move because a state
+    case needed a different fake.
+    """
+    launcher = _Launcher(record=_record(state)) if launcher is None else launcher
     return TuiContext(
         launcher=launcher,  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        creator=_Creator() if creator is None else creator,  # type: ignore[arg-type]
         profiles=(
             ProfileChoice("claude", True),
             ProfileChoice("codex", False, "not installed on this host"),
@@ -260,8 +309,8 @@ def _context(*, state: SessionState = SessionState.RUNNING) -> TuiContext:
             f"={session_id}",
         ),
         catalogue=(_PROJECT, _OTHER),
-        capture=lambda _session_id: _captured(),
-        conversations=_Conversations(),  # type: ignore[arg-type]
+        capture=(lambda _session_id: _captured()) if capture is None else capture,
+        conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
     )
 
 
@@ -362,6 +411,210 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     return None
 
 
+# --------------------------------------------------------------------------------------
+# The second axis: the states a screen enters, rather than the screens themselves.
+#
+# `_POSITIONS` above is an axis of *screens*, tied to the registry by an equality that
+# `test_every_position_has_a_baseline` calls deliberate — a name outliving its screen has to
+# fail. The renders below are not screens: the empty list, the unreadable store, the refused
+# capture, a detail rendered for a state whose action rows differ. Every one of them shares a
+# position with a baseline already committed under that name — all twelve, across the five
+# positions SESSIONS, SESSION_DETAIL, INSPECT, AREAS and RESUME_PROFILES — so adding them to
+# `_POSITIONS` would break that equality instead of closing a gap. Hence a second axis, with
+# `test_every_state_names_a_live_position` as its own tie back to the registry.
+#
+# What these ten cannot show, stated because a green run here otherwise reads as more than
+# it is: `run_test` leaves notifications disabled, so no toast reaches `export_screenshot`.
+# Three of the ten put their explanation partly in a toast (the store failure, the
+# unreadable root, the attach hand-off), and what is baselined is the part the owner sees on
+# the screen itself — the status line, its severity, and the rows that survive. The toast
+# text is asserted by `announcements()` in the sibling behaviour tests, and that division is
+# why widening this net does not retire those.
+# --------------------------------------------------------------------------------------
+
+
+def _capturing(text: str):
+    """A capture port that answers with exactly `text`, however unlikely."""
+
+    async def capture(_session_id) -> str:
+        return text
+
+    return capture
+
+
+class _NoneCapable(_Conversations):
+    """A host where every installed agent answers "I cannot resume"."""
+
+    async def capabilities(self):
+        return (
+            ProfileResumeCapability(
+                ProfileId("claude"),
+                catalogue_available=False,
+                selected_resume_available=False,
+            ),
+        )
+
+
+class _UnavailableResume(_Conversations):
+    """The capability probe fails on the **re**-ask, which is the only path that reaches it.
+
+    Failing the first ask would be caught one screen earlier, by `ResumeProjectsScreen.choose`,
+    and would never leave the project list — so a fake that always raises does not drive this
+    render at all. `ResumeProfilesScreen.on_reveal` re-asks only on the way back from the
+    conversation list, and that is the branch being baselined.
+    """
+
+    def __init__(self) -> None:
+        self.asked = 0
+
+    async def capabilities(self):
+        self.asked += 1
+        if self.asked > 1:
+            raise RuntimeError("the agent could not be asked")
+        return await super().capabilities()
+
+
+class _UnlistableCatalogue(_Conversations):
+    """Every agent can resume, but the page read fails.
+
+    `fetch_page` reports onto the screen that asked, and the first page is asked for by the
+    profile choice — so this render only appears once a profile has been chosen, not on
+    arriving at the profile list.
+    """
+
+    async def catalogue(self, query):
+        raise RuntimeError("the catalogue could not be read")
+
+
+@dataclass(frozen=True, slots=True)
+class _State:
+    """One render, the name its baseline is committed under, and how to arrive at it.
+
+    `position` is not decoration: it is asserted at capture time, so a state that stops
+    being reachable fails where it is named rather than quietly baselining whatever screen
+    the drive happened to land on.
+    """
+
+    name: str
+    position: str
+    context: Callable[[], TuiContext]
+    drive: Callable[[RemoteAgentsTui, object], Awaitable[None]]
+
+
+async def _to_sessions(app: RemoteAgentsTui, _pilot) -> None:
+    await app.show_sessions()
+
+
+async def _to_detail(app: RemoteAgentsTui, _pilot) -> None:
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
+
+
+async def _to_inspect(app: RemoteAgentsTui, pilot) -> None:
+    await _to_detail(app, pilot)
+    await app.screen.show_inspect()
+
+
+async def _to_attach(app: RemoteAgentsTui, pilot) -> None:
+    await _to_detail(app, pilot)
+    await app.screen.show_attach()
+
+
+async def _to_areas(app: RemoteAgentsTui, _pilot) -> None:
+    await app.show_areas()
+
+
+async def _to_resume_profiles(app: RemoteAgentsTui, pilot) -> None:
+    await app.action_resume()
+    await pilot.pause()
+    await app.screen.choose("opaque-existing")
+
+
+async def _to_resume_profiles_after_choosing(app: RemoteAgentsTui, pilot) -> None:
+    """One step further than the profile list: the choice that asks for the first page."""
+    await _to_resume_profiles(app, pilot)
+    await pilot.pause()
+    await app.screen.choose("claude")
+
+
+async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
+    """Back onto the profile list from the conversation list, which is what re-asks."""
+    await _to_resume_profiles_after_choosing(app, pilot)
+    await pilot.pause()
+    await app.action_back()
+
+
+_STATES = (
+    _State(
+        "SESSIONS_EMPTY",
+        "SESSIONS",
+        lambda: _context(launcher=_Launcher(records=())),
+        _to_sessions,
+    ),
+    _State(
+        "SESSIONS_STORE_FAILURE",
+        "SESSIONS",
+        lambda: _context(launcher=_Launcher(list_error=RuntimeError("database is locked"))),
+        _to_sessions,
+    ),
+    _State(
+        "SESSION_DETAIL_MISSING",
+        "SESSION_DETAIL",
+        lambda: _context(launcher=_Launcher(records=())),
+        _to_detail,
+    ),
+    _State(
+        "SESSION_DETAIL_PRESERVED",
+        "SESSION_DETAIL",
+        lambda: _context(state=SessionState.PRESERVED),
+        _to_detail,
+    ),
+    _State(
+        "SESSION_DETAIL_STARTING",
+        "SESSION_DETAIL",
+        lambda: _context(state=SessionState.STARTING),
+        _to_detail,
+    ),
+    _State("SESSION_DETAIL_ATTACH", "SESSION_DETAIL", _context, _to_attach),
+    _State(
+        "INSPECT_BINARY",
+        "INSPECT",
+        lambda: _context(capture=_capturing("before\x00after")),
+        _to_inspect,
+    ),
+    _State("INSPECT_EMPTY", "INSPECT", lambda: _context(capture=_capturing("")), _to_inspect),
+    _State(
+        "AREAS_UNREADABLE",
+        "AREAS",
+        lambda: _context(creator=_Creator(error=OSError("no such development root"))),
+        _to_areas,
+    ),
+    _State(
+        "RESUME_PROFILES_NONE_CAPABLE",
+        "RESUME_PROFILES",
+        lambda: _context(conversations=_NoneCapable()),
+        _to_resume_profiles,
+    ),
+    # The last two were added by the Stage 2 gate rather than by BL-010, and the reason is
+    # worth keeping: the evaluator found both of these renders already defective — a status
+    # that pointed at the exit without saying what had failed, at no severity — and the
+    # reason nothing had caught it is precisely that neither had a baseline. Fixing the
+    # defect without baselining it would have left the next one just as invisible.
+    _State(
+        "RESUME_PROFILES_UNAVAILABLE",
+        "RESUME_PROFILES",
+        lambda: _context(conversations=_UnavailableResume()),
+        _to_resume_profiles_revealed,
+    ),
+    _State(
+        "RESUME_PROFILES_UNLISTABLE",
+        "RESUME_PROFILES",
+        lambda: _context(conversations=_UnlistableCatalogue()),
+        _to_resume_profiles_after_choosing,
+    ),
+)
+
+
 @pytest.fixture(autouse=True)
 def _neutral_colour_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Render as if no colour-forcing variable were set, whatever the developer exports."""
@@ -399,6 +652,47 @@ def test_every_position_has_a_baseline() -> None:
     deleted would otherwise sit there pointing at a baseline nothing renders.
     """
     assert set(_POSITIONS) == {screen.position for screen in ALL_SCREENS}
+
+
+@pytest.mark.parametrize("case", _STATES, ids=lambda case: case.name)
+async def test_every_named_state_matches_its_baseline(case: _State) -> None:
+    """Each error, empty and alternate-state render matches its committed baseline."""
+    app = RemoteAgentsTui(case.context())
+    async with app.run_test(size=_SIZE) as pilot:
+        app.theme = _THEME
+        await pilot.pause()
+        await case.drive(app, pilot)
+        await settle(app, pilot)
+        assert position(app) == case.position, (
+            f"{case.name} drove to {position(app)}, expected {case.position}"
+        )
+        _assert_snapshot(app, case.name)
+
+
+def test_every_state_names_a_live_position() -> None:
+    """This axis's tie back to the registry, and the reason it is a subset not an equality.
+
+    `_POSITIONS` must equal the registry because a screen with no baseline is the hole that
+    net exists to close. States are different: nobody claims every screen has an interesting
+    second state, so requiring one per screen would invent nine empty cases to satisfy an
+    equality. What must hold is the other direction — a state pointing at a position no
+    screen declares is a case driving nothing, and it would sit here passing against a
+    baseline captured before the screen was deleted.
+
+    The name checks are the same defect one level down: two states sharing a name, or a
+    state named for a position, would have the second capture silently overwrite the first
+    baseline under `REMOTE_AGENTS_SNAPSHOT_UPDATE=1` and then compare against it forever.
+    """
+    registry = {screen.position for screen in ALL_SCREENS}
+    named = {case.position for case in _STATES}
+    assert named <= registry, f"states name positions no screen declares: {named - registry}"
+
+    names = [case.name for case in _STATES]
+    assert len(set(names)) == len(names), f"two states share a baseline name: {names}"
+    assert not set(names) & set(_POSITIONS), (
+        f"a state is named for a position, and would overwrite its baseline: "
+        f"{set(names) & set(_POSITIONS)}"
+    )
 
 
 async def test_a_missing_baseline_fails_rather_than_being_written() -> None:
