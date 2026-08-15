@@ -17,6 +17,7 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
 from remote_agents.application.reconcile import SessionLocks
+from remote_agents.application.session_actions import UNKNOWN_SESSION
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -233,8 +234,16 @@ class SessionService:
             )
             observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
             if not observation.preserved:
+                # Two causes, two events (DEC-022). `unknown_session` means the terminal never
+                # matched the session to a live pane it owns, so no exit sequence left this
+                # host and nothing was waited for; recording a timeout for it made the durable
+                # history assert something that did not happen. Everything else that fails to
+                # preserve did send the sequence and did wait, and stays a timeout.
                 await self._store.record_event(
-                    command.session_id, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+                    command.session_id,
+                    LifecycleEvent.GRACEFUL_STOP_NEVER_SENT
+                    if observation.detail == UNKNOWN_SESSION
+                    else LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
                 )
                 return observation
             await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)

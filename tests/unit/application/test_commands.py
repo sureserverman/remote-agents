@@ -55,9 +55,16 @@ class FakeStore:
 
 
 class FakeTerminal:
-    def __init__(self, live: bool = True, *, graceful_preserved: bool = True) -> None:
+    def __init__(
+        self,
+        live: bool = True,
+        *,
+        graceful_preserved: bool = True,
+        graceful_detail: str = "",
+    ) -> None:
         self.live = live
         self.graceful_preserved = graceful_preserved
+        self.graceful_detail = graceful_detail
         self.launches: list[tuple[SessionId, ProjectId, ProfileId]] = []
         self.force_stop_calls = 0
 
@@ -79,7 +86,10 @@ class FakeTerminal:
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
         return TerminalObservation(
-            session_id, live=not self.graceful_preserved, preserved=self.graceful_preserved
+            session_id,
+            live=not self.graceful_preserved,
+            preserved=self.graceful_preserved,
+            detail=self.graceful_detail,
         )
 
     async def cleanup(self, session_id: SessionId) -> None:
@@ -148,6 +158,37 @@ async def test_graceful_stop_timeout_restores_running_state_for_explicit_force_s
     assert store.events[-2:] == [
         LifecycleEvent.GRACEFUL_STOP_REQUESTED,
         LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
+    ]
+
+
+async def test_a_stop_that_was_never_sent_is_not_recorded_as_a_timeout() -> None:
+    """The audit log must not assert an exit sequence that was never sent (DEC-022).
+
+    `TmuxRuntime.graceful_stop` answers `unknown_session` when this host could not match the
+    session to a live pane it owns — no profile curated, no managed pane found, or a pane
+    belonging to a different one. Nothing is signalled to the agent in any of those, so
+    recording `GRACEFUL_STOP_TIMED_OUT` claimed a wait that never happened. The state still
+    lands on RUNNING, because nothing was stopped; only the event differs.
+
+    Existing rows are deliberately not migrated (DEC-022): the stored row records the event
+    and not the observation behind it, so nothing in the database says which historical
+    `GRACEFUL_STOP_TIMED_OUT` rows were real timeouts. A migration would have to guess, and
+    rewriting audit history with a guess is worse than the ambiguity it replaces.
+    """
+    store = FakeStore()
+    terminal = FakeTerminal(graceful_preserved=False, graceful_detail="unknown_session")
+    service = SessionService(store, terminal)
+    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+
+    observation = await service.graceful_stop(
+        GracefulStopCommand(record.session_id, record.profile_id)
+    )
+
+    assert observation.preserved is False
+    assert store.records[record.session_id].state is SessionState.RUNNING
+    assert store.events[-2:] == [
+        LifecycleEvent.GRACEFUL_STOP_REQUESTED,
+        LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     ]
 
 

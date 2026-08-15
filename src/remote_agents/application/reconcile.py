@@ -178,6 +178,15 @@ def _event_for_reconciliation(
         if record.state in {SessionState.STARTING, SessionState.FAILED}:
             return LifecycleEvent.READY
         if record.state is SessionState.STOP_REQUESTED:
+            # Still a *timeout*, and it must stay one. DEC-022 split `GRACEFUL_STOP_NEVER_SENT`
+            # out of this event for the case where nothing was ever signalled — but that is
+            # `SessionService.graceful_stop` seeing `unknown_session` from the terminal, which
+            # is a different producer from this one. Here the pane is live and the record has
+            # been sitting in STOP_REQUESTED since a stop that *was* sent: the exit sequence
+            # went out, the wait ran out, and the agent is still there. That is the literal
+            # meaning of the event. Two call sites recording two events for what reads like
+            # one failure is exactly the shape that invites a "consistency" fix, so the
+            # difference is written here rather than left to be inferred.
             return LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
     if result.reason == "pane_dead" and record.state is SessionState.RUNNING:
         return LifecycleEvent.RECONCILED_PANE_DEAD
