@@ -164,6 +164,7 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
 
 UNKNOWN_SESSION = "unknown_session"
 GRACEFUL_TIMEOUT = "graceful_timeout"
+OWNERSHIP_LOST = "ownership_lost"
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,8 +216,16 @@ _STOP_FAILURES: dict[str, tuple[str, str]] = {
         "rather than this host's view of the session. Try again if it may still be finishing, "
         "or force stop it.",
     ),
+    OWNERSHIP_LOST: (
+        "This host had no pane left to stop.",
+        "The session is no longer in this host's managed inventory, so nothing was killed: it "
+        "was destroyed outside this app, or its ownership metadata drifted. The record has "
+        "been cleared either way, so the session will not come back to the list. If an agent "
+        "may still be running behind it, look for it with "
+        "`tmux -L remote-agents list-panes -a` and end it there.",
+    ),
 }
-"""Deliberately worded so the two cannot be mistaken for each other.
+"""Deliberately worded so no two of them can be mistaken for each other.
 
 `unknown_session` names a **disjunction**, and an earlier version of it did not. `TmuxRuntime.
 graceful_stop` returns that one detail for three conditions — no curated profile, no managed
@@ -240,6 +249,20 @@ was that neither was reported at all — both surfaces discarded `graceful_stop`
 
 `unknown_session` exists because of DEC-006: a stop fails closed on an unresolved profile
 rather than guessing at one. This makes that refusal legible; it does not soften it.
+
+`ownership_lost` is the third entry and the odd one, because it is the only cause here that
+does **not** describe a stop that left the session where it was. It belongs to *force*, and
+under DEC-017 force keeps clearing the record even when it finds no pane — so the session does
+end, and the row does go away. What was wrong was the claim: both surfaces reported "Force
+stopped X" over a kill nobody observed. It shares this table rather than growing a second one
+because DEC-007's whole argument is that the two surfaces speak one vocabulary, and a cause
+with its own private wording on each surface is how that stops being true.
+
+Read it with DEC-017's accepted cost 1 in hand: `VERIFIED_FORCE_STOP` is still written to the
+durable history whether or not `kill-session` ran, so the audit log cannot tell these apart and
+only this sentence carries the distinction. That asymmetry with DEC-006 — graceful fails closed
+on an unresolved profile, force does not fail closed on an unresolved pane — is recorded and
+deliberate, not an oversight to be "restored".
 """
 
 
@@ -262,5 +285,31 @@ def stop_failure(observation: _StopObservation) -> StopFailure | None:
             f"The terminal reported {observation.detail!r} and the session was left as it is. "
             "Force stop it if you need it ended now.",
         )
+    summary, remedy = known
+    return StopFailure(observation.detail, summary, remedy)
+
+
+def force_stop_failure(observation: _StopObservation) -> StopFailure | None:
+    """What force stop actually observed, or `None` when it killed the pane it was asked to.
+
+    **Force cannot be read by `stop_failure`, and the reason is worth stating rather than
+    discovering.** That function keys on `preserved`, because for a graceful stop a preserved
+    pane *is* the success. Force removes the pane, so `preserved` is false on every outcome
+    including the good one — handing a force observation to `stop_failure` would report every
+    successful kill as a failure. The discriminator here is the detail alone.
+
+    So this is deliberately the mirror image of its sibling's fail-closed default: an
+    unrecognised detail answers `None`, meaning "nothing to report". `TmuxRuntime.force_stop`
+    sets a detail only for `ownership_lost`; the ordinary kill carries none. Defaulting the
+    unknown to a failure here would announce one on every successful force the moment a future
+    detail is added for some unrelated reason, which is the louder wrong answer.
+
+    What this does **not** do is change the outcome. DEC-017 keeps `SessionService.force_stop`
+    recording `VERIFIED_FORCE_STOP` and the record reaching ENDED either way, because a row the
+    owner cannot clear is a worse failure than an over-confident message. This is the message.
+    """
+    known = _STOP_FAILURES.get(observation.detail)
+    if known is None:
+        return None
     summary, remedy = known
     return StopFailure(observation.detail, summary, remedy)

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from stop_results import a_clean_stop, a_stop_that_did_not_take
+from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -660,7 +660,7 @@ class _Launcher:
         self.records = [
             record for record in self.records if record.session_id != command.session_id
         ]
-        return None
+        return a_verified_force_stop(command.session_id)
 
 
 class _Message:

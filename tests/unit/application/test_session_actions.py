@@ -8,8 +8,10 @@ import pytest
 
 from remote_agents.application.session_actions import (
     GRACEFUL_TIMEOUT,
+    OWNERSHIP_LOST,
     UNKNOWN_SESSION,
     available_actions,
+    force_stop_failure,
     stop_failure,
 )
 from remote_agents.domain.models import SessionState
@@ -123,21 +125,64 @@ def test_each_known_cause_gets_its_own_words(detail: str) -> None:
     assert failure.summary and failure.remedy
 
 
-def test_the_two_known_causes_share_no_wording() -> None:
+def test_no_two_known_causes_share_wording() -> None:
     """The requirement is that they cannot be mistaken for each other, at the source.
 
     The contract test asserts this of the *rendered* surfaces, which is where it matters; this
     asserts it of the vocabulary itself, so a convergence is caught before either surface has
     a chance to render it identically.
+
+    Enumerated over the whole table rather than over the pair it was written for. When
+    `ownership_lost` joined it for BL-026 this test still compared exactly two causes and would
+    have kept passing had the third been written in the second's words — a pairwise assertion
+    over a growing table only ever checks the pair somebody remembered to name.
     """
-    unknown = stop_failure(_Observation(preserved=False, detail=UNKNOWN_SESSION))
-    timed_out = stop_failure(_Observation(preserved=False, detail=GRACEFUL_TIMEOUT))
-    assert unknown is not None and timed_out is not None
-    assert unknown.summary != timed_out.summary
-    assert unknown.remedy != timed_out.remedy
+    causes = [UNKNOWN_SESSION, GRACEFUL_TIMEOUT, OWNERSHIP_LOST]
+    failures = [stop_failure(_Observation(preserved=False, detail=cause)) for cause in causes]
+    assert all(failure is not None for failure in failures)
+
+    summaries = {failure.summary for failure in failures if failure is not None}
+    remedies = {failure.remedy for failure in failures if failure is not None}
+    assert len(summaries) == len(causes), f"two causes share a summary: {summaries}"
+    assert len(remedies) == len(causes), f"two causes share a remedy: {remedies}"
 
 
-@pytest.mark.parametrize("detail", ["", "ownership_lost", "something_new"])
+def test_force_reads_the_detail_because_every_force_leaves_preserved_false() -> None:
+    """`stop_failure` cannot read a force, and this is the line that says so out loud.
+
+    Force removes the pane, so `preserved` is false on the successful outcome too — the field
+    `stop_failure` keys on carries no signal here. Handing it a force observation would report
+    every completed kill as a failure, which is why BL-026's fix is a second reader rather than
+    a second caller of the first.
+    """
+    killed = _Observation(preserved=False)
+    found_nothing = _Observation(preserved=False, detail=OWNERSHIP_LOST)
+
+    assert force_stop_failure(killed) is None, "a completed force stop has nothing to report"
+    assert stop_failure(killed) is not None, (
+        "the sibling still reads the same observation as a failure — which is exactly why "
+        "force must not be routed through it"
+    )
+
+    lost = force_stop_failure(found_nothing)
+    assert lost is not None
+    assert lost.detail == OWNERSHIP_LOST
+    assert lost.summary and lost.remedy
+
+
+def test_an_unrecognised_detail_is_not_a_force_failure() -> None:
+    """The mirror image of the sibling's fail-closed default, and deliberately so.
+
+    `stop_failure` treats an unknown detail as a failure because `preserved` false already
+    established that the exit sequence did not work. Nothing establishes that here: force sets
+    a detail only when it found no pane, and the ordinary kill carries none. Defaulting the
+    unknown to a failure would announce one on every successful force the moment some unrelated
+    detail is added.
+    """
+    assert force_stop_failure(_Observation(preserved=False, detail="something_new")) is None
+
+
+@pytest.mark.parametrize("detail", ["", "something_new"])
 def test_an_unrecognised_cause_is_still_a_failure(detail: str) -> None:
     """The fail-dangerous default, closed — and the branch nothing else in the tree reaches.
 

@@ -1417,10 +1417,11 @@ class PrivateBotBoundary:
         current = await self._record(session_value)
         if current is not None:
             # The `else` is **unreachable today and worded as if it were not**, which is the
-            # honest shape for it. `failure` is non-None for exactly the graceful action, and
-            # `cleanup` and `force_stop` both walk the record to ENDED on every non-raising
-            # path (`application/services.py`), so a session that is still listed after one of
-            # those is a state no current code produces. The wording is deliberately neutral
+            # honest shape for it. `failure` is non-None for graceful and, since BL-026, for a
+            # force that found no pane — and `cleanup` and `force_stop` both walk the record to
+            # ENDED on every non-raising path (`application/services.py`), so a session still
+            # listed after one of those is a state no current code produces. The wording is
+            # deliberately neutral
             # about *why* rather than repeating the graceful-stop advice it used to carry:
             # reached at all, this branch is a session that outlived a command that claimed to
             # end it, and telling that operator to wait for a graceful exit would be a guess.
@@ -1438,12 +1439,26 @@ class PrivateBotBoundary:
             # they then have to leave.
             return await self._sessions_reply(notice=f"{subject} is still running\n{said}")
         if failure is not None:
-            # The session has left the list, but the stop still reported that it did not take
-            # effect — the other writer DEC-005 permits ended it in the window between the two.
-            # Narrow, and worth not getting wrong: the whole point of threading `failure` here
-            # was to stop inferring the outcome from the record, and "Stopped X" over an
-            # observation that says nothing was stopped is the reading DEC-006 forbids. Found
-            # by the Stage 2 gate's evaluator and its second pass independently.
+            # The session has left the list and the stop still had something to report. Two
+            # producers reach here and the wording has to be true of both, which is why it says
+            # what is *observable* — the session is gone from the list — rather than what was
+            # done to it.
+            #
+            # Originally the narrow one: a graceful stop that did not take effect, over a record
+            # the other writer DEC-005 permits had ended in the window between the two. The
+            # point of threading `failure` here was to stop inferring the outcome from the
+            # record, and "Stopped X" over an observation that says nothing was stopped is the
+            # reading DEC-006 forbids. Found by the Stage 2 gate's evaluator and its second pass
+            # independently.
+            #
+            # Since BL-026 the common one: a force stop that found no managed pane. It killed
+            # nothing, the service recorded `VERIFIED_FORCE_STOP` anyway and the record reached
+            # ENDED (DEC-017, deliberately — a row the owner cannot clear is the worse failure),
+            # so the session really has gone from the list. This branch is reused rather than
+            # given its own sentence because DEC-007's shared vocabulary is the safeguard that
+            # makes a second surface safe, and a cause worded once per surface is how it stops
+            # being shared. The `endings` table below keeps "Force stopped X" for the case where
+            # a pane was actually found and killed, which is the only case that may claim it.
             return await self._sessions_reply(
                 notice=f"{subject} is no longer listed\n{failure.summary} {failure.remedy}"
             )

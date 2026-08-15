@@ -43,7 +43,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from textual.worker import WorkerState
@@ -135,6 +135,7 @@ class _SlowLauncher:
 
     async def force_stop(self, _command):
         await self._record_and_wait("force")
+        return a_verified_force_stop()
 
     async def set_remote_control(self, _command):
         await self._record_and_wait("remote-control")
@@ -541,6 +542,7 @@ class _AdvancingLauncher:
     async def force_stop(self, _command):
         self.issued.append("force")
         self.state = SessionState.ENDED
+        return a_verified_force_stop()
 
 
 async def test_two_queued_enters_issue_one_stop_through_the_real_delivery_path() -> None:

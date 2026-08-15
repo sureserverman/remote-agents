@@ -5,7 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 import pytest
-from stop_results import a_clean_stop, a_stop_that_did_not_take
+from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
@@ -78,8 +78,9 @@ class _RecordingService:
     async def cleanup(self, _command) -> None:
         self.dispatched.append("cleanup")
 
-    async def force_stop(self, _command) -> None:
+    async def force_stop(self, _command):
         self.dispatched.append("force")
+        return a_verified_force_stop()
 
 
 class _Record:
@@ -188,8 +189,9 @@ class _FailingService:
     async def cleanup(self, _command) -> None:  # pragma: no cover - not reached
         self.dispatched.append("cleanup")
 
-    async def force_stop(self, _command) -> None:  # pragma: no cover - not reached
+    async def force_stop(self, _command):  # pragma: no cover - not reached
         self.dispatched.append("force")
+        return a_verified_force_stop()
 
 
 @pytest.mark.parametrize("detail", [UNKNOWN_SESSION, GRACEFUL_TIMEOUT])

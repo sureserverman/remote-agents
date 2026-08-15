@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
 from tui_feedback import announcements
@@ -117,8 +117,9 @@ class _Launcher:
     async def copy_attach(self, _session_id) -> str | None:
         return None
 
-    async def force_stop(self, command: ForceStopCommand) -> None:
+    async def force_stop(self, command: ForceStopCommand):
         self.issued.append(command)
+        return a_verified_force_stop()
 
     async def graceful_stop(self, command):
         self.issued.append(command)

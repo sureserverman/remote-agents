@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -93,7 +94,7 @@ class _RecordingLauncher:
         self.issued.append(command)
         if self.error is not None:
             raise self.error
-        return None
+        return a_verified_force_stop()
 
 
 def _context(launcher: _RecordingLauncher) -> TuiContext:
@@ -298,7 +299,7 @@ async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
 
         async def force_stop(self, command):
             self.issued.append(command)
-            return None
+            return a_verified_force_stop()
 
     launcher = _SlowLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]

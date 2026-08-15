@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_verified_force_stop
 
 from remote_agents.adapters.telegram.authorization import (
     AuthorizationGate,
@@ -99,5 +100,7 @@ class RecordingForceService:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def force_stop(self, command: object) -> None:
+    async def force_stop(self, command: object):
         self.calls += 1
+        del command
+        return a_verified_force_stop()

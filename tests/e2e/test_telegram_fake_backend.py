@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 from fake_telegram import FakeChat
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from telegram.error import BadRequest
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -813,8 +813,9 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
         async def cleanup(self, _command) -> None:
             stopped.append("cleanup")
 
-        async def force_stop(self, _command) -> None:
+        async def force_stop(self, _command):
             stopped.append("force")
+            return a_verified_force_stop()
 
     boundary.launcher = _StoppingLauncher()
     chat = FakeChat()

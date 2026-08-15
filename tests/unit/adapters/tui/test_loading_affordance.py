@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import working
 
@@ -154,8 +154,9 @@ class _Launcher:
     async def cleanup(self, _command) -> None:
         await self._gated()
 
-    async def force_stop(self, _command) -> None:
+    async def force_stop(self, _command):
         await self._gated()
+        return a_verified_force_stop()
 
     async def set_remote_control(self, _command) -> RemoteControlState:
         await self._gated()

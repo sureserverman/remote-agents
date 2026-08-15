@@ -9,6 +9,7 @@ from remote_agents.application.session_actions import (
     FORCE,
     StopFailure,
     available_actions,
+    force_stop_failure,
     stop_failure,
 )
 from remote_agents.domain.models import ProfileId, SessionId, SessionState
@@ -155,9 +156,16 @@ class StopController:
         observation has always carried and this method used to discard. `dispatched` is the
         old bool, unchanged in meaning, so every refusal path answers exactly what it did.
 
-        Only the graceful branch can report a failure. `cleanup` returns nothing at all, and
-        `force_stop`'s observation describes a kill the service has already recorded as an
-        event; neither has two causes that read alike, which is the problem being fixed.
+        Graceful and force can both report; `cleanup` returns nothing at all, so there is
+        nothing there to read.
+
+        **Force is read through `force_stop_failure`, not `stop_failure`.** The latter keys on
+        `preserved`, which is the success for a graceful stop and is false on *every* force,
+        because force removes the pane rather than keeping it — routing force through it would
+        report every completed kill as a failure. What force reports is BL-026's case: the
+        runtime found no managed pane, killed nothing, and the service recorded
+        `VERIFIED_FORCE_STOP` anyway (DEC-017, deliberately, so the row still clears). The
+        session does end; the claim that a kill was observed is what stops being made.
         """
 
         if record.session_id != request.session_id or record.profile_id != request.profile_id:
@@ -175,5 +183,5 @@ class StopController:
         if request.action == "cleanup":
             await service.cleanup(CleanupCommand(request.session_id))
             return StopResult(True)
-        await service.force_stop(ForceStopCommand(request.session_id))
-        return StopResult(True)
+        observation = await service.force_stop(ForceStopCommand(request.session_id))
+        return StopResult(True, force_stop_failure(observation))

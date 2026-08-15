@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import status as _status
 from tui_positions import position
@@ -36,6 +36,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.terminal import TerminalObservation
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
@@ -55,6 +56,10 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 class _RecordingLauncher:
     records: tuple[SessionRecord, ...] = ()
     issued: list[object] = field(default_factory=list)
+    #: What `force_stop` observed. Defaults to the kill that worked; a test wanting BL-026's
+    #: case swaps in `a_force_stop_that_found_nothing`. A field rather than a flag because the
+    #: surface reads the whole observation, and a bool here would decide for it.
+    force_result: Callable[[], TerminalObservation] = a_verified_force_stop
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
@@ -67,7 +72,7 @@ class _RecordingLauncher:
 
     async def force_stop(self, command: ForceStopCommand):
         self.issued.append(command)
-        return None
+        return self.force_result()
 
     async def graceful_stop(self, command):
         self.issued.append(command)
@@ -474,6 +479,7 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
 
         async def force_stop(self, command):
             self.issued.append(command)
+            return a_verified_force_stop()
 
         async def set_remote_control(self, command):
             self.issued.append(command)
@@ -544,6 +550,7 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
 
         async def force_stop(self, command):
             self.issued.append(command)
+            return a_verified_force_stop()
 
         async def set_remote_control(self, command):
             self.issued.append(command)
