@@ -12,6 +12,10 @@ resolves it one of two ways:
 
 * *Cancelled.* `App` cancels its workers before it prunes its screens, so the ordinary
   ending of a quit is `WorkerCancelled`, which `in_thread` re-raises as `CancelledError` —
+  (that ordering is an observed property of the Textual version pinned here, traced through
+  `_process_messages`/`_shutdown`, not a documented contract; a future upgrade that reorders
+  the teardown would not be caught by anything in this file, and none of the three cases below
+  depends on it — they construct the pruned-screen state directly) —
   a `BaseException`, so it passes straight through every `except Exception` in this flow and
   the recovery path never runs at all. That ending is already pinned, by
   `test_tui_worker_exclusivity.py`'s
@@ -46,32 +50,37 @@ the same guard:
 
 The guards in `screens/base.py` are what make this file green; they are not decoration.
 
-**Two arrangements, and the difference matters — corrected at the Stage 1 gate.** The three
-cases above run the handler on `asyncio.create_task`, which detaches it from the message
-pump. That detachment is what lets the shutdown finish while the call is parked, and
-therefore what *produces* the pruned screen they report against. **The real surface does not
-do this.** `ProjectReviewScreen.choose` is awaited inline from
-`ChoiceScreen.on_option_list_option_selected`, so it runs on the screen's own pump, and
-`App._close_all` waits for that pump — park a call there and the shutdown cannot proceed at
-all. The last test in this file drives that path and measures it.
+**These cases describe the production arrangement now, and for one release they did not.**
+The history is worth keeping, because the file's meaning changed underneath it twice.
 
-The first version of this file claimed the opposite in this docstring and built a premise
-test around it, asserting the pruned screen was what the owner's own path produced. It is
-not. The distinction is worth stating rather than quietly fixing, because the conclusion
-survived and the evidence given for it did not — and those are separable things.
+When these three were written, `ProjectReviewScreen.choose` awaited the create *inline on the
+screen's message pump*. `App._close_all` waits for that pump, so a parked create held the
+teardown behind it and a failure could never land on a pruned screen — the state these cases
+report against was unreachable in production, and they only produced it by running the handler
+on `asyncio.create_task`. An earlier version of this docstring had that backwards, claiming the
+pruned screen was what the owner's own path produced; a Stage 1 gate review caught it, and the
+correction was worth stating because the conclusion survived and the evidence did not.
 
-**Result: BL-014 does not reproduce**, and now for two independent reasons rather than one.
-On the real pump path the state it feared is *unreachable*: the teardown is serialised behind
-the handler, so a failure cannot land on a pruned screen. Constructed off-pump, where it can,
-the guards in `screens/base.py` hold it anyway. There is no `xfail` in this file. What it
-defends is the guarantee rather than the defect — and both halves are worth keeping, since
-the guards are what a future off-pump caller would need and the pump ordering is why no
-present one does.
+**Then holding the pump turned out to be its own defect.** `ctrl+q` during a create was never
+dispatched at all — the key sat in the pump behind the create, so the surface looked hung with
+no timeout and no affordance. The fix moves the create onto a Textual worker
+(`ProjectReviewScreen._create_project`), which frees the pump and answers the key.
+
+That reverses the reachability: the app can now finish shutting down while a create is still
+in flight, so **BL-014's hazard is reachable on the owner's own path**. These three cases
+stopped describing a hypothetical the moment that landed. They are the coverage that keeps
+BL-014 closed, not a defence against a state nothing could produce — which is why the fix was
+taken knowingly rather than treated as reopening the item.
+
+**Result: BL-014 does not reproduce.** The `showing` guards in `screens/base.py` contain the
+failure wherever it lands, and the mutations above are what prove they are load-bearing rather
+than decorative. There is no `xfail` in this file; what it defends is the guarantee.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +89,7 @@ from typing import Any
 import pytest
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
+from tui_feedback import announcements
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -262,7 +272,16 @@ async def test_a_failure_landing_after_the_quit_escapes_no_exception(group, reac
         if group == "areas":
             in_flight = asyncio.create_task(app.screen.populate())
         else:
-            in_flight = asyncio.create_task(_select(app, "create"))
+            # `_create_project.__wrapped__` rather than `_select(app, "create")`, because the
+            # create is a Textual worker now: `choose` takes the guard, starts the worker and
+            # returns, so driving it through the handler would leave this test holding a task
+            # that finished immediately while the real work ran somewhere it could not reach.
+            # The wrapped coroutine is the worker's own body, run on a task here exactly as
+            # the worker runs it on one in production — which is the point of the change that
+            # made this necessary. See the module docstring.
+            in_flight = asyncio.create_task(
+                type(app.screen)._create_project.__wrapped__(app.screen)
+            )
 
         await asyncio.wait_for(suspend.started.wait(), timeout=5)
         assert group in suspend.groups, (
@@ -352,102 +371,84 @@ async def test_the_screen_really_is_gone_when_the_failure_lands() -> None:
     )
 
 
-async def test_on_the_real_pump_path_the_failure_lands_while_the_screen_is_still_up() -> None:
-    """What the *production* arrangement does, which is not what the cases above arrange.
+async def test_the_pump_stays_free_while_a_create_is_in_flight() -> None:
+    """The reason the create was moved onto a worker: `ctrl+q` has to be answered.
 
-    Added by the Stage 1 gate's second review pass, which found that the file was sound about
-    its guards and wrong about its premise — a distinction worth the extra test, because the
-    conclusion it reached survives and the evidence it gave for it did not.
+    This test used to assert the exact opposite — that the pump was *held* for the duration of
+    a create, measured by `pilot.pause()` timing out — and that was true and was the defect.
+    Every key enters through the same pump the create was awaited on, so quit was not merely
+    slow, it was never dispatched: `ctrl+q press BLOCKED while create parked; did action_quit
+    run? []`. Nothing distinguished it from a hang.
 
-    Every case above runs the handler on `asyncio.create_task`. That is what lets the
-    shutdown finish while the call is parked, and it is therefore what produces the pruned
-    screen those cases report against. The real surface does not do this:
-    `ProjectReviewScreen.choose` is awaited inline from
-    `ChoiceScreen.on_option_list_option_selected`, so it runs **on the screen's own message
-    pump** — and `App._close_all` waits for that pump. Park a call there and the shutdown
-    cannot proceed at all.
+    So the assertion is inverted along with the code. With the create on a worker
+    (`ProjectReviewScreen._create_project`), the pump drains while the create is parked and the
+    key is delivered.
 
-    So this drives the selection the way the framework does, by posting the message and
-    letting the pump dispatch it, and measures the ordering that actually ships:
-
-    * with the create parked, `app.exit()` cannot advance — the screen is still stacked, and
-      that assertion is deterministic rather than timed, because a blocked pump cannot
-      process the shutdown at all;
-    * when the failure lands, the screen is still mounted and `showing` is still `True`;
-    * nothing escapes.
-
-    **This is the stronger half of BL-014's answer.** The cases above show the guards hold
-    *if* a failure ever reaches a pruned screen; this shows that on the path the owner
-    actually takes, it cannot — the pump serialises the teardown behind the handler, so the
-    state BL-014 feared is unreachable rather than merely survivable. Both are worth keeping:
-    the guards are what a future off-pump caller would need, and this is why no present one
-    needs them.
+    The guard is checked too, and it is the half a naive fix would drop: `choose` takes
+    `set_busy(True)` *synchronously* before starting the worker, so the window between the
+    handler returning and the worker holding the guard cannot admit a second Enter on the
+    still-drawn Create row. That is the queued-repeat shape BL-015 recorded on launch and
+    resume, and freeing the pump is exactly what would have introduced it on a third flow.
     """
     app = RemoteAgentsTui(_context())
-    reported: list[tuple[str, bool, bool]] = []
-    stacked_while_parked: bool | None = None
+    suspend: _Suspending | None = None
+    answered = False
+    try:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await _drive_to_the_review(app, pilot)
+            review = app.screen
+            suspend = _Suspending(app.in_thread, "create-project")
+            app.in_thread = suspend  # type: ignore[method-assign]
 
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        await _drive_to_the_review(app, pilot)
-        review = app.screen
-        suspend = _Suspending(app.in_thread, "create-project")
-        app.in_thread = suspend  # type: ignore[method-assign]
+            choices = review.query_one("#choices", OptionList)
+            index = choices.get_option_index("create")
+            review.post_message(
+                OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
+            )
+            await asyncio.wait_for(suspend.started.wait(), timeout=5)
 
-        # Records the screen's state *at the moment the recovery path speaks*, which is the
-        # whole measurement — asking afterwards would report the state after the pump
-        # resumed and the shutdown completed, i.e. a different instant than the one BL-014
-        # is about.
-        real = review.announce
+            # Recorded rather than asserted here, and released in the `finally` below, because
+            # a regression puts the create back on the pump — and then `pilot.pause()` cannot
+            # complete *and* `run_test`'s context exit cannot complete either, since it waits
+            # for that same pump. Asserting inside the block would leave the suite hanging
+            # instead of failing. Measured: the first draft of this test did exactly that.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(pilot.pause(), timeout=5)
+                answered = True
+            held = app.busy
+            showing = review.showing
 
-        def recording(message: str, **keywords: Any) -> None:
-            reported.append((message, review.showing, review in app.screen_stack))
-            real(message, **keywords)
+            # **The key itself, not just a drained pump.** A review pointed out that this test
+            # was named for `ctrl+q` being answered and never pressed it — it inferred the
+            # property from `pilot.pause()` completing, which would not catch a regression that
+            # freed the OptionList's dispatch but not the key-binding path. So the key is
+            # pressed for real, and the assertion is on an observable consequence: this screen
+            # is a `GatheredSelectionScreen`, so `work_in_flight` is unconditionally true and
+            # the first press must *arm and warn* rather than exit. A warning here proves the
+            # press reached `action_quit`, which is the whole claim.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(pilot.press("ctrl+q"), timeout=5)
+            warned = announcements(app, severity="warning")
+            still_running = app.is_running
+            suspend.release.set()
+            await settle(app, pilot)
+    finally:
+        if suspend is not None:
+            suspend.release.set()
 
-        review.announce = recording  # type: ignore[method-assign]
-
-        choices = review.query_one("#choices", OptionList)
-        index = choices.get_option_index("create")
-        # Posted rather than awaited: this is the one difference from `_select`, and it is
-        # the difference the whole test is about — the pump dispatches the handler, so the
-        # handler holds the pump.
-        review.post_message(
-            OptionList.OptionSelected(choices, choices.get_option_at_index(index), index)
-        )
-
-        await asyncio.wait_for(suspend.started.wait(), timeout=5)
-        app.exit(None)
-
-        # The discriminating probe, and the reason this test is not just the cases above
-        # with a different spelling. `pilot.pause()` waits for the app to finish processing
-        # what it has pending — which it cannot do while this very handler is parked on the
-        # pump. Asserted as a timeout in the *expecting-timeout* direction on purpose: a
-        # slower machine can only make a blocked pump look more blocked, never less, so this
-        # cannot flake toward a false pass. The `await pumped` after the release is what
-        # rules out the other reading, that `pause` was hanging for some unrelated reason.
-        pumped = asyncio.create_task(pilot.pause())
-        with pytest.raises(TimeoutError):
-            await asyncio.wait_for(asyncio.shield(pumped), timeout=0.5)
-        stacked_while_parked = review in app.screen_stack
-
-        suspend.release.set()
-        await pumped
-        await settle(app, pilot)
-
-    assert stacked_while_parked is True, (
-        "the review screen left the stack while a create was still parked on its pump, so "
-        "the shutdown is not serialised behind the handler after all — which would make the "
-        "pruned-screen state the cases above construct reachable in production too"
+    assert warned and "Press ctrl+q again" in warned[-1], (
+        f"`ctrl+q` was not answered while a create was in flight — the surface said {warned}. "
+        f"That is the defect this change exists to fix: the key sat in the pump behind the "
+        f"create and the app looked hung."
     )
-    assert reported and "Project not created" in reported[-1][0], (
-        f"the `except` branch did not reach its report on the real pump path; the surface "
-        f"said {[message for message, _, _ in reported]}"
+    assert still_running, "the first press should have warned rather than left"
+    assert answered, (
+        "the message pump did not drain while a create was in flight, so `ctrl+q` would not "
+        "be dispatched — the create is back on the pump and the surface looks hung"
     )
-    _, showing_when_reported, stacked_when_reported = reported[-1]
-    assert (showing_when_reported, stacked_when_reported) == (True, True), (
-        "on the real pump path the failure is supposed to land while the screen is still up "
-        f"— it reported with showing={showing_when_reported}, stacked={stacked_when_reported}"
+    assert held, (
+        "the guard was not held while the create was in flight, so a second Enter on the "
+        "still-drawn Create row would issue a second creation"
     )
-    assert app._exception is None, (
-        f"an exception escaped the recovery path on the real pump path: {app._exception!r}"
-    )
+    assert showing, "the review should still be the position the owner is looking at"

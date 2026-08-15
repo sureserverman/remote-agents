@@ -430,10 +430,24 @@ async def test_a_cancelled_read_does_not_render_an_error_into_a_dying_screen() -
     an error into a screen being torn down, raising `MountError` out of the recovery path.
     `CancelledError` is a `BaseException` and passes through untouched, which is what the
     plain await these calls replaced already did.
+
+    **Rewritten when the create moved onto a worker of its own.** This used to drive the
+    create through `_select` on a task and assert that *task* ended `CancelledError`. That
+    stopped measuring anything the moment `choose` began taking the guard, starting
+    `_create_project` and returning: the task then completed immediately and carried no
+    cancellation at all, while the real work — and the real cancellation — happened in a
+    worker the test never held.
+
+    So it drives the worker itself now, which is both the production mechanism and a stronger
+    test than the original: Textual cancels its own workers during shutdown, before it prunes
+    screens, so the cancellation under test is the one the framework actually performs rather
+    than one the test arranged. The two assertions are the two halves of the guarantee — the
+    ending is a cancellation rather than a failure, and nothing escaped into the app while it
+    was tearing down.
     """
     creator = _SlowCreator()
     app = RemoteAgentsTui(_context(_SlowLauncher(), creator))
-    raised: list[str] = []
+    state: WorkerState | None = None
     try:
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
@@ -441,19 +455,25 @@ async def test_a_cancelled_read_does_not_render_an_error_into_a_dying_screen() -
             await app.screen.choose("infra")
             app.screen.submit("new-project")
             await settle(app, pilot)
-            creating = asyncio.create_task(_select(app, "create"))
+            # The real decorated method, so this is a real Textual worker — the same object
+            # `choose` starts, held here only so its outcome can be read.
+            creating = app.screen._create_project()
             assert await asyncio.to_thread(creator.started.wait, 5), "the create never started"
             app.exit(None)
             creator.release.set()
-            try:
-                await creating
-            except BaseException as error:  # noqa: BLE001 - the type is the assertion
-                raised.append(type(error).__name__)
+            with contextlib.suppress(Exception):
+                await creating.wait()
+            state = creating.state
     finally:
         creator.release.set()
-    assert raised == ["CancelledError"], (
-        f"a cancelled create surfaced as {raised}; MountError here means the error path tried "
-        f"to draw into a torn-down screen"
+
+    assert state is WorkerState.CANCELLED, (
+        f"a create in flight at shutdown ended {state}, not cancelled — if it ERRORed, the "
+        f"recovery path ran against a screen being torn down, which is the MountError this "
+        f"test exists to keep out"
+    )
+    assert app._exception is None, (
+        f"an exception escaped while the app was tearing down: {app._exception!r}"
     )
 
 
