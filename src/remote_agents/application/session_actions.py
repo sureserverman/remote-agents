@@ -136,8 +136,6 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
 
 
-
-
 def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     """Whether a surface should offer to answer the folder-trust question for `record`.
 

@@ -609,9 +609,7 @@ async def test_a_session_waiting_on_folder_trust_is_offered_the_answer() -> None
     anchor = await _open_detail(chat, boundary)
 
     labels = [
-        button.text
-        for row in chat.messages[anchor].reply_markup.inline_keyboard
-        for button in row
+        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
     ]
     assert "Trust this project" in labels, labels
 
@@ -643,9 +641,7 @@ async def test_a_session_not_waiting_on_trust_is_offered_no_such_row() -> None:
     anchor = await _open_detail(chat, boundary)
 
     labels = [
-        button.text
-        for row in chat.messages[anchor].reply_markup.inline_keyboard
-        for button in row
+        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
     ]
     assert "Trust this project" not in labels, labels
 
