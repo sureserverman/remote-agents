@@ -1,6 +1,7 @@
 """Reconciliation tests: terminal evidence wins and ambiguity is read-only."""
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from remote_agents.application.reconcile import (
     reconcile,
 )
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionDisplayIdentity,
@@ -41,15 +43,12 @@ class InMemoryStore:
         return tuple(self.records.values())
 
     async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord:
+        # `replace` rather than a positional rebuild: this fake used to reconstruct the record
+        # from its first six fields and silently drop every later one, which is the same
+        # defect Task 4.1 closed in the real store. A fake that loses a field the store keeps
+        # passes tests the production path would fail.
         current = self.records[session_id]
-        updated = SessionRecord(
-            current.session_id,
-            current.project_id,
-            current.profile_id,
-            current.display,
-            transition(current.state, event).to_state,
-            current.created_at,
-        )
+        updated = replace(current, state=transition(current.state, event).to_state)
         self.records[session_id] = updated
         self.events.append(event)
         return updated
@@ -159,6 +158,41 @@ async def test_a_live_pane_that_is_not_ready_is_not_promoted_to_running() -> Non
     assert store.events == [], "no promotion, so no lifecycle event"
 
 
+async def test_a_live_pane_under_a_stop_request_is_a_timeout_and_not_a_stop_never_sent() -> None:
+    """The one branch DEC-022 deliberately left recording the old event.
+
+    `SessionService.graceful_stop` stopped writing `GRACEFUL_STOP_TIMED_OUT` for
+    `unknown_session`, because nothing was signalled there. This producer is the other one and
+    it keeps the event: it finds a live pane under a record in STOP_REQUESTED, which in the
+    ordinary case is a stop that was sent and did not take.
+
+    **It cannot prove that, and this test does not claim it does.** The record stores the
+    event, not the observation that produced it, so a record left in STOP_REQUESTED by a crash
+    between `graceful_stop`'s first write and its terminal call is indistinguishable here —
+    the same argument DEC-022 makes for why historical rows are not migrated, in a narrower
+    place. What is pinned is only that *this* producer keeps recording the timeout, because
+    the alternative would name every ordinary case wrongly in order to catch the rare one.
+
+    Written because the argument for keeping the two producers apart lived only in a comment.
+    Two call sites recording two events for what reads like the same failure is the shape that
+    invites a "consistency" edit, and until this existed such an edit passed the whole suite —
+    the defence was prose a refactor never has to read. Found by the Stage 2 gate evaluator,
+    which noted the domain test one layer down already had exactly this treatment.
+    """
+    stopping = record(SessionState.STOP_REQUESTED)
+    store = InMemoryStore((stopping,))
+    service = ReconciliationService(store, settle_after=timedelta(0))
+
+    await service.reconcile((TerminalObservation(stopping.session_id, live=True, preserved=False),))
+
+    assert store.events == [LifecycleEvent.GRACEFUL_STOP_TIMED_OUT], (
+        "this producer must keep recording a timeout: it cannot see whether the exit sequence "
+        "was sent, and GRACEFUL_STOP_NEVER_SENT would assert nothing left the host for every "
+        "ordinary case in order to be right about the rare one"
+    )
+    assert store.records[stopping.session_id].state is SessionState.RUNNING
+
+
 async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
     """The repair the promotion exists for must survive the new check."""
     failed = record(SessionState.FAILED)
@@ -174,6 +208,66 @@ async def test_a_live_pane_that_is_ready_is_still_promoted() -> None:
 
     assert store.records[failed.session_id].state is SessionState.RUNNING
     assert store.events == [LifecycleEvent.READY]
+
+
+async def test_a_session_inside_its_settle_window_is_not_mistaken_for_an_unknown_pane() -> None:
+    """A launching session is *known*, even while it is deliberately not being reconciled.
+
+    The settle filter exists so a pass does not overwrite a state its own caller is about to
+    record. But "known" answers a different question — does a row exist for this pane — and
+    computing it from the filtered set conflated the two. Every launch then looked like an
+    unknown pane for the whole settle window, `_save_trusted_orphan` tried to INSERT a
+    primary key that already existed, and the UNIQUE constraint aborted the entire pass.
+    `RuntimeCoordinator._reconcile_once` does not swallow that, so it took the runtime down.
+
+    Reproduced against a real SQLite store by the Stage 4 gate's adversarial pass; pinned
+    here at the unit tier because this is where the classification is decided.
+    """
+    settling = record(SessionState.STARTING)
+    store = InMemoryStore((settling,))
+    service = ReconciliationService(store, settle_after=timedelta(minutes=2))
+
+    results = await service.reconcile(
+        (
+            TerminalObservation(
+                settling.session_id,
+                live=True,
+                preserved=False,
+                project_id=ProjectId("opaque-editor"),
+                profile_id=ProfileId("claude"),
+            ),
+        )
+    )
+
+    assert [item.reason for item in results] == [], (
+        "a settling session should be skipped entirely, not classified as an unknown pane"
+    )
+    assert store.records[settling.session_id].state is SessionState.STARTING
+    assert store.events == []
+
+
+async def test_an_adopted_orphan_records_which_producer_created_it() -> None:
+    """The whole of DEC-020 rests on this stamp: it is what separates a live adopted agent
+    from a muddled-evidence record, and it can only be known here, at the moment of adoption.
+    """
+    store = InMemoryStore(())
+    service = ReconciliationService(store, settle_after=timedelta(0))
+    unknown = SessionId.new()
+
+    await service.reconcile(
+        (
+            TerminalObservation(
+                unknown,
+                live=True,
+                preserved=False,
+                project_id=ProjectId("opaque-editor"),
+                profile_id=ProfileId("claude"),
+            ),
+        )
+    )
+
+    assert store.records[unknown].state is SessionState.ORPHANED
+    assert store.records[unknown].orphan_provenance is OrphanProvenance.ADOPTED
 
 
 async def test_reconciliation_never_creates_an_orphan_without_trusted_identity() -> None:

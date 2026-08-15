@@ -15,7 +15,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList, TextArea
 from tui_positions import position
 
@@ -86,7 +86,7 @@ class _Everything:
 
     async def force_stop(self, command):
         self.issued.append(command)
-        return None
+        return a_verified_force_stop()
 
     async def set_remote_control(self, command):
         self.issued.append(command)

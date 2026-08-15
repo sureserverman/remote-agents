@@ -62,7 +62,9 @@ class FakeTerminal:
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
         observation = await self.inspect(session_id)
-        return attach_command(session_id) if observation is not None and observation.live else None
+        if observation is None or not (observation.live or observation.preserved):
+            return None
+        return attach_command(session_id, read_only=not observation.live)
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
@@ -90,9 +92,28 @@ class FakeTerminal:
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
-        """End the fake process while retaining its inspectable session."""
+        """End the fake process while retaining its inspectable session.
+
+        **Ownership is carried through the transition, not dropped at it.** A preserved pane
+        keeps its `@remote_agents_*` session options in the real runtime — verified against
+        tmux 3.4: a dead pane still answers `parse_pane` with its project and profile — so a
+        fake that blanked them modelled a terminal the real one is not. It mattered from the
+        moment PRESERVED became attachable (DEC-021): `SessionService.copy_attach` compares
+        those two fields against the record, so a preserved observation with neither made the
+        new read-only branch unreachable through this fake, and no fake-backed test could
+        exercise the capability at all. Found by the Stage 3 gate's adversarial pass.
+
+        This is the same reasoning `launch` records for recording them in the first place.
+        """
         del profile_id
-        observation = TerminalObservation(session_id, live=False, preserved=True)
+        previous = self._observations.get(session_id)
+        observation = TerminalObservation(
+            session_id,
+            live=False,
+            preserved=True,
+            project_id=previous.project_id if previous is not None else None,
+            profile_id=previous.profile_id if previous is not None else None,
+        )
         self._observations[session_id] = observation
         return observation
 

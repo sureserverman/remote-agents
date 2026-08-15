@@ -1,4 +1,4 @@
-"""Replay-safe confirmation state for the approved destructive session actions."""
+"""Replay-safe callback state for the approved session stop actions."""
 
 from __future__ import annotations
 
@@ -9,9 +9,10 @@ from remote_agents.application.session_actions import (
     FORCE,
     StopFailure,
     available_actions,
+    force_stop_failure,
     stop_failure,
 )
-from remote_agents.domain.models import ProfileId, SessionId, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionId, SessionState
 from remote_agents.ports.callback_state import CallbackStatePort
 
 CONFIRMED_FORCE = "force.confirmed"
@@ -75,7 +76,7 @@ _NOT_DISPATCHED = StopResult(False)
 
 
 class StopController:
-    """Mint and claim the tokens behind the approved destructive actions.
+    """Mint and claim the tokens behind the approved stop actions.
 
     **Every token is minted unbound.** A keyboard is built before the message that will carry
     it exists — and, when a screen is redrawn in place, before the render that replaces the
@@ -101,12 +102,18 @@ class StopController:
         session_id: SessionId,
         profile_id: ProfileId,
         state: SessionState,
+        orphan_provenance: OrphanProvenance | None,
         action: str,
         owner_id: int,
         chat_id: int,
     ) -> str | None:
-        """Offer one policy-permitted action, unbound until its screen is delivered."""
-        if action not in available_actions(state):
+        """Offer one policy-permitted action, unbound until its screen is delivered.
+
+        Takes provenance because `available_actions` does: after DEC-020 an ORPHANED
+        record's rows depend on which producer created it, and this method is one of the
+        two places the bot decides what to mint.
+        """
+        if action not in available_actions(state, orphan_provenance):
             return None
         return self._callbacks.create(
             action, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
@@ -117,6 +124,7 @@ class StopController:
         session_id: SessionId,
         profile_id: ProfileId,
         state: SessionState,
+        orphan_provenance: OrphanProvenance | None,
         owner_id: int,
         chat_id: int,
     ) -> str | None:
@@ -125,7 +133,7 @@ class StopController:
         `CONFIRMED_FORCE` is an adapter-internal action: `available_actions` is still the sole
         authority on whether a force is permitted at all (DEC-007), and it is re-asked here.
         """
-        if FORCE not in available_actions(state):
+        if FORCE not in available_actions(state, orphan_provenance):
             return None
         return self._callbacks.create(
             CONFIRMED_FORCE, f"{session_id}:{profile_id}", owner_id, chat_id, mutation=True
@@ -155,9 +163,16 @@ class StopController:
         observation has always carried and this method used to discard. `dispatched` is the
         old bool, unchanged in meaning, so every refusal path answers exactly what it did.
 
-        Only the graceful branch can report a failure. `cleanup` returns nothing at all, and
-        `force_stop`'s observation describes a kill the service has already recorded as an
-        event; neither has two causes that read alike, which is the problem being fixed.
+        Graceful and force can both report; `cleanup` returns nothing at all, so there is
+        nothing there to read.
+
+        **Force is read through `force_stop_failure`, not `stop_failure`.** The latter keys on
+        `preserved`, which is the success for a graceful stop and is false on *every* force,
+        because force removes the pane rather than keeping it — routing force through it would
+        report every completed kill as a failure. What force reports is the case DEC-017 names: the
+        runtime found no managed pane, killed nothing, and the service recorded
+        `VERIFIED_FORCE_STOP` anyway (DEC-017, deliberately, so the row still clears). The
+        session does end; the claim that a kill was observed is what stops being made.
         """
 
         if record.session_id != request.session_id or record.profile_id != request.profile_id:
@@ -165,7 +180,7 @@ class StopController:
         # The record is re-read here because it may have moved on since the token was
         # issued, but the rule it is checked against is the shared one. A private copy is
         # what let an offered action be silently refused at dispatch.
-        if request.action not in available_actions(record.state):
+        if request.action not in available_actions(record.state, record.orphan_provenance):
             return _NOT_DISPATCHED
         if request.action == "graceful":
             observation = await service.graceful_stop(
@@ -175,5 +190,14 @@ class StopController:
         if request.action == "cleanup":
             await service.cleanup(CleanupCommand(request.session_id))
             return StopResult(True)
-        await service.force_stop(ForceStopCommand(request.session_id))
-        return StopResult(True)
+        if request.action == FORCE:
+            observation = await service.force_stop(ForceStopCommand(request.session_id))
+            return StopResult(True, force_stop_failure(observation))
+        # Force is its own named branch and an unrecognised action raises, rather than the kill
+        # being the trailing `else`. It was, and nothing could reach it — the `available_actions`
+        # recheck above admits only the three. But "anything I do not recognise is a kill" is a
+        # fail-dangerous default in the one method that kills, and any future non-destructive
+        # member of `available_actions` would have become a force stop here. The TUI's
+        # `_issue_stop` removed exactly this shape and said why; this is the sibling it was
+        # asymmetric with, found by the Stage 3 gate's adversarial pass.
+        raise ValueError(f"no command is curated for the action {request.action!r}")

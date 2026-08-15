@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 from fake_telegram import FakeChat
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from telegram.error import BadRequest
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -61,7 +61,7 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
     inspection = inspect_capture(b"ready\n")
     callbacks = CallbackStateStore()
     stops = StopController(callbacks)
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11)
     callbacks.bind_pending(11, 1)
 
     assert inspection.text == "ready"
@@ -105,7 +105,7 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
 
     callbacks = CallbackStateStore()
     stops = StopController(callbacks)
-    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    token = stops.offer(session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11)
     callbacks.bind_pending(11, 1)
     assert token is not None
     request = stops.claim(token, 7, 11, 1)
@@ -813,8 +813,9 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
         async def cleanup(self, _command) -> None:
             stopped.append("cleanup")
 
-        async def force_stop(self, _command) -> None:
+        async def force_stop(self, _command):
             stopped.append("force")
+            return a_verified_force_stop()
 
     boundary.launcher = _StoppingLauncher()
     chat = FakeChat()

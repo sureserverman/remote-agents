@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_verified_force_stop
 
 from remote_agents.adapters.telegram.authorization import (
     AuthorizationGate,
@@ -63,7 +64,9 @@ async def test_force_stop_rechecks_the_current_record_before_dispatch() -> None:
     profile_id = ProfileId("claude")
     callbacks = CallbackStateStore()
     controller = StopController(callbacks)
-    token = controller.offer_confirmed_force(session_id, profile_id, SessionState.RUNNING, 7, 11)
+    token = controller.offer_confirmed_force(
+        session_id, profile_id, SessionState.RUNNING, None, 7, 11
+    )
     assert token is not None
     callbacks.bind_pending(11, 1)
     request = controller.claim(token, 7, 11, 1)
@@ -99,5 +102,7 @@ class RecordingForceService:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def force_stop(self, command: object) -> None:
+    async def force_stop(self, command: object):
         self.calls += 1
+        del command
+        return a_verified_force_stop()

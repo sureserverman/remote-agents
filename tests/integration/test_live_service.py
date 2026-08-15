@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from stop_results import a_clean_stop, a_stop_that_did_not_take
+from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -660,7 +660,7 @@ class _Launcher:
         self.records = [
             record for record in self.records if record.session_id != command.session_id
         ]
-        return None
+        return a_verified_force_stop(command.session_id)
 
 
 class _Message:
@@ -953,7 +953,7 @@ async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_k
     # The name the bot shows carries the catalogue's project name, not the opaque slug.
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "force", 7, 11
+        running.session_id, running.profile_id, running.state, None, "force", 7, 11
     )
     boundary.callbacks.bind_pending(11, 1)
 
@@ -972,7 +972,7 @@ async def test_a_completed_stop_names_the_session_and_what_became_of_its_output(
     boundary, launcher = _stop_boundary(running)
     subject = (await boundary._record(str(running.session_id))).display.rendered
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11
+        running.session_id, running.profile_id, running.state, None, "graceful", 7, 11
     )
     boundary.callbacks.bind_pending(11, 1)
 
@@ -991,7 +991,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     boundary, launcher = _stop_boundary(running)
     launcher.leave_running = True
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11
+        running.session_id, running.profile_id, running.state, None, "graceful", 7, 11
     )
     boundary.callbacks.bind_pending(11, 1)
 
@@ -1031,7 +1031,7 @@ async def test_a_slow_action_shows_a_keyboardless_pending_screen_before_its_resu
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, _ = _stop_boundary(running)
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11
+        running.session_id, running.profile_id, running.state, None, "graceful", 7, 11
     )
     callback = _Callback(token)
     boundary.callbacks.bind_pending(11, callback.message.message_id)
@@ -1116,7 +1116,7 @@ async def test_the_bot_names_which_cause_left_the_session_running(
     launcher.leave_running = True
     launcher.graceful_detail = detail
     token = boundary.stops.offer(
-        running.session_id, running.profile_id, running.state, "graceful", 7, 11
+        running.session_id, running.profile_id, running.state, None, "graceful", 7, 11
     )
     boundary.callbacks.bind_pending(11, 1)
 

@@ -58,6 +58,7 @@ from remote_agents.application.session_actions import (
     StopFailure,
     available_actions,
     explain_state,
+    force_stop_failure,
     remote_control_available,
     stop_failure,
 )
@@ -709,7 +710,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         session_id = str(record.session_id)
         self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
 
-    # The destructive path ---------------------------------------------------------
+    # The mutating path ------------------------------------------------------------
     #
     # The two confirmations are modals in `screens/confirm.py`, answered through
     # `ask_to_confirm` before either of these is called at all. What is left here is the part
@@ -823,10 +824,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             if record is None:
                 await screen.refuse()
                 return
-            if action not in available_actions(record.state):
+            if action not in available_actions(record.state, record.orphan_provenance):
                 await screen.refuse(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
@@ -871,9 +872,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 # indistinguishable from the same screen before the stop was ever asked for.
                 # That sentence *is* BL-008: the surface had no way to say that something was
                 # attempted and did not happen.
-                screen.set_status(
-                    f"{_ACTION_LABELS[action]} did not take effect. {failure.summary}"
+                #
+                # **Force gets a different opening, because "did not take effect" would be
+                # false for it (DEC-017).** A force that found no pane still ends the
+                # session and still clears the row — that is the decision, taken because a row
+                # the owner cannot clear is worse than an over-confident message. So the stop
+                # very much took effect on the record; what it did not do is the kill it used
+                # to claim. Reporting it as a failed stop would trade one wrong claim for
+                # another, and would tell the owner to retry something that already happened.
+                opening = (
+                    f"{_ACTION_LABELS[action]}: the session has ended."
+                    if action == FORCE
+                    else f"{_ACTION_LABELS[action]} did not take effect."
                 )
+                screen.set_status(f"{opening} {failure.summary}")
                 # The summary opens the notification too, rather than the remedy alone. A
                 # toast is read on its own and gone a few seconds later, so one that starts
                 # mid-explanation asks the owner to have been looking at the status line at
@@ -891,26 +903,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         kill" is a fail-dangerous default in the one method that kills, and the cost of it
         being right is that every future caller stays correct by accident.
 
-        **Only `graceful_stop` answers anything, and that is BL-008's scope rather than the
-        whole of the problem.** Its `TerminalObservation` has always distinguished a clean exit
+        **Graceful and force both answer; `cleanup` returns nothing at all, so there is nothing
+        there to read.** Graceful's `TerminalObservation` has always distinguished a clean exit
         from a timeout — the service's own docstring says `preserved` "remains the way a caller
-        tells a clean exit from `graceful_timeout`" — and both surfaces threw the value away.
-        `cleanup` returns nothing at all, so there is nothing there to read.
+        tells a clean exit from `graceful_timeout`" — and both surfaces threw the value away
+        until BL-008.
 
-        **`force_stop` is a different matter and this docstring used to misdescribe it.** It
-        said force's observation "describes a kill the state machine has already recorded",
-        implying there was nothing to distinguish. There is: `TmuxRuntime.force_stop` returns
-        `detail="ownership_lost"` *without* killing anything when no managed pane matches, and
-        `SessionService.force_stop` records `VERIFIED_FORCE_STOP` regardless, so both surfaces
-        report "the session has ended" over an agent that may still be running. That is the
-        same two-causes-that-read-alike shape BL-008 names, in the one method that kills.
+        **Force is read through a different function, and that is not an inconsistency.**
+        `stop_failure` keys on `preserved`, which for graceful *is* the success; force removes
+        the pane, so `preserved` is false on every force including the one that worked, and
+        routing force through it would report every completed kill as a failure.
+        `force_stop_failure` reads the detail instead.
 
-        It is **not fixed here**, and the reason is a boundary rather than an oversight: the
-        honest repair is for the service to stop recording a kill it did not perform, which is
-        an application-layer behaviour change on the destructive path — the kind DEC-006 was
-        recorded for — and it needs an owner's decision about whether force should fail closed,
-        not a presentation edit. Recorded as BL-026. Found by the Stage 2 gate's second review
-        pass, checking this docstring's own claim against the runtime.
+        What it reports: `TmuxRuntime.force_stop` returns `detail="ownership_lost"`
+        *without* killing anything when no managed pane matches, and both surfaces used to say
+        "Force stopped X" over it. Under DEC-017 the behaviour is deliberately unchanged —
+        `SessionService.force_stop` still records `VERIFIED_FORCE_STOP`, the record still
+        reaches ENDED, the row still clears — because a row the owner cannot clear is worse
+        than an over-confident message. Only the claim changed. The cost the owner accepted
+        with it: the durable history still cannot tell the two apart, so this sentence on
+        screen is the only place the distinction exists.
         """
         launcher = self._services.launcher
         if action == GRACEFUL:
@@ -922,8 +934,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await launcher.cleanup(CleanupCommand(record.session_id))
             return None
         if action == FORCE:
-            await launcher.force_stop(ForceStopCommand(record.session_id))
-            return None
+            observation = await launcher.force_stop(ForceStopCommand(record.session_id))
+            return force_stop_failure(observation)
         raise ValueError(f"no command is curated for the action {action!r}")
 
     # Store reads screens share ---------------------------------------------------

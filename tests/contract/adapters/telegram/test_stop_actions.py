@@ -5,7 +5,7 @@ from html import escape
 from uuid import UUID
 
 import pytest
-from stop_results import a_clean_stop, a_stop_that_did_not_take
+from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -37,11 +37,17 @@ class FakeService:
     async def cleanup(self, _command) -> None:
         self.actions.append("cleanup")
 
-    async def force_stop(self, _command) -> None:
+    async def force_stop(self, _command):
         self.actions.append("force")
+        return a_verified_force_stop()
 
 
 class Record:
+    # Mirrors SessionRecord's tenth field. A fake missing it duck-types the record
+    # everywhere except the one branch DEC-020 added, which is the branch that offers a
+    # destructive action.
+    orphan_provenance = None
+
     def __init__(self, session_id: SessionId, state: SessionState, profile_id: ProfileId) -> None:
         self.session_id = session_id
         self.state = state
@@ -53,9 +59,11 @@ def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -
     controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
     graceful = controller.offer(
-        session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11
+        session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11
     )
-    force = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "force", 7, 11)
+    force = controller.offer(
+        session, ProfileId("claude"), SessionState.RUNNING, None, "force", 7, 11
+    )
     callbacks.bind_pending(11, 1)
 
     claimed = controller.claim(graceful, 7, 11, 1)
@@ -70,7 +78,7 @@ def test_stop_actions_require_the_right_confirmation_strength_and_claim_once() -
     # whose own button is a separate token carrying a separate action.
     assert controller.claim(force, 7, 11, 1) is None
     confirmed = controller.offer_confirmed_force(
-        session, ProfileId("claude"), SessionState.RUNNING, 7, 11
+        session, ProfileId("claude"), SessionState.RUNNING, None, 7, 11
     )
     assert confirmed is not None
     callbacks.bind_pending(11, 1)
@@ -84,10 +92,12 @@ def test_cleanup_only_exists_for_preserved_sessions() -> None:
     session = SessionId(UUID(int=1))
 
     assert (
-        controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "cleanup", 7, 11)
+        controller.offer(session, ProfileId("claude"), SessionState.RUNNING, None, "cleanup", 7, 11)
         is None
     )
-    assert controller.offer(session, ProfileId("claude"), SessionState.PRESERVED, "cleanup", 7, 11)
+    assert controller.offer(
+        session, ProfileId("claude"), SessionState.PRESERVED, None, "cleanup", 7, 11
+    )
 
 
 @pytest.mark.asyncio
@@ -95,11 +105,11 @@ async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup()
     callbacks = CallbackStateStore()
     controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
-    token = controller.offer(session, ProfileId("codex"), SessionState.FAILED, "force", 7, 11)
+    token = controller.offer(session, ProfileId("codex"), SessionState.FAILED, None, "force", 7, 11)
 
     assert token is not None
     confirmed = controller.offer_confirmed_force(
-        session, ProfileId("codex"), SessionState.FAILED, 7, 11
+        session, ProfileId("codex"), SessionState.FAILED, None, 7, 11
     )
     assert confirmed is not None
     callbacks.bind_pending(11, 1)
@@ -119,7 +129,9 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
     callbacks = CallbackStateStore()
     controller = StopController(callbacks)
     session = SessionId(UUID(int=1))
-    token = controller.offer(session, ProfileId("claude"), SessionState.RUNNING, "graceful", 7, 11)
+    token = controller.offer(
+        session, ProfileId("claude"), SessionState.RUNNING, None, "graceful", 7, 11
+    )
     callbacks.bind_pending(11, 1)
     assert token is not None
     claimed = controller.claim(token, 7, 11, 1)
@@ -335,7 +347,7 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
         launcher=launcher,
     )
     token = boundary.stops.offer(
-        offered.session_id, offered.profile_id, SessionState.RUNNING, "graceful", 7, 11
+        offered.session_id, offered.profile_id, SessionState.RUNNING, None, "graceful", 7, 11
     )
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
@@ -359,7 +371,9 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
     """
     record = _a_session()
     boundary = _stopped_boundary(record)
-    token = boundary.stops.offer(record.session_id, record.profile_id, record.state, "force", 7, 11)
+    token = boundary.stops.offer(
+        record.session_id, record.profile_id, record.state, None, "force", 7, 11
+    )
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)
 
@@ -389,7 +403,7 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
         launcher=launcher,
     )
     token = boundary.stops.offer(
-        record.session_id, record.profile_id, record.state, "graceful", 7, 11
+        record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
     )
     assert token is not None
     boundary.callbacks.bind_pending(11, 1)

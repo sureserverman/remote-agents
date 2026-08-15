@@ -1,8 +1,10 @@
 """The palette offers three ways to *go* somewhere and no way to *do* anything.
 
 DEC-007 rests the safety of the destructive path on a confirmation whose cursor sits on the
-abort. A command palette is a second route to whatever it exposes — type a fragment, press
-enter — so an entry naming a session action would be a route around that confirmation. These
+abort — a force stop's confirmation, since DEC-018 leaves graceful stop and cleanup
+unconfirmed. A command palette is a second route to whatever it exposes — type a fragment,
+press enter — so an entry naming any session action would be a route around that
+confirmation, and around the re-read and re-check standing in front of the unconfirmed two. These
 tests are the check that no such entry exists, and that the declared table which the gate
 sweeps is the table the palette actually serves.
 """
@@ -83,16 +85,29 @@ def test_every_entry_names_an_action_the_app_actually_has() -> None:
         assert hasattr(RemoteAgentsTui, f"action_{action}"), action
 
 
-def test_no_entry_dispatches_to_a_destructive_action() -> None:
+def test_no_entry_dispatches_to_an_action_rather_than_a_position() -> None:
     """Checked at the *action* as well as the label, because the label is only the caption.
 
     A future entry could be called "Clean up" and dispatch to `action_force_stop`. The name
     sweep above would not see that; this does.
+
+    The set below is deliberately wider than "destructive", which DEC-018 narrowed to force
+    stop and cleanup. `stop` is the graceful spelling and `resume_confirm` creates a session
+    rather than ending one — neither is destructive, and both are still refused here, because
+    what the palette must not do is *act* at all (DEC-007). Shrinking this set to the
+    destructive two would open the route the file exists to keep closed.
     """
-    destructive = {"stop", "force", "force_stop", "cleanup", "kill", "resume_confirm"}
+    acts_rather_than_navigates = {
+        "stop",
+        "force",
+        "force_stop",
+        "cleanup",
+        "kill",
+        "resume_confirm",
+    }
     dispatched = {action for _name, _help, action in NAVIGATION_COMMANDS}
 
-    assert dispatched & destructive == set()
+    assert dispatched & acts_rather_than_navigates == set()
 
 
 async def test_the_palette_serves_exactly_the_declared_table() -> None:

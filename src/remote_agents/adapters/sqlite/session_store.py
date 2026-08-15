@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionDisplayIdentity,
@@ -16,6 +18,8 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
 from remote_agents.ports.session_store import ProjectUsage
+
+_LOG = logging.getLogger(__name__)
 
 
 class SQLiteSessionStore:
@@ -39,9 +43,9 @@ class SQLiteSessionStore:
                 """
                 INSERT INTO sessions(
                     session_id, project_id, profile_id, display_identity, state, created_at,
-                    resume_profile_id, resume_source_id, terminal_reason
+                    resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.session_id),
@@ -53,6 +57,7 @@ class SQLiteSessionStore:
                     str(record.resume_profile_id) if record.resume_profile_id else None,
                     record.resume_source_id,
                     record.terminal_reason,
+                    record.orphan_provenance.value if record.orphan_provenance else None,
                 ),
             )
 
@@ -61,7 +66,7 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id, terminal_reason
+                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
             FROM sessions WHERE session_id = ?
             """,
             (str(session_id),),
@@ -74,7 +79,7 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id, terminal_reason
+                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
             FROM sessions WHERE resume_profile_id = ? AND resume_source_id = ?
             """,
             (str(profile_id), source_id),
@@ -85,7 +90,7 @@ class SQLiteSessionStore:
         """Return durable projections, optionally filtered by approved lifecycle states."""
         query = (
             "SELECT session_id, project_id, profile_id, display_identity, state, created_at, "
-            "resume_profile_id, resume_source_id, terminal_reason "
+            "resume_profile_id, resume_source_id, terminal_reason, orphan_provenance "
             "FROM sessions"
         )
         values: tuple[str, ...] = ()
@@ -101,10 +106,31 @@ class SQLiteSessionStore:
         if current is None:
             raise KeyError(f"unknown session: {session_id}")
         to_state = transition(current.state, event).to_state
-        # Only a terminal state gets a reason, and only the first one: the matrix offers no
-        # way out of ENDED or ORPHANED, so the event that landed there is the whole answer
-        # to why the session stopped.
+        # Only a terminal state gets a reason: the matrix offers no way out of ENDED, so the
+        # event that landed there is the whole answer to why the session stopped.
+        #
+        # ORPHANED used to qualify and no longer does, and nothing here was edited to change
+        # that — `TERMINAL_STATES` is derived from the transition table, and DEC-020's one new
+        # row made ORPHANED an origin. The result is right: a held-aside record has not
+        # stopped, so claiming an ending for it would be false, and an adopted one that is
+        # later force-stopped gets `verified_force_stop` as its reason at the moment it
+        # actually ends. The `else current.terminal_reason` branch carries an existing reason
+        # forward rather than clearing it — though no reachable transition lands there with a
+        # non-None value today: ENDED is the only state that can hold one, and ENDED has no
+        # way out, so `transition` raises before this line is reached. It is written as the
+        # honest general form rather than as `None`, because the alternative encodes "no
+        # non-terminal state ever follows a terminal one" as a silent assumption.
         terminal_reason = event.value if to_state in TERMINAL_STATES else current.terminal_reason
+        # The second of ORPHANED's two producers. `reconcile._save_trusted_orphan` stamps
+        # ADOPTED when it *creates* a record; the ambiguous producer never creates one, it
+        # transitions an existing record, and this is the method that lands it. Stamping here
+        # is what lets a NULL provenance mean one thing (a row older than migration 6) rather
+        # than three. Existing provenance is never overwritten, because it is durable history:
+        # a record moving to ENDED under DEC-020's force stop has to carry out of ORPHANED
+        # which kind of ORPHANED it was, or the audit trail loses what was killed.
+        orphan_provenance = current.orphan_provenance
+        if to_state is SessionState.ORPHANED and orphan_provenance is None:
+            orphan_provenance = OrphanProvenance.AMBIGUOUS
         updated = SessionRecord(
             current.session_id,
             current.project_id,
@@ -115,12 +141,21 @@ class SQLiteSessionStore:
             current.resume_profile_id,
             current.resume_source_id,
             terminal_reason,
+            orphan_provenance,
         )
         with self._connection:
             self._append_event(str(session_id), event)
             self._connection.execute(
-                "UPDATE sessions SET state = ?, terminal_reason = ? WHERE session_id = ?",
-                (updated.state.value, updated.terminal_reason, str(session_id)),
+                """
+                UPDATE sessions SET state = ?, terminal_reason = ?, orphan_provenance = ?
+                WHERE session_id = ?
+                """,
+                (
+                    updated.state.value,
+                    updated.terminal_reason,
+                    updated.orphan_provenance.value if updated.orphan_provenance else None,
+                    str(session_id),
+                ),
             )
         return updated
 
@@ -202,6 +237,7 @@ class SQLiteSessionStore:
             current.resume_profile_id,
             current.resume_source_id,
             current.terminal_reason,
+            current.orphan_provenance,
         )
         with self._connection:
             self._connection.execute(
@@ -265,7 +301,7 @@ def _instant_from_row(value: str) -> datetime:
 
 
 def _record_from_row(
-    row: tuple[str, str, str, str, str, str, str | None, str | None, str | None],
+    row: tuple[str, str, str, str, str, str, str | None, str | None, str | None, str | None],
 ) -> SessionRecord:
     """Rebuild a validated domain record from one trusted SQLite projection row."""
     display_parts = row[3].split(" · ", 4)
@@ -288,4 +324,36 @@ def _record_from_row(
         ProfileId(row[6]) if row[6] is not None else None,
         row[7],
         row[8],
+        _provenance_from_row(row[9]),
     )
+
+
+def _provenance_from_row(value: str | None) -> OrphanProvenance | None:
+    """Read a stored provenance, falling to the conservative branch on anything unknown.
+
+    An unrecognized value is a hand-edited row, a partial write, or — the realistic case — a
+    member written by a newer build and read back after a downgrade.
+
+    The blast radius is real but is **not** what distinguishes this column: `_record_from_row`
+    already raises for a malformed display identity, a non-UUID id and an unknown state, so
+    "one bad row costs the whole page" is this function's existing behaviour for four other
+    columns, and claiming otherwise would describe a policy this file does not hold. What is
+    different here is that a *conservative reading exists*. There is no safe substitute for an
+    unparseable `state`, but there is one for provenance — `None` offers strictly less than
+    either real value, so falling to it is exactly as safe as refusing and costs nothing.
+
+    Refusing is not the only alternative to guessing permissively, which is how this was first
+    written. This column decides whether a destructive action is offered, and `None` is the
+    branch that offers *less*, so falling to it is exactly as safe as refusing and keeps the
+    session visible and actionable in every other respect. The value is logged rather than
+    swallowed, because a row nobody can explain is worth knowing about.
+    """
+    if value is None:
+        return None
+    try:
+        return OrphanProvenance(value)
+    except ValueError:
+        _LOG.warning(
+            "unrecognized orphan provenance %r; treating it as the conservative branch", value
+        )
+        return None

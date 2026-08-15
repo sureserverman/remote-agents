@@ -48,21 +48,40 @@ def exact_session_target(session_name: str) -> str:
     return f"ra-{session_id}:"
 
 
-def attach_argv(session_id: SessionId) -> tuple[str, ...]:
-    """Return the exact argument vector that attaches to one managed session."""
+def attach_argv(session_id: SessionId, *, read_only: bool = False) -> tuple[str, ...]:
+    """Return the exact argument vector that attaches to one managed session.
+
+    `read_only` adds tmux's own `-r` and nothing else. It is what a PRESERVED session is
+    offered (DEC-021): the pane's output is the thing PRESERVED exists to keep, and refusing
+    to show it made the state less useful than what it replaced — but the agent has exited, so
+    there is nothing to type *to*, and a writable attach would imply otherwise.
+
+    A flag on the one builder rather than a second function, so the socket and the exact
+    target cannot drift between the two forms. That target is still `exact_session_target`,
+    which refuses anything that is not a canonical managed name — read-only widens *what may
+    be attached to*, never *what may be named*.
+
+    **`-r` goes after `attach-session`, not before it.** It is a flag of the command, not a
+    global tmux option: `tmux -L remote-agents -r attach-session …` exits with
+    `unknown option -- r`, because the global set is `[-2CDlNuVv] [-c] [-f] [-L] [-S] [-T]`
+    and `-r` is not in it. Verified against tmux 3.4 rather than assumed — the first draft of
+    this function put it in the global position and the first draft of its test asserted that
+    position, so the pair agreed with each other and not with tmux.
+    """
     return (
         "tmux",
         "-L",
         "remote-agents",
         "attach-session",
+        *(("-r",) if read_only else ()),
         "-t",
         exact_session_target(f"ra-{session_id}"),
     )
 
 
-def attach_command(session_id: SessionId) -> str:
+def attach_command(session_id: SessionId, *, read_only: bool = False) -> str:
     """Return the one copyable attach command for a currently verified managed session."""
-    return " ".join(attach_argv(session_id))
+    return " ".join(attach_argv(session_id, read_only=read_only))
 
 
 def parse_pane(line: str) -> ManagedPane:

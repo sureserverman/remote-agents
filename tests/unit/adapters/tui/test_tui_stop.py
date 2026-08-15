@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from stop_results import a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -93,7 +94,7 @@ class _RecordingLauncher:
         self.issued.append(command)
         if self.error is not None:
             raise self.error
-        return None
+        return a_verified_force_stop()
 
 
 def _context(launcher: _RecordingLauncher) -> TuiContext:
@@ -126,7 +127,7 @@ async def test_detail_offers_exactly_the_policy_actions(state: SessionState) -> 
         await pilot.pause()
         offered = _offered(app)
 
-    assert offered == set(available_actions(state))
+    assert offered == set(available_actions(state, None))
 
 
 async def test_graceful_issues_a_graceful_stop_command() -> None:
@@ -206,7 +207,7 @@ async def test_an_action_the_policy_refuses_is_never_issued(state: SessionState)
         await app.show_detail(str(record.session_id))
         await pilot.pause()
         for action in ("graceful", "cleanup"):
-            if action not in available_actions(state):
+            if action not in available_actions(state, None):
                 await app.screen.choose(action)
                 await pilot.pause()
 
@@ -298,7 +299,7 @@ async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
 
         async def force_stop(self, command):
             self.issued.append(command)
-            return None
+            return a_verified_force_stop()
 
     launcher = _SlowLauncher((record,))
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]

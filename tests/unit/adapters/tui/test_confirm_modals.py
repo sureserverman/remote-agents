@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_clean_stop
+from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
 from tui_feedback import announcements
@@ -117,8 +117,9 @@ class _Launcher:
     async def copy_attach(self, _session_id) -> str | None:
         return None
 
-    async def force_stop(self, command: ForceStopCommand) -> None:
+    async def force_stop(self, command: ForceStopCommand):
         self.issued.append(command)
+        return a_verified_force_stop()
 
     async def graceful_stop(self, command):
         self.issued.append(command)
@@ -170,12 +171,17 @@ class _Arrangement:
 #: hard-coded. The plan's wording is "one case per destructive confirm site"; this is that,
 #: rather than one case per modal.
 _ARRANGED: dict[type[ConfirmScreen], tuple[_Arrangement, ...]] = {
-    # ORPHANED is a state the stop policy offers no force for, so a session that drifts into
+    # A *muddled-evidence* ORPHANED is a state the stop policy offers no force for -- the
+    # fixture leaves orphan_provenance at its default, which is that branch. DEC-020 does
+    # offer force for the adopted branch, so this arrangement names which one it means rather
+    # than saying "ORPHANED" and meaning half of it. A session that drifts into
     # it while the question is open must not be forced by the answer.
     ForceConfirmModal: (
         _Arrangement(
             open_key=FORCE,
-            offered_when=lambda record: FORCE in available_actions(record.state),
+            offered_when=lambda record: (
+                FORCE in available_actions(record.state, record.orphan_provenance)
+            ),
             refused_state=SessionState.ORPHANED,
             refusal_names="force stop",
             expects=lambda command: (

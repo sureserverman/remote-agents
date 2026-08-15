@@ -193,8 +193,10 @@ state means. It offers exactly the stops the shared policy allows from that stat
 only from RUNNING (which ends the session outright, cleaning up the pane it exited), Clean up only
 from PRESERVED — now reached only by a pane that died on its own — and Force stop from RUNNING,
 STOP_REQUESTED, PRESERVED, or FAILED. A starting session offers none, because the domain has no
-stop transition out of STARTING and reconciliation is what resolves one that is stuck; an orphaned
-session offers none either, because the domain has no transition out of ORPHANED at all.
+stop transition out of STARTING and reconciliation is what resolves one that is stuck. An orphaned
+session depends on how it got there: one that reconciliation adopted — a running agent found with
+no record of it — offers Force stop and nothing else, while one whose pane evidence was merely
+ambiguous offers none, as does any record predating the column that stores the difference.
 
 Both surfaces spell those actions the same way, from one map beside the policy that decides which
 of them to offer. The stops share a single row under the read-only actions, which each get a row

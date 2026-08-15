@@ -76,6 +76,15 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         """,
     ),
+    # No DEFAULT, deliberately: every row that predates this column reads NULL and so takes
+    # the conservative branch. Provenance cannot be back-derived (DEC-020) -- once a pane has
+    # been adopted a record exists, so the next reconciliation pass matches it by id and never
+    # sees an unknown pane again -- and backfilling 'adopted' would hand a destructive action
+    # to rows on the strength of a guess about how they got there.
+    (
+        6,
+        "ALTER TABLE sessions ADD COLUMN orphan_provenance TEXT;",
+    ),
 )
 
 

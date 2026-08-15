@@ -43,3 +43,35 @@ def a_stop_that_did_not_take(
     return TerminalObservation(
         session_id or SessionId.new(), live=True, preserved=False, detail=detail
     )
+
+
+def a_verified_force_stop(session_id: SessionId | None = None) -> TerminalObservation:
+    """The managed pane was found and killed, which is what force stop does when it works.
+
+    `preserved` is false and stays false — force removes the pane rather than keeping it, so
+    unlike a graceful stop there is no outcome here in which it is true. That is exactly why
+    `stop_failure` cannot read a force: it keys on `preserved`, and every force would look like
+    a failure to it. `force_stop_failure` reads the detail instead.
+
+    The right default for any double standing in for `SessionService.force_stop`, because it is
+    the outcome those tests were written against while the value was being thrown away.
+    """
+    return TerminalObservation(session_id or SessionId.new(), live=False, preserved=False)
+
+
+def a_force_stop_that_found_nothing(session_id: SessionId | None = None) -> TerminalObservation:
+    """Force stop ran and no managed pane matched, so nothing was killed (BL-026, DEC-017).
+
+    `TmuxRuntime.force_stop` reports `ownership_lost` here, and `SessionService.force_stop`
+    records `VERIFIED_FORCE_STOP` anyway — deliberately, per DEC-017, so the record still
+    reaches ENDED and the row still clears rather than stranding. What changes is only what the
+    surfaces are entitled to *say* about it.
+
+    Not the ordinary "the agent already exited" case, which this is easy to mistake for: a
+    cleanly exited agent leaves a PRESERVED pane, still in the managed inventory, so force
+    finds it and kills it normally. This fires only when the pane is absent from the inventory
+    entirely — destroyed outside the app, or ownership metadata drifted.
+    """
+    return TerminalObservation(
+        session_id or SessionId.new(), live=False, preserved=False, detail="ownership_lost"
+    )

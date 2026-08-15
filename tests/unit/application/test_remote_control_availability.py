@@ -13,6 +13,11 @@ from remote_agents.domain.models import ProfileId, SessionId, SessionState
 class Record:
     """The minimum a caller must carry to be asked about Remote Control."""
 
+    # Mirrors SessionRecord's tenth field. A fake missing it duck-types the record
+    # everywhere except the one branch DEC-020 added, which is the branch that offers a
+    # destructive action.
+    orphan_provenance = None
+
     def __init__(self, state: SessionState, profile_id: ProfileId) -> None:
         self.session_id = SessionId(UUID(int=1))
         self.state = state

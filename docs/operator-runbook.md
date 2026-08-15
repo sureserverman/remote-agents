@@ -537,14 +537,26 @@ uv run --locked remote-agents tui
 5. Force stop is confirmed a second time, on a screen of its own that names the session and
    states that the kill is immediate, cannot be undone, and loses whatever the agent has not
    saved. Cancel is the first entry and the highlighted one, so a stray or repeated enter aborts;
-   confirming means moving to the other row on purpose. No screen rests the cursor on a
-   destructive entry, and a stop that fails leaves the cursor on Back rather than on the button
+   confirming means moving to the other row on purpose. No screen rests the cursor on an entry
+   that mutates, and a stop that fails leaves the cursor on Back rather than on the button
    that just failed, so a second enter is never a blind retry of a kill.
-6. ORPHANED offers no stop at all. It does not mean the pane is gone — that ends the session — it
-   means the record and this host's panes could not be reconciled, so the session is quarantined
-   for local attention and the lifecycle permits no transition out of it. Inspect it with
-   `tmux -L remote-agents list-panes -a` and resolve it at the tmux level, only after its
-   ownership and output have been established.
+6. ORPHANED is two situations, and what is offered depends on which. It never meant the pane is
+   gone — that ends the session. It means the record and this host's panes could not be
+   reconciled, and reconciliation knows two ways that happens, so the record now remembers which
+   applied.
+   - **A running agent was found with no record of it**, and was taken back into the list. This
+     is usually a live agent the database lost. It offers **Force stop**, which is the action its
+     pane actually supports, and the screen says so in as many words. The lifecycle permits
+     exactly this one transition out of ORPHANED and nothing else — there is no way to simply
+     dismiss the row, because clearing it without acting would hide a working agent rather than
+     stop it.
+   - **The pane was found but was neither live nor preserved.** The evidence supports no action,
+     so none is offered. Every record written before the provenance column existed reads this
+     way too, because how it got there cannot be worked out after the fact.
+
+   Either way, inspect it with `tmux -L remote-agents list-panes -a` and resolve it at the tmux
+   level, only after its ownership and output have been established. Forcing the first kind kills
+   a pane this tool never properly owned — that is intended, and it is still a kill.
 
 Ctrl+O opens Resume, which starts a new managed session continuing a saved conversation, and it
 is offered only for profiles that report themselves resume-capable on this host. When a session
@@ -572,10 +584,11 @@ is the point; check `doctor --profiles` when the surface tells you the stop was 
 Force and cleanup resolve no profile, because they remove the managed tmux session itself, so
 force remains available when a graceful stop cannot be resolved.
 
-The two-writer caveat above still applies, and it now governs destructive actions rather than
-launches alone. `SessionLocks` serializes per-session mutations only inside the process holding
-them, so a stop from the terminal and a stop from the service are not serialized against each
-other; across the two processes the only arbitration is SQLite's one-second busy timeout and the
+The two-writer caveat above still applies, and it now governs stops as well as launches.
+`SessionLocks` serializes the mutations issued through `SessionService`, and only inside the
+process holding them — reconciliation's own writes do not take it at all — so a stop from the
+terminal and a stop from the service are not serialized against each other; across the two
+processes the only arbitration is SQLite's one-second busy timeout and the
 durable idempotency keys. That is sound for a single owner on one host and would not be for
 concurrent operators. Drive a given session from one surface at a time, and let the other
 surface's next list read the result.

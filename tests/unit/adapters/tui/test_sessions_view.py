@@ -314,7 +314,7 @@ async def test_a_screen_left_mid_read_does_not_draw_onto_its_own_corpse() -> Non
     `query_one` on widgets that are already unmounted and raising `NoMatches` out of a message
     handler, which exits the app.
 
-    The distinction matters because the destructive paths close the same hole a second way, by
+    The distinction matters because the stop paths close the same hole a second way, by
     holding the busy guard so the pop cannot happen at all. If this test were written against
     one of those it would pass with `showing` removed entirely — verified by mutation, which is
     why it is written here instead.
@@ -416,7 +416,7 @@ async def test_the_background_read_leaves_the_cursor_where_the_owner_put_it() ->
     """A refill that walks the selection back to row 0 every ten seconds is worse than stale.
 
     On the tick the owner presses enter, it would open a different session's detail than the
-    one they were looking at — and one screen deeper are the destructive actions.
+    one they were looking at — and one screen deeper are the stop actions.
     """
     first, second, third = _record(), _record(), _record()
     launcher = _Listing((first, second, third))

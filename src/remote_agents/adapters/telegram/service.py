@@ -55,7 +55,11 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.conversations import ConversationCatalogueQuery, ConversationService
+from remote_agents.application.conversations import (
+    ConversationCatalogueQuery,
+    ConversationService,
+    resume_available,
+)
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
@@ -77,9 +81,10 @@ from remote_agents.application.session_actions import (
     trust_available,
 )
 from remote_agents.config import TelegramSecrets
-from remote_agents.domain.conversations import ConversationReference, ConversationState
+from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import (
     MAX_LABEL_LENGTH,
+    OrphanProvenance,
     ProfileId,
     ProjectId,
     SessionId,
@@ -817,6 +822,17 @@ class PrivateBotBoundary:
         resolved = await self._resolve_resume(reference_value)
         if resolved is None or resolved.summary.project_id is None:
             return _reply_arguments(self._message("That conversation is no longer available."))
+        # Re-checked at the *act*, not only where the review screen was drawn. This is the
+        # mitigation `StopController.execute` already applies to every stop — the rendered row
+        # is re-tested against the shared policy before the command goes out — and the resume
+        # path did not have it on either surface. `_resume_confirm_reply` checks while building
+        # the screen, which is a different moment: the resolve above is a second, independent
+        # read, so a conversation the policy refuses could be resumed here after passing there.
+        # Found by the Stage 3 gate's adversarial pass, which noted the very shape this fix
+        # was for — the rule written down in some places and not others — reappearing on the
+        # other surface.
+        if not resume_available(resolved.summary):
+            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
         record = await self.launcher.resume(
             ResumeCommand(
                 resolved.summary.project_id,
@@ -1028,11 +1044,12 @@ class PrivateBotBoundary:
         # graceful stop is one tap from discarding the pane's output. No state offers more
         # than two stops, so the row stays legible.
         stops: list[Button] = []
-        for action in available_actions(record.state):
+        for action in available_actions(record.state, record.orphan_provenance):
             token = self.stops.offer(
                 record.session_id,
                 record.profile_id,
                 record.state,
+                record.orphan_provenance,
                 action,
                 self.owner_user_id,
                 self.owner_chat_id,
@@ -1043,7 +1060,8 @@ class PrivateBotBoundary:
             buttons.append(tuple(stops))
         return self._message(
             f"<b>{escape(record.display.rendered)}</b>\n"
-            f"State: {record.state.value}\n{_state_explanation(record.state)}",
+            f"State: {record.state.value}\n"
+            f"{_state_explanation(record.state, record.orphan_provenance)}",
             tuple(buttons),
             back=self._callback("sessions.open", "sessions"),
         )
@@ -1053,13 +1071,15 @@ class PrivateBotBoundary:
         back = self._callback("session.detail", session_value)
         if record is None or not await self._can_copy_attach(record):
             return self._message(
-                "Copy Attach is unavailable until this managed pane is live.", back=back
+                "Copy Attach is unavailable: this session has no pane on this host any more.",
+                back=back,
             )
         copy = getattr(self.launcher, "copy_attach", None)
         command = await copy(record.session_id) if copy is not None else None
         if command is None:
             return self._message(
-                "Copy Attach is unavailable until this managed pane is live.", back=back
+                "Copy Attach is unavailable: this session has no pane on this host any more.",
+                back=back,
             )
         return self._message(
             f"<b>Copy attach command</b>\n<code>{escape(command)}</code>", back=back
@@ -1171,6 +1191,13 @@ class PrivateBotBoundary:
         )
 
     async def _can_copy_attach(self, record: SessionRecord) -> bool:
+        """Whether this session has a pane the owner can be handed a command for.
+
+        Preserved counts as well as live (DEC-021). This surface *hides* the button when the
+        answer is no, where the local one renders the row always and explains when chosen — so
+        this predicate is what decides whether the bot offers a PRESERVED session its attach
+        at all, and DEC-021 requires both surfaces to offer it or neither.
+        """
         if self.launcher is None:
             return False
         inspect = getattr(self.launcher, "inspect", None)
@@ -1179,7 +1206,7 @@ class PrivateBotBoundary:
         observation = await inspect(InspectQuery(record.session_id))
         return bool(
             observation is not None
-            and observation.live
+            and (observation.live or observation.preserved)
             and observation.project_id == record.project_id
             and observation.profile_id == record.profile_id
         )
@@ -1363,6 +1390,7 @@ class PrivateBotBoundary:
             record.session_id,
             ProfileId(profile_value),
             record.state,
+            record.orphan_provenance,
             self.owner_user_id,
             self.owner_chat_id,
         )
@@ -1371,10 +1399,17 @@ class PrivateBotBoundary:
                 "Force stop is no longer available for this session.",
                 back=self._callback("session.detail", session_value),
             )
+        # The state line is carried onto the confirmation, not only onto the detail screen.
+        # Its twin `ForceStopConfirmModal` on the local surface has always rendered it, and
+        # after DEC-020 it is what tells the owner they are about to kill a pane this app
+        # adopted rather than launched — which is exactly the sentence the one screen that
+        # authorises a kill should not be the one screen to omit. The parity contract compares
+        # rendered *action sets*, so this divergence was invisible to it.
         return self._message(
             f"<b>Force stop {escape(record.display.rendered)}?</b>\n"
             "This kills the agent immediately and cannot be undone. Anything it has not "
-            "saved is lost.",
+            "saved is lost.\n"
+            f"{escape(_state_explanation(record.state, record.orphan_provenance))}",
             (
                 (Button("Cancel", self._callback("session.detail", session_value)),),
                 (Button(ACTION_LABELS[FORCE], confirmed),),
@@ -1417,10 +1452,12 @@ class PrivateBotBoundary:
         current = await self._record(session_value)
         if current is not None:
             # The `else` is **unreachable today and worded as if it were not**, which is the
-            # honest shape for it. `failure` is non-None for exactly the graceful action, and
-            # `cleanup` and `force_stop` both walk the record to ENDED on every non-raising
-            # path (`application/services.py`), so a session that is still listed after one of
-            # those is a state no current code produces. The wording is deliberately neutral
+            # honest shape for it. `failure` is non-None for graceful and, since force gained
+            # the same vocabulary, for a
+            # force that found no pane — and `cleanup` and `force_stop` both walk the record to
+            # ENDED on every non-raising path (`application/services.py`), so a session still
+            # listed after one of those is a state no current code produces. The wording is
+            # deliberately neutral
             # about *why* rather than repeating the graceful-stop advice it used to carry:
             # reached at all, this branch is a session that outlived a command that claimed to
             # end it, and telling that operator to wait for a graceful exit would be a guess.
@@ -1438,12 +1475,27 @@ class PrivateBotBoundary:
             # they then have to leave.
             return await self._sessions_reply(notice=f"{subject} is still running\n{said}")
         if failure is not None:
-            # The session has left the list, but the stop still reported that it did not take
-            # effect — the other writer DEC-005 permits ended it in the window between the two.
-            # Narrow, and worth not getting wrong: the whole point of threading `failure` here
-            # was to stop inferring the outcome from the record, and "Stopped X" over an
-            # observation that says nothing was stopped is the reading DEC-006 forbids. Found
-            # by the Stage 2 gate's evaluator and its second pass independently.
+            # The session has left the list and the stop still had something to report. Two
+            # producers reach here and the wording has to be true of both, which is why it says
+            # what is *observable* — the session is gone from the list — rather than what was
+            # done to it.
+            #
+            # Originally the narrow one: a graceful stop that did not take effect, over a record
+            # the other writer DEC-005 permits had ended in the window between the two. The
+            # point of threading `failure` here was to stop inferring the outcome from the
+            # record, and "Stopped X" over an observation that says nothing was stopped is the
+            # reading DEC-006 forbids. Found by the Stage 2 gate's evaluator and its second pass
+            # independently.
+            #
+            # Since force started reporting its own observation, the common one: a force stop
+            # that found no managed pane. It killed
+            # nothing, the service recorded `VERIFIED_FORCE_STOP` anyway and the record reached
+            # ENDED (DEC-017, deliberately — a row the owner cannot clear is the worse failure),
+            # so the session really has gone from the list. This branch is reused rather than
+            # given its own sentence because DEC-007's shared vocabulary is the safeguard that
+            # makes a second surface safe, and a cause worded once per surface is how it stops
+            # being shared. The `endings` table below keeps "Force stopped X" for the case where
+            # a pane was actually found and killed, which is the only case that may claim it.
             return await self._sessions_reply(
                 notice=f"{subject} is no longer listed\n{failure.summary} {failure.remedy}"
             )
@@ -1621,7 +1673,7 @@ class PrivateBotBoundary:
                 ),
             )
             for summary in result.conversations
-            if summary.state is ConversationState.RESUMABLE
+            if resume_available(summary)
         )
         navigation = []
         if result.page > 1:
@@ -1663,7 +1715,7 @@ class PrivateBotBoundary:
         if resolved is None or resolved.summary.project_id is None:
             return self._message("That conversation is no longer available.")
         summary = resolved.summary
-        if summary.state is not ConversationState.RESUMABLE:
+        if not resume_available(summary):
             return self._message("That conversation cannot be resumed safely.")
         project = next(
             (item for item in self.catalogue if item.opaque_id == str(summary.project_id)), None
@@ -1963,6 +2015,6 @@ def _session_row_label(record: SessionRecord) -> str:
     return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
 
 
-def _state_explanation(state: SessionState) -> str:
+def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
     """Defer to the shared mapping so both surfaces describe a state identically."""
-    return explain_state(state)
+    return explain_state(state, orphan_provenance)

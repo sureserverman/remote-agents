@@ -11,27 +11,53 @@ rechecked the live record against a fourth spelling of the same rule.
 
 Availability is a *narrowing* of the domain's legal transitions, never a widening: an action
 this module offers must be one `domain.state_machine` will actually perform, or the owner
-confirms a destructive operation and receives an exception instead of a stopped session.
+takes an offered action and receives an exception instead of a stopped session.
 `tests/architecture/test_policy_matches_domain.py` enforces that direction.
 
-ORPHANED is deliberately **not** forceable. It is tempting — it is the one state the two
-prior copies never agreed on, and it can be stopped from no surface today — but the domain
-has no transition out of ORPHANED at all, so a force from it raises InvalidTransition before
-the terminal is reached. ORPHANED does not mean "the pane is gone" (that is
-RECONCILED_TERMINAL_MISSING, which ends the session); it means the evidence was ambiguous, or
-a tmux tag was found with no store row. `reconcile.py` quarantines it for local attention on
-purpose. Making it forceable is a real capability with a real safety question — it would put
-a one-tap kill on a possibly-live pane this app does not own — and it needs a domain
-transition and a recorded decision, not a policy edit.
+**ORPHANED is two situations, and they get different answers** (DEC-020). It never meant
+"the pane is gone" — that is RECONCILED_TERMINAL_MISSING, which ends the session. It means
+either that the evidence was ambiguous (a pane found but neither live nor preserved), or
+that a trusted managed pane was found with **no store row at all** and adopted. The record
+remembers which, as `SessionRecord.orphan_provenance`, so this module can tell them apart.
+
+The adopted case gets force stop — the action its pane actually supports. The ambiguous case
+gets nothing, and so does any row written before migration 6, which cannot have its
+provenance back-derived. That asymmetry is the whole reason `available_actions` takes a
+second argument.
+
+**One half of that split is currently inert against the real adapter, and a reader should
+know it.** `adapters/tmux/codec.py` derives `live` and `preserved` from one `pane_dead`
+field validated to be exactly `"0"` or `"1"`, so the two are exact complements and "neither
+live nor preserved" is a state the runtime cannot report. `reconcile`'s `ambiguous_terminal`
+branch is therefore unreachable in production, and `AMBIGUOUS` is written only by tests that
+hand-build such an observation. The conservative branch that *does* fire in production is
+the `None` one — every row predating migration 6. This is a defect in DEC-020's premise
+rather than in its implementation here: the decision describes evidence this adapter cannot
+produce. It is recorded for the owner as a register correction; nothing here should be
+"simplified" on the strength of it, because the branch becomes live the moment a runtime
+learns to report a third pane condition.
+
+This was previously a flat refusal, and the reasoning recorded here for it was sound at the
+time: the lifecycle matrix then permitted ORPHANED no way out at all, so an offered force
+raised InvalidTransition before the terminal was reached. DEC-020 supplies exactly one
+transition (`VERIFIED_FORCE_STOP → ENDED`) and no bare retire, so the row still clears only
+as the consequence of an observed action, never by dismissing it. The safety question the old
+text raised — a one-tap kill on a possibly-live pane this app does not own — was answered
+rather than dropped: it is accepted cost 3 of DEC-020. Note what that branch actually
+establishes, which is narrower than "a live agent": `_save_trusted_orphan` adopts on the
+strength of a *parseable managed tag with no store row*, and never reads `observation.live`.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from remote_agents.domain.models import ProfileId, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+
+_LOG = logging.getLogger(__name__)
 
 GRACEFUL = "graceful"
 CLEANUP = "cleanup"
@@ -50,10 +76,13 @@ learns one vocabulary and meets it everywhere. The bot used to title-case the ac
 the same button did, and `tests/contract/test_session_actions_parity.py` had to carry a
 translation table between them to compare surfaces at all.
 
-`graceful` is labelled by its effect rather than its mechanism. It is a destructive action —
-it ends the session and discards the pane's output — sitting next to read-only ones, and
-"Graceful" described how the agent exits rather than what the owner is about to lose. The
-lifecycle keeps calling the action `graceful`; only its name on screen changed.
+`graceful` is labelled by its effect rather than its mechanism. It ends the session and
+discards the pane's output — a cost the owner does not get a second chance at — sitting next
+to read-only actions, and "Graceful" described how the agent exits rather than what the owner
+is about to lose. Naming the effect is the whole of the mitigation here: DEC-018 declined a
+confirmation for it on both surfaces, because graceful stop is the ordinary way a session ends
+and a confirmation on the common path teaches the owner to dismiss the one guarding force
+stop. The lifecycle keeps calling the action `graceful`; only its name on screen changed.
 """
 
 _FORCEABLE = frozenset(
@@ -66,21 +95,41 @@ _FORCEABLE = frozenset(
 )
 
 
-def available_actions(state: SessionState) -> tuple[str, ...]:
-    """Return the stop actions offerable from `state`, destructive one last.
+def available_actions(
+    state: SessionState, orphan_provenance: OrphanProvenance | None
+) -> tuple[str, ...]:
+    """Return the stop actions offerable from `state`, force last.
 
     STARTING offers nothing: the pane may not exist yet, and the domain has no stop
     transition from it; a stuck STARTING session is resolved by reconciliation instead.
-    ENDED and ORPHANED offer nothing: both are read-only in the state machine.
+    ENDED offers nothing: it is read-only in the state machine.
+
+    `orphan_provenance` is read **only** when `state` is ORPHANED, and is ignored otherwise;
+    `tests/unit/application/test_session_actions.py` pins that inertness. It is a required
+    argument rather than one defaulting to `None` on purpose. A default would let a call site
+    that forgot it silently render the conservative rows, and a surface quietly missing the
+    adopted branch is precisely the divergence DEC-007 makes the parity contract responsible
+    for — a divergence the contract cannot catch if *both* surfaces forget. Required, the
+    same mistake is a TypeError at the call site.
     """
     actions: list[str] = []
     if state is SessionState.RUNNING:
         actions.append(GRACEFUL)
     if state is SessionState.PRESERVED:
         actions.append(CLEANUP)
-    if state in _FORCEABLE:
+    if state in _FORCEABLE or _is_adopted_orphan(state, orphan_provenance):
         actions.append(FORCE)
     return tuple(actions)
+
+
+def _is_adopted_orphan(state: SessionState, orphan_provenance: OrphanProvenance | None) -> bool:
+    """Whether this is the ORPHANED branch DEC-020 gives an action to.
+
+    Written as an equality against ADOPTED rather than as "not AMBIGUOUS", so that `None` —
+    every row older than migration 6 — falls to the conservative side, and so that a third
+    provenance added later is conservative until someone decides otherwise.
+    """
+    return state is SessionState.ORPHANED and orphan_provenance is OrphanProvenance.ADOPTED
 
 
 _EXPLANATIONS = {
@@ -93,24 +142,55 @@ _EXPLANATIONS = {
         "check can still promote it."
     ),
     SessionState.ENDED: "The session is closed; nothing is left to reach.",
-    # Two producers, and the wording has to fit both: a record whose pane evidence was
-    # neither live nor preserved (reconcile.py "ambiguous_terminal"), and a trusted pane
-    # found with no record at all ("unknown_session"). It is quarantined either way, and
-    # nothing the owner does moves it out — there is no transition from ORPHANED.
+    # The ambiguous producer, and the default for any row older than migration 6. The
+    # adopted producer reads differently and is spelled out below.
     SessionState.ORPHANED: (
         "This session and the panes on this host could not be reconciled, so it is held "
         "aside. No action is offered for it."
     ),
 }
 
+_ADOPTED_ORPHAN_EXPLANATION = (
+    "An agent's pane was found on this host with no record of it, so it was taken back into "
+    "the list. It may still be running. Force stop is the only stop that can reach it."
+)
+"""The adopted branch, in the owner's words rather than in the register's.
 
-def explain_state(state: SessionState) -> str:
+DEC-020 is a capability decision, so the two branches have to be distinguishable *on screen*
+— if they read identically the branch exists in the code and not in the product. The word
+"provenance" deliberately does not appear: what the owner needs is that something may still
+be running and that force is what reaches it.
+
+**Two claims this deliberately does not make**, both found by the Stage 4 gate's adversarial
+pass after an earlier draft made them:
+
+- Not "a *running* agent", and not "probably still working". `_save_trusted_orphan` adopts a
+  managed pane with no store row **whether or not that pane is live** — it never reads
+  `observation.live`. So this text is rendered for a dead-but-preserved pane too, and the
+  earlier wording was simply false for it.
+- Not "the only *action*". This sentence is rendered on a screen that also offers Copy attach
+  and Inspect output. It is the only *stop*, which is the claim the policy actually supports.
+
+It also cannot go stale gracefully: `reconcile` short-circuits every ORPHANED record to
+`quarantined` before it looks at observations, so an adopted record is never observed again.
+"may still be running" is therefore the strongest honest tense — a record adopted weeks ago
+whose pane died the same afternoon still renders this line.
+"""
+
+
+def explain_state(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
     """One line describing `state` to the owner, for any surface that renders a session.
 
     Every member is spelled out rather than defaulted. The bot previously classified four
     states and fell back to "This session is no longer active." for the rest, which was
     false for STARTING — a session that is actively coming up.
+
+    Takes provenance for the same reason `available_actions` does, and is required for the
+    same reason: after DEC-020 the sentence "No action is offered for it" is false for an
+    adopted record, and a caller that forgot the argument would print it anyway.
     """
+    if _is_adopted_orphan(state, orphan_provenance):
+        return _ADOPTED_ORPHAN_EXPLANATION
     return _EXPLANATIONS[state]
 
 
@@ -145,10 +225,13 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     it -- so a surface consults this with a fresh observation or not at all.
 
     Deliberately *not* folded into `available_actions`. That function is the stop-action
-    policy the parity contract pins (DEC-007), and its answer is a pure function of
-    `SessionState`; adding a pane-dependent row to it would make the contract's comparison
-    depend on what an agent happened to be printing. This follows `remote_control_available`
-    instead, which is the established shape for an action that is not a stop.
+    policy the parity contract pins (DEC-007), and its answer is a function of the *stored
+    record* alone — its state, and since DEC-020 its `orphan_provenance`. Adding a
+    pane-dependent row would make the contract's comparison depend on what an agent happened
+    to be printing, which is a different kind of input entirely: a record's fields are the
+    same for both surfaces at the moment they render, and a pane's output is not. This
+    follows `remote_control_available` instead, which is the established shape for an action
+    that is not a stop.
 
     Unlike Remote Control, no session state is required. The state a trust-blocked launch
     lands in is FAILED -- the readiness marker never arrived -- so gating on RUNNING would
@@ -161,6 +244,7 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
 
 UNKNOWN_SESSION = "unknown_session"
 GRACEFUL_TIMEOUT = "graceful_timeout"
+OWNERSHIP_LOST = "ownership_lost"
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +279,7 @@ class _StopObservation(Protocol):
 #: The causes a graceful stop can report without preserving the pane, and what each one means
 #: to the owner. Keyed by the `detail` the terminal adapter sets, which is the only place the
 #: two are distinguished — the observation is otherwise identical.
-_STOP_FAILURES: dict[str, tuple[str, str]] = {
+_GRACEFUL_FAILURES: dict[str, tuple[str, str]] = {
     UNKNOWN_SESSION: (
         "The stop was never sent.",
         "Nothing was signalled to the agent and nothing was stopped, because this host could "
@@ -213,7 +297,7 @@ _STOP_FAILURES: dict[str, tuple[str, str]] = {
         "or force stop it.",
     ),
 }
-"""Deliberately worded so the two cannot be mistaken for each other.
+"""Deliberately worded so no two of them can be mistaken for each other.
 
 `unknown_session` names a **disjunction**, and an earlier version of it did not. `TmuxRuntime.
 graceful_stop` returns that one detail for three conditions — no curated profile, no managed
@@ -237,6 +321,44 @@ was that neither was reported at all — both surfaces discarded `graceful_stop`
 
 `unknown_session` exists because of DEC-006: a stop fails closed on an unresolved profile
 rather than guessing at one. This makes that refusal legible; it does not soften it.
+
+**These are the causes `graceful_stop` can report, and only those.** Force's cause lives in
+`_FORCE_FAILURES` below. The two started as one table — DEC-007's argument that the surfaces
+speak one vocabulary was read as an argument for one dict — but that conflated *authoring the
+words once*, which is what DEC-007 actually asks for and which both tables still do, with
+*letting either reader reach either cause*, which nothing asks for. The Stage 3 gate's Tier-2
+review named the consequence: `stop_failure` and `force_stop_failure` each read the whole
+table, disjoint only because the two `TmuxRuntime` methods happen to emit different strings, so
+a graceful stop that ever reported `ownership_lost` would have been handed force's sentence —
+telling the owner to force stop a session that was already gone. Two tables make that
+unreachable rather than merely unlikely.
+"""
+
+#: The cause *force* stop can report, kept apart from the graceful table above so neither
+#: reader can reach the other's wording. One entry today; the separation is structural, not a
+#: reflection of how many there are.
+_FORCE_FAILURES: dict[str, tuple[str, str]] = {
+    OWNERSHIP_LOST: (
+        "This host had no pane left to stop.",
+        "The session is no longer in this host's managed inventory, so nothing was killed: it "
+        "was destroyed outside this app, or its ownership metadata drifted. The record has "
+        "been cleared either way, so the session will not come back to the list. If an agent "
+        "may still be running behind it, look for it with "
+        "`tmux -L remote-agents list-panes -a` and end it there.",
+    ),
+}
+"""The odd one out among the stop causes, because it does not describe a stop that left the
+session where it was.
+
+Under DEC-017 force keeps clearing the record even when it finds no pane — the session does
+end and the row does go away — so what was wrong was never the outcome, only the claim: both
+surfaces reported "Force stopped X" over a kill nobody observed.
+
+Read it with DEC-017's accepted cost 1 in hand: `VERIFIED_FORCE_STOP` is still written to the
+durable history whether or not `kill-session` ran, so the audit log cannot tell these apart and
+only this sentence carries the distinction. That asymmetry with DEC-006 — graceful fails closed
+on an unresolved profile, force does not fail closed on an unresolved pane — is recorded and
+deliberate, not an oversight to be "restored".
 """
 
 
@@ -251,7 +373,7 @@ def stop_failure(observation: _StopObservation) -> StopFailure | None:
     """
     if observation.preserved:
         return None
-    known = _STOP_FAILURES.get(observation.detail)
+    known = _GRACEFUL_FAILURES.get(observation.detail)
     if known is None:
         return StopFailure(
             observation.detail,
@@ -259,5 +381,46 @@ def stop_failure(observation: _StopObservation) -> StopFailure | None:
             f"The terminal reported {observation.detail!r} and the session was left as it is. "
             "Force stop it if you need it ended now.",
         )
+    summary, remedy = known
+    return StopFailure(observation.detail, summary, remedy)
+
+
+def force_stop_failure(observation: _StopObservation) -> StopFailure | None:
+    """What force stop actually observed, or `None` when it killed the pane it was asked to.
+
+    **Force cannot be read by `stop_failure`, and the reason is worth stating rather than
+    discovering.** That function keys on `preserved`, because for a graceful stop a preserved
+    pane *is* the success. Force removes the pane, so `preserved` is false on every outcome
+    including the good one — handing a force observation to `stop_failure` would report every
+    successful kill as a failure. The discriminator here is the detail alone.
+
+    So this is deliberately the mirror image of its sibling's fail-closed default: an
+    unrecognised detail answers `None`, meaning "nothing to report". `TmuxRuntime.force_stop`
+    sets a detail only for `ownership_lost`; the ordinary kill carries none. Defaulting the
+    unknown to a failure here would announce one on every successful force the moment a future
+    detail is added for some unrelated reason, which is the louder wrong answer.
+
+    **Failing open quietly is not the same as failing open**, which is the correction the Stage
+    3 gate evaluator made to the paragraph above. An *empty* detail is the ordinary kill and
+    says nothing is wrong; a detail this table does not know is a cause somebody added without
+    coming here, and answering `None` for it means both surfaces report "the session has ended"
+    over an observation nobody has read. So the empty case is silent and the unrecognised case
+    is logged. This is the same shape `SessionService.graceful_stop` uses for its own unknown
+    cause, where the comment says it out loud: the log is what makes a new cause somebody's
+    problem instead of nobody's.
+
+    What this does **not** do is change the outcome. DEC-017 keeps `SessionService.force_stop`
+    recording `VERIFIED_FORCE_STOP` and the record reaching ENDED either way, because a row the
+    owner cannot clear is a worse failure than an over-confident message. This is the message.
+    """
+    known = _FORCE_FAILURES.get(observation.detail)
+    if known is None:
+        if observation.detail:
+            _LOG.warning(
+                "force stop reported %r, which is not a cause this has words for; reporting it "
+                "as a completed kill, which may overstate what happened",
+                observation.detail,
+            )
+        return None
     summary, remedy = known
     return StopFailure(observation.detail, summary, remedy)

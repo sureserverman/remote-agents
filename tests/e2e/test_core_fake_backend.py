@@ -1,6 +1,7 @@
 """End-to-end approved lifecycle against an in-memory fake backend."""
 
 from collections.abc import Collection, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -53,15 +54,11 @@ class InMemorySessionStore:
         )
 
     async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord:
+        # `replace` rather than a positional rebuild — see the twin in test_reconcile.py: the
+        # old shape dropped every field after created_at, so a fake could lose what the real
+        # store carries and the test would still pass.
         current = self.records[session_id]
-        updated = SessionRecord(
-            current.session_id,
-            current.project_id,
-            current.profile_id,
-            current.display,
-            transition(current.state, event).to_state,
-            current.created_at,
-        )
+        updated = replace(current, state=transition(current.state, event).to_state)
         self.records[session_id] = updated
         return updated
 

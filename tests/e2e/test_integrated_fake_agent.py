@@ -53,7 +53,9 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
 
         stop = StopController(callbacks)
-        token = stop.offer(record.session_id, record.profile_id, record.state, "graceful", 7, 11)
+        token = stop.offer(
+            record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
+        )
         assert token is not None
         callbacks.bind_pending(11, 2)
         request = stop.claim(token, 7, 11, 2)
@@ -63,7 +65,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         # One button ended it: the graceful stop removed the tmux session it exited, so
         # there is no pane left to capture and no second step for the owner to confirm.
         assert stopped.state is SessionState.ENDED
-        assert available_actions(stopped.state) == ()
+        assert available_actions(stopped.state, stopped.orphan_provenance) == ()
         with pytest.raises(TerminalTargetMissing):
             await _capture(gateway, record.session_id)
 
@@ -75,11 +77,11 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         # first: a token re-offered onto the same message cannot survive that message's
         # next render.
         assert (
-            force.offer(command.session_id, command.profile_id, command.state, "force", 7, 11)
+            force.offer(command.session_id, command.profile_id, command.state, None, "force", 7, 11)
             is not None
         )
         token = force.offer_confirmed_force(
-            command.session_id, command.profile_id, command.state, 7, 11
+            command.session_id, command.profile_id, command.state, None, 7, 11
         )
         assert token is not None
         callbacks.bind_pending(11, 4)
@@ -145,7 +147,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
         assert "Sessions 1/1" in listed.text, "it is on the list before the stop"
 
         token = boundary.stops.offer(
-            record.session_id, record.profile_id, record.state, "graceful", 7, 11
+            record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
         )
         assert token is not None
         boundary.callbacks.bind_pending(11, 1)

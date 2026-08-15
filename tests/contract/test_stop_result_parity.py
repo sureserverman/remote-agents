@@ -114,7 +114,7 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
         launcher=launcher,
     )
     token = boundary.stops.offer(
-        record.session_id, record.profile_id, record.state, "graceful", 7, 11
+        record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
     )
     assert token is not None, "the bot offered no graceful stop, so nothing was exercised"
     # The token is minted unbound, exactly as a real render mints it; delivering the screen
@@ -219,6 +219,211 @@ async def test_both_surfaces_name_the_same_cause(detail: str) -> None:
         assert failure.remedy in rendered, (
             f"{name} named the cause for {detail} but not the remedy; it said {rendered!r}"
         )
+
+
+class _ForceLauncher:
+    """A force stop that reports `detail` and leaves the session gone from the list.
+
+    Gone, on both outcomes, and that is the point of BL-026 rather than a convenience.
+    `SessionService.force_stop` records `VERIFIED_FORCE_STOP` whether or not `kill-session`
+    ran, so the record reaches ENDED and drops out of the listing either way (DEC-017, chosen
+    because a row the owner cannot clear is worse than an over-confident message). The
+    aftermath is therefore *identical* for a kill that happened and one that did not — exactly
+    the shape BL-008 named for graceful, in the one action that kills. The observation is the
+    only thing that can tell them apart, and both surfaces used to discard it.
+    """
+
+    def __init__(self, record: SessionRecord, detail: str) -> None:
+        self.record = record
+        self.detail = detail
+        self.issued: list[object] = []
+        self.stopped = False
+
+    async def refresh_readiness(self):
+        return () if self.stopped else (self.record,)
+
+    async def list_sessions(self):
+        return () if self.stopped else (self.record,)
+
+    async def copy_attach(self, _session_id):
+        return None
+
+    async def inspect(self, _query):
+        return None
+
+    async def force_stop(self, command):
+        self.issued.append(command)
+        self.stopped = True
+        return TerminalObservation(
+            self.record.session_id, live=False, preserved=False, detail=self.detail
+        )
+
+
+async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
+    """Everything the bot's reply put in front of the owner after a confirmed force."""
+    from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
+
+    launcher = _ForceLauncher(record, detail)
+    boundary = PrivateBotBoundary(
+        7,
+        11,
+        catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
+        launcher=launcher,
+    )
+    # The *confirmed* token, because an unconfirmed force is refused at `claim` by design —
+    # the second press is what makes it runnable, and this drives the press that runs.
+    token = boundary.stops.offer_confirmed_force(
+        record.session_id, record.profile_id, record.state, record.orphan_provenance, 7, 11
+    )
+    assert token is not None, "the bot offered no force stop, so nothing was exercised"
+    boundary.callbacks.bind_pending(11, 100)
+    reply = await boundary._stop_reply(CONFIRMED_FORCE, token, 100)
+    assert launcher.issued, "the bot never issued the force, so this asserts nothing about it"
+    return unescape(str(reply["text"]))
+
+
+async def _tui_said_force(record: SessionRecord, detail: str) -> str:
+    """Everything the local surface put in front of the owner after a confirmed force.
+
+    The confirmation is a modal awaited through `ask_to_confirm`, so `choose` does not return
+    until it is answered — the same arrangement as a real keypress, whose handler is likewise
+    suspended for as long as the owner takes to decide. It is answered here by pressing the
+    confirming row rather than by reaching past the modal, so what is exercised is the path an
+    owner actually takes.
+    """
+    import asyncio
+
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+
+    launcher = _ForceLauncher(record, detail)
+    app = RemoteAgentsTui(
+        TuiContext(
+            launcher=launcher,  # type: ignore[arg-type]
+            creator=object(),  # type: ignore[arg-type]
+            profiles=(ProfileChoice("claude", True),),
+            refresh_catalogue=tuple,
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        )
+    )
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        rows = app.screen.query_one("#choices", OptionList)
+        assert "force" in [option.id for option in rows.options], (
+            "the detail offered no force stop, so nothing was exercised"
+        )
+        asking = asyncio.create_task(app.screen.choose("force"))
+        await pilot.pause()
+        # The modal rests on the abort by design (DEC-007), so confirming is two deliberate
+        # acts: move off Cancel, then press. Driven with keys rather than by calling into the
+        # modal, because the modal is a `ModalScreen[bool]` with no `choose` — and because
+        # this is the sequence an owner actually performs.
+        await pilot.press("down")
+        await pilot.press("enter")
+        await asyncio.wait_for(asking, timeout=5)
+        await pilot.pause()
+        status = str(app.screen.query_one("#status").content)
+        toasts = " ".join(notification.message for notification in app._notifications)
+    assert launcher.issued, "the surface never issued the force, so this asserts nothing about it"
+    return f"{status}\n{toasts}"
+
+
+FORCE_SURFACES = (
+    ("telegram", _telegram_said_force),
+    ("tui", _tui_said_force),
+)
+
+
+@pytest.mark.parametrize("surface_name,said", FORCE_SURFACES)
+async def test_neither_surface_claims_a_kill_it_did_not_make(surface_name: str, said) -> None:
+    """BL-026, as the operator meets it. The third cause, and the only one on the kill path.
+
+    `ownership_lost` means `TmuxRuntime.force_stop` matched no managed pane and killed nothing.
+    Both surfaces reported the kill anyway — a claim about an observation that says the
+    opposite, and in the drifted-metadata case an agent may still be running behind it
+    (DEC-017's accepted cost 2).
+
+    **Asserted as what the surface must *say*, not only as a phrase it must avoid.** The
+    negative alone was measured against the pre-fix code and caught only the bot, because the
+    local surface never used the words "Force stopped" — it said "the session has ended", which
+    is true and still omits everything the owner needs. A forbidden-phrase list only ever
+    catches the wording somebody already thought of.
+    """
+    from remote_agents.application.session_actions import force_stop_failure
+
+    observed = force_stop_failure(
+        TerminalObservation(SessionId.new(), live=False, preserved=False, detail="ownership_lost")
+    )
+    assert observed is not None
+    rendered = await said(_record(), "ownership_lost")
+
+    assert observed.summary in rendered, (
+        f"{surface_name} ended the session without saying no pane was found: {rendered!r}"
+    )
+    assert "force stopped" not in rendered.casefold(), (
+        f"{surface_name} still claims a kill it did not make: {rendered!r}"
+    )
+
+
+async def test_both_surfaces_name_the_same_cause_for_a_force_that_found_nothing() -> None:
+    """DEC-007, extended to the kill path: one vocabulary, authored once.
+
+    Compared through the shared sentence rather than a marker word, for the reason the graceful
+    sibling gives: a marker each surface could satisfy separately is not agreement.
+    """
+    from remote_agents.application.session_actions import force_stop_failure
+
+    failure = force_stop_failure(
+        TerminalObservation(SessionId.new(), live=False, preserved=False, detail="ownership_lost")
+    )
+    assert failure is not None
+    said = {name: await render(_record(), "ownership_lost") for name, render in FORCE_SURFACES}
+
+    for name, rendered in said.items():
+        assert failure.summary in rendered, (
+            f"{name} did not use the shared vocabulary for ownership_lost; it said {rendered!r}"
+        )
+        assert failure.remedy in rendered, (
+            f"{name} named the cause but not the remedy; it said {rendered!r}"
+        )
+
+
+@pytest.mark.parametrize("surface_name,said", FORCE_SURFACES)
+async def test_a_force_that_killed_the_pane_still_reads_as_a_stop_that_worked(
+    surface_name: str, said
+) -> None:
+    """The other half, and the one a fix for BL-026 could break without noticing.
+
+    Routing force through `stop_failure` — the obvious reuse — would report *every* force as a
+    failure, because that function keys on `preserved` and force never preserves. This is the
+    assertion that catches it: a force that found its pane and killed it must still read as a
+    stop that worked, and must not carry the ownership_lost wording.
+    """
+    rendered = await said(_record(), "")
+
+    assert "This host had no pane left to stop." not in rendered, (
+        f"{surface_name} reported a completed force stop as a failure: {rendered!r}"
+    )
+    assert "ended" in rendered.casefold() or "force stopped" in rendered.casefold(), (
+        f"{surface_name} did not report a completed force stop as one: {rendered!r}"
+    )
+
+
+@pytest.mark.parametrize("surface_name,said", FORCE_SURFACES)
+async def test_the_two_force_outcomes_do_not_read_alike_on_either_surface(
+    surface_name: str, said
+) -> None:
+    """The claim the other three cannot make, and the whole of BL-026.
+
+    The record ends and the row clears on both outcomes, so the *aftermath* is identical — one
+    message for both satisfies every other assertion here perfectly, and was what both surfaces
+    shipped. Compared as whole rendered messages so wording that has converged fails too.
+    """
+    rendered = {detail: await said(_record(), detail) for detail in ("", "ownership_lost")}
+    assert rendered[""] != rendered["ownership_lost"], (
+        f"{surface_name} says the same thing whether or not a pane was found: {rendered['']!r}"
+    )
 
 
 @pytest.mark.parametrize("surface_name,said", SURFACES)

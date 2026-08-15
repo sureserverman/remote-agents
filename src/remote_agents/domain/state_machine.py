@@ -16,6 +16,7 @@ class LifecycleEvent(StrEnum):
     GRACEFUL_STOP_REQUESTED = "graceful_stop_requested"
     PANE_EXITED = "pane_exited"
     GRACEFUL_STOP_TIMED_OUT = "graceful_stop_timed_out"
+    GRACEFUL_STOP_NEVER_SENT = "graceful_stop_never_sent"
     VERIFIED_FORCE_STOP = "verified_force_stop"
     CLEANUP_CONFIRMED = "cleanup_confirmed"
     AMBIGUOUS_TERMINAL_EVIDENCE = "ambiguous_terminal_evidence"
@@ -47,6 +48,11 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     (SessionState.RUNNING, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.STOP_REQUESTED, LifecycleEvent.PANE_EXITED): SessionState.PRESERVED,
     (SessionState.STOP_REQUESTED, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT): SessionState.RUNNING,
+    # Same destination as the timeout above, and deliberately so: nothing was stopped either
+    # way, so the record belongs back in RUNNING. What differs is only what the durable
+    # history says happened, which is the whole of DEC-022 — one of these waited for an exit
+    # sequence that never came, and the other never sent one.
+    (SessionState.STOP_REQUESTED, LifecycleEvent.GRACEFUL_STOP_NEVER_SENT): SessionState.RUNNING,
     (SessionState.STOP_REQUESTED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
     (SessionState.STOP_REQUESTED, LifecycleEvent.CLEANUP_CONFIRMED): SessionState.ENDED,
     (
@@ -62,6 +68,22 @@ _TRANSITIONS: dict[tuple[SessionState, LifecycleEvent], SessionState] = {
     (SessionState.RUNNING, LifecycleEvent.RECONCILED_PANE_DEAD): SessionState.PRESERVED,
     (SessionState.PRESERVED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
     (SessionState.FAILED, LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE): SessionState.ORPHANED,
+    # DEC-020's one way out of ORPHANED, and deliberately the only one. The row clears as the
+    # consequence of an *observed* action, never by dismissing it: a bare retire would assert
+    # an ending nobody saw, and for the adopted case it would hide a live agent rather than
+    # stop it — the failure mode inverted rather than fixed.
+    #
+    # Adding this line removes ORPHANED from TERMINAL_STATES below, which is derived from the
+    # origins present here. Two consequences follow with no line naming ORPHANED: the session
+    # store stops writing a terminal_reason when a record enters ORPHANED, and a record can
+    # now leave it. Both are intended.
+    #
+    # The matrix says nothing about *provenance* — it cannot, because provenance lives on the
+    # record and this table is a pure function of state. So the domain permits this transition
+    # from either kind of ORPHANED, and `application/session_actions.py` is what confines the
+    # offer to the adopted branch. That is the established direction (availability narrows the
+    # domain, never widens it), but it does mean the domain alone is not the guard here.
+    (SessionState.ORPHANED, LifecycleEvent.VERIFIED_FORCE_STOP): SessionState.ENDED,
 }
 
 

@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import (
+    OrphanProvenance,
     ProfileId,
     SessionDisplayIdentity,
     SessionId,
@@ -29,9 +30,23 @@ class ReconciliationResult:
 
 
 def reconcile(
-    records: tuple[SessionRecord, ...], observations: tuple[TerminalObservation, ...]
+    records: tuple[SessionRecord, ...],
+    observations: tuple[TerminalObservation, ...],
+    *,
+    also_known: frozenset[SessionId] = frozenset(),
 ) -> tuple[ReconciliationResult, ...]:
-    """Derive safe states from terminal evidence without terminal mutation."""
+    """Derive safe states from terminal evidence without terminal mutation.
+
+    `also_known` names sessions that exist in the store but are deliberately **not** being
+    reconciled on this pass — today, the ones still inside their settle window. They must
+    still count as known, because "known" here answers "does a row exist for this pane", not
+    "is this pane being reconciled". Conflating the two made every launch look like an
+    unknown pane for the length of the settle window: `_save_trusted_orphan` then tried to
+    INSERT a row whose primary key already existed, the `UNIQUE` constraint raised, and the
+    whole pass aborted — taking the runtime coordinator down with it, since it does not
+    swallow that. Found by the Stage 4 gate's adversarial pass, reproduced against a real
+    store.
+    """
     by_id = {observation.session_id: observation for observation in observations}
     results: list[ReconciliationResult] = []
     for record in records:
@@ -50,9 +65,15 @@ def reconcile(
         elif observation.live:
             state, reason = SessionState.RUNNING, "terminal_live"
         else:
+            # Unreachable from the real adapter, and kept deliberately. `codec.parse_pane`
+            # derives both flags from one validated `pane_dead` field, so `live` and
+            # `preserved` are exact complements and this `else` needs a pane that is neither.
+            # Only a hand-built observation reaches it. Kept because it is the honest
+            # fallthrough for a runtime that learns to report a third condition, and because
+            # deleting it would make the next such runtime silently take the `live` branch.
             state, reason = SessionState.ORPHANED, "ambiguous_terminal"
         results.append(ReconciliationResult(record.session_id, state, reason))
-    known = {record.session_id for record in records}
+    known = {record.session_id for record in records} | set(also_known)
     results.extend(
         ReconciliationResult(observation.session_id, SessionState.ORPHANED, "unknown_session")
         for observation in observations
@@ -83,8 +104,12 @@ class ReconciliationService:
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
     ) -> tuple[ReconciliationResult, ...]:
-        records = tuple(record for record in await self._store.list() if self._has_settled(record))
-        results = reconcile(records, observations)
+        stored = tuple(await self._store.list())
+        records = tuple(record for record in stored if self._has_settled(record))
+        settling = frozenset(record.session_id for record in stored) - {
+            record.session_id for record in records
+        }
+        results = reconcile(records, observations, also_known=settling)
         by_id = {record.session_id: record for record in records}
         for result in results:
             record = by_id.get(result.session_id)
@@ -157,6 +182,9 @@ class ReconciliationService:
                 ),
                 SessionState.ORPHANED,
                 datetime.now(UTC),
+                # Keyword, not positional: provenance is the tenth field and every rebuild
+                # that reached it positionally is exactly how it gets dropped.
+                orphan_provenance=OrphanProvenance.ADOPTED,
             )
         )
 
@@ -178,6 +206,26 @@ def _event_for_reconciliation(
         if record.state in {SessionState.STARTING, SessionState.FAILED}:
             return LifecycleEvent.READY
         if record.state is SessionState.STOP_REQUESTED:
+            # Still a *timeout*, and it must stay one. DEC-022 split `GRACEFUL_STOP_NEVER_SENT`
+            # out of this event for the case where nothing was ever signalled — but that is
+            # `SessionService.graceful_stop` seeing `unknown_session` from the terminal, which
+            # is a different producer from this one. Here the pane is live and the record has
+            # been sitting in STOP_REQUESTED since a stop that was sent: the exit sequence went
+            # out, the wait ran out, and the agent is still there. Two call sites recording two
+            # events for what reads like one failure is exactly the shape that invites a
+            # "consistency" fix, so the difference is written here rather than left to be
+            # inferred.
+            #
+            # **Not exhaustive, and the gap is worth knowing rather than papering over.**
+            # `graceful_stop` writes GRACEFUL_STOP_REQUESTED — which persists STOP_REQUESTED —
+            # *before* it calls the terminal, so a process that dies in that window leaves a
+            # durable STOP_REQUESTED behind a stop that never left the host. The next pass sees
+            # a live pane and lands here, recording a timeout for it. That is the same
+            # over-claim DEC-022 removed from the other producer, surviving in a narrower
+            # crash-recovery case this branch cannot tell apart: the record stores the event,
+            # not the observation, so nothing here can distinguish it. Named because it is
+            # exactly the reasoning a reader needs, and it is *not* an argument for merging the
+            # two events — that would give the ordinary case the wrong name to fix the rare one.
             return LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
     if result.reason == "pane_dead" and record.state is SessionState.RUNNING:
         return LifecycleEvent.RECONCILED_PANE_DEAD
@@ -196,7 +244,23 @@ def _event_for_reconciliation(
 
 
 class SessionLocks:
-    """Per-session asyncio locks serializing concurrent destructive mutations."""
+    """The asyncio locks `SessionService` takes around the mutations it issues.
+
+    Every mutation it issues, not only the ones that end a session: the previous wording said
+    "destructive mutations", which read as though a graceful stop were outside the lock, and it
+    is not. But the set is bounded by the **caller** rather than by the kind of change, and
+    saying "every state-changing mutation" would assert a guarantee this class does not give.
+    `ReconciliationService` above is the counter-example, and it is not a hypothetical one: it
+    is constructed with a store and a readiness check and no locks at all (`bootstrap.py`), runs
+    on a timer beside the service (`_reconcile_periodically`), and writes `record_event`
+    directly, so a reconciliation pass racing an owner's stop on the same session is not
+    serialized by anything here.
+
+    Which lock covers what also differs, because a session id is not always in hand yet:
+    `launch` and `resume` take `operation()` alone — the record does not exist to key on — and
+    `resume` adds `for_conversation`. `for_session` covers the mutations of a record that is
+    already stored.
+    """
 
     def __init__(self) -> None:
         self._locks: dict[SessionId, asyncio.Lock] = {}

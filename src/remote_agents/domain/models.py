@@ -54,6 +54,23 @@ class SessionState(StrEnum):
     ORPHANED = "orphaned"
 
 
+class OrphanProvenance(StrEnum):
+    """Which producer put a record into ORPHANED, because the two get different actions.
+
+    ORPHANED conflates two situations that reconciliation can already tell apart and then
+    forgets (DEC-020). `ADOPTED` is a trusted managed pane found with **no record at all**
+    and taken into the register — frequently a live agent the database lost, and the case
+    that justifies offering a force stop. `AMBIGUOUS` is a record whose pane was found but
+    was neither live nor preserved, where the evidence supports no action at all.
+
+    Only the *policy* meaning belongs here; which rows may be acted on is
+    `session_actions.py`'s to say.
+    """
+
+    ADOPTED = "adopted"
+    AMBIGUOUS = "ambiguous"
+
+
 @dataclass(frozen=True, slots=True)
 class SessionId:
     """Opaque immutable session key, backed by a UUID."""
@@ -168,6 +185,36 @@ class SessionRecord:
 
     Without it a session killed out from under the service is indistinguishable from one
     the owner stopped deliberately, because both simply read ENDED.
+    """
+    orphan_provenance: OrphanProvenance | None = None
+    """Which producer put this record into ORPHANED, or `None` if none did.
+
+    `None` has three causes, and they are worth keeping straight because all three take the
+    same conservative branch and only one of them is ordinary:
+
+    1. **This record has never been ORPHANED** — the ordinary case. Both producers stamp:
+       `reconcile._save_trusted_orphan` writes `ADOPTED` when it creates a record, and
+       `record_event` writes `AMBIGUOUS` when a transition lands an existing record there.
+    2. **The row predates migration 6.** Deliberate, and the subject of the next paragraph.
+    3. **The stored value was not one this build recognizes** — a hand-edited row, or one
+       written by a newer build and read back after a downgrade. `_provenance_from_row` logs
+       it and falls to `None` rather than raising, because raising would cost the caller
+       every *other* session on the page.
+
+    Cause 3 is the one an earlier version of this docstring denied, claiming `None` meant
+    exactly one thing. The conservative fallback that creates it was added to this same file's
+    sibling in the same commit, and `tests/integration/sqlite/test_orphan_provenance.py`
+    demonstrates it against a genuinely ORPHANED post-migration record.
+
+    A row that predates migration 6 also reads `None`, and that is the one genuine ambiguity.
+    It is deliberate: provenance cannot be back-derived, because once a pane is adopted a
+    record exists and reconciliation matches it by id from then on, never seeing an unknown
+    pane again (DEC-020). Such a row takes the conservative branch rather than gaining a
+    destructive action on the strength of a guess.
+
+    It outlives ORPHANED. DEC-020 gives the state one way out, so a force-stopped adopted
+    record reaches ENDED still carrying `ADOPTED` — which is what lets the audit trail answer
+    *what was killed*, rather than only that something was.
     """
 
     def __post_init__(self) -> None:

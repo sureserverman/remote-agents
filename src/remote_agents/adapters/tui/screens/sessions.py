@@ -283,7 +283,7 @@ class SessionsScreen(ChoiceScreen):
             return
         # Restore by row *key*, not by index. A session that ended between two ticks shortens
         # the list above the cursor, so the index the owner was on now names a different
-        # session — and this list's rows are the handles on destructive actions one screen
+        # session — and this list's rows are the handles on the stop actions one screen
         # deeper. A key that has gone falls back to row 0, which is the same non-mutating
         # resting position every other fill uses (DEC-007).
         choices = self.query_one("#choices", OptionList)
@@ -377,7 +377,9 @@ class SessionDetailScreen(ChoiceScreen):
         # exactly the split the breadcrumb exists to take.
         self._display = record.display.rendered
         self.show_breadcrumb()
-        self.set_status(f"State: {record.state.value}. {explain_state(record.state)}")
+        self.set_status(
+            f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
+        )
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
@@ -404,9 +406,14 @@ class SessionDetailScreen(ChoiceScreen):
     ) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
-        The stop entries are exactly `available_actions(record.state)` in the order it
-        returns them, which puts the destructive one last. Adding, filtering, or reordering
+        The stop entries are exactly `available_actions(record.state, record.orphan_provenance)`
+        in the order it returns them, which puts force last. Adding, filtering, or reordering
         here is what `tests/contract/test_session_actions_parity.py` exists to catch.
+
+        Provenance is passed rather than dropped because an ORPHANED record's rows depend on
+        it (DEC-020), and a surface that passed only the state would silently render the
+        conservative set — a divergence the parity contract cannot see if the other surface
+        does the same thing.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.capture is not None:
@@ -427,7 +434,8 @@ class SessionDetailScreen(ChoiceScreen):
             # the feature landed.
             entries.extend((key, label) for key, label, _state in _REMOTE_CONTROL_ROWS)
         entries.extend(
-            (action, ACTION_LABELS[action]) for action in available_actions(record.state)
+            (action, ACTION_LABELS[action])
+            for action in available_actions(record.state, record.orphan_provenance)
         )
         entries.append((_BACK, "Back"))
         return tuple(entries)
@@ -457,8 +465,8 @@ class SessionDetailScreen(ChoiceScreen):
         """Answer the folder-trust question, re-reading the record and the pane first.
 
         Not modal-confirmed, and that is a judgment worth writing down rather than an
-        omission. DEC-008's confirmations guard *destructive* actions -- force stop, Remote
-        Control -- and this one destroys nothing: it answers a question the agent is already
+        omission. The two actions DEC-008 puts a confirmation in front of are force stop and
+        Remote Control, and this one destroys nothing: it answers a question the agent is already
         asking, with the answer the owner would have to give at the keyboard for the session
         to be usable at all. A confirmation here would ask "are you sure you want to unblock
         the thing you launched".
@@ -514,14 +522,14 @@ class SessionDetailScreen(ChoiceScreen):
             if record is None:
                 await self.refuse()
                 return
-            if FORCE not in available_actions(record.state):
+            if FORCE not in available_actions(record.state, record.orphan_provenance):
                 # Asked before the question rather than only after the answer. `stop` re-checks
                 # regardless — that is DEC-007's fourth mitigation and it is what makes this
                 # safe rather than necessary — but a surface that opens a kill confirmation it
                 # already knows it will refuse is asking the owner to authorise nothing.
                 await self.refuse(
                     f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             if not self.showing:
@@ -570,7 +578,7 @@ class SessionDetailScreen(ChoiceScreen):
             if not remote_control_available(record):
                 await self.refuse(
                     "Remote Control is not available for this session. "
-                    f"{explain_state(record.state)}"
+                    f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             if not self.showing:
@@ -606,10 +614,14 @@ class SessionDetailScreen(ChoiceScreen):
                 self.tui.report_store_failure(error, self)
                 return
         if command is None:
+            # "no pane left", not "not live": a preserved pane attaches read-only now
+            # (DEC-021), so liveness stopped being what this refusal turns on. Saying it still
+            # did would send an owner looking for a way to revive a session whose output is
+            # sitting right there.
             self.announce(
-                "Attach is not available: this session's pane is not live, or the pane "
-                f"found for it belongs to a different project or agent. "
-                f"{explain_state(record.state)}",
+                "Attach is not available: this session has no pane on this host any more, or "
+                f"the pane found for it belongs to a different project or agent. "
+                f"{explain_state(record.state, record.orphan_provenance)}",
                 severity="warning",
             )
             return

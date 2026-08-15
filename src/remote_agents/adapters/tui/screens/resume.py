@@ -34,7 +34,7 @@ from remote_agents.adapters.tui.model import (
     conversation_row,
 )
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
-from remote_agents.application.conversations import ConversationCatalogueQuery
+from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -129,10 +129,11 @@ class ResumeProjectsScreen(ChoiceScreen):
                 if capability.catalogue_available and capability.selected_resume_available
             )
             # Inside the guard, not after it. `push_screen` yields while the new screen
-            # mounts, so clearing first leaves a window in which a second global binding
-            # pops the screen being mounted and the fetched capabilities are discarded with
-            # no error — the same "a second entry point mid-navigation" class the guard
-            # exists for, just failing silently instead of stranding.
+            # mounts, so clearing first leaves a window in which a second of this app's
+            # bindings pops the screen being mounted and the fetched capabilities are
+            # discarded with no error — the same "a second entry point mid-navigation" class
+            # the guard exists for, just failing silently instead of stranding. What the
+            # guard does *not* cover is written down once, on `ChoiceScreen.advance_to`.
             await self.advance_to(ResumeProfilesScreen(project, capable))
 
 
@@ -290,11 +291,32 @@ class ResumeConversationsScreen(ChoiceScreen):
             )
             self.show_choices(((_BACK, "Back"),))
             return
-        if not page.conversations:
+        # Filtered by the shared policy, which this surface did not consult at all until the
+        # rule was centralized here — it rendered whatever the catalogue returned. The bot had
+        # the rule twice and this had it nowhere, and nothing had gone wrong only because
+        # `ConversationState` has
+        # one member. `resume_available` is now the single authority, beside
+        # `ConversationService` as `remote_control_available` sits beside `available_actions`.
+        #
+        # **Filtered before the empty check, not after it**, and the ordering is the whole of
+        # the fix the Stage 3 gate asked for. The check below used to read
+        # `page.conversations` — the *unfiltered* page — so a page whose rows were all refused
+        # fell through to the choose-a-conversation branch, where `entries` picks up a `Back`
+        # row and can therefore never be empty. `show_choices` substitutes `empty_state` only
+        # when the whole tuple is empty, so it never fired either: the owner got "Choose a
+        # conversation. Page 1 of 1." above no conversations at all. The bot filters first and
+        # then asks `if not buttons:`, so this was also the one place the two surfaces would
+        # have disagreed — in the task whose subject is making them agree.
+        offered = [
+            (str(item.reference), conversation_row(item))
+            for item in page.conversations
+            if resume_available(item)
+        ]
+        if not offered:
             self.set_status("There are no saved conversations for that agent and project.")
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
-        entries = [(str(item.reference), conversation_row(item)) for item in page.conversations]
+        entries = list(offered)
         if page.page > 1:
             entries.append((_PREVIOUS, "Previous page"))
         if page.page < page.page_count:
@@ -313,22 +335,38 @@ class ResumeConversationsScreen(ChoiceScreen):
         if key in {_NEXT, _PREVIOUS}:
             await self.turn_page(1 if key == _NEXT else -1)
             return
-        try:
-            # The reference is only ever one this surface rendered from a server-issued
-            # page; constructing it here re-validates its opaque shape, and resolution is
-            # server-side, so a forged or stale value resolves to nothing rather than a path.
-            resolved = await conversations.resolve_for_resume(ConversationReference(key))
-        except ValueError:
-            self.announce("That conversation selection is not valid.", severity="warning")
-            return
-        except Exception as error:
-            _LOG.exception("conversation resolve failed")
-            self.announce(f"That conversation could not be resolved: {error}")
-            return
-        if resolved is None:
-            self.announce("That conversation is no longer available.", severity="warning")
-            return
-        await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
+        # Guarded across the resolve *and* the push, matching `:113` and `:232` — the two
+        # siblings of this fetch — for the reason given there. This one was the exception
+        # (DEC-024), and nothing chose it: the flow was hand-rolled with the other two
+        # guarded, and this fetch was extracted afterwards without inheriting it. The cost is
+        # real and accepted: a second entry point does nothing for the duration of one more
+        # await. `turn_page` below takes the guard for itself and releases before
+        # `render_page`, which is deliberate and stays that way — it redraws this position
+        # rather than pushing another.
+        async with self.holding_the_guard():
+            try:
+                # The reference is only ever one this surface rendered from a server-issued
+                # page; constructing it here re-validates its opaque shape, and resolution is
+                # server-side, so a forged or stale value resolves to nothing rather than a
+                # path.
+                resolved = await conversations.resolve_for_resume(ConversationReference(key))
+            except ValueError:
+                self.announce("That conversation selection is not valid.", severity="warning")
+                return
+            except Exception as error:
+                _LOG.exception("conversation resolve failed")
+                self.announce(f"That conversation could not be resolved: {error}")
+                return
+            if resolved is None:
+                self.announce("That conversation is no longer available.", severity="warning")
+                return
+            # Inside the guard, not after it, for the reason `ResumeProjectsScreen.choose`
+            # gives: `push_screen` yields while the new screen mounts, so releasing first
+            # leaves a window in which one of this app's bindings pops the screen being
+            # mounted and the resolved conversation is discarded with no error at all.
+            # `ChoiceScreen.advance_to` records what this narrows and what it does not —
+            # Textual's own `ctrl+p` is a priority binding and gets through regardless.
+            await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
 
     async def turn_page(self, step: int) -> None:
         wanted = max(1, min(self.page.page + step, self.page.page_count))
@@ -381,6 +419,25 @@ class ResumeConfirmScreen(ChoiceScreen):
 
     async def choose(self, key: str) -> None:
         if key != "resume-confirm":
+            await self.tui.go_back()
+            return
+        # Re-asked at the act rather than trusted from the row that got the owner here. What it
+        # catches is a `resolve_for_resume` that disagrees with the `catalogue` listing — the
+        # two are independent reads of the provider, and only the first was ever filtered.
+        #
+        # **It does not catch staleness while the owner deliberates on this screen**, and an
+        # earlier version of this comment claimed it did, by analogy to `RemoteAgentsTui.stop`.
+        # That analogy is wrong: `stop` genuinely re-reads the record (`current_record`), while
+        # `self.resolved` is a frozen snapshot taken when this screen was pushed, so a pure
+        # function of it cannot see anything move. Covering that window would mean re-resolving
+        # here, which is DEC-024's shape one hop further and is not what centralizing the
+        # rule was for.
+        #
+        # The same claim also said the bot had always had this check. It had not — it checked
+        # while *rendering* the review screen and then resumed unchecked, which the Stage 3
+        # gate's adversarial pass found and which is now fixed in `_resume_reply`.
+        if not resume_available(self.resolved.summary):
+            self.announce("That conversation can no longer be resumed.", severity="warning")
             await self.tui.go_back()
             return
         await self.tui.issue_resume(self, self.project, self.profile, self.resolved)

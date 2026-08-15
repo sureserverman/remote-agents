@@ -11,11 +11,14 @@ from uuid import uuid4
 
 import pytest
 
+from remote_agents.adapters.sqlite import database as database_module
 from remote_agents.adapters.sqlite.database import (
+    backup_path,
     database_is_ready,
     open_database,
     restore_database,
 )
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS, current_version
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
@@ -200,3 +203,46 @@ class CountingTerminal:
 
     async def force_stop(self, session_id: SessionId) -> TerminalObservation:
         raise AssertionError("not used")
+
+
+def test_restore_refuses_to_roll_a_database_back_over_a_newer_schema(tmp_path, monkeypatch) -> None:
+    """The documented recovery procedure used to destroy data on a rollback.
+
+    `database_is_ready` means "at the newest schema *this binary* knows", so an **older**
+    build reads a migrated database as unready. `doctor` then reports it unready,
+    `docs/database-recovery.md` says the restore command refuses to overwrite a healthy
+    database and hands over the invocation, and the restore moved the newer database aside
+    as `.corrupt` and reinstated the pre-migration snapshot — losing every session recorded
+    since the upgrade, on a command documented as safe.
+
+    The setup is the real production sequence rather than a contrivance: `open_database`
+    snapshots to `.bak` before applying a migration, so upgrading leaves a previous-schema
+    backup beside a current-schema database exactly as staged here. The rolled-back build is
+    simulated by truncating the migration list the module reads, which is precisely what
+    distinguishes the two builds — the stored version is read from the database either way.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    open_database(path, migrations=MIGRATIONS[:-1]).close()
+    open_database(path).close()
+
+    newest, previous = MIGRATIONS[-1][0], MIGRATIONS[-2][0]
+    assert current_version(sqlite3.connect(path)) == newest
+    assert current_version(sqlite3.connect(backup_path(path))) == previous, (
+        "the upgrade should have snapshotted the pre-migration schema"
+    )
+
+    # The rolled-back build knows one migration fewer, so it calls the live database unready
+    # while the older snapshot beside it looks perfectly healthy.
+    monkeypatch.setattr(database_module, "MIGRATIONS", MIGRATIONS[:-1])
+
+    assert database_is_ready(path) is False, "the premise: the old build calls this unhealthy"
+    assert database_is_ready(backup_path(path)) is True, "and calls the stale snapshot healthy"
+
+    with pytest.raises(ValueError, match="newer schema"):
+        restore_database(path)
+
+    monkeypatch.undo()
+    assert current_version(sqlite3.connect(path)) == newest, "the live database is untouched"
+    assert not path.with_suffix(".sqlite3.corrupt").exists(), (
+        "nothing may be moved aside when the restore was refused"
+    )

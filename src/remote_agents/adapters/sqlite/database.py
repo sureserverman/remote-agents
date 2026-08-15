@@ -47,12 +47,36 @@ def backup_path(path: Path) -> Path:
 
 
 def restore_database(path: Path, backup: Path | None = None) -> None:
-    """Atomically restore a verified backup after preserving unreadable database evidence."""
+    """Atomically restore a verified backup after preserving unreadable database evidence.
+
+    **Refuses to restore backwards over a newer schema.** `database_is_ready` means "at the
+    newest schema *this binary* knows", not "healthy" — so a database migrated by a newer
+    build reads as not-ready to an older one. Without the version check below, the sequence
+    an operator is actually told to follow destroyed data: `doctor` reports the healthy
+    newer database as unready, `docs/database-recovery.md` says the restore command "refuses
+    to overwrite a healthy database" and gives the invocation, and the restore then moved the
+    newer database aside as `.corrupt` and reinstated the pre-migration snapshot. Every
+    session recorded since the upgrade disappeared, on a command documented as safe.
+
+    Found by the Stage 4 gate's adversarial pass and reproduced end to end. The mechanism is
+    generic rather than new — it has been reachable since the first migration — but this
+    stage added migration 6 and hardened one column read against exactly the downgrade case
+    while leaving the file-level path that eats the whole database.
+
+    The refusal is deliberately narrow: it fires only when the live database is *ahead* of
+    the backup, which is never a restore anyone wants and is always recoverable by running
+    the newer build again.
+    """
     source = backup_path(path) if backup is None else backup
     if not database_is_ready(source):
         raise ValueError("database backup is not a readable current schema")
     if path.exists() and database_is_ready(path):
         raise ValueError("refusing to replace a healthy database")
+    if path.exists() and _schema_version(path) > _schema_version(source):
+        raise ValueError(
+            "refusing to replace a database at a newer schema than the backup: run the "
+            "build that created it, rather than restoring over it"
+        )
     if path.exists():
         _preserve_corrupt_database(path)
     source_connection = _read_only_connection(source)
@@ -88,6 +112,26 @@ def _preserve_corrupt_database(path: Path) -> None:
 
 def _read_only_connection(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+
+
+def _schema_version(path: Path) -> int:
+    """Read a database's recorded schema version, or -1 if it cannot be read at all.
+
+    Separate from `database_is_ready` because the two ask different questions: that one asks
+    "is this the schema I know", this one asks "which schema is it". An unreadable file
+    answers -1 so a caller comparing versions treats it as older than anything, which is the
+    direction that keeps the refusals above conservative.
+    """
+    if not path.is_file():
+        return -1
+    try:
+        connection = _read_only_connection(path)
+        try:
+            return current_version(connection)
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error, TypeError):
+        return -1
 
 
 def database_is_ready(path: Path) -> bool:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -15,8 +16,19 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
-from remote_agents.application.errors import DuplicateCommandError, SessionNotFoundError
+from remote_agents.application.errors import (
+    DuplicateCommandError,
+    SessionNotFoundError,
+    StopNotPermittedError,
+)
 from remote_agents.application.reconcile import SessionLocks
+from remote_agents.application.session_actions import (
+    CLEANUP,
+    FORCE,
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    available_actions,
+)
 from remote_agents.domain.models import (
     ProfileId,
     SessionDisplayIdentity,
@@ -29,6 +41,19 @@ from remote_agents.domain.state_machine import LifecycleEvent, transition
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.session_store import ProjectUsage, SessionStore
 from remote_agents.ports.terminal import TerminalObservation, TerminalPort
+
+_LOG = logging.getLogger(__name__)
+
+#: What each non-preserving graceful stop is recorded as in the durable history (DEC-022).
+#: Enumerated rather than "`unknown_session`, else a timeout", because the two are different
+#: claims about the same field and an `else` makes the weaker one a silent default. The
+#: exhaustiveness of this mapping rests on `TmuxRuntime.graceful_stop` emitting exactly these
+#: two details, which is a fact living in another file with nothing tying them together — so a
+#: third detail must land somewhere that says so rather than somewhere that guesses.
+_STOP_EVENTS: dict[str, LifecycleEvent] = {
+    UNKNOWN_SESSION: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
+    GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
+}
 
 
 class SessionService:
@@ -158,12 +183,19 @@ class SessionService:
         return await self._terminal.inspect(query.session_id)
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
-        """Return a copyable command only after current record and terminal ownership agree."""
+        """Return a copyable command only after current record and terminal ownership agree.
+
+        A **preserved** pane qualifies alongside a live one (DEC-021), and it is the terminal
+        that decides which command that earns — read-only for preserved. This layer's job is
+        unchanged and is the half that matters here: the ownership check. A pane whose project
+        or profile disagrees with the record is refused whether it is live or preserved, so
+        widening liveness does not widen *whose* pane may be handed over.
+        """
         record = await self._require_session(session_id)
         observation = await self._terminal.inspect(session_id)
         if (
             observation is None
-            or not observation.live
+            or not (observation.live or observation.preserved)
             or observation.project_id != record.project_id
             or observation.profile_id != record.profile_id
         ):
@@ -233,9 +265,32 @@ class SessionService:
             )
             observation = await self._terminal.graceful_stop(command.session_id, command.profile_id)
             if not observation.preserved:
-                await self._store.record_event(
-                    command.session_id, LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
-                )
+                # Two causes, two events (DEC-022). `unknown_session` means the terminal never
+                # matched the session to a live pane it owns, so no exit sequence left this
+                # host and nothing was waited for; recording a timeout for it made the durable
+                # history assert something that did not happen.
+                #
+                # A detail neither branch knows falls back to the timeout — which is what this
+                # method recorded for every cause before DEC-022, so the fallback introduces no
+                # claim that was not already being made — but it says so out loud.
+                #
+                # **`stop_failure` resolves the same unknown the other way, and the difference
+                # is not an inconsistency.** There, the choice is between "a failure" and "a
+                # success", and an unknown plainly belongs on the failure side. Here both
+                # answers are equally specific *claims* about what happened — one asserts a
+                # wait, the other asserts that nothing left the host — so there is no
+                # conservative side to fall to, and picking either silently would be inventing
+                # evidence. Hence the warning: the fallback keeps the pre-DEC-022 behaviour and
+                # the log is what makes a new cause somebody's problem instead of nobody's.
+                event = _STOP_EVENTS.get(observation.detail)
+                if event is None:
+                    _LOG.warning(
+                        "graceful stop reported %r, which is not a cause this records an event "
+                        "for; logging it as a timeout, which may overstate what happened",
+                        observation.detail,
+                    )
+                    event = LifecycleEvent.GRACEFUL_STOP_TIMED_OUT
+                await self._store.record_event(command.session_id, event)
                 return observation
             await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
             await self._terminal.cleanup(command.session_id)
@@ -243,15 +298,74 @@ class SessionService:
             return observation
 
     async def cleanup(self, command: CleanupCommand) -> None:
+        """Discard a preserved pane, refusing any state the policy does not offer it from.
+
+        The policy check is not redundant with the `transition` below, and the gap it covers
+        long predates DEC-020: `CLEANUP_CONFIRMED` is domain-legal from RUNNING and
+        STOP_REQUESTED, while `available_actions` offers cleanup **only** from PRESERVED. So
+        for two states the matrix would happily walk a live session to ENDED and ask the
+        terminal to kill its tmux session, on an action no surface offers and no confirmation
+        guards. Both surfaces gate on `available_actions` before calling, so this was not
+        reachable by an owner — it was simply undefended at the layer that owns the action.
+
+        Found by the Stage 4 gate's adversarial pass, which noticed that the sibling guard in
+        `force_stop` had been justified by the claim that no such gap existed.
+        """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
+            if CLEANUP not in available_actions(record.state, record.orphan_provenance):
+                raise StopNotPermittedError(
+                    f"cleanup is not offered for a session in {record.state.value}: it "
+                    "discards a preserved pane, and there is none to discard here"
+                )
             transition(record.state, LifecycleEvent.CLEANUP_CONFIRMED)
             await self._terminal.cleanup(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
 
     async def force_stop(self, command: ForceStopCommand) -> TerminalObservation:
+        """End the session, and hand back what the terminal actually observed.
+
+        **`VERIFIED_FORCE_STOP` is written whether or not a kill happened, and the event name
+        overstates the one case where it did not.** When no managed pane matches, the terminal
+        reports `ownership_lost` and kills nothing — and this still records the event, so the
+        record reaches ENDED and the row clears. That is DEC-017, chosen deliberately: a row
+        the owner cannot clear is a worse failure than an over-confident message, and failing
+        closed would strand the destroyed-outside-the-app case with no way to retire it.
+
+        DEC-017's accepted cost 1 is exactly this line. The durable history cannot distinguish
+        a kill that happened from one that did not; only the **returned observation** carries
+        that, which is why this method returns it rather than `None`, and why both surfaces
+        read it through `session_actions.force_stop_failure`. Anyone reconstructing
+        what happened from `session_events` alone will over-read this event, and there is no
+        fix for that short of reopening the decision.
+
+        Stated here because this is where a reader chasing the audit log lands. The sibling
+        `graceful_stop` above splits its two causes into two events (DEC-022) — a contrast that
+        otherwise invites the inference that force has only one cause. It has two; they are
+        just not distinguishable *here*.
+        """
         async with self._locks.operation(), self._locks.for_session(command.session_id):
             record = await self._require_session(command.session_id)
+            # Defence in depth for the one refusal the matrix below cannot make. Availability
+            # has always narrowed the domain on `SessionState` alone, so until DEC-020 every
+            # stop the policy refused the domain refused too and this line would have been
+            # dead. DEC-020 branches on a *record field*, and `transition` is a pure function
+            # of state — so from here on the policy is the only thing standing between a
+            # caller and a kill on a muddled-evidence ORPHANED record. That is a guard worth
+            # having at the layer that owns the destructive action, not only at the two
+            # surfaces that happen to call it.
+            #
+            # Asked through `available_actions` rather than restated: one authority on what
+            # may be stopped (DEC-001), so this cannot drift away from what the surfaces
+            # render. Scoped to ORPHANED so every other state keeps failing exactly as it
+            # did, through the matrix, with the exception its callers already expect.
+            if record.state is SessionState.ORPHANED and FORCE not in available_actions(
+                record.state, record.orphan_provenance
+            ):
+                raise StopNotPermittedError(
+                    "a force stop is not offered for this session: its pane evidence was "
+                    "ambiguous, so nothing here identifies what would be killed"
+                )
             transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)
             observation = await self._terminal.force_stop(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.VERIFIED_FORCE_STOP)
