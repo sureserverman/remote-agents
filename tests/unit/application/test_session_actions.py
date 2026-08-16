@@ -16,6 +16,7 @@ from remote_agents.application.session_actions import (
     StopFailure,
     available_actions,
     force_stop_failure,
+    notifiable,
     stop_failure,
 )
 from remote_agents.domain.models import OrphanProvenance, SessionState
@@ -319,3 +320,48 @@ def test_the_fallback_does_not_stutter_when_a_surface_prefixes_it() -> None:
     failure = stop_failure(_Observation(preserved=False, detail="something_new"))
     assert failure is not None
     assert "did not take effect" not in failure.summary
+
+
+# `notifiable` — which sessions an unprompted notification can still be news about ---------
+
+
+@pytest.mark.parametrize("state", list(SessionState))
+def test_notifiable_answers_for_every_state_and_only_a_working_one_is_news(
+    state: SessionState,
+) -> None:
+    """The predicate is total, and exactly the two working states answer True.
+
+    Parametrized over the enum rather than over a hand-written list of states, for the reason
+    `EXPECTED` is: a state added later must fail here until somebody decides what a
+    notification about it would claim, instead of silently inheriting a `False` nobody chose.
+
+    STARTING is in the True half deliberately and is the half an edit is likeliest to lose —
+    it looks like the not-working-yet state, and dropping it would discard a real agent's
+    first report whenever its hook beats reconciliation to the record.
+    """
+    expected = state in {SessionState.STARTING, SessionState.RUNNING}
+
+    assert notifiable(state) is expected
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        SessionState.STOP_REQUESTED,
+        SessionState.PRESERVED,
+        SessionState.FAILED,
+        SessionState.ENDED,
+        SessionState.ORPHANED,
+    ],
+)
+def test_a_session_the_owner_has_already_dealt_with_is_never_notified_about(
+    state: SessionState,
+) -> None:
+    """The complaint that produced the predicate, pinned as its own assertion.
+
+    Each of these is a session whose stopping the owner either did themselves or has already
+    watched, so a notification announcing it tells them their own action back. Named
+    separately from the total test above so a regression here reads as the product defect it
+    is rather than as a table that stopped matching.
+    """
+    assert notifiable(state) is False

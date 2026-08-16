@@ -93,27 +93,38 @@ def test_an_agent_saying_it_needs_input_needs_an_answer(tmp_path: Path) -> None:
     assert activity.confidence is ActivityConfidence.REPORTED
 
 
-def test_an_idle_timer_needs_an_answer_but_only_as_a_guess(tmp_path: Path) -> None:
-    """`idle_prompt` is a 60-second timer with recorded false positives and false negatives.
+def test_an_idle_timer_is_dropped_rather_than_reported_as_a_need_for_an_answer(
+    tmp_path: Path,
+) -> None:
+    """A sixty-second timer with recorded false positives is not an observation worth sending.
 
-    It is still worth reporting, but never as the same claim as an agent that actually said
-    it was waiting, so it carries a confidence the presentation layer can weaken its wording
-    from rather than being flattened into the reported kinds.
+    It was carried for a while as an inferred `needs_answer`, on the argument that a weakened
+    sentence makes a weak signal safe to send. It does not: a hedge changes how a message reads,
+    not whether it was worth waking the owner for, and this one fires on an agent that is merely
+    thinking. The two reported notifications say the same thing when it is actually true.
+
+    Dropped means dropped the way every unmapped event is -- read, deleted, and returned as
+    nothing -- rather than left on disk to be reconsidered on every later pass.
     """
     _spool(tmp_path, event="Notification", reason="idle_prompt")
 
-    (activity,) = drain_activity(tmp_path)
-
-    assert activity.kind is ActivityKind.NEEDS_ANSWER
-    assert activity.confidence is ActivityConfidence.INFERRED
+    assert drain_activity(tmp_path) == ()
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_a_session_that_ended_is_ended(tmp_path: Path) -> None:
+def test_a_session_that_merely_ended_is_dropped_because_it_tells_the_owner_nothing(
+    tmp_path: Path,
+) -> None:
+    """`SessionEnd` fires on the stop the owner just pressed, so it confirms their own action.
+
+    Every notification this service sends is unprompted, which is the whole reason the bar is
+    "worth acting on" rather than "true". An ending has nothing to act on: either the owner
+    ended it, and they know, or the session is gone and the listing already says so.
+    """
     _spool(tmp_path, event="SessionEnd", reason="logout")
 
-    (activity,) = drain_activity(tmp_path)
-
-    assert activity.kind is ActivityKind.ENDED
+    assert drain_activity(tmp_path) == ()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_an_event_this_service_does_not_map_is_dropped_rather_than_guessed(

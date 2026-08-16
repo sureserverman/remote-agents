@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1265,18 +1266,28 @@ class _NotifyBot:
         self.markups.append(kwargs)
 
 
-def _spool(directory, session_id: str, *, event: str = "Stop", stamp: str = "000001") -> None:
+def _spool(
+    directory,
+    session_id: str,
+    *,
+    event: str = "Stop",
+    stamp: str = "000001",
+    reason: str | None = None,
+) -> None:
     directory.mkdir(parents=True, exist_ok=True)
+    record: dict[str, object] = {
+        "session_id": session_id,
+        "event": event,
+        "observed_at": "2026-08-11T14:05:00+00:00",
+        "detail": "Ran the suite.",
+    }
+    # `StopFailure` and `Notification` discriminate on a field of their own, so a test that
+    # wants a second *kind* has to be able to set it. Omitted rather than defaulted, because a
+    # record carrying a reason the event does not use is not one the hook would ever write.
+    if reason is not None:
+        record["reason"] = reason
     (directory / f"{session_id}-20260811T140500{stamp}Z.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "event": event,
-                "observed_at": "2026-08-11T14:05:00+00:00",
-                "detail": "Ran the suite.",
-            }
-        ),
-        encoding="utf-8",
+        json.dumps(record), encoding="utf-8"
     )
 
 
@@ -1293,7 +1304,7 @@ def _running(label: str = "one") -> SessionRecord:
     return _record(SessionState.RUNNING, label, ProjectId("p" * 24))
 
 
-async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file(
+async def test_a_spooled_activity_is_delivered_once_and_leaves_no_file(
     tmp_path,
 ) -> None:
     """The spool is drained by delivery, not merely read by it.
@@ -1301,6 +1312,10 @@ async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file
     Exactly-once here is a property of two things agreeing: the drain deletes what it returns,
     and the notifier sends what the drain returned. A pass that sent without draining would
     repeat the same message every poll for as long as the file sat there.
+
+    Named for the *activity* rather than the message since delivery became grouped: one record
+    still reaches the owner once, but a second record from the same session in the same pass
+    now rides in the same message rather than a second one, which the old name asserted.
     """
     record = _running()
     boundary, bot = _notified(record)
@@ -1362,7 +1377,7 @@ async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path
     await _watch_quiet_once(composition)
 
     assert len(bot.sends) == 1
-    _spool(spool, session_id, event="SessionEnd", stamp="000009")
+    _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000009")
     await _watch_quiet_once(composition)
     assert len(bot.sends) == 2, "a different kind was suppressed by another kind's rate limit"
 
@@ -1387,14 +1402,34 @@ async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_p
     assert record.display.rendered in str(bot.sends[0]["text"])
 
 
-async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> None:
-    """The sessions list hides an ENDED record, and `SessionEnd` is precisely the event whose
-    record is ENDED by the time it is delivered. Resolving the name through the list would
-    have dropped every one of them."""
-    record = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+@pytest.mark.parametrize(
+    "state",
+    [
+        SessionState.ENDED,
+        SessionState.STOP_REQUESTED,
+        SessionState.PRESERVED,
+        SessionState.FAILED,
+    ],
+)
+async def test_a_session_the_owner_has_already_dealt_with_is_not_notified_about(
+    tmp_path, state: SessionState
+) -> None:
+    """The inverse of what this test asserted before, and the inversion is the point.
+
+    It used to prove that an ENDED record was *still named* by its notification, because
+    `SessionEnd` was precisely the kind whose record had ENDED by delivery time and resolving
+    the name through the sessions list would have dropped every one of them. That kind is
+    retired, and with it the only reason to speak about a session the owner has finished with:
+    a `Stop` arriving for a session they already stopped reports their own action back.
+
+    Parametrized over the states rather than pinned to ENDED, because the defect is about the
+    whole not-working half of the lifecycle and a check naming one member of it could pass
+    while the other three still notified.
+    """
+    record = _record(state, "finished", ProjectId("q" * 24))
     boundary, bot = _notified(record)
     spool = tmp_path / "activity"
-    _spool(spool, str(record.session_id), event="SessionEnd")
+    _spool(spool, str(record.session_id))
 
     await _watch_quiet_once(
         ServiceComposition(
@@ -1402,8 +1437,72 @@ async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> 
         )
     )
 
-    assert len(bot.sends) == 1
-    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert bot.sends == []
+
+
+async def test_only_an_actionable_report_about_a_live_session_reaches_the_owner(
+    tmp_path,
+) -> None:
+    """The whole of the value filter, driven through the real drain and the real notifier.
+
+    Each half is already pinned on its own -- the mapping drops `SessionEnd` and the idle
+    timer in `tests/unit/application/test_activity.py`, and `_display_for` declines a finished
+    session above. Neither of those runs the two together, and the two together are what the
+    owner actually experiences: one pass, four spooled records, one message.
+
+    Worth its own test rather than left to the pair because the failure it catches is a seam.
+    A mapping that dropped nothing and a liveness check that declined everything would each
+    pass their own tests while this one found an empty chat or a full one.
+    """
+    live = _running()
+    finished = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+    boundary, bot = _notified(live, finished)
+    spool = tmp_path / "activity"
+    _spool(spool, str(live.session_id), event="SessionEnd", stamp="000001")
+    _spool(spool, str(live.session_id), event="Notification", reason="idle_prompt", stamp="000002")
+    _spool(spool, str(finished.session_id), stamp="000003")
+    _spool(spool, str(live.session_id), stamp="000004")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1, "only the Stop from the running session is worth sending"
+    assert live.display.rendered in str(bot.sends[0]["text"])
+    assert "finished its work" in str(bot.sends[0]["text"])
+    assert list(spool.iterdir()) == [], "a dropped record is still drained off disk"
+
+
+async def test_a_session_that_stops_while_its_notification_waits_is_not_notified(
+    tmp_path,
+) -> None:
+    """Liveness is read when the message is sent, not when the record was drained.
+
+    The gap is real and is exactly where the owner's complaint lives: the drain deletes a
+    record before returning it, a refused send leaves that activity in the retry queue, and
+    the owner presses Stop while it sits there. Checking at drain time would have found a
+    RUNNING session and sent the message a pass later anyway.
+    """
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == [], "the double was supposed to refuse the first send"
+
+    # The owner presses Stop while the activity is held for retry. Nothing re-drains it; the
+    # only copy left is the one in the notifier's queue.
+    boundary.launcher.records = [replace(record, state=SessionState.STOP_REQUESTED)]
+
+    await _watch_quiet_once(composition)
+
+    assert bot.sends == []
 
 
 async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
@@ -1662,3 +1761,95 @@ def test_doctor_stale_config_out_of_bounds_value_reports_the_drift_rather_than_r
     # config fine.
     assert report["config"]["invalid"]
     assert "max_label_length" in report["config"]["invalid"][0]
+
+
+async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_path) -> None:
+    """The owner's complaint, end to end: an agent that says three things is not three alerts.
+
+    Driven through the real drain and the real notifier rather than the grouping function,
+    because the two halves have to agree about what a pass *is* -- the drain returns a batch
+    ordered by observation time and the notifier groups whatever is in its queue, and a version
+    that grouped only within one drain's batch would pass a unit test and still send a second
+    message for anything held from an earlier pass.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    session_id = str(record.session_id)
+    _spool(spool, session_id, stamp="000001")
+    _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
+    _spool(
+        spool, session_id, event="Notification", reason="permission_prompt", stamp="000003"
+    )
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1, "three observations, one session, one message"
+    text = str(bot.sends[0]["text"])
+    assert text.count("•") == 3
+    assert record.display.rendered in text
+    assert "finished its work" in text
+    assert "usage limit" in text
+    assert "waiting for an answer" in text
+
+
+async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
+    """Grouping is per session, not per pass. Collapsing across sessions would put two agents'
+    news under one name, which is worse than the flood it would be fixing."""
+    first = _running("one")
+    second = _record(SessionState.RUNNING, "two", ProjectId("r" * 24))
+    boundary, bot = _notified(first, second)
+    spool = tmp_path / "activity"
+    # Two observations each, deliberately: with one apiece this test would pass unchanged under
+    # the retired one-message-per-observation delivery, and so would prove nothing about
+    # grouping at all.
+    _spool(spool, str(first.session_id), stamp="000001")
+    _spool(spool, str(second.session_id), stamp="000002")
+    _spool(spool, str(first.session_id), event="StopFailure", reason="rate_limit", stamp="000003")
+    _spool(
+        spool,
+        str(second.session_id),
+        event="Notification",
+        reason="permission_prompt",
+        stamp="000004",
+    )
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 2, "four observations, two sessions, two messages"
+    named = {str(send["text"]).split("\n")[0] for send in bot.sends}
+    assert len(named) == 2, "each message is headed by its own session"
+    for send in bot.sends:
+        assert str(send["text"]).count("•") == 2, "each session's own two, and no one else's"
+
+
+async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> None:
+    """A `Stop` hook fires per turn, so a long instruction spools the same sentence repeatedly.
+
+    The rate limit already collapses a burst *across* passes; this is the within-pass half,
+    where every copy arrives in one drain and no window has elapsed between them.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    for index in range(4):
+        _spool(spool, str(record.session_id), stamp=f"00000{index}")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1
+    text = str(bot.sends[0]["text"])
+    assert text.count("finished its work") == 1, "four identical reports are one line"
+    assert "•" not in text, "one surviving observation renders in the ungrouped shape"

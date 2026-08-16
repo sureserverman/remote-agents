@@ -180,8 +180,8 @@ journalctl --user -u remote-agents.service -n 100 --no-pager
 > here to work out which four.
 
 The service sends unprompted messages when a managed agent stops working, one message per
-observation, beside the live view rather than inside it. Two sources feed them and only one has
-to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
+session per delivery pass, beside the live view rather than inside it. Two sources feed them and
+only one has to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
 hooks; every other curated profile — `codex`, `opencode`, `cursor-agent` — has no hook system, so
 it is watched by capturing its pane. The hooks are not installed by the unit, by `serve`, or by
 `doctor`. Install them once per host:
@@ -323,12 +323,18 @@ opposite one, and points at the service rather than at the hook — check
 `journalctl --user -u remote-agents.service` for `activity watch pass failed`.
 
 The other way notifications go missing is a restart. Whenever Telegram is unreachable, refusing
-sends, or simply behind — a burst of more than ten in one pass is throttled and the remainder
-queued, which is ordinary and clears itself within seconds — the undelivered ones are held **in
-memory only**, and every pass with anything queued says so: `holding N undelivered
-notification(s) in memory; a restart now loses them`. The warning reports the queue, not the
-cause, so it does not by itself mean Telegram is failing; what it always means is that a restart
-right now would drop those N. There is nothing behind that queue, and that
+sends, or simply behind — a burst of more than ten messages in one pass is throttled and the
+remainder queued, which is ordinary and clears itself within seconds — the undelivered ones are
+held **in memory only**, and a pass that delivered nothing while holding some says so: `holding N
+undelivered notification(s) in memory; a restart now loses them`. It used to fire on *any*
+non-empty queue, which meant it also fired on the ordinary throttled pass just described — in
+simulation, on eight of forty passes with Telegram working perfectly — so the line an operator
+was meant to spot an outage by was one they learned to scroll past. It now names the case worth
+looking at: nothing got through, and a restart right now would drop those N. It still reports the
+queue rather than the cause, so it does not by itself mean Telegram is failing. The queue itself holds at most 200, matching what one drain may
+hand over; past that, eviction falls on the session holding the most of the queue rather than on
+whatever arrived first, so a chatty session can no longer push out a quiet session's only report.
+There is nothing behind that queue, and that
 is DEC-026 rather than an omission: a durable queue was weighed against a schema migration and a
 second spool to drain and bound forever, and declined, because the session itself is the
 authoritative record of what an agent did. What a restart during an outage costs the owner is
@@ -337,11 +343,22 @@ the sessions afterwards rather than waiting on the notifications — they are no
 
 ### What each notification means
 
-Each message names the session by its display identity, gives one sentence, and carries a single
-`Open session` button that renders that session's detail into the live view. There is no other
-button: a notification is not a screen, so it may not carry navigation. It is sent apart from the
-live view, so navigating the live view (Back, Home, a session detail) leaves it alone — the
-anchor's pruning does not own it.
+Each message names the session by its display identity and carries a single `Open session`
+button that renders that session's detail into the live view. There is no other button: a
+notification is not a screen, so it may not carry navigation. It is sent apart from the live
+view, so navigating the live view (Back, Home, a session detail) leaves it alone — the anchor's
+pruning does not own it.
+
+A session gets one message per delivery pass rather than one message per observation, so several
+things it has to report in one pass ride together instead of arriving as separate messages that
+each push the live view down again. A lone observation keeps the old shape: the sentence, then
+the agent's text on its own line. Two or more take `• ` bullets, newest first, each folding the
+agent's text onto the same line after an em-dash; the message holds at most five lines, and
+anything past that is summarized in a trailing `and N earlier.` line rather than growing the
+message without bound. Within one pass, two observations of the same kind carrying the same text
+collapse to one line bearing the later timestamp; the same kind with different text is not the
+same report, so both survive. An observation the message could not fit is not lost — it stays
+queued and goes out in the next pass.
 
 Two things follow from Telegram ordering a chat purely by send time, and both were added after
 the first real run showed what their absence feels like. **Pressing `Open session` deletes that
@@ -360,14 +377,31 @@ stays where it was.
 | `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
 | `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
 | `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
-| `needs_answer` | "The agent may be waiting for an answer." | Claude's `Notification` hook, `notification_type: idle_prompt` | inferred |
-| `ended` | "The session has ended." | Claude's `SessionEnd` hook, any `reason` | reported |
 | `quiet` | "No output since 14:05 UTC." | this service watching the pane | inferred |
 
-The first six are the agent reporting on itself, and each carries at most one bounded, escaped
+The first four are the agent reporting on itself, and each carries at most one bounded, escaped
 line of what it last said. Everything else those hook fields can carry — every other value of
 `error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
 reporting the wrong reason an agent stopped is worse than reporting nothing.
+
+**A notification has to be worth acting on, and two kinds that once appeared here were not.** The
+bar is no longer only "does this say why the agent stopped" but "is there anything for the owner
+to do about it", and both are now checked at the mapping, so a record that fails the second is
+drained, deleted and dropped exactly like one that fails the first:
+
+- **`ended`**, from `SessionEnd`. It fired whenever a session ended, including one the owner had
+  just ended themselves — the graceful stop types `/exit` into the pane, so pressing Stop in
+  Telegram reliably produced a message reporting that press back. Every `reason` mapped to the
+  same sentence, so it could not even distinguish the owner's exit from any other.
+- **the inferred `needs_answer`**, from `notification_type: idle_prompt`. A sixty-second timer
+  upstream, with recorded false positives and false negatives. When it was wrong it interrupted
+  the owner for nothing; when it was right, `permission_prompt` or `agent_needs_input` had usually
+  said so already, and said it as a fact rather than a guess.
+
+The hook still fires for both, and `install-agent-hooks` still registers `SessionEnd` — the
+records are still written and still drained off disk. What changed is that nothing is built from
+them, which is deliberate: a kind that is never produced cannot then be rendered, rate-limited, or
+delivered by mistake somewhere downstream.
 
 `limit_reached` and `output_limit` are separate because the next move differs: a rate limit is
 waited out or paid around and the work is untouched, while a reply that hit its output ceiling is
@@ -381,15 +415,18 @@ unreachable: a managed session stopping on a rate limit spooled a record whose r
 the drain dropped it, silently. `tests/live/test_agent_activity_hooks.py` now reads the installed
 bundle rather than a fixture, so the same drift fails a test instead of losing notifications.
 
-`SessionEnd` fires whenever a session ends, including one the owner ended: the graceful stop types
-`/exit` into the pane, so pressing Stop in Telegram normally produces an `ended` notification
-confirming what the owner just did. Every `reason` maps to the same sentence, so the message does
-not distinguish an owner-initiated exit from any other.
+**Notifications are only sent about a session that is still live** — `starting` or `running`.
+A record that has reached `stop_requested`, `preserved`, `failed`, `ended` or `orphaned` is one
+the owner has already dealt with, so an agent's report about it tells them their own action back.
+That check is made when the message is *sent*, not when the record was drained, which is the case
+that matters: an activity can wait in the retry queue across passes while Telegram is refusing
+sends, and the owner can press Stop while it waits. Declining to speak is logged as
+`not notifying about a session that is no longer running`, separately from the rarer
+`dropping an activity this service will not speak about`, which means a session this service can
+no longer identify at all.
 
-The two inferred kinds append one further sentence, "This is a guess, not something it reported.",
-and they are guesses of different sizes. `idle_prompt` is a sixty-second timer upstream with
-recorded false positives and false negatives, so its wording is weakened to "may be waiting" rather
-than dropped. `quiet` is this service's own heuristic, and the only signal available for the three
+`quiet` appends one further sentence, "This is a guess, not something it reported." It is this
+service's own heuristic, and the only signal available for the three
 profiles with no hook system: the pane's captured output is digested each poll, and a digest that
 has not changed for the configured number of polls is reported once. It says what was observed —
 that no output has appeared since a given minute — and never that the agent finished, because the
@@ -405,13 +442,16 @@ Both knobs live under `[limits]` in `~/.config/remote-agents/config.toml`. The s
 `activity_poll_seconds = 30` (bounded 5–600) and `activity_quiet_polls = 3` (bounded 2–20), so a
 pane goes quiet 90 seconds after its last change by default.
 
-Separately, and not configurable, one session's one kind of news is rate-limited — a `Stop` hook
-fires per turn rather than per task, so an agent working through a long instruction reports
-"finished" repeatedly and each report is true. The first message of a kind is always prompt; the
-window then **doubles for each consecutive repeat of that same kind**, from 2 minutes to 4, 8, 16,
-32, and no further than one message every 64 minutes. Only the second and later copies are made
-rarer, and the cap keeps the signal alive rather than muting it: an agent that has been waiting all
-night is still waiting, and a window that kept doubling would amount to never mentioning it again.
+Separately, and not configurable, each kind of a session's news is rate-limited on its own — a
+`Stop` hook fires per turn rather than per task, so an agent working through a long instruction
+reports "finished" repeatedly and each report is true. The first message of a kind is always
+prompt; the window then **doubles for each consecutive repeat of that same kind**, from 2 minutes
+to 4, 8, 16, 32, and no further than one message every 64 minutes. Only the second and later
+copies are made rarer, and the cap keeps the signal alive rather than muting it: an agent that has
+been waiting all night is still waiting, and a window that kept doubling would amount to never
+mentioning it again. The window decides only whether a message is sent at all, never which lines
+a sent message carries: if anything in a session's group is due, the whole group goes out,
+because a second line in a message the owner is already receiving costs nothing.
 
 The limit is keyed by session *and* kind, and so is the backoff. An agent that finishes and then
 needs an answer has said two different things and both arrive. A **different** kind for the same
@@ -422,8 +462,14 @@ than an hour later. The other kinds keep their timestamps, so a genuine burst is
 A repeat is counted only when a message was actually sent; a suppressed one does not advance the
 backoff.
 
+The doubling described above only started working correctly in this release. Before it, the rate
+limit's memory was discarded after 4 minutes, so any kind reporting less often than that was
+always treated as first-time and never backed off: measured, a `Stop` every 5 minutes produced 96
+messages over 8 hours where the taper intends 12. Operators upgrading will notice fewer repeated
+notifications from a busy agent, and that is intended, not a fault.
+
 One further bound sits above all of that, and it is the only one about the chat rather than about
-a session's news: **at most ten notifications are sent per poll.** The per-session limit cannot
+a session's news: **at most ten messages are sent per poll.** The per-session limit cannot
 provide this, because twenty sessions stopping at once are twenty separate keys and none of them
 suppresses another — past Telegram's per-chat rate, at which point its refusals would come back as
 a growing backlog. Nothing is dropped: the remainder stays queued and the next poll takes it, so a

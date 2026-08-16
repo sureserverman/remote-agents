@@ -41,8 +41,15 @@ class ActivityKind(Enum):
     """The only things this service claims about an agent that has stopped working.
 
     Deliberately fewer than the events upstream emits. A hook carries a dozen error types and
-    notification types; the owner is being told one of six things, and an event that does not
+    notification types; the owner is being told one of five things, and an event that does not
     answer "why did it stop" is dropped rather than mapped to the nearest neighbour.
+
+    Answering that question is necessary and not sufficient. Every message built from these
+    arrives unprompted, on a phone, so the second bar is that the owner has something to *do*
+    about it. An `ended` kind cleared the first and failed the second: it came from `SessionEnd`,
+    which fires on the stop the owner has just pressed, so it spent its life confirming their own
+    action back to them. It is retired rather than reworded, because there is no wording that
+    makes news out of something that is not news.
 
     `LIMIT_REACHED` and `OUTPUT_LIMIT` are separate because the owner's next move differs. A
     rate limit is waited out or paid around and the work is untouched; a response that hit its
@@ -55,17 +62,26 @@ class ActivityKind(Enum):
     LIMIT_REACHED = "limit_reached"
     OUTPUT_LIMIT = "output_limit"
     NEEDS_ANSWER = "needs_answer"
-    ENDED = "ended"
     QUIET = "quiet"
 
 
 class ActivityConfidence(Enum):
     """Whether the agent said this, or something guessed it from the outside.
 
-    It exists so presentation can weaken its wording rather than flatten the difference.
-    `Notification(idle_prompt)` is a sixty-second timer with recorded false positives and
-    false negatives, and pane quiet is a heuristic by construction -- both are worth telling
-    the owner and neither is worth telling them as a fact.
+    It exists so presentation can weaken its wording rather than flatten the difference. The one
+    guess left is pane quiet, and it is a heuristic by construction: this service watched a
+    terminal stop changing and inferred an agent behind it. Nothing can check that inference,
+    either -- the profiles watched this way are exactly the ones with no hook system, so pane
+    quiet is not a second opinion about a session, it is the only opinion there is. Worth
+    telling the owner, and not worth telling them as a fact.
+
+    Two members for one guess is deliberate. This records a property of the *observation* --
+    whether anything actually said it -- rather than a count of today's sources, so a signal
+    arriving from somewhere new is classified before anyone chooses its words. That ordering is
+    what kept Claude's sixty-second idle notification, which `application/activity.py` no longer
+    maps at all, from ever reaching the owner in the grammar of something the agent had said.
+    Naming it here rather than leaving it as "a retired upstream signal" is the point of the
+    example: the member that outlived it is the one a reader is entitled to ask about.
     """
 
     REPORTED = "reported"

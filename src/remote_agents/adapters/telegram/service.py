@@ -77,6 +77,7 @@ from remote_agents.application.session_actions import (
     StopFailure,
     available_actions,
     explain_state,
+    notifiable,
     remote_control_available,
     state_word,
     trust_available,
@@ -1528,19 +1529,47 @@ class PrivateBotBoundary:
         )
 
     async def _display_for(self, session_value: str) -> str | None:
-        """Name a session for a message the owner did not ask for.
+        """Name a session for a message the owner did not ask for, or decline to.
 
-        Deliberately not `_record`, and the difference is the whole point: that one reads
-        `_records`, which hides an ENDED session because the sessions *list* should not show
-        history. A `SessionEnd` activity is precisely the one whose record is ENDED by the time
-        it is delivered, so resolving a notification's name through the list would have dropped
-        every ending — the notification most worth having — while every other kind worked.
+        Two questions, answered together because the notifier is entitled to neither of them
+        separately: *can this session be named*, and *is it still one worth speaking about*.
+        Returning `None` for either is what the notifier already does the right thing with —
+        it drops the activity as finished business rather than holding it for retry — so the
+        whole liveness rule lands on this side of the callable and the adapter that renders
+        the message never learns what a `SessionState` is (DEC-001).
+
+        **The liveness question is asked here, at send time, and that placement is the
+        feature.** An activity can sit in the retry queue across passes while Telegram is
+        refusing sends, and the owner can press Stop while it waits; asked at drain time the
+        answer would have been "running" and the message would have gone out a pass later
+        anyway. `notifiable` is the lifecycle layer's to answer (DEC-029), not this module's.
+
+        Deliberately not `_record`, and for a reason that has *changed* rather than lapsed.
+        That one reads `_records`, which hides an ENDED session because the sessions list
+        should not show history — and this used to reach past it so that a `SessionEnd`
+        notification could still be named, that kind being precisely the one whose record had
+        ENDED by delivery time. That kind is retired. What survives the retirement is the
+        narrower need to *recognise* such a record in order to decline it: a session absent
+        from `_records` and a session present-but-finished must not both arrive here as
+        "cannot be named", because only one of them is worth an operator's attention.
         """
         if self.launcher is None:
             return None
         project_names = {project.opaque_id: project.name for project in self.catalogue}
         for record in await self.launcher.list_sessions():
             if str(record.session_id) == session_value:
+                if not notifiable(record.state):
+                    # Said out loud, and said differently from the notifier's own drop. This
+                    # one is the feature working — an agent reported after the owner had
+                    # already dealt with its session — while the notifier's is a session this
+                    # service can no longer identify at all, which is rare and worth noticing.
+                    # Collapsed into one message, the journal could not tell a quiet night
+                    # from a store that had lost a row.
+                    _LOG.info(
+                        "not notifying about a session that is no longer running (%s)",
+                        state_word(record.state, record.orphan_provenance),
+                    )
+                    return None
                 named = _with_project_name(record, project_names.get(str(record.project_id)))
                 return named.display.rendered
         return None

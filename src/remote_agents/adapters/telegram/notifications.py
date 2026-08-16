@@ -9,9 +9,11 @@ second borrow the grammar of the first.
 Two rules carry that, and both are structural rather than editorial:
 
 **An inferred observation says so, in its own sentence.** `ActivityConfidence.INFERRED` covers
-two very different guesses -- a sixty-second idle timer upstream, and a pane that stopped
-changing here -- and neither is worth telling the owner as a fact. The hedge is appended by
-the renderer, not left to whoever writes the next sentence.
+one guess -- a pane that stopped changing here -- and it is not worth telling the owner as a
+fact. The hedge is appended by the renderer, not left to whoever writes the next sentence, and
+that stays structural now that it fires for a single kind: it was written when a second guess
+existed, that guess was retired rather than hedged better, and the rule is what stops the next
+one arriving in the grammar of something the agent actually said.
 
 **A quiet report never carries agent text.** Nothing said it. The classifier already sets
 `detail=None` for `QUIET`, and this drops it again regardless, because the failure mode is
@@ -76,47 +78,157 @@ _SENTENCES = {
     ActivityKind.COMPLETED: "The agent has finished its work.",
     ActivityKind.LIMIT_REACHED: "The agent stopped after reaching a usage limit.",
     ActivityKind.OUTPUT_LIMIT: "The agent stopped at its output length limit for one reply.",
-    ActivityKind.ENDED: "The session has ended.",
 }
 
-_WAITING = {
-    ActivityConfidence.REPORTED: "The agent is waiting for an answer.",
-    # Weaker on purpose: this reaches the owner from a sixty-second idle timer with recorded
-    # false positives, so the sentence has to survive being wrong.
-    ActivityConfidence.INFERRED: "The agent may be waiting for an answer.",
-}
+_WAITING = "The agent is waiting for an answer."
+"""The one sentence `NEEDS_ANSWER` has, now that every source of it is the agent's own report.
+
+There were two, chosen by confidence, and the weaker of them -- "may be waiting" -- existed for
+an upstream idle timer that is no longer mapped at all. Stating this plainly does not loosen
+this module's first rule: what reaches here is an agent asking permission or an agent saying it
+needs input, and in both the agent is the one making the claim.
+
+"An agent asking permission" is spelled the long way round on purpose: upstream calls that case
+`permission_` followed by the word for a question put to a terminal, and
+`check_telegram_actions.py` rejects that bare substring anywhere in this package, because a
+Telegram adapter that can put a question into a pane is the surface that audit exists to keep
+closed. The check cannot tell prose from code, and it is right not to try: a term that has to
+be spelled around in a comment is a term nobody adds to a call site by accident.
+"""
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
 # `presenters` rather than copied, private names and all: an escaper and a budget that exist
 # twice are two escapers and two budgets, and only one of them ever gets fixed.
 
 
-def activity_text(activity: AgentActivity, *, display: str) -> str:
-    """The message's words, which depend on nothing Telegram has to answer for first.
+_MAXIMUM_LINES_PER_MESSAGE = 5
+"""How many of a session's observations one message will spell out.
+
+A backstop, not the mechanism: the rate limit collapses a burst of one kind and
+`grouped_for_delivery` folds exact repeats, so a group this large has genuinely said this many
+different things. Not necessarily *in one pass*, which an earlier version of this note claimed --
+a group deferred past the per-pass ceiling, or held through a refusal, accumulates across as many
+passes as it waits, and that is the case most likely to reach the cap at all.
+
+What this may not do is drop the rest silently -- a message that looks like a complete account of
+a session and is not is worse than one that says how much it left out, which is why the count
+below is part of the rule rather than a nicety.
+"""
+
+_MAXIMUM_DETAIL_UNITS = MAXIMUM_DETAIL_CHARACTERS
+"""One detail's ceiling in UTF-16 units, which is not the same quantity as its character cap.
+
+Numerically the application layer's `MAXIMUM_DETAIL_CHARACTERS`, and named apart from it because
+they are different measurements that happen to agree: that one truncates raw agent text by
+character count before it is escaped, this one bounds an *escaped* line against Telegram's
+budget. Reusing the import directly type-checked and read fine, and meant that raising the raw
+cap for some unrelated reason would silently widen what one line may spend here, with nobody
+editing this module.
+"""
+
+_BULLET = "• "
+"""Worn only when there is more than one line to tell apart. See `activity_text`."""
+
+_RESERVED_NAME_UNITS = 48
+"""The slice of the budget the observations may not spend, so the session can still be named.
+
+An untitled message is not a cheaper message, it is an unusable one: the owner reads these on a
+phone, several sessions deep, and a wall of sentences with no idea which agent produced them
+cannot be acted on at all.
+"""
+
+
+def shown_in_message(group: SessionGroup) -> tuple[AgentActivity, ...]:
+    """Which of a group's observations one message actually spells out.
+
+    The *newest* that fit, not the first. `grouped_for_delivery` orders a group oldest-first so
+    it reads as a timeline, and taking a prefix therefore spelled out the stalest lines and
+    folded the freshest into the counter -- a `needs_answer` arriving after five `completed`
+    reports is the one line worth a thumb, and it was the one being hidden.
+
+    **Public, and shared with the notifier, because the answer had two owners and they
+    disagreed.** `activity_text` rendered the newest five while `_send` stamped the rate limit
+    for every kind in the group, so an observation folded into "and N earlier" was recorded as
+    told to the owner and then dropped, having been neither. For `NEEDS_ANSWER` -- the highest
+    value signal this service has -- that is the agent waiting and nobody being told, with the
+    stamp then suppressing the next report of it too. It is the same silence-by-self-suppression
+    the window filter caused, reached through the line cap instead, which is the argument for
+    one function rather than two call sites that happen to agree.
+    """
+    return group.activities[-_MAXIMUM_LINES_PER_MESSAGE:]
+
+
+def activity_text(group: SessionGroup, *, display: str) -> str:
+    """One session's news as the whole message the owner receives about it.
 
     Split out from `render_activity` because the delivery order is send-then-mint: the
     notification's token is bound to the message the send answers with, so the text has to
     exist before the token does. Nothing about the wording depends on the button, which is
     what makes that order available at all.
 
-    The bounding order is detail first, then the name. Either can be pathological -- a display
-    identity carries an owner-supplied label -- and reserving the detail's slot before fitting
-    the name means a long name truncates itself rather than silently deleting what the agent
-    said.
+    **A lone observation reads exactly as it always did**, sentence then detail on its own
+    line, and only a group of two or more takes bullets with the detail folded onto the
+    sentence's line. Two shapes is a real cost and it buys the two things that matter. Almost
+    every notification carries one observation, so a bullet in front of a single sentence would
+    be clutter added to the common case for the sake of the rare one. And in a group the fold
+    is not cosmetic: with each detail on its own line, three observations produce six lines
+    with nothing saying which text belongs to which sentence, and the owner attributes the
+    agent's words to the wrong event.
+
+    **The budget is spent outward from the observations.** The old order -- bound the detail,
+    then fit the name into what was left -- was sufficient for exactly one observation and is
+    not any more: the application layer caps each detail at `MAXIMUM_DETAIL_CHARACTERS`, but
+    escaping can quintuple a character (`&` becomes `&amp;`), so five capped details can reach
+    six thousand UTF-16 units against a ceiling of 4096, with no single one of them at fault.
+    Telegram refuses the send outright, so the failure mode is a notification that never
+    arrives. So the details share what is left after the sentences, the hedge and a reserved
+    slot for the name, and the name is fitted last into whatever remains -- a long name
+    truncates itself rather than deleting what an agent said, which is the right way round,
+    since the name carries an owner-supplied label and the observations are what the message
+    exists to deliver.
+
+    **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
+    the service were less sure this time -- when it is saying the same structural thing about
+    the same kind.
     """
-    sentence = _sentence(activity)
-    hedge = _HEDGE if activity.confidence is ActivityConfidence.INFERRED else ""
+    shown = shown_in_message(group)
+    hidden = len(group.activities) - len(shown)
+    bulleted = len(shown) > 1
 
-    detail = _bounded_escaped(_detail_of(activity) or "", MAXIMUM_DETAIL_CHARACTERS)
-    tail = (f"\n{detail}" if detail else "") + (f"\n{hedge}" if hedge else "")
+    sentences = [_sentence(activity) for activity in shown]
+    details = [_detail_of(activity) for activity in shown]
+    hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
-    skeleton = f"<b></b>\n{sentence}{tail}"
-    name = _bounded_escaped(display, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(skeleton))
-    return f"<b>{name}</b>\n{sentence}{tail}"
+    trailers = ([f"and {hidden} earlier."] if hidden else []) + ([_HEDGE] if hedged else [])
+    # Measured with the details empty, because they are the only part with a budget to
+    # negotiate; everything else in the message is ours and fixed.
+    spent = _utf16_units("<b></b>\n" + "\n".join(_lines(sentences, [None] * len(shown), bulleted)))
+    spent += _utf16_units("\n" + "\n".join(trailers)) if trailers else 0
+    share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
+        1, sum(1 for detail in details if detail)
+    )
+
+    bounded = [
+        _bounded_escaped(detail, min(_MAXIMUM_DETAIL_UNITS, share)) if detail else None
+        for detail in details
+    ]
+    body = "\n".join(_lines(sentences, bounded, bulleted) + trailers)
+    name = _bounded_escaped(display, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"<b></b>\n{body}"))
+    return f"<b>{name}</b>\n{body}"
 
 
-def render_activity(activity: AgentActivity, *, display: str, open_session: str) -> RenderedMessage:
-    """Render one observation as the whole message the owner receives about it.
+def _lines(sentences: list[str], details: list[str | None], bulleted: bool) -> list[str]:
+    """One line per observation when they must be told apart, two when there is only one."""
+    if not bulleted:
+        return [sentences[0]] + ([details[0]] if details and details[0] else [])
+    return [
+        f"{_BULLET}{sentence}" + (f" — {detail}" if detail else "")
+        for sentence, detail in zip(sentences, details, strict=True)
+    ]
+
+
+def render_activity(group: SessionGroup, *, display: str, open_session: str) -> RenderedMessage:
+    """Render one session's group as the whole message the owner receives about it.
 
     Pure, and deliberately ignorant of Telegram's transport: it is handed the session's
     display identity and an already-minted callback token because resolving either would mean
@@ -125,14 +237,14 @@ def render_activity(activity: AgentActivity, *, display: str, open_session: str)
     """
     _validate_callback(open_session)
     return render_message(
-        activity_text(activity, display=display),
+        activity_text(group, display=display),
         ((Button(OPEN_SESSION_LABEL, open_session),),),
     )
 
 
 def _sentence(activity: AgentActivity) -> str:
     if activity.kind is ActivityKind.NEEDS_ANSWER:
-        return _WAITING[activity.confidence]
+        return _WAITING
     if activity.kind is ActivityKind.QUIET:
         # What was observed, never what it implies. The service saw a pane stop changing; it
         # did not see an agent finish, and the owner reading this on a phone will supply that
@@ -203,13 +315,21 @@ suppressing any other, and each notification costs two Bot API calls -- past Tel
 per-chat rate, at which point the 429s land in the retry queue and the backlog grows against
 its own cap.
 
-Ten per pass against a thirty-second poll is a third of a message per second, comfortably
-under that. Nothing is dropped: the remainder stays queued and the next pass takes it, so a
-genuine burst arrives spread out rather than refused. This is the only bound here that is
-about the *chat* rather than about one session's news.
+Ten per pass against a thirty-second poll averages a third of a message per second. *Averages*
+is the honest word and was not the word here before: the sends are not paced within a pass, so
+ten of them go out back to back -- ten `sendMessage`, ten `editMessageReplyMarkup`, and the live
+view's delete-and-resend -- and no `AIORateLimiter` is installed on the application. The bound is
+therefore a burst ceiling that happens to be under the *average* rate, not a rate limiter.
+
+It degrades safely, which is why the number stands rather than the pacing being built: a 429
+raises out of the send, `deliver` holds that group and stops the pass, and the rest waits. So the
+failure mode of the optimistic reading is a slower pass, not a lost notification. Nothing is
+dropped: the remainder stays queued and the next pass takes it, so a genuine burst arrives spread
+out rather than refused. This is the only bound here that is about the *chat* rather than about
+one session's news.
 """
 
-_MAXIMUM_PENDING = 100
+_MAXIMUM_PENDING = 200
 """How many undelivered notifications are worth holding while Telegram is unreachable.
 
 The drain has already deleted the spool files by the time a send is refused, so this queue is
@@ -217,11 +337,85 @@ the only remaining copy -- which is the argument for holding some, and the reaso
 unbounded. An outage long enough to overflow this has produced news too stale to send anyway,
 so the oldest is dropped and said out loud.
 
+**Two hundred, and the number is `application.activity.MAXIMUM_DRAIN`'s rather than a taste.**
+At a hundred it was half of what one drain may hand over in a single call, so a service that had
+been down -- exactly the case `MAXIMUM_DRAIN`'s own docstring contemplates -- evicted a hundred
+records inside `_enqueue` before a single send was attempted, and the drain had already unlinked
+them from disk. `drain_activity` goes to real trouble to take the *oldest* records so its bound
+cannot truncate whole sessions; the notifier then discarded exactly that oldest half. The two
+bounds were set against each other across the seam. It is not imported, because an adapter
+importing the application layer would invert the dependency this project is arranged around
+(DEC-001); it is written down here with the reason, and the drain's constant is the one to look
+at if either moves.
+
 That there is nothing *behind* this cap is DEC-026 rather than an omission. A durable queue was
 weighed and declined: it buys back a convenience at the price of a schema migration and a second
 spool that must then be drained, bounded and reasoned about forever. So this number is the only
 bound there is, and what it turns away is dropped rather than spilled anywhere.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class SessionGroup:
+    """One session's news for one delivery pass, in the order it should be read."""
+
+    session_id: str
+    activities: tuple[AgentActivity, ...]
+
+
+def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGroup, ...]:
+    """Fold a pass's observations into one bundle per session, saying each thing once.
+
+    Pure and clock-free: it is handed everything the pass observed and reads nothing else, so
+    the three rules below are exercised without a Telegram, a session store or a sleep.
+
+    **Sessions come back in the order they were first heard from.** The queue behind this is
+    FIFO, and that fairness is what keeps a burst of twenty sessions spread across passes
+    rather than starving the unlucky ones -- a property that survives grouping only if grouping
+    preserves it. Ordering by session id would hand the chat to whoever's identifier sorts
+    early, every pass, for as long as the backlog lasts, and that identifier is not something
+    the owner chose or can see. Ordering by time across sessions is the subtler mistake: it
+    would decide a group's place from a stamp on one observation *inside* it, so the collapse
+    below -- which changes which observation that is -- would be quietly re-deciding an order
+    the queue had already settled.
+
+    **Within a session, identical `(kind, detail)` observations collapse to the newest.** A
+    `Stop` hook fires per turn rather than per task, so an agent working through one long
+    instruction reports "finished" repeatedly and every report is true; the pane watch has the
+    same shape, since `QUIET` carries no agent text at all and two quiet spells in one pass are
+    indistinguishable here. What does not collapse is two `completed` observations carrying
+    *different* text: those are two different things the agent said, and folding them on the
+    kind alone would delete one of them silently. The pair is the identity, never the kind.
+
+    **What survives is then ordered by `observed_at`.** After the collapse rather than before,
+    and the order matters: a survivor carries the newest stamp of its duplicates, so a sentence
+    first said at 14:00 and repeated at 14:20 belongs below whatever was said at 14:10. Sorted
+    first and collapsed after, it would print above it -- a timeline running backwards inside a
+    single message, which reads as the service having confused two sessions.
+
+    Ties fall back to the collapse order, which is first appearance of each `(kind, detail)`
+    pair; the sort is stable and this relies on that. Two observations sharing an instant carry
+    no fact about which came first, so what is worth guaranteeing is not the true order but a
+    repeatable one: the same input has to produce the same bundle on a retry, because a message
+    that reshuffles itself between one send and the next reads as fresh news.
+    """
+    collapsed: dict[str, dict[tuple[ActivityKind, str | None], AgentActivity]] = {}
+    for activity in activities:
+        seen = collapsed.setdefault(activity.session_id, {})
+        key = (activity.kind, activity.detail)
+        held = seen.get(key)
+        if held is None or activity.observed_at > held.observed_at:
+            # Assignment to an existing key keeps its position, so replacing a duplicate does
+            # not move the survivor to the back of its group -- the collapse order stays first
+            # appearance, which is what the stable sort below falls back on.
+            seen[key] = activity
+    return tuple(
+        SessionGroup(
+            session_id,
+            tuple(sorted(observations.values(), key=lambda activity: activity.observed_at)),
+        )
+        for session_id, observations in collapsed.items()
+    )
 
 
 class ActivityNotifier:
@@ -274,6 +468,9 @@ class ActivityNotifier:
         self._now = now
         self._bot: object | None = None
         self._pending: deque[AgentActivity] = deque()
+        #: Whether the pass that just ran delivered anything, so `_report_backlog` can tell an
+        #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
+        self._sent_this_pass = False
         self._last_sent: dict[tuple[str, ActivityKind], _Sent] = {}
 
     def attach(self, bot: object) -> None:
@@ -290,19 +487,38 @@ class ActivityNotifier:
         if self._bot is None:
             return 0
         self._forget_expired_limits()
+        self._sent_this_pass = False
+        # Grouped from the *whole* queue rather than from this pass's arrivals, which is what
+        # makes a held group merge with news that came in since: an activity Telegram refused
+        # last pass and one spooled a minute later belong to the same session and must leave
+        # as one message, or the grouping has bought the owner nothing.
+        held: list[AgentActivity] = []
         sent = 0
-        while self._pending and sent < _MAXIMUM_SENDS_PER_PASS:
-            activity = self._pending[0]
+        refused = False
+        for group in grouped_for_delivery(self._pending):
+            if refused or sent >= _MAXIMUM_SENDS_PER_PASS:
+                held.extend(group.activities)
+                continue
             try:
-                delivered = await self._send(activity)
+                delivered, unsaid = await self._send(group)
             except Exception:
-                # Left at the head deliberately: the record is already off disk, so dropping it
-                # here loses it outright. Stopping the pass rather than skipping to the next
-                # keeps the order and avoids hammering a Telegram that just refused us.
+                # Held whole, and the pass stops. The record is already off disk -- the drain
+                # deletes before it returns (DEC-013 cost 3) and DEC-026 keeps this queue in
+                # memory with nothing behind it -- so an activity neither sent nor held here is
+                # gone outright. Stopping rather than skipping to the next session keeps the
+                # order and avoids hammering a Telegram that just refused us.
                 _LOG.warning("could not deliver an activity notification; holding it for retry")
-                break
-            self._pending.popleft()
+                held.extend(group.activities)
+                refused = True
+                continue
             sent += int(delivered)
+            # What the message could not spell out is owed, not spent.
+            held.extend(unsaid)
+        self._sent_this_pass = sent > 0
+        # What is held is the *collapsed* set, not what arrived: two identical observations are
+        # one thing said twice, and re-holding both would resurrect a duplicate the next pass
+        # has already been told to fold.
+        self._pending = deque(held)
         if sent:
             # Once per pass, not once per message: the menu only has to end up below the last
             # notification, and moving it five times to get there would delete and re-send the
@@ -335,44 +551,129 @@ class ActivityNotifier:
         Saying it on every pass makes the window visible in the journal while it is open,
         rather than inferable afterwards from a notification that never came.
         """
-        if self._pending:
+        if self._pending and not self._sent_this_pass:
+            # Guarded on *nothing having been sent*, because an ordinary pass that deferred a
+            # group past the per-pass ceiling also leaves a non-empty queue, and warning on
+            # that made the line fire on eight of forty healthy passes in simulation -- which
+            # is how a warning added to make an outage visible becomes something an operator
+            # learns to scroll past.
             _LOG.warning(
                 "holding %d undelivered notification(s) in memory; a restart now loses them",
                 len(self._pending),
             )
 
     def _enqueue(self, activities: Iterable[AgentActivity]) -> None:
+        """Take a pass's observations, dropping the loudest session's oldest when full.
+
+        **Not the queue's oldest, which is what this did.** Delivery is per session and so is
+        fairness -- `grouped_for_delivery` orders by first appearance precisely so a burst
+        cannot starve a quiet session -- but retention was global and per observation, so one
+        chatty session could own all hundred slots and evict every other session's news from
+        the head. Simulated: five sessions each reporting `QUIET` once, against one session
+        emitting twenty-five distinct records a pass, ended with the queue holding a hundred
+        observations from the loud session and nothing from the other five. Their reports were
+        destroyed permanently -- `observe_quiet` fires once per spell and re-arms only on a
+        pane change, so there is no second chance, and the drain had already deleted the files.
+
+        Evicting from the session with the most queued observations makes the cap cost the
+        session that filled it. Its *oldest* goes, because within one session the newest news
+        is the news worth keeping.
+        """
         for activity in activities:
             if len(self._pending) >= _MAXIMUM_PENDING:
-                self._pending.popleft()
-                _LOG.warning("dropping the oldest undelivered notification; the queue is full")
+                self._evict()
             self._pending.append(activity)
 
-    async def _send(self, activity: AgentActivity) -> bool:
-        """Deliver one observation, or decline to, and say which.
+    def _evict(self) -> None:
+        """Drop one observation from whichever session is using the most of the queue."""
+        counts: dict[str, int] = {}
+        for held in self._pending:
+            counts[held.session_id] = counts.get(held.session_id, 0) + 1
+        loudest = max(counts, key=lambda session_id: counts[session_id])
+        for index, held in enumerate(self._pending):
+            if held.session_id == loudest:
+                del self._pending[index]
+                break
+        _LOG.warning(
+            "the notification queue is full; dropping the oldest held for one session (%d held)",
+            counts[loudest],
+        )
 
-        Declining is not failing: a collapsed burst and a session that can no longer be named
-        are both finished business, so the caller drops them. Only a raise means "try again".
+    async def _send(self, group: SessionGroup) -> tuple[bool, tuple[AgentActivity, ...]]:
+        """Deliver one session's news as one message, and answer what is still owed.
+
+        Returns whether a message went out, and the observations it did *not* spell out --
+        which the caller holds for the next pass rather than dropping. A group larger than
+        `_MAXIMUM_LINES_PER_MESSAGE` is folded into "and N earlier", and those observations
+        have then been neither shown nor sent; discarding them loses agent output permanently,
+        since the drain deleted the record before it ever reached this queue.
+
+        Declining is not failing: a group the rate limit emptied and a session that can no
+        longer be named are both finished business, so the caller drops them rather than
+        holding them. Only a raise means "try again".
+
+        **The window decides whether a message is sent, never which lines it carries.** This
+        is the correction to the shape this task first had, and the distinction is the whole
+        of two defects. The limit exists to stop *messages*: one per session per pass is the
+        cost the owner feels, and a second line inside a message they are already receiving
+        costs them nothing. Filtering the group by window instead meant that an observation
+        the queue was holding -- something the agent said that had never been sent, since
+        anything still queued by definition has not been -- was *deleted* while a message to
+        that very session went out with four of its five lines unused. Before grouping that
+        trade was forced, because carrying it meant a second message; grouping removed the
+        reason and the filter outlived it.
+
+        The second defect is worse and is why this is stated as a rule. A kind held back by
+        its own window was absent from the message, and `_record_sent` read that absence as
+        "this session reported something different, so the held kind is not repeating" -- the
+        notifier taking its own suppression decision as evidence against itself. A standing
+        condition backed off to sixty-four minutes is absent from sixty-three of every
+        sixty-four minutes' messages, so it was nearly always the kind that got reset, and its
+        backoff never advanced past the first step. Measured on the module's own premises
+        (`Stop` fires per turn), an overnight session with a periodic companion produced 75 to
+        255 notifications where the taper intends 12. Sending the whole group closes both: what
+        was observed rides along, and what was observed is what `_record_sent` is told about.
+
+        **It closes them and does not restore the taper**, which is worth stating here because
+        the numbers above invite the opposite reading. `_forget_expired_limits` prunes an entry
+        at `_window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
+        a kind observed less often than that finds no entry, is re-created at zero, and never
+        doubles at all. Measured after this change: a lone `Stop` every four minutes still
+        produces 120 messages in eight hours. That defect is older than this module's grouping
+        and is `_forget_expired_limits`' to answer, not this method's; it is named here so the
+        next reader does not take "the storm is closed" for "the backoff works".
         """
         moment = self._now()
-        key = (activity.session_id, activity.kind)
-        entry = self._last_sent.get(key)
-        if entry is not None and moment - entry.sent_at < self._window(entry.repeats):
-            return False
-        display = await self._display(activity.session_id)
+        if not any(self._due(activity, moment) for activity in group.activities):
+            return False, ()
+        display = await self._display(group.session_id)
         if display is None:
-            # Nothing to name it and nothing for its button to open. Rare -- the store outlives
-            # a session -- and a message reading "a session has finished" is worse than silence.
-            _LOG.info("dropping an activity for a session this service can no longer name")
-            return False
+            # Two refusals arrive as one `None`, and this module is deliberately unable to
+            # tell them apart: the session cannot be named, or it is no longer one worth
+            # speaking about. Both are finished business rather than a failed send, so both
+            # get the same treatment here -- dropped, not held for retry. Which of the two it
+            # was is decided and logged by the boundary that owns the lifecycle
+            # (`service._display_for`), because a notifier that branched on session state
+            # would be a driver adapter making lifecycle policy (DEC-001).
+            _LOG.info("dropping an activity this service will not speak about")
+            return False, ()
 
         message_id = await self._view.send_apart(
             self._bot,
-            {"text": activity_text(activity, display=display), "parse_mode": ParseMode.HTML},
+            {
+                "text": activity_text(group, display=display),
+                "parse_mode": ParseMode.HTML,
+            },
         )
         # Recorded before the keyboard, because by here the owner has already been told. A
         # markup failure below must not re-send the message it is trying to decorate.
-        self._record_sent(key, moment, entry)
+        #
+        # Stamped for what was *rendered*, never for the whole group. A kind folded into "and
+        # N earlier" has not been told to anyone, and stamping it would both silence it and
+        # suppress its next report. What it does cover is a kind that was rendered without
+        # being due -- that one has now been said, and is a repeat from here on.
+        shown = shown_in_message(group)
+        self._record_sent(group.session_id, (a.kind for a in shown), moment)
         # The guard covers the mint and the render as well as the call, and the width is the
         # point. An earlier version wrapped only `edit_message_reply_markup`, which left two
         # raising steps outside it -- and a raise there escaped into `deliver`, which logged
@@ -387,12 +688,12 @@ class ActivityNotifier:
                 # it the chat's live view -- see `service._NOTIFIED_DETAIL`. It opens the same
                 # screen; it just says where the thumb was.
                 NOTIFIED_DETAIL_ACTION,
-                activity.session_id,
+                group.session_id,
                 self._owner_user_id,
                 self._view.chat_id,
                 message_id,
             )
-            rendered = render_activity(activity, display=display, open_session=token)
+            rendered = render_activity(group, display=display, open_session=token)
             await self._bot.edit_message_reply_markup(
                 chat_id=self._view.chat_id,
                 message_id=message_id,
@@ -403,7 +704,12 @@ class ActivityNotifier:
             # A message that arrived without one is degraded, and re-sending it to fix that
             # would be the storm this class exists to prevent.
             _LOG.warning("an activity notification was sent without its Open session button")
-        return True
+        return True, group.activities[: len(group.activities) - len(shown)]
+
+    def _due(self, activity: AgentActivity, moment: datetime) -> bool:
+        """Whether this one observation is news, given when its kind was last sent."""
+        entry = self._last_sent.get((activity.session_id, activity.kind))
+        return entry is None or moment - entry.sent_at >= self._window(entry.repeats)
 
     def _window(self, repeats: int) -> timedelta:
         """How long this news stays old, given how many times it has already been sent.
@@ -425,20 +731,42 @@ class ActivityNotifier:
         return self._rate_limit * (2 ** min(repeats, _MAXIMUM_BACKOFF_DOUBLINGS))
 
     def _record_sent(
-        self, key: tuple[str, ActivityKind], moment: datetime, prior: _Sent | None
+        self, session_id: str, kinds: Iterable[ActivityKind], moment: datetime
     ) -> None:
-        """Stamp this send, and let anything else about the same session start over.
+        """Stamp every kind this message carried, and let the rest of the session start over.
 
         A repeat count is a claim that *nothing has changed*. The moment a session reports a
         different kind, something has: an agent that finishes, is asked something, and finishes
         again is not repeating itself, and backing its second "finished" off to an hour would
         answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
         so their base windows still collapse a genuine burst.
+
+        **The kinds this message carried are exempt from that reset, and the exemption is the
+        whole reason this takes a batch rather than a key.** The rule was written when a
+        message carried exactly one kind, and applied per-kind to a grouped one it turns on
+        itself: recording the second kind resets the first, which was recorded a moment earlier
+        in the same send and is not evidence that anything changed.
+
+        **`kinds` is what the message *carried*, which since `_send` stops filtering by window
+        is everything the session was observed saying this pass** -- and that identity is what
+        makes the exemption complete rather than partial. An earlier version passed only the
+        kinds whose own window had elapsed, which left the dominant case open: a standing
+        condition backed off to sixty-four minutes is *absent* from almost every message, so it
+        was almost always the kind being reset, by its own suppression. Measured, that produced
+        75 to 255 notifications overnight where the taper intends 12. A caller that ever
+        narrows this argument again reopens exactly that, and nothing about the resulting
+        messages would look wrong.
+
+        So the reset applies to what the session did not say at all this pass, which is what "a
+        different kind" always meant.
         """
-        self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
-        session = key[0]
+        carried = set(kinds)
+        for kind in carried:
+            key = (session_id, kind)
+            prior = self._last_sent.get(key)
+            self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
         for other, sent in self._last_sent.items():
-            if other[0] == session and other != key and sent.repeats:
+            if other[0] == session_id and other[1] not in carried and sent.repeats:
                 self._last_sent[other] = _Sent(sent.sent_at, 0)
 
     def _forget_expired_limits(self) -> None:
@@ -458,12 +786,34 @@ class ActivityNotifier:
         backoff to two minutes -- a backoff that could never reach its second step, which is
         exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
         one; the entry is inert during it, since the window has already passed.
+
+        **Under a floor, and the floor is the whole of the taper working at all.** Both terms
+        above scale with the count they exist to preserve, so at zero repeats the horizon was
+        four minutes -- and a kind observed less often than *that* always found its own entry
+        already discarded, was re-created at zero, and could never reach the first doubling.
+        The counter is what makes each wait longer, and it could not climb. `Stop` fires per
+        turn and a turn routinely takes longer than four minutes, so this was the ordinary
+        case: a lone `Stop` every five minutes produced 96 messages over eight hours against a
+        taper intending twelve, and every notification in the pile was individually true.
+
+        The bootstrapping problem is why a proportional horizon cannot fix itself: the entry
+        must already have a high count to be kept long enough to earn a high count. So the
+        floor is a fixed quantity that does not consult the count at all -- the widest window
+        the backoff can ever reach. Anything reporting more often than that hourly cap now
+        accumulates, which is every case the cap was designed for.
+
+        It is a floor rather than a removal because the map is still unbounded over the life
+        of a service launching sessions all day, and forgetting is what bounds it. A kind that
+        genuinely stops reporting is still forgotten -- an hour or so later than before, one
+        small entry per (session, kind) -- and that is the whole price.
         """
         moment = self._now()
+        floor = self._window(_MAXIMUM_BACKOFF_DOUBLINGS)
         expired = [
             key
             for key, sent in self._last_sent.items()
-            if moment - sent.sent_at >= self._window(sent.repeats) * _RETENTION_WINDOWS
+            if moment - sent.sent_at
+            >= max(self._window(sent.repeats) * _RETENTION_WINDOWS, floor)
         ]
         for key in expired:
             del self._last_sent[key]
