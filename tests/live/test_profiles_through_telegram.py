@@ -157,6 +157,14 @@ def _durable_callbacks_exist(database_path: Path) -> bool:
 
     The table is what makes a button drawn before a restart still resolve after it. Its
     presence is the auditable half; that the *press* worked is owner-witnessed.
+
+    **A missing table raises rather than answering False.** The first version of this check
+    named `callback_state`, and the table is `callback_states` -- so it swallowed its own
+    typo and reported "the owner journey left no durable trace of step 9" against a store
+    that had the trace all along. An audit that reports a coverage gap when what it actually
+    hit was its own wrong table name is worse than one that crashes: the gap is plausible,
+    so it gets believed. Schema drift and journey coverage are different findings and this
+    now tells them apart.
     """
     connection = _read_only(database_path)
     try:
@@ -166,9 +174,12 @@ def _durable_callbacks_exist(database_path: Path) -> bool:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        if "callback_state" not in names:
-            return False
-        return connection.execute("SELECT COUNT(*) FROM callback_state").fetchone()[0] > 0
+        if "callback_states" not in names:
+            raise AssertionError(
+                "callback_states is absent from the production schema; this audit is checking "
+                f"a table that does not exist. Tables present: {sorted(names)}"
+            )
+        return connection.execute("SELECT COUNT(*) FROM callback_states").fetchone()[0] > 0
     finally:
         connection.close()
 
