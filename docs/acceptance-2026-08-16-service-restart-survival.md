@@ -138,11 +138,12 @@ would have meant opening sqlite by hand):
 - [x] **No pane process is a zombie or stopped** — all three are `S` (interruptible sleep) with
       `s` (session leader) and `+` (foreground group). A `Z` or `T` here would mean a pid that
       survived in name only.
-- [ ] **The agent responds to input — NOT PERFORMED.** Two of the three sessions were attached by
-      the owner at the time of reading and were deliberately not disturbed; the third was not
-      attached to either. A live pid and a non-zombie state are **necessary and not sufficient**,
-      exactly as the drill says, and nothing below the owner actually using the session can close
-      that gap. Marked unperformed rather than folded into the confirmations above.
+- [x] **The agent responds to input — confirmed by the owner**, asked directly after the
+      readings above were taken: *"Yes, they still work"*. This is the one step nothing on the
+      host can answer. A live pid and a non-zombie state are **necessary and not sufficient**,
+      exactly as the drill says, so this is recorded as the owner's confirmation rather than as
+      an inference from the process table. Two of the three sessions were attached by the owner
+      at the time of reading and were deliberately not disturbed by the assistant.
 - [ ] **A normal stop after the restart — NOT PERFORMED.** Stopping a session the owner is
       working in was out of the question, so the drill's closing
       `graceful_stop_requested` / `pane_exited` / `cleanup_confirmed` sequence was not exercised
