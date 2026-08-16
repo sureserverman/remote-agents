@@ -1082,3 +1082,46 @@ async def test_a_full_queue_costs_the_session_that_filled_it_not_the_quiet_ones(
     assert {f"quiet-{index}" for index in range(5)} <= held, (
         "the quiet sessions' only reports were evicted by a louder neighbour"
     )
+
+
+async def test_an_observation_the_message_could_not_hold_is_owed_not_spent() -> None:
+    """The line cap must not become a second way to lose the highest-value signal.
+
+    Both gate readers found this independently. `activity_text` spells out the newest five
+    observations and folds the rest into "and N earlier"; `_send` was stamping the rate limit
+    for *every* kind in the group. So a `needs_answer` sitting behind five newer `completed`
+    reports was never rendered, recorded as though it had been told to the owner, and then
+    dropped -- a successfully sent group is not re-queued. The agent is waiting, nobody is told,
+    and the stamp suppresses the next report of it too.
+
+    Reachable exactly where `_MAXIMUM_LINES_PER_MESSAGE`'s docstring says the cap is reachable
+    at all: a backlogged drain of 200 records over 20 sessions leaves ten per session.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    waiting = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+    clock.advance(1)
+    newer = [
+        _for(
+            SESSION_A,
+            ActivityKind.COMPLETED,
+            f"turn {index}",
+            clock.moment + timedelta(seconds=index),
+        )
+        for index in range(5)
+    ]
+
+    assert await notifier.deliver([waiting, *newer]) == 1
+
+    text = str(view.sent[-1]["text"])
+    assert "and 1 earlier." in text, "the oldest is the one folded away"
+    assert "Which file?" not in text
+    assert (SESSION_A, ActivityKind.NEEDS_ANSWER) not in notifier._last_sent, (
+        "a kind nobody was shown must not be recorded as told"
+    )
+    assert notifier.pending_count() == 1, "and it is owed, not spent"
+
+    # The next pass says it, rather than it being lost with the group that could not carry it.
+    clock.advance(1)
+    assert await notifier.deliver([]) == 1
+    assert "Which file?" in str(view.sent[-1]["text"])

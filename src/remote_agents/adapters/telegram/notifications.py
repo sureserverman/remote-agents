@@ -138,6 +138,26 @@ cannot be acted on at all.
 """
 
 
+def shown_in_message(group: SessionGroup) -> tuple[AgentActivity, ...]:
+    """Which of a group's observations one message actually spells out.
+
+    The *newest* that fit, not the first. `grouped_for_delivery` orders a group oldest-first so
+    it reads as a timeline, and taking a prefix therefore spelled out the stalest lines and
+    folded the freshest into the counter -- a `needs_answer` arriving after five `completed`
+    reports is the one line worth a thumb, and it was the one being hidden.
+
+    **Public, and shared with the notifier, because the answer had two owners and they
+    disagreed.** `activity_text` rendered the newest five while `_send` stamped the rate limit
+    for every kind in the group, so an observation folded into "and N earlier" was recorded as
+    told to the owner and then dropped, having been neither. For `NEEDS_ANSWER` -- the highest
+    value signal this service has -- that is the agent waiting and nobody being told, with the
+    stamp then suppressing the next report of it too. It is the same silence-by-self-suppression
+    the window filter caused, reached through the line cap instead, which is the argument for
+    one function rather than two call sites that happen to agree.
+    """
+    return group.activities[-_MAXIMUM_LINES_PER_MESSAGE:]
+
+
 def activity_text(group: SessionGroup, *, display: str) -> str:
     """One session's news as the whole message the owner receives about it.
 
@@ -171,11 +191,7 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     the service were less sure this time -- when it is saying the same structural thing about
     the same kind.
     """
-    # The *newest* that fit, not the first. `grouped_for_delivery` orders a group oldest-first
-    # so it reads as a timeline, and taking a prefix therefore spelled out the stalest lines and
-    # folded the freshest into the counter -- a `needs_answer` arriving after five `completed`
-    # reports is the one line worth a thumb, and it was the one being hidden.
-    shown = group.activities[-_MAXIMUM_LINES_PER_MESSAGE:]
+    shown = shown_in_message(group)
     hidden = len(group.activities) - len(shown)
     bulleted = len(shown) > 1
 
@@ -484,7 +500,7 @@ class ActivityNotifier:
                 held.extend(group.activities)
                 continue
             try:
-                delivered = await self._send(group)
+                delivered, unsaid = await self._send(group)
             except Exception:
                 # Held whole, and the pass stops. The record is already off disk -- the drain
                 # deletes before it returns (DEC-013 cost 3) and DEC-026 keeps this queue in
@@ -496,6 +512,8 @@ class ActivityNotifier:
                 refused = True
                 continue
             sent += int(delivered)
+            # What the message could not spell out is owed, not spent.
+            held.extend(unsaid)
         self._sent_this_pass = sent > 0
         # What is held is the *collapsed* set, not what arrived: two identical observations are
         # one thing said twice, and re-holding both would resurrect a duplicate the next pass
@@ -581,8 +599,14 @@ class ActivityNotifier:
             counts[loudest],
         )
 
-    async def _send(self, group: SessionGroup) -> bool:
-        """Deliver one session's news as one message, or decline to, and say which.
+    async def _send(self, group: SessionGroup) -> tuple[bool, tuple[AgentActivity, ...]]:
+        """Deliver one session's news as one message, and answer what is still owed.
+
+        Returns whether a message went out, and the observations it did *not* spell out --
+        which the caller holds for the next pass rather than dropping. A group larger than
+        `_MAXIMUM_LINES_PER_MESSAGE` is folded into "and N earlier", and those observations
+        have then been neither shown nor sent; discarding them loses agent output permanently,
+        since the drain deleted the record before it ever reached this queue.
 
         Declining is not failing: a group the rate limit emptied and a session that can no
         longer be named are both finished business, so the caller drops them rather than
@@ -607,13 +631,21 @@ class ActivityNotifier:
         sixty-four minutes' messages, so it was nearly always the kind that got reset, and its
         backoff never advanced past the first step. Measured on the module's own premises
         (`Stop` fires per turn), an overnight session with a periodic companion produced 75 to
-        255 notifications where the taper intends 12 -- verbatim the every-two-minutes storm
-        `_window` was written to prevent. Sending the whole group closes both: what was
-        observed rides along, and what was observed is what `_record_sent` is told about.
+        255 notifications where the taper intends 12. Sending the whole group closes both: what
+        was observed rides along, and what was observed is what `_record_sent` is told about.
+
+        **It closes them and does not restore the taper**, which is worth stating here because
+        the numbers above invite the opposite reading. `_forget_expired_limits` prunes an entry
+        at `_window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
+        a kind observed less often than that finds no entry, is re-created at zero, and never
+        doubles at all. Measured after this change: a lone `Stop` every four minutes still
+        produces 120 messages in eight hours. That defect is older than this module's grouping
+        and is `_forget_expired_limits`' to answer, not this method's; it is named here so the
+        next reader does not take "the storm is closed" for "the backoff works".
         """
         moment = self._now()
         if not any(self._due(activity, moment) for activity in group.activities):
-            return False
+            return False, ()
         display = await self._display(group.session_id)
         if display is None:
             # Two refusals arrive as one `None`, and this module is deliberately unable to
@@ -624,7 +656,7 @@ class ActivityNotifier:
             # (`service._display_for`), because a notifier that branched on session state
             # would be a driver adapter making lifecycle policy (DEC-001).
             _LOG.info("dropping an activity this service will not speak about")
-            return False
+            return False, ()
 
         message_id = await self._view.send_apart(
             self._bot,
@@ -634,10 +666,14 @@ class ActivityNotifier:
             },
         )
         # Recorded before the keyboard, because by here the owner has already been told. A
-        # markup failure below must not re-send the message it is trying to decorate. Every
-        # kind the message carried is stamped -- including one that was not itself due, since
-        # it has now been said and is a repeat from here on.
-        self._record_sent(group.session_id, (a.kind for a in group.activities), moment)
+        # markup failure below must not re-send the message it is trying to decorate.
+        #
+        # Stamped for what was *rendered*, never for the whole group. A kind folded into "and
+        # N earlier" has not been told to anyone, and stamping it would both silence it and
+        # suppress its next report. What it does cover is a kind that was rendered without
+        # being due -- that one has now been said, and is a repeat from here on.
+        shown = shown_in_message(group)
+        self._record_sent(group.session_id, (a.kind for a in shown), moment)
         # The guard covers the mint and the render as well as the call, and the width is the
         # point. An earlier version wrapped only `edit_message_reply_markup`, which left two
         # raising steps outside it -- and a raise there escaped into `deliver`, which logged
@@ -668,7 +704,7 @@ class ActivityNotifier:
             # A message that arrived without one is degraded, and re-sending it to fix that
             # would be the storm this class exists to prevent.
             _LOG.warning("an activity notification was sent without its Open session button")
-        return True
+        return True, group.activities[: len(group.activities) - len(shown)]
 
     def _due(self, activity: AgentActivity, moment: datetime) -> bool:
         """Whether this one observation is news, given when its kind was last sent."""
