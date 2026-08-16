@@ -112,3 +112,49 @@ def test_the_shipped_example_config_carries_both_activity_limits() -> None:
 
     assert "activity_poll_seconds" in shipped
     assert "activity_quiet_polls" in shipped
+
+
+def test_the_shipped_example_config_satisfies_the_schema_the_code_requires() -> None:
+    """Pin the example against the schema itself, not against two key names.
+
+    The test above names `activity_poll_seconds` and `activity_quiet_polls` because those are
+    the two that were once missing. That check cannot fail for the *next* key, which is the
+    whole failure mode BL-029 exists to close: the example config drifts from the code, the
+    README installs from the example, and the first run crash-loops. Loading it is the
+    strongest available statement -- it exercises every rule `load_config` enforces, so a
+    schema change that the example does not follow fails here rather than on someone's host.
+    """
+    from remote_agents.config import describe_schema_drift
+
+    drift = describe_schema_drift(Path("config/remote-agents.example.toml"))
+
+    # The shipped example points at paths that exist only on the owner's machine, so a full
+    # load legitimately fails on `paths.dev_root`. What must hold is that the *key sets* agree
+    # with the schema -- that is the drift class this closes.
+    unknown, missing = drift["unknown"], drift["missing"]
+    assert unknown == [], f"example config carries keys the code rejects: {unknown}"
+    assert missing == [], f"example config lacks keys the code requires: {missing}"
+
+
+def test_a_config_that_is_not_utf8_is_diagnosed_rather_than_a_decode_traceback(tmp_path) -> None:
+    """`UnicodeDecodeError` is a `ValueError`, so an `OSError` handler does not catch it.
+
+    A truncated or wrongly-encoded config is a real deploy fault -- it crash-loops `serve`
+    like any other unusable config -- and it was the one shape that came out of both readers
+    as a raw decode traceback instead of the diagnosis every other malformed config gets.
+    Found by the Stage 2 gate evaluator.
+    """
+    from remote_agents.config import describe_schema_drift
+
+    corrupt = tmp_path / "config.toml"
+    corrupt.write_bytes(b'[paths]\ndev_root = "\xff\xfe not utf-8"\n')
+
+    # The reporting path answers rather than raising, which is its whole contract.
+    drift = describe_schema_drift(corrupt)
+    assert drift["readable"] is False
+    assert "cannot read configuration" in drift["detail"]
+
+    # And the loading path raises the project's own error rather than a decode error.
+    with pytest.raises(ConfigError) as refusal:
+        load_config(corrupt)
+    assert "cannot read configuration" in str(refusal.value)

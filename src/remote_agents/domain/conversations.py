@@ -52,7 +52,21 @@ class ProviderConversationId:
 
 @dataclass(frozen=True, slots=True)
 class ConversationSummary:
-    """Safe selection metadata; provider IDs remain server-side."""
+    """Selection metadata: an opaque reference out, the provider ID never in.
+
+    The old summary line said "safe selection metadata", which read as a claim about the
+    whole record and was only ever true of half of it. `reference` is the server-resolved
+    opaque key, `ProviderConversationId` is not a field here at all, and that boundary is
+    enforced and covered by `tests/security/test_session_catalog.py`. `description` is a
+    weaker claim and is now written as one: it is the owner's own last prompt or generated
+    title (`adapters/agents/claude_sessions.py` `_resume_description`), checked below only
+    for length and printability and never for content, so it can carry a filesystem path
+    the owner typed. Neither surface filters it: the terminal renders the whole string
+    (`adapters/tui/model.py` `conversation_row`) and Telegram a 48-character prefix
+    (`adapters/telegram/service.py` `_resume_button_text`) -- shorter, but not screened.
+    Filtering was considered and declined -- "path-shaped" has no clean definition, and a
+    picker row redacted into ambiguity is worse at the one job the list has (BL-007).
+    """
 
     reference: ConversationReference
     profile_id: ProfileId
@@ -73,7 +87,12 @@ class ConversationSummary:
 
 
 def display_description(value: object) -> str | None:
-    """Normalize an owner-approved provider title to a bounded single line."""
+    """Normalize a provider title to a bounded single line.
+
+    "Owner-approved" was the old wording and it overstated the case: nothing approves this
+    text. It is whatever the owner last typed at the agent, read back out of the provider's
+    own transcript. Bounding and whitespace collapsing are the whole of what happens to it.
+    """
     if not isinstance(value, str):
         return None
     normalized = " ".join(value.split())

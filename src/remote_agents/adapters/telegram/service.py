@@ -78,6 +78,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     explain_state,
     remote_control_available,
+    state_word,
     trust_available,
 )
 from remote_agents.config import TelegramSecrets
@@ -1982,7 +1983,19 @@ def _split_resume_page(value: str) -> tuple[str, str, int] | None:
 
 
 def _resume_button_text(description: str | None, updated_at: datetime) -> str:
-    """Keep owner-approved titles useful without overflowing the compact keyboard."""
+    """Keep a resume title useful without overflowing the compact keyboard.
+
+    "Owner-approved" was the old wording here and it implied a vetting step that does not
+    exist: this is the owner's own last instruction to the agent, read back out of the
+    provider's transcript and truncated to fit a button (BL-007). See
+    `domain/conversations.py` `ConversationSummary` for what is and is not screened.
+
+    The obvious word for that text is one `tests/architecture/check_telegram_actions.py`
+    forbids anywhere in this package, comments included, because its presence here would
+    otherwise mean this adapter had grown a way to *send* one. The check is a plain substring
+    scan and cannot tell prose from a call, which is the right trade for a guard on the
+    control surface -- so the wording works around it rather than the guard being narrowed.
+    """
     prefix = description[:48].rstrip() if description else "Resumable"
     return f"{prefix} · {updated_at:%Y-%m-%d %H:%M UTC}"
 
@@ -2012,7 +2025,10 @@ def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[But
 
 
 def _session_row_label(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
+    # The shared authority, not `state.value` -- the identical line in `adapters/tui/model.py`
+    # is why both surfaces rendered the two kinds of ORPHANED the same way (BL-031).
+    word = state_word(record.state, record.orphan_provenance)
+    return f"{record.display.rendered} · {word} · {age(record.created_at)}"
 
 
 def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:

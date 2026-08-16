@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from remote_agents.adapters.tui.context import ProfileChoice
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
+from remote_agents.application.session_actions import state_word
 from remote_agents.domain.conversations import ConversationSummary
 from remote_agents.domain.models import SessionRecord, normalize_label
 from remote_agents.domain.projects import ProjectIdentity
@@ -105,10 +106,23 @@ def selectable_area(value: str) -> bool:
 
 
 def conversation_row(summary: ConversationSummary) -> str:
-    """Safe selection metadata only — never a provider ID, path, or path fragment."""
+    """Render a conversation for selection: never a provider ID, and no filtering beyond that.
+
+    This line used to promise "never a provider ID, path, or path fragment". The first third
+    is true and enforced -- `ProviderConversationId` is not a field of `ConversationSummary`
+    and cannot reach here. The rest was never enforced anywhere: `description` is the owner's
+    own last prompt, checked for length and printability and never for content, so a path they
+    typed is rendered like any other text (BL-007, and see `ConversationSummary` itself).
+    """
     described = summary.description or "(no description)"
     return f"{described} · {summary.state.value} · {age(summary.updated_at)}"
 
 
 def session_row(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
+    """One list row. The state word comes from the shared policy, never from `state.value`.
+
+    Both surfaces had this exact line, independently, which is how they rendered both kinds
+    of ORPHANED identically (BL-031). `state_word` is the single authority now.
+    """
+    word = state_word(record.state, record.orphan_provenance)
+    return f"{record.display.rendered} · {word} · {age(record.created_at)}"

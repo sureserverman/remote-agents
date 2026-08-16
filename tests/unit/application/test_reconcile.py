@@ -39,6 +39,13 @@ class InMemoryStore:
     async def save(self, item: SessionRecord) -> None:
         self.records[item.session_id] = item
 
+    async def get(self, session_id: SessionId) -> SessionRecord | None:
+        # On the port since before this fake existed, and unimplemented here until the
+        # reconciler needed it -- the same class of gap the `record_event` comment below
+        # names. A fake narrower than the port it stands in for passes tests the production
+        # path would fail.
+        return self.records.get(session_id)
+
     async def list(self) -> tuple[SessionRecord, ...]:
         return tuple(self.records.values())
 
@@ -324,3 +331,81 @@ async def test_mutation_drain_waits_for_active_operation_and_closes_admission() 
     with pytest.raises(RuntimeError, match="mutations are draining"):
         async with locks.operation():
             pass
+
+
+async def test_a_stop_in_flight_is_left_alone_however_old_the_session_is() -> None:
+    """The guard must key on a caller being mid-flight, not on the session's age.
+
+    `_has_settled` exists to keep a reconciliation pass off a record whose own caller is
+    between two writes -- its docstring says so outright: "Reconciling either window would
+    overwrite a state its own caller is about to record, and that caller's event is then an
+    illegal transition from the state written underneath it." That is exactly the crash the
+    deployed service was producing, `InvalidTransition: pane_exited is not legal while
+    session is running`, reaching the owner as "callback action failed while its pending
+    notice was on screen".
+
+    Before the fix the only guard was `now - record.created_at >= settle_after` -- the age of
+    the *session*, not the progress of the *caller*. So it held for the first two minutes of a
+    session's life and then switched itself off permanently: a launch was protected because a
+    launch happens at the beginning, and a stop almost never was, because the owner stops a
+    session after working in it. Every other test in this file passes `settle_after=0`, which
+    disables the window entirely, which is why none of them caught it.
+    """
+    stopping = replace(
+        record(SessionState.STOP_REQUESTED),
+        created_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+    store = InMemoryStore((stopping,))
+    locks = SessionLocks()
+    service = ReconciliationService(store, settle_after=timedelta(0), locks=locks)
+    observation = (TerminalObservation(stopping.session_id, live=False, preserved=False),)
+
+    # Exactly what `SessionService.graceful_stop` holds across its two `record_event` calls.
+    async with locks.for_session(stopping.session_id):
+        await service.reconcile(observation)
+
+    assert store.events == [], "the reconciler wrote underneath an in-flight stop"
+    assert store.records[stopping.session_id].state is SessionState.STOP_REQUESTED
+
+
+async def test_a_record_no_caller_is_holding_is_still_reconciled() -> None:
+    """The other direction, which is what stops the fix being 'never reconcile anything'.
+
+    A guard that never lets the reconciler write is trivially crash-free and silently
+    abandons every record that really is stuck -- a launch that died leaves STARTING behind,
+    and no owner action can resolve it. Once the lock is released there is no caller left to
+    protect, so the pass must act.
+    """
+    stopping = replace(
+        record(SessionState.STOP_REQUESTED),
+        created_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+    store = InMemoryStore((stopping,))
+    locks = SessionLocks()
+    service = ReconciliationService(store, settle_after=timedelta(0), locks=locks)
+    observation = (TerminalObservation(stopping.session_id, live=False, preserved=False),)
+
+    async with locks.for_session(stopping.session_id):
+        await service.reconcile(observation)
+    assert store.events == []
+
+    await service.reconcile(observation)
+
+    # Not-live and not-preserved is *ambiguous* evidence rather than a confirmed ending, so
+    # the record is held aside rather than closed. The point here is only that it acts.
+    assert store.events == [LifecycleEvent.AMBIGUOUS_TERMINAL_EVIDENCE]
+    assert store.records[stopping.session_id].state is SessionState.ORPHANED
+
+
+async def test_asking_whether_a_session_is_busy_does_not_mint_a_lock_for_it() -> None:
+    """`for_session` is a setdefault, so a read through it would allocate on every pass.
+
+    The reconciler asks about every stored record on every pass, for the life of a process
+    designed to run for weeks. Routing that through `for_session` would grow the lock map by
+    one entry per session asked about and never release it.
+    """
+    locks = SessionLocks()
+    session_id = SessionId.new()
+
+    assert locks.session_is_busy(session_id) is False
+    assert locks._locks == {}

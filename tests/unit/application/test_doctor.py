@@ -132,3 +132,33 @@ def test_production_doctor_blocks_a_missing_agent_executable() -> None:
         "status": "degraded",
         "reason": "profile_blocked",
     }
+
+
+def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() -> None:
+    """Pin the contract, which `bootstrap.py` currently short-circuits before reaching.
+
+    A Stage 2 review called this branch dead, and from the one live call site it is:
+    `doctor` returns a minimal report before ever building a full one when the config will
+    not load. The branch is kept and tested rather than deleted because `production_doctor`
+    is an application-layer function whose signature accepts a drift report -- a second
+    caller handing it an unreadable config and getting `healthy: true` back would be a
+    silent wrong answer, and the guard is what makes the parameter mean something.
+    """
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(ProfileCompatibility(ProfileId("codex"), True, None, "AVAILABLE", None),),
+        registered_projects=2,
+        discovered_projects=3,
+        catalogue_projects=4,
+        config_drift={"readable": False, "missing": ["activity_quiet_polls"], "unknown": []},
+    )
+
+    # Every component is green and the deploy is still not healthy, which is the whole point:
+    # the service crash-loops on a config it cannot load however well everything else answers.
+    assert all(component["status"] == "healthy" for component in report["components"].values())
+    assert report["healthy"] is False
+    assert report["config"]["missing"] == ["activity_quiet_polls"]

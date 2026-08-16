@@ -64,9 +64,15 @@ from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
-from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.services import SessionService
-from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
+from remote_agents.config import (
+    ConfigError,
+    TelegramSecrets,
+    describe_schema_drift,
+    load_config,
+    load_secrets,
+)
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
@@ -303,6 +309,13 @@ def main(
     doctor_parser.add_argument("--fake-terminal", action="store_true")
     doctor_parser.add_argument("--profiles", action="store_true")
     doctor_parser.add_argument("--json", action="store_true")
+    # BL-030: the append-only lifecycle history has been written since migration 1 with
+    # nothing able to read it back, so the runbook described an audit trail an operator could
+    # only reach by opening sqlite by hand. It lands on `doctor` rather than on the bot or the
+    # TUI because it is a read-only diagnostic, which is what `doctor` already is -- and
+    # because adding a row to either surface would move the parity contract for a report
+    # neither surface has a use for mid-session.
+    doctor_parser.add_argument("--history", type=str, default=None)
     restore_parser = subcommands.add_parser("restore-database")
     restore_parser.add_argument("--database", type=Path, required=True)
     restore_parser.add_argument("--backup", type=Path)
@@ -349,8 +362,42 @@ def main(
             result = profile_doctor(probe_profiles(closed_profiles()))
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
+        if arguments.history is not None:
+            return _print_session_history(arguments)
         paths = ProductionPaths.for_home(Path.home())
-        config = load_config(arguments.config or paths.config_path)
+        config_path = arguments.config or paths.config_path
+        # `add-project` and `tui` have both caught ConfigError here for as long as they have
+        # existed; `doctor` did not, which meant the one command an operator runs *before*
+        # trusting a deploy raised a traceback on exactly the input it exists to diagnose
+        # (BL-029). Diagnose first, then decide whether there is anything left to check.
+        drift = describe_schema_drift(config_path)
+        if not drift["readable"]:
+            # Report the one thing that was actually observed, and say plainly that nothing
+            # else was. The obvious shape here is to call `production_doctor` with every
+            # component set False, and it is wrong: `core_ready=False` renders as
+            # `registry_unavailable`, `tmux_ready=False` as `tmux_unavailable`, and neither
+            # was ever probed -- the registry path and the database path are read *out of*
+            # the config that would not load. That report would assert six failures nobody
+            # looked for, on a host where tmux may be perfectly fine, and send an operator
+            # chasing five phantoms behind one real fault.
+            report = {
+                "healthy": False,
+                "config": drift,
+                "components": {},
+                "checked": False,
+            }
+            print(json.dumps(report, sort_keys=True) if arguments.json else report)
+            return 1
+        # Guarded even though `describe_schema_drift` just proved the file loads, which is the
+        # try/except the plan asked for and the check-then-act above does not replace. The two
+        # calls are two separate reads, so an operator editing the deployed config in the
+        # window between them would land the very traceback BL-029 exists to remove -- and
+        # editing that file is exactly what someone running `doctor` is about to do.
+        try:
+            config = load_config(config_path)
+        except ConfigError as error:
+            print(error, file=sys.stderr)
+            return 1
         registry = load_registry(config.registry_path)
         discovered = discover_projects(config.dev_root)
         catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
@@ -370,6 +417,10 @@ def main(
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
             catalogue_projects=len(catalogue.catalogue),
+            # Carried on the healthy path too, so a green report says the config *was*
+            # compared rather than leaving the operator to infer it from the absence of a
+            # complaint. Silence and a passed check look identical otherwise.
+            config_drift=drift,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -418,6 +469,17 @@ def main(
             return 1
         finally:
             connection.close()
+        # Closed above, exec'd below, and that order is the guarantee (DEC-023). The alternative
+        # was Textual's `App.suspend()`, which would have kept this process — and therefore this
+        # connection — alive underneath the attached tmux client, buying a detach that returns the
+        # owner to the session list instead of to the shell. It was declined: a suspended surface
+        # holds the SQLite handle for the whole attached session, which breaks what
+        # README.md:173-175 states outright ("the attached terminal holds no database handle") and
+        # changes the two-writer story DEC-005 accepted, where the bot and this terminal share the
+        # store and the terminal simply lets go while the owner is attached. Declining costs a UX
+        # nicety — a re-entry is a fresh launch; adopting costs a documented guarantee, and the
+        # guarantee is load-bearing in a way the nicety is not. DEC-005 stands unamended; DEC-023
+        # declines to override it and records no supersede.
         return attach_to(request)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
@@ -509,6 +571,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     conversations = _conversation_service(project_paths)
     secrets = load_secrets()
     store = SQLiteSessionStore(connection)
+    # One lock map, shared by the two objects that write session state. See the note on the
+    # ReconciliationService below: this single binding is the fix, and two instances here
+    # would look identical and repair nothing.
+    locks = SessionLocks()
     return ServiceComposition(
         PrivateBotBoundary(
             secrets.owner_user_id,
@@ -524,7 +590,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
             max_label_length=config.max_label_length,
-            launcher=SessionService(store, terminal),
+            launcher=SessionService(store, terminal, locks=locks),
             conversations=conversations,
             creator=_project_creator(config),
             capture=terminal.capture,
@@ -534,7 +600,13 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         # Readiness is wired in deliberately: without it, reconciliation promotes any
         # FAILED session with a live pane to RUNNING, including one stopped dead on a
         # trust dialog it cannot answer. Observed in the wild 2026-08-14.
-        ReconciliationService(store, confirm_ready=terminal.confirm_ready),
+        #
+        # The locks are shared with the SessionService above, and that sharing is the whole
+        # fix for the InvalidTransition crashes: the reconciler runs on a timer beside the
+        # service and writes `record_event` directly, so without a lock in common it would
+        # overwrite the state of a session whose graceful stop is between its own two writes.
+        # Constructing two SessionLocks here would type-check, run, and fix nothing.
+        ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
         paths.activity_directory,
     )
@@ -670,7 +742,16 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
     """Read the checked private EnvironmentFile for this read-only metadata audit."""
     environment_path = paths.require_private_environment()
     environment: dict[str, str] = {}
-    for line in environment_path.read_text(encoding="utf-8").splitlines():
+    try:
+        contents = environment_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        # The fourth member of the decode class swept in this stage, and the only one that
+        # had no handler at all: every other malformed-environment-file path here raises
+        # ConfigError, so a truncated or wrongly-encoded file was the one shape that came out
+        # as a raw traceback. The message deliberately says nothing about the file's content
+        # -- this is the credential file.
+        raise ConfigError("Telegram environment file is unreadable") from error
+    for line in contents.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -681,3 +762,56 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
     secrets = load_secrets(environment)
     assert secrets is not None
     return secrets
+
+
+def _print_session_history(arguments) -> int:
+    """Print one session's recorded lifecycle events (BL-030).
+
+    Reads through the same private-state guard every other command uses, so a history read
+    cannot be pointed at a database outside the owner's state directory. Nothing here is
+    mutable and nothing is sent anywhere -- it is the read half the table has been missing.
+    """
+    paths = ProductionPaths.for_home(Path.home())
+    try:
+        # Called for its refusal, not its value: `_private_state_config` raises when the
+        # config names a database outside the owner's private state directory, which is what
+        # stops a history read being pointed at an arbitrary file.
+        _private_state_config(arguments.config or paths.config_path, paths)
+        session_id = SessionId.parse(arguments.history)
+    except (ConfigError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    connection = paths.open_database(open_database, migrations=MIGRATIONS)
+    try:
+        store = SQLiteSessionStore(connection)
+        record = asyncio.run(store.get(session_id))
+        if record is None:
+            print(f"no session recorded for {session_id}", file=sys.stderr)
+            return 1
+        events = asyncio.run(store.events(session_id))
+    finally:
+        connection.close()
+    if arguments.json:
+        print(
+            json.dumps(
+                {
+                    "session": str(session_id),
+                    "state": record.state.value,
+                    "events": [
+                        {
+                            "event": event.event_type,
+                            "at": event.created_at.isoformat(),
+                            "error_code": event.error_code,
+                        }
+                        for event in events
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(f"{session_id} · {record.state.value}")
+    for event in events:
+        suffix = f" ({event.error_code})" if event.error_code else ""
+        print(f"  {event.created_at.isoformat()}  {event.event_type}{suffix}")
+    return 0

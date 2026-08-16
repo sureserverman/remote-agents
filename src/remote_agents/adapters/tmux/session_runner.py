@@ -29,7 +29,10 @@ def load_intent(session_id: SessionId, intent_directory: Path) -> LaunchIntent:
     path = intent_directory / f"{session_id}.json"
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        # `UnicodeDecodeError` is a `ValueError` rather than an `OSError`, so a truncated or
+        # corrupt intent file escaped as a decode traceback instead of the message this
+        # function exists to give. Same class as the two handlers in `config.py`.
         raise ValueError("launch intent is unavailable or invalid") from error
     required = {"session_id", "profile_id", "executable", "argv", "cwd", "environment"}
     if not isinstance(document, dict) or set(document) != required:

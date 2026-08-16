@@ -91,11 +91,22 @@ class SessionService:
                 datetime.now(UTC),
             )
             await self._store.save(record)
-            observation = await self._terminal.launch(
-                session_id, command.project_id, command.profile_id
-            )
-            event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-            return await self._store.record_event(session_id, event)
+            # From here the session id exists, so the per-session lock can be taken -- and
+            # must be. `ReconciliationService.session_is_busy` answers "is a caller mid-flight
+            # on this session", and it can only answer from a held lock. Without this, a
+            # launch is invisible to it for its whole duration: the reconciler falls back to
+            # the settle window, and a launch slower than that window (a cold agent CLI) is
+            # reconciled to FAILED underneath itself. The launch's own `record_event` then
+            # runs `transition(FAILED, STARTUP_ERROR)`, which is not in the matrix, and raises
+            # the same InvalidTransition class this stage exists to close. Found by the Stage
+            # 4 gate review; the stop half was fixed first because that is the half production
+            # actually hit, a stop being routinely slower than the window and a launch rarely.
+            async with self._locks.for_session(session_id):
+                observation = await self._terminal.launch(
+                    session_id, command.project_id, command.profile_id
+                )
+                event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
+                return await self._store.record_event(session_id, event)
 
     async def resume(self, command: ResumeCommand) -> SessionRecord:
         """Create one managed identity for a server-resolved provider conversation."""
@@ -128,14 +139,18 @@ class SessionService:
             source_id,
         )
         await self._store.save(record)
-        observation = await self._terminal.resume(
-            session_id,
-            command.project_id,
-            command.profile_id,
-            command.conversation.provider_conversation_id,
-        )
-        event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-        return await self._store.record_event(session_id, event)
+        # The same shape as `launch`, and owed for the same reason: the id exists from here,
+        # so the per-session lock is what makes this resume visible to
+        # `ReconciliationService.session_is_busy` for its whole duration.
+        async with self._locks.for_session(session_id):
+            observation = await self._terminal.resume(
+                session_id,
+                command.project_id,
+                command.profile_id,
+                command.conversation.provider_conversation_id,
+            )
+            event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
+            return await self._store.record_event(session_id, event)
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())

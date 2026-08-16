@@ -17,7 +17,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
-from remote_agents.ports.session_store import ProjectUsage
+from remote_agents.ports.session_store import ProjectUsage, SessionEvent
 
 _LOG = logging.getLogger(__name__)
 
@@ -175,6 +175,30 @@ class SQLiteSessionStore:
                 idempotency_key=idempotency_key,
                 error_code=error_code,
             )
+
+    async def events(self, session_id: SessionId) -> tuple[SessionEvent, ...]:
+        """Read back the append-only lifecycle history for one session (BL-030).
+
+        The table has carried this since migration 1 with nothing able to read it, so the
+        runbook described an audit trail retrievable only by opening sqlite by hand. Ordered
+        by `event_id` rather than `created_at`: the timestamps are second-resolution strings
+        and two events inside one operation routinely share one, while the primary key is the
+        actual write order.
+
+        `idempotency_key` is deliberately not returned. It is a callback token, which is
+        exactly the class `check_surface.py` keeps off any reporting surface; `error_code` is
+        returned because `_append_event` already refuses to store an unsanitized one.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT event_type, created_at, error_code
+            FROM session_events WHERE session_id = ? ORDER BY event_id
+            """,
+            (str(session_id),),
+        ).fetchall()
+        # Positional, like `_record_from_row` below: this connection has no `row_factory`,
+        # so rows are plain tuples and name access raises.
+        return tuple(SessionEvent(row[0], datetime.fromisoformat(row[1]), row[2]) for row in rows)
 
     def _append_event(
         self,

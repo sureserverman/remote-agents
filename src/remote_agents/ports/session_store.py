@@ -30,6 +30,22 @@ class ProjectUsage:
     last_used_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class SessionEvent:
+    """One row of the append-only lifecycle history, as an operator reads it.
+
+    The table has been written since migration 1 and had no read path until BL-030: the
+    operator docs described a durable audit trail that could only be retrieved by opening
+    sqlite by hand. `error_code` is carried because `_append_event` already sanitizes it --
+    it refuses anything containing token/prompt/pane/env -- so it is the one free-text field
+    on the row that is safe to surface.
+    """
+
+    event_type: str
+    created_at: datetime
+    error_code: str | None
+
+
 class SessionStore(Protocol):
     async def next_sequence(self, project_id: ProjectId, profile_id: ProfileId) -> int: ...
     async def save(self, record: SessionRecord) -> None: ...
@@ -42,5 +58,6 @@ class SessionStore(Protocol):
     ) -> Sequence[SessionRecord]: ...
     async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord: ...
     async def set_label(self, session_id: SessionId, label: str | None) -> SessionRecord: ...
+    async def events(self, session_id: SessionId) -> Sequence[SessionEvent]: ...
     async def project_usage(self) -> Sequence[ProjectUsage]: ...
     async def claim_idempotency_key(self, key: str) -> bool: ...

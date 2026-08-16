@@ -1,4 +1,18 @@
-"""Hand the owner's terminal to the pane the local surface just started."""
+"""Hand the owner's terminal to the pane the local surface just started.
+
+**The handoff is an exec, not a suspend** (DEC-023). Textual's `App.suspend()` was the
+alternative: it would have kept the surface process alive underneath the attached tmux client
+and dropped the owner back on the session list when they detached. It is not adopted, because
+a suspended surface is still a *running* surface — it holds the SQLite handle open for as long
+as the owner stays attached. That is the whole objection. README.md:173-175 promises in writing
+that "the attached terminal holds no database handle", and the concurrency story DEC-005
+accepted rests on the same fact: the bot and this terminal are two writers, and the terminal
+letting go of its handle while the owner is attached is what keeps that pair simple. So the
+trade is a UX nicety against a documented guarantee. Declining costs the nicety — detaching
+returns to the shell rather than to the session list, so re-entering the surface is a fresh
+launch — and the guarantee is load-bearing in a way the nicety is not. DEC-005 stands
+unamended; DEC-023 declines to override it and deliberately records no supersede.
+"""
 
 from __future__ import annotations
 

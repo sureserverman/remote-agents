@@ -116,6 +116,10 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
     report = __import__("json").loads(capsys.readouterr().out)
     assert report["healthy"] is True
     assert set(report["components"]) == {"core", "store", "tmux", "telegram", "service", "profiles"}
+    # A green report says the config was compared, rather than leaving the operator to infer
+    # it from the absence of a complaint.
+    assert report["config"]["readable"] is True
+    assert report["config"]["missing"] == [] and report["config"]["unknown"] == []
     assert [profile["status"] for profile in report["profiles"]] == ["AVAILABLE"] * 5
 
 
@@ -1534,3 +1538,127 @@ async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tm
 
     assert len(bot.sends) == 1
     assert boundary.notifier.pending_count() == 0
+
+
+def _doctor_config_text(tmp_path, limits: str) -> str:
+    return (
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        f"[limits]\n{limits}"
+    )
+
+
+def _arrange_doctor(tmp_path, monkeypatch, config_text: str) -> None:
+    """Wire `doctor` exactly as the healthy-path test does, but over a given config."""
+    config = tmp_path / "config.toml"
+    config.write_text(config_text, encoding="utf-8")
+    paths = _DoctorPaths(config)
+    monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
+    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", lambda _argv: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._telegram_credentials_are_private", lambda _paths: True
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
+    monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
+    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.probe_profiles",
+        lambda *_args, **_kwargs: (_compatibility("claude"),),
+    )
+
+
+def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagnose(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The real incident: a deployed config that predates two keys the code now requires.
+
+    `docs/acceptance-2026-08-11-agent-activity.md:258-271` records the service crash-looping
+    through three restarts on exactly this, and `doctor` -- the command an operator runs
+    *before* trusting a deploy -- died the same way, with a traceback instead of a diagnosis.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(tmp_path, "max_label_length = 40\nproject_page_size = 10\n"),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["readable"] is False
+    # Nothing else was probed -- the registry and database paths are read *out of* the config
+    # that would not load -- so nothing else is claimed. A report asserting six component
+    # failures nobody looked for would send an operator chasing phantoms behind one fault.
+    assert report["checked"] is False
+    assert report["components"] == {}
+    # Naming the keys is the whole point: the runbook fix is four lines of TOML, and a report
+    # that says only "config_schema_drift" sends the operator back to the runbook to find out
+    # which four.
+    assert set(report["config"]["missing"]) == {"activity_poll_seconds", "activity_quiet_polls"}
+
+
+def test_doctor_stale_config_unknown_key_reports_the_drift_rather_than_raising(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The other direction of the same drift: a key the code used to have and dropped.
+
+    A rollback produces this as readily as an upgrade produces the missing-key case --
+    `_require_exact_keys` refuses both -- so a check proven only on the incident that
+    happened to occur would leave `doctor` crashing on the one that happens next.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(
+            tmp_path,
+            "max_label_length = 40\nproject_page_size = 10\n"
+            "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n"
+            "retired_knob = 7\n",
+        ),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["unknown"] == ["retired_knob"]
+    assert report["config"]["missing"] == []
+
+
+def test_doctor_stale_config_out_of_bounds_value_reports_the_drift_rather_than_raising(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The third way `load_config` refuses: every key present, one value out of range.
+
+    Structurally complete and still unloadable. This is the case a key-set comparison alone
+    cannot see, which is why the drift check asks `load_config` itself rather than reasoning
+    about keys and stopping there.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(
+            tmp_path,
+            "max_label_length = 4000\nproject_page_size = 10\n"
+            "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        ),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["unknown"] == []
+    assert report["config"]["missing"] == []
+    # No key is wrong, so the key lists are empty and `invalid` is the only thing carrying the
+    # diagnosis. A report that said nothing here would be a report that called an unloadable
+    # config fine.
+    assert report["config"]["invalid"]
+    assert "max_label_length" in report["config"]["invalid"][0]

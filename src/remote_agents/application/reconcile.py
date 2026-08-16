@@ -84,6 +84,12 @@ def reconcile(
 
 _ConfirmReady = Callable[[SessionId, ProfileId], Awaitable[TerminalObservation]]
 
+#: How long a repair write waits for a session's lock before giving up and leaving the record
+#: to the next pass. Short on purpose: a lock held longer than this belongs to a mutation that
+#: is either mid-flight (in which case this pass must not write anyway) or wedged (in which
+#: case waiting is how one stuck session takes the whole reconciliation loop with it).
+_REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
+
 
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
@@ -95,11 +101,17 @@ class ReconciliationService:
         settle_after: timedelta = timedelta(minutes=2),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         confirm_ready: _ConfirmReady | None = None,
+        locks: SessionLocks | None = None,
     ) -> None:
         self._store = store
         self._settle_after = settle_after
         self._now = now
         self._confirm_ready = confirm_ready
+        # The service's own locks, when the composition root shares them (`bootstrap.py`).
+        # Optional so that every existing caller constructing this with a store alone keeps
+        # working; absent, the settle window below is the only guard, which is what this
+        # class had before.
+        self._locks = locks
 
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
@@ -126,8 +138,64 @@ class ReconciliationService:
                 # from the readiness check that already knows it.
                 continue
             if event is not None:
-                await self._store.record_event(record.session_id, event)
+                await self._record_if_unchanged(record, event)
         return results
+
+    async def _record_if_unchanged(self, record: SessionRecord, event: LifecycleEvent) -> None:
+        """Write the repair under the session's own lock, and only if nothing moved.
+
+        `_has_settled` is evaluated for every record at the top of the pass, but the loop
+        above it awaits -- on `_is_ready`, and on each `record_event`. So a stop can begin
+        *after* the settle check cleared a session and *before* this pass reaches its write,
+        and the check would still say it was safe. Reproduced with two sessions: the
+        reconciler yields inside its write to the first, an owner's graceful stop runs to
+        completion on the second in that gap, and the pass then writes
+        `reconciled_terminal_missing` to a record that is already ENDED.
+
+        That is the same crash class this stage exists to close, so closing it halfway would
+        have been worse than not claiming it. The settle check stays -- it is what keeps an
+        in-flight record out of `records` entirely, which `also_known` depends on -- and the
+        write is made atomic with respect to the service here.
+
+        The state re-read is not redundant with the lock. A mutation that completed *before*
+        this coroutine acquired the lock leaves nothing held to see, so the lock alone would
+        admit a write against a record that has already moved on. When it has, this pass is
+        working from a stale reading and the right answer is to do nothing: whatever moved
+        the record knows more than this pass does, and the next pass looks again.
+
+        Takes `for_session` alone and never `operation()`, so there is no lock-ordering cycle
+        with `SessionService`, which takes them in that order.
+
+        **The acquisition is bounded, and that bound is load-bearing.** `_has_settled`
+        consults the lock only for STARTING and STOP_REQUESTED; every other state is waved
+        through and reaches this method, where an unbounded `async with` would wait on
+        whatever holds it. `force_stop`, `cleanup`, `answer_trust`, `set_remote_control` and
+        `refresh_readiness` all hold `for_session` across a terminal call, and
+        `adapters/tmux/gateway.py` awaits `process.communicate()` with no timeout of its own,
+        so "whatever holds it" can be a hung tmux invocation. Blocking here would stall the
+        *whole pass* -- including records for other sessions later in the loop -- and
+        `bootstrap._reconcile_quietly` catches exceptions, not hangs, so there would be no
+        log, no retry and no recovery short of a restart. Skipping one record for one pass is
+        the recoverable failure; losing the loop is not. Found by the Stage 4 gate evaluator,
+        which reproduced the stall and showed an unrelated STARTING record left unrepaired.
+        """
+        if self._locks is None:
+            await self._store.record_event(record.session_id, event)
+            return
+        lock = self._locks.for_session(record.session_id)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=_REPAIR_LOCK_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # Whoever holds it is mid-flight, which is exactly when this pass must not write.
+            # The next pass looks again.
+            return
+        try:
+            current = await self._store.get(record.session_id)
+            if current is None or current.state is not record.state:
+                return
+            await self._store.record_event(record.session_id, event)
+        finally:
+            lock.release()
 
     async def _is_ready(self, record: SessionRecord) -> bool:
         """Whether the agent behind a live pane is actually ready to be called RUNNING.
@@ -154,9 +222,49 @@ class ReconciliationService:
         the same holds while a graceful stop waits for the pane to exit. Reconciling either
         window would overwrite a state its own caller is about to record, and that caller's
         event is then an illegal transition from the state written underneath it.
+
+        **Two guards, because there are two kinds of unsettled record and a clock cannot
+        tell them apart.**
+
+        The first is the lock, and it is the one that was missing. A mutation that has a
+        session id in hand holds `for_session` for its whole body -- `graceful_stop` records
+        `GRACEFUL_STOP_REQUESTED`, awaits the terminal, then records a second event, all
+        inside it. If that lock is held, a caller is between two writes *right now*, and no
+        elapsed time makes reconciling it safe.
+
+        The second is the settle window, and after the Stage 4 gate review its job is
+        narrower than it first appears. `launch` and `resume` now take `for_session` for
+        everything after the record exists, so they are covered by the lock like any other
+        mutation; before that fix they were not, and a launch slower than the window was
+        reconciled to FAILED underneath itself. What the window is left covering is the
+        genuinely abandoned record -- one left in STARTING or STOP_REQUESTED by a process
+        that has since died, which holds no lock because nothing is running, and which must
+        be repaired rather than protected forever.
+
+        **What was wrong before:** the window was the only guard, so it was doing both jobs
+        and could only do one. `now - created_at` asks how old the *session* is, so the guard
+        held for the first two minutes of a session's life and then switched itself off
+        permanently. A launch was protected, because a launch happens at the beginning; a
+        stop almost never was, because the owner stops a session after working in it. The
+        deployed service produced exactly that:
+        `InvalidTransition: pane_exited is not legal while session is running`, reaching the
+        owner as "callback action failed while its pending notice was on screen".
+
+        Every test in `tests/unit/application/test_reconcile.py` but one passed
+        `settle_after=0`, which disables the window entirely. The exception
+        (`test_a_session_inside_its_settle_window_is_not_mistaken_for_an_unknown_pane`) uses a
+        real two-minute window on a *fresh* STARTING record -- the case the old form got
+        right. So the axis it got wrong, an aged record past the window, was covered by
+        nothing.
+
+        The lock guard is only as wide as the process holding it. DEC-005 accepts a second
+        writer -- the local terminal -- and no asyncio lock reaches it; that race is unchanged
+        and is not what crashed here.
         """
         if record.state not in {SessionState.STARTING, SessionState.STOP_REQUESTED}:
             return True
+        if self._locks is not None and self._locks.session_is_busy(record.session_id):
+            return False
         return self._now() - record.created_at >= self._settle_after
 
     async def _save_trusted_orphan(
@@ -272,6 +380,26 @@ class SessionLocks:
 
     def for_session(self, session_id: SessionId) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
+
+    def session_is_busy(self, session_id: SessionId) -> bool:
+        """Whether a mutation is in flight on this session right now.
+
+        Deliberately does **not** use `for_session`, which is a `setdefault` and would mint a
+        lock for every session merely asked about -- turning a read into an allocation on a
+        map that lives as long as the process.
+
+        This is what lets `ReconciliationService` stay off a record whose own caller is
+        between two writes. Reading `locked()` is sound here because both sides run on the
+        one event loop in the one process: the reconciler is a task beside the service, not a
+        thread, so there is no window between this answer and acting on it. It says nothing
+        about the *other* writer DEC-005 accepts -- the local TUI drives its own
+        `SessionService` in a separate process with its own `SessionLocks`, and no asyncio
+        lock spans processes. ("The local TUI", not "the local terminal": this file uses
+        *terminal* for the `TerminalPort` both services share in-process, which is a
+        different thing.)
+        """
+        lock = self._locks.get(session_id)
+        return lock is not None and lock.locked()
 
     def for_conversation(
         self, profile_id: ProfileId, source_id: ProviderConversationId

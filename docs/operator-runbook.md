@@ -20,7 +20,24 @@ present; version reporting is informative and local updates remain launchable. A
 executable is `BLOCKED` and must not be launched from Telegram. Each launch still has to reach
 its agent-specific readiness state.
 The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
-boundary, service, and each profile. It must report `healthy: true` before normal operation.
+boundary, service, each profile, and — since BL-029 — the deployed **config** checked against
+the schema this build requires. It must report `healthy: true` before normal operation. An
+unreadable config reports `healthy: false` with `checked: false` and an empty `components`,
+because the registry and database paths are read out of the config that would not load, so
+nothing else was probed and nothing else is claimed.
+
+`doctor` also reads back one session's recorded lifecycle history (BL-030). The
+`session_events` table has been the durable audit trail since the first migration and had no
+read path, so the only way to see it was to open sqlite by hand:
+
+```bash
+uv run --locked remote-agents doctor --history <session-id>
+uv run --locked remote-agents doctor --history <session-id> --json | python -m json.tool
+```
+
+Events are listed in write order, not timestamp order — a graceful stop records its request,
+the pane exit and the cleanup inside one operation, and the second-resolution timestamps tie.
+The callback token stored on each row is never printed; the sanitized `error_code` is.
 
 Confirm Telegram's discoverable owner shell without printing the credential:
 
@@ -149,6 +166,18 @@ journalctl --user -u remote-agents.service -n 100 --no-pager
 > owner never learns they have. The cost is this upgrade step, and the error names both keys.
 > Found by the acceptance run on 2026-08-11 rather than by any test, because every test builds its
 > own config and so can never be out of date with the code.
+>
+> **`doctor` now catches this class before the restart does.** Run `remote-agents doctor --json`
+> against the deployed config first: it no longer raises on a config it cannot load, and reports
+> the drift under `config` — `missing` and `unknown` naming the keys, and `invalid` carrying the
+> refusal for **any other reason `load_config` says no once the key sets agree**. That is wider
+> than an out-of-range number: a section that is not a TOML table, a path that is relative or does
+> not exist, and the refusal of a file carrying a token or secret all land there too — as does a
+> file that is not valid UTF-8. Most name the setting at fault; the token refusal deliberately
+> names nothing, and reads only `TOML must not contain tokens or secrets`. `healthy` is `false`
+> for any of them. Naming the keys is the point: the fix above
+> is four lines of TOML, and a report that said only "the config is wrong" would send you back
+> here to work out which four.
 
 The service sends unprompted messages when a managed agent stops working, one message per
 observation, beside the live view rather than inside it. Two sources feed them and only one has
@@ -292,6 +321,19 @@ Every component must be a real directory, and the leaf `drwx------`. A spool tha
 managed Claude sessions finish work is this fault; a spool that grows without shrinking is the
 opposite one, and points at the service rather than at the hook — check
 `journalctl --user -u remote-agents.service` for `activity watch pass failed`.
+
+The other way notifications go missing is a restart. Whenever Telegram is unreachable, refusing
+sends, or simply behind — a burst of more than ten in one pass is throttled and the remainder
+queued, which is ordinary and clears itself within seconds — the undelivered ones are held **in
+memory only**, and every pass with anything queued says so: `holding N undelivered
+notification(s) in memory; a restart now loses them`. The warning reports the queue, not the
+cause, so it does not by itself mean Telegram is failing; what it always means is that a restart
+right now would drop those N. There is nothing behind that queue, and that
+is DEC-026 rather than an omission: a durable queue was weighed against a schema migration and a
+second spool to drain and bound forever, and declined, because the session itself is the
+authoritative record of what an agent did. What a restart during an outage costs the owner is
+being told, not the fact. So if that warning is in the journal and you must restart anyway, read
+the sessions afterwards rather than waiting on the notifications — they are not coming.
 
 ### What each notification means
 
