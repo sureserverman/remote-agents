@@ -23,7 +23,12 @@ from remote_agents.domain.models import ProfileId, ProjectId
 
 
 class ClaudeSessionCatalogue:
-    """List UUID sessions with an owner-approved bounded resume description."""
+    """List UUID sessions with a bounded resume description.
+
+    Not "owner-approved", which is what this said before BL-007: nothing approves the
+    description. It is the owner's own last prompt or the provider's generated title,
+    bounded and printable-checked and screened for nothing.
+    """
 
     def __init__(
         self,

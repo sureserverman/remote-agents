@@ -293,9 +293,13 @@ managed Claude sessions finish work is this fault; a spool that grows without sh
 opposite one, and points at the service rather than at the hook — check
 `journalctl --user -u remote-agents.service` for `activity watch pass failed`.
 
-The other way notifications go missing is a restart. While Telegram is refusing sends, the
-undelivered ones are held **in memory only**, and every pass says so — `holding N undelivered
-notification(s) in memory; a restart now loses them`. There is nothing behind that queue, and that
+The other way notifications go missing is a restart. Whenever Telegram is unreachable, refusing
+sends, or simply behind — a burst of more than ten in one pass is throttled and the remainder
+queued, which is ordinary and clears itself within seconds — the undelivered ones are held **in
+memory only**, and every pass with anything queued says so: `holding N undelivered
+notification(s) in memory; a restart now loses them`. The warning reports the queue, not the
+cause, so it does not by itself mean Telegram is failing; what it always means is that a restart
+right now would drop those N. There is nothing behind that queue, and that
 is DEC-026 rather than an omission: a durable queue was weighed against a schema migration and a
 second spool to drain and bound forever, and declined, because the session itself is the
 authoritative record of what an agent did. What a restart during an outage costs the owner is

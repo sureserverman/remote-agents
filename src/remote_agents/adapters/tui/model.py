@@ -105,7 +105,14 @@ def selectable_area(value: str) -> bool:
 
 
 def conversation_row(summary: ConversationSummary) -> str:
-    """Safe selection metadata only — never a provider ID, path, or path fragment."""
+    """Render a conversation for selection: never a provider ID, and no filtering beyond that.
+
+    This line used to promise "never a provider ID, path, or path fragment". The first third
+    is true and enforced -- `ProviderConversationId` is not a field of `ConversationSummary`
+    and cannot reach here. The rest was never enforced anywhere: `description` is the owner's
+    own last prompt, checked for length and printability and never for content, so a path they
+    typed is rendered like any other text (BL-007, and see `ConversationSummary` itself).
+    """
     described = summary.description or "(no description)"
     return f"{described} · {summary.state.value} · {age(summary.updated_at)}"
 

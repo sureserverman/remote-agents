@@ -1982,7 +1982,11 @@ def _split_resume_page(value: str) -> tuple[str, str, int] | None:
 
 
 def _resume_button_text(description: str | None, updated_at: datetime) -> str:
-    """Keep owner-approved titles useful without overflowing the compact keyboard."""
+    """Keep a resume title useful without overflowing the compact keyboard.
+
+    "Owner-approved" was the old wording here and it implied a vetting step that does not
+    exist: this is the owner's own last prompt, truncated to fit a button (BL-007).
+    """
     prefix = description[:48].rstrip() if description else "Resumable"
     return f"{prefix} · {updated_at:%Y-%m-%d %H:%M UTC}"
 
