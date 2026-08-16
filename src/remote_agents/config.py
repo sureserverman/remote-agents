@@ -100,6 +100,22 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         if not unknown and not missing:
             report["invalid"] = [str(error)]
         return report
+    except OSError as error:
+        # This function's whole contract is that it does not raise -- it exists because
+        # `doctor` used to die on the input it is meant to diagnose. `load_config` converts
+        # the OSErrors it anticipates into `ConfigError`, so this branch is for the ones it
+        # does not: a filesystem that answers in a way neither function was written for.
+        #
+        # No such path is currently reachable, and the honest note is that this is contract
+        # hardening rather than a fix for a demonstrated crash. A Stage 2 review argued
+        # `_absolute_directory`'s `path.is_dir()` could surface `PermissionError` from an
+        # unsearchable ancestor; on this interpreter it cannot -- `Path.is_dir()` swallows
+        # EACCES and returns False, which becomes a caught `ConfigError` -- but that is a
+        # property of `pathlib`'s error handling, not of anything stated here, and it has
+        # changed between releases before. A guarantee that holds only because of an
+        # unrelated module's current behaviour is worth one line to make it hold outright.
+        report["detail"] = f"cannot read configuration: {error}"
+        return report
     report["readable"] = True
     return report
 

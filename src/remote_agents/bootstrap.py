@@ -379,7 +379,16 @@ def main(
             }
             print(json.dumps(report, sort_keys=True) if arguments.json else report)
             return 1
-        config = load_config(config_path)
+        # Guarded even though `describe_schema_drift` just proved the file loads, which is the
+        # try/except the plan asked for and the check-then-act above does not replace. The two
+        # calls are two separate reads, so an operator editing the deployed config in the
+        # window between them would land the very traceback BL-029 exists to remove -- and
+        # editing that file is exactly what someone running `doctor` is about to do.
+        try:
+            config = load_config(config_path)
+        except ConfigError as error:
+            print(error, file=sys.stderr)
+            return 1
         registry = load_registry(config.registry_path)
         discovered = discover_projects(config.dev_root)
         catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
