@@ -95,11 +95,17 @@ class ReconciliationService:
         settle_after: timedelta = timedelta(minutes=2),
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         confirm_ready: _ConfirmReady | None = None,
+        locks: SessionLocks | None = None,
     ) -> None:
         self._store = store
         self._settle_after = settle_after
         self._now = now
         self._confirm_ready = confirm_ready
+        # The service's own locks, when the composition root shares them (`bootstrap.py`).
+        # Optional so that every existing caller constructing this with a store alone keeps
+        # working; absent, the settle window below is the only guard, which is what this
+        # class had before.
+        self._locks = locks
 
     async def reconcile(
         self, observations: tuple[TerminalObservation, ...]
@@ -154,9 +160,43 @@ class ReconciliationService:
         the same holds while a graceful stop waits for the pane to exit. Reconciling either
         window would overwrite a state its own caller is about to record, and that caller's
         event is then an illegal transition from the state written underneath it.
+
+        **Two guards, because there are two kinds of unsettled record and a clock cannot
+        tell them apart.**
+
+        The first is the lock, and it is the one that was missing. A mutation that has a
+        session id in hand holds `for_session` for its whole body -- `graceful_stop` records
+        `GRACEFUL_STOP_REQUESTED`, awaits the terminal, then records a second event, all
+        inside it. If that lock is held, a caller is between two writes *right now*, and no
+        elapsed time makes reconciling it safe.
+
+        The second is the settle window, which covers the case the lock cannot: `launch`
+        takes `operation()` alone, because there is no session id to key on until the record
+        exists. A launching record is fresh by construction, so measuring from `created_at`
+        is exactly right there -- and it is also what resolves a record left in STARTING by a
+        process that has since died, which has no live caller and must be repaired rather
+        than protected forever.
+
+        **What was wrong before:** the window was the only guard, so it was doing both jobs
+        and could only do one. `now - created_at` asks how old the *session* is, so the guard
+        held for the first two minutes of a session's life and then switched itself off
+        permanently. A launch was protected, because a launch happens at the beginning; a
+        stop almost never was, because the owner stops a session after working in it. The
+        deployed service produced exactly that:
+        `InvalidTransition: pane_exited is not legal while session is running`, reaching the
+        owner as "callback action failed while its pending notice was on screen".
+
+        Every test in `tests/unit/application/test_reconcile.py` passed `settle_after=0`,
+        which disables the window entirely, so nothing exercised the axis it was wrong about.
+
+        The lock guard is only as wide as the process holding it. DEC-005 accepts a second
+        writer -- the local terminal -- and no asyncio lock reaches it; that race is unchanged
+        and is not what crashed here.
         """
         if record.state not in {SessionState.STARTING, SessionState.STOP_REQUESTED}:
             return True
+        if self._locks is not None and self._locks.session_is_busy(record.session_id):
+            return False
         return self._now() - record.created_at >= self._settle_after
 
     async def _save_trusted_orphan(
@@ -272,6 +312,23 @@ class SessionLocks:
 
     def for_session(self, session_id: SessionId) -> asyncio.Lock:
         return self._locks.setdefault(session_id, asyncio.Lock())
+
+    def session_is_busy(self, session_id: SessionId) -> bool:
+        """Whether a mutation is in flight on this session right now.
+
+        Deliberately does **not** use `for_session`, which is a `setdefault` and would mint a
+        lock for every session merely asked about -- turning a read into an allocation on a
+        map that lives as long as the process.
+
+        This is what lets `ReconciliationService` stay off a record whose own caller is
+        between two writes. Reading `locked()` is sound here because both sides run on the
+        one event loop in the one process: the reconciler is a task beside the service, not a
+        thread, so there is no window between this answer and acting on it. It says nothing
+        about the *other* writer DEC-005 accepts -- the local terminal is a separate process,
+        and no asyncio lock spans processes.
+        """
+        lock = self._locks.get(session_id)
+        return lock is not None and lock.locked()
 
     def for_conversation(
         self, profile_id: ProfileId, source_id: ProviderConversationId

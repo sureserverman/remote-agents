@@ -64,7 +64,7 @@ from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
-from remote_agents.application.reconcile import ReconciliationService
+from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.config import (
     ConfigError,
@@ -562,6 +562,10 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     conversations = _conversation_service(project_paths)
     secrets = load_secrets()
     store = SQLiteSessionStore(connection)
+    # One lock map, shared by the two objects that write session state. See the note on the
+    # ReconciliationService below: this single binding is the fix, and two instances here
+    # would look identical and repair nothing.
+    locks = SessionLocks()
     return ServiceComposition(
         PrivateBotBoundary(
             secrets.owner_user_id,
@@ -577,7 +581,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
             max_label_length=config.max_label_length,
-            launcher=SessionService(store, terminal),
+            launcher=SessionService(store, terminal, locks=locks),
             conversations=conversations,
             creator=_project_creator(config),
             capture=terminal.capture,
@@ -587,7 +591,13 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         # Readiness is wired in deliberately: without it, reconciliation promotes any
         # FAILED session with a live pane to RUNNING, including one stopped dead on a
         # trust dialog it cannot answer. Observed in the wild 2026-08-14.
-        ReconciliationService(store, confirm_ready=terminal.confirm_ready),
+        #
+        # The locks are shared with the SessionService above, and that sharing is the whole
+        # fix for the InvalidTransition crashes: the reconciler runs on a timer beside the
+        # service and writes `record_event` directly, so without a lock in common it would
+        # overwrite the state of a session whose graceful stop is between its own two writes.
+        # Constructing two SessionLocks here would type-check, run, and fix nothing.
+        ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
         paths.activity_directory,
     )
