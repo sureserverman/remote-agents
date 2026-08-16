@@ -1,11 +1,19 @@
 # Acceptance: fewer notifications, and one message per session
 
 Date: 2026-08-16
-Release: 0.11.0 — branch `feat/notification-value-and-grouping`, commit `9c0a65e`
+Release: 0.11.0 — branch `feat/notification-value-and-grouping`, commit `be980c8`
+(the owner's run was against the service restarted from this branch on 2026-08-16)
 Plan: `2026-08-16-notification-value-and-grouping-plan.md`, Task 3.4
 
-> **Status: PARTIALLY RUN. The machine-side half is complete and recorded from its own output.
-> The owner-side half is not run and its lines are empty.**
+> **Status: RUN AND ACCEPTED, 2026-08-16.** The machine-side half is recorded from its own
+> output. The owner-side half was performed by the owner against the real Telegram client and
+> the real service, and reported as a **single blanket confirmation** — "Yes, it works as
+> intended" — against a seven-instruction sequence, **not** as four separate readings.
+>
+> That distinction is preserved rather than smoothed over, for the reason
+> `docs/acceptance-2026-08-11.md` gives: what each step records is the owner's *coverage* of it,
+> and the independent machine-side corroboration is listed separately. No per-step observation
+> has been invented, and the four steps below therefore share one line rather than carrying four.
 >
 > The environment this branch was built in has no systemd user session and no way to reach
 > Telegram, which was recorded as a Preflight failure before Stage 1 began. It does have real
@@ -14,13 +22,15 @@ Plan: `2026-08-16-notification-value-and-grouping-plan.md`, Task 3.4
 > with production code, and was.
 >
 > The split below is the point, and it is the one `docs/acceptance-2026-08-11.md` insists on:
-> what a machine confirmed is listed as such, what an owner must witness is listed separately
-> and left blank. This document was laid out by the session that wrote the code, which is
-> exactly the party whose observations are worth least — so it records none of the owner's.
+> what a machine confirmed is listed as such, and what only an owner can witness is listed
+> separately and attributed to them. This document was laid out by the session that wrote the
+> code, which is exactly the party whose observations are worth least — so every line in Part 1
+> is a transcript rather than a summary, and no line in Part 2 says more than the owner said.
 >
-> **What the machine half cannot establish:** that Telegram accepts and renders these messages
-> legibly on a phone, that the `Open session` button round-trips, and that the service runs
-> under systemd on the real host. Those are the four owner steps at the end.
+> **What the machine half could not establish, and Part 2 exists for:** that Telegram accepts and
+> renders these messages legibly on a phone, that the `Open session` button round-trips and
+> consumes the notification, and that the service runs this build under systemd on the real
+> host.
 
 ## What changed, in the owner's terms
 
@@ -148,9 +158,10 @@ covering that map advanced its clock by exactly the broken horizon and had been 
 
 ---
 
-# Part 2 — what needs the owner, and is not run
+# Part 2 — what only the owner could establish
 
-Four things, none of which any machine here can establish.
+Four things, none of which any machine here can establish. All four are covered by one
+confirmation rather than four readings — see Status.
 
 ## Step A — the service runs this build under systemd
 
@@ -172,7 +183,8 @@ host reporting `active` continuously on 2026-08-16 while running code three sub-
 `main`. If the process start time predates the restart, everything below reads the old build.
 
 - **Expected:** `doctor` healthy, `ActiveState=active`, start time later than the restart.
-- **Observed:**
+- **Observed:** covered by the owner's blanket confirmation of 2026-08-16 (see Status). Not
+  separately reported; no `ps` output was transcribed here, and none is claimed.
 
 ## Step B — a notification is legible on the phone
 
@@ -180,7 +192,7 @@ Launch a managed `claude` session from Telegram and let it complete one turn.
 
 - **Expected:** the message from Step 1 above, rendered — the session's name in bold, the
   sentence, the agent's line, and a single `Open session` button. The menu ends up below it.
-- **Observed:**
+- **Observed:** covered by the owner's blanket confirmation of 2026-08-16.
 
 ## Step C — the `Open session` button round-trips
 
@@ -188,7 +200,7 @@ Press `Open session` on that notification.
 
 - **Expected:** the session's detail screen renders into the live view, and **the notification is
   deleted from the chat** — it has been acted on. Pressing it does not make it the live view.
-- **Observed:**
+- **Observed:** covered by the owner's blanket confirmation of 2026-08-16.
 
 ## Step D — pressing Stop is silent
 
@@ -196,7 +208,12 @@ Press Stop on that session and let it end.
 
 - **Expected:** the sessions list shows the outcome as its lead line, as always, and **nothing
   arrives in the chat**. The absence is the assertion.
-- **Observed:**
+- **Observed:** covered by the owner's blanket confirmation of 2026-08-16. This is the step the
+  confirmation is weakest evidence for, and it is worth saying so: the assertion is an *absence*,
+  and an absence is the one thing a reader can satisfy by not noticing. The machine half proves
+  the mechanism — `SessionEnd` is drained and dropped, Part 1 Step 2 — so what the owner's
+  confirmation adds here is that no *other* path sends a message on stop, which nothing else
+  checks.
 
 ## Defects this run found
 
@@ -206,11 +223,27 @@ Press Stop on that session and let it end.
 > reads.
 
 - **Machine half:** none. Every check passed first time.
-- **Owner half:**
+- **Owner half:** none reported.
+
+Two defects were found *while preparing* this run rather than by it, and both are recorded
+because a document that only lists what the final pass saw understates what the exercise cost:
+
+- **`uv sync --locked` failed outright.** The 0.11.0 bump edited `pyproject.toml` and
+  `__init__.py` and left `uv.lock` at 0.10.0, so the command the README gives for development and
+  the runbook gives before a redeploy stopped with `the lockfile needs to be updated`. Fixed in
+  `be980c8`. Found by the owner asking which of the proposed redeploy commands were actually
+  necessary — none of the automated checks cover the documented redeploy path.
+- **Two of the three redeploy commands first given to the owner were unnecessary**, and one of
+  those two was the broken one. `git checkout` named a branch already checked out, and
+  `uv sync --locked` is not needed on this host at all: the venv install is editable, so the
+  service picks up the code on restart, and no dependency changed in this release.
 
 ## Outcome
 
 - **Machine half:** accepted 2026-08-16, recorded from its own output.
-- **Owner half — accepted / rejected:**
-- **By:**
-- **On:**
+- **Owner half:** **accepted**, as a blanket confirmation of the seven-step sequence.
+- **By:** the owner.
+- **On:** 2026-08-16.
+
+**Release 0.11.0 is accepted for this branch.** What it is not is a claim that four independent
+observations were made — see Status.
