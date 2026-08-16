@@ -9,9 +9,11 @@ second borrow the grammar of the first.
 Two rules carry that, and both are structural rather than editorial:
 
 **An inferred observation says so, in its own sentence.** `ActivityConfidence.INFERRED` covers
-two very different guesses -- a sixty-second idle timer upstream, and a pane that stopped
-changing here -- and neither is worth telling the owner as a fact. The hedge is appended by
-the renderer, not left to whoever writes the next sentence.
+one guess -- a pane that stopped changing here -- and it is not worth telling the owner as a
+fact. The hedge is appended by the renderer, not left to whoever writes the next sentence, and
+that stays structural now that it fires for a single kind: it was written when a second guess
+existed, that guess was retired rather than hedged better, and the rule is what stops the next
+one arriving in the grammar of something the agent actually said.
 
 **A quiet report never carries agent text.** Nothing said it. The classifier already sets
 `detail=None` for `QUIET`, and this drops it again regardless, because the failure mode is
@@ -76,15 +78,16 @@ _SENTENCES = {
     ActivityKind.COMPLETED: "The agent has finished its work.",
     ActivityKind.LIMIT_REACHED: "The agent stopped after reaching a usage limit.",
     ActivityKind.OUTPUT_LIMIT: "The agent stopped at its output length limit for one reply.",
-    ActivityKind.ENDED: "The session has ended.",
 }
 
-_WAITING = {
-    ActivityConfidence.REPORTED: "The agent is waiting for an answer.",
-    # Weaker on purpose: this reaches the owner from a sixty-second idle timer with recorded
-    # false positives, so the sentence has to survive being wrong.
-    ActivityConfidence.INFERRED: "The agent may be waiting for an answer.",
-}
+_WAITING = "The agent is waiting for an answer."
+"""The one sentence `NEEDS_ANSWER` has, now that every source of it is the agent's own report.
+
+There were two, chosen by confidence, and the weaker of them -- "may be waiting" -- existed for
+an upstream idle timer that is no longer mapped at all. Stating this plainly does not loosen
+this module's first rule: what reaches here is a permission prompt or an agent saying it needs
+input, and in both the agent is the one making the claim.
+"""
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
 # `presenters` rather than copied, private names and all: an escaper and a budget that exist
@@ -132,7 +135,7 @@ def render_activity(activity: AgentActivity, *, display: str, open_session: str)
 
 def _sentence(activity: AgentActivity) -> str:
     if activity.kind is ActivityKind.NEEDS_ANSWER:
-        return _WAITING[activity.confidence]
+        return _WAITING
     if activity.kind is ActivityKind.QUIET:
         # What was observed, never what it implies. The service saw a pane stop changing; it
         # did not see an agent finish, and the owner reading this on a phone will supply that

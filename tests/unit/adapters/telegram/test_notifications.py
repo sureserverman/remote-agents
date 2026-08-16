@@ -47,7 +47,6 @@ EVERY_KIND = (
     ActivityKind.LIMIT_REACHED,
     ActivityKind.OUTPUT_LIMIT,
     ActivityKind.NEEDS_ANSWER,
-    ActivityKind.ENDED,
     ActivityKind.QUIET,
 )
 
@@ -111,7 +110,7 @@ def test_detail_is_escaped_rather_than_rendered_as_markup() -> None:
 
 def test_a_display_identity_carrying_markup_is_escaped_too() -> None:
     message = render_activity(
-        _activity(ActivityKind.ENDED),
+        _activity(ActivityKind.COMPLETED),
         display="<i>project</i> · claude",
         open_session=OPEN,
     )
@@ -130,22 +129,22 @@ def test_an_unbounded_detail_still_fits_the_telegram_budget() -> None:
     assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
 
 
-def test_an_inferred_need_for_an_answer_is_worded_as_a_possibility() -> None:
-    reported = render_activity(
+def test_a_need_for_an_answer_is_stated_plainly_because_the_agent_asked() -> None:
+    """The only sources left are a permission prompt and an agent saying it needs input.
+
+    Both are the agent speaking, so the sentence no longer hedges. It used to, for the third
+    source — an upstream sixty-second idle timer — which was retired rather than softened: a
+    weakened sentence makes a weak signal read better, not become worth sending.
+    """
+    message = render_activity(
         _activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.REPORTED),
         display=DISPLAY,
         open_session=OPEN,
     )
-    inferred = render_activity(
-        _activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
 
-    assert reported.text != inferred.text
-    assert "is waiting" in reported.text
-    assert "may be waiting" in inferred.text
-    assert "may be waiting" not in reported.text
+    assert "The agent is waiting for an answer." in message.text
+    assert "may be waiting" not in message.text
+    assert "not something it reported" not in message.text
 
 
 def test_quiet_is_a_report_of_silence_and_never_a_claim_of_completion() -> None:
@@ -203,13 +202,18 @@ def test_quiet_never_renders_agent_text_even_if_a_caller_supplies_it() -> None:
 
 
 def test_an_inferred_report_says_so_rather_than_asserting_it() -> None:
-    for kind in (ActivityKind.QUIET, ActivityKind.NEEDS_ANSWER):
-        message = render_activity(
-            _activity(kind, confidence=ActivityConfidence.INFERRED),
-            display=DISPLAY,
-            open_session=OPEN,
-        )
-        assert "not something it reported" in message.text
+    """Pane quiet is the one guess left, and the hedge is what keeps it honest.
+
+    The rule is the renderer's rather than the sentence's on purpose: it fires on the
+    confidence, so a future inferred kind cannot arrive unhedged by whoever writes its wording.
+    """
+    message = render_activity(
+        _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "not something it reported" in message.text
 
 
 def test_a_callback_that_is_not_an_opaque_token_is_refused() -> None:

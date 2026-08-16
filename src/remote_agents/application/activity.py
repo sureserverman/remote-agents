@@ -7,6 +7,14 @@ cannot read rather than raising, and a record that reaches no mapping is dropped
 guessed at. Reporting the wrong reason an agent stopped is worse than reporting nothing: the
 owner acts on these.
 
+Two events are dropped for a second reason, which is not that they cannot be read but that
+nothing follows from them. `SessionEnd` confirms a stop the owner has just pressed, and the
+sixty-second idle notification fires on an agent that is merely thinking. Both were mapped
+once. Everything built from these records arrives unprompted, so an observation that is true
+and carries nothing to do is a cost with no return -- and the mapping is the right place to
+decide that, because a kind that is never produced cannot then be rendered, rate-limited, or
+delivered by mistake somewhere further down.
+
 Draining deletes. A record turned into activity is gone from disk before it is returned, so a
 service that restarts halfway through a delivery cannot tell the owner the same thing twice.
 The cost is the opposite failure -- a crash between the delete and the send loses one
@@ -78,10 +86,16 @@ _STOP_FAILURES = {
     # ceiling is continued from. One sentence for both told the owner the alarming one.
     "max_output_tokens": ActivityKind.OUTPUT_LIMIT,
 }
+# Both of these are the agent saying it is stuck, which is why both are REPORTED. Upstream's
+# third one -- a sixty-second idle timer -- is absent for a different reason than the values
+# above: it answers "why did it stop" and answers it wrongly often enough to have a recorded
+# history of doing so, on an agent that had merely gone quiet while thinking. It was carried
+# for a while as an inferred `needs_answer` on the argument that a hedged sentence makes a
+# weak signal safe to send, which it does not: a hedge changes how a message reads, never
+# whether it was worth sending. When the timer is right, one of these two says the same thing.
 _NOTIFICATIONS = {
     "permission_prompt": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
     "agent_needs_input": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED),
-    "idle_prompt": (ActivityKind.NEEDS_ANSWER, ActivityConfidence.INFERRED),
 }
 
 
@@ -253,8 +267,6 @@ def _activity(record: dict) -> AgentActivity | None:
 def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfidence] | None:
     if event == "Stop":
         return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
-    if event == "SessionEnd":
-        return ActivityKind.ENDED, ActivityConfidence.REPORTED
     if event == "StopFailure":
         kind = _STOP_FAILURES.get(reason) if isinstance(reason, str) else None
         return None if kind is None else (kind, ActivityConfidence.REPORTED)
