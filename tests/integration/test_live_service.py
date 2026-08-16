@@ -1534,3 +1534,62 @@ async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tm
 
     assert len(bot.sends) == 1
     assert boundary.notifier.pending_count() == 0
+
+
+def _doctor_config_text(tmp_path: Path, limits: str) -> str:
+    return (
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        f"[limits]\n{limits}"
+    )
+
+
+def _arrange_doctor(tmp_path, monkeypatch, config_text: str) -> None:
+    """Wire `doctor` exactly as the healthy-path test does, but over a given config."""
+    config = tmp_path / "config.toml"
+    config.write_text(config_text, encoding="utf-8")
+    paths = _DoctorPaths(config)
+    monkeypatch.setattr("remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: paths)
+    monkeypatch.setattr("remote_agents.bootstrap.database_is_ready", lambda _path: True)
+    monkeypatch.setattr("remote_agents.bootstrap._command_succeeds", lambda _argv: True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._telegram_credentials_are_private", lambda _paths: True
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
+    monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
+    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.probe_profiles",
+        lambda *_args, **_kwargs: (_compatibility("claude"),),
+    )
+
+
+def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagnose(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The real incident: a deployed config that predates two keys the code now requires.
+
+    `docs/acceptance-2026-08-11-agent-activity.md:258-271` records the service crash-looping
+    through three restarts on exactly this, and `doctor` -- the command an operator runs
+    *before* trusting a deploy -- died the same way, with a traceback instead of a diagnosis.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(tmp_path, "max_label_length = 40\nproject_page_size = 10\n"),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["readable"] is False
+    # Naming the keys is the whole point: the runbook fix is four lines of TOML, and a report
+    # that says only "config_schema_drift" sends the operator back to the runbook to find out
+    # which four.
+    assert set(report["config"]["missing"]) == {"activity_poll_seconds", "activity_quiet_polls"}

@@ -66,7 +66,13 @@ from remote_agents.application.project_admin import CreateProjectCommand, Projec
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.application.services import SessionService
-from remote_agents.config import ConfigError, TelegramSecrets, load_config, load_secrets
+from remote_agents.config import (
+    ConfigError,
+    TelegramSecrets,
+    describe_schema_drift,
+    load_config,
+    load_secrets,
+)
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
@@ -350,7 +356,28 @@ def main(
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
         paths = ProductionPaths.for_home(Path.home())
-        config = load_config(arguments.config or paths.config_path)
+        config_path = arguments.config or paths.config_path
+        # `add-project` and `tui` have both caught ConfigError here for as long as they have
+        # existed; `doctor` did not, which meant the one command an operator runs *before*
+        # trusting a deploy raised a traceback on exactly the input it exists to diagnose
+        # (BL-029). Diagnose first, then decide whether there is anything left to check.
+        drift = describe_schema_drift(config_path)
+        if not drift["readable"]:
+            report = production_doctor(
+                core_ready=False,
+                database_ready=False,
+                tmux_ready=False,
+                telegram_ready=False,
+                service_ready=False,
+                profiles=(),
+                registered_projects=0,
+                discovered_projects=0,
+                catalogue_projects=0,
+                config_drift=drift,
+            )
+            print(json.dumps(report, sort_keys=True) if arguments.json else report)
+            return 1
+        config = load_config(config_path)
         registry = load_registry(config.registry_path)
         discovered = discover_projects(config.dev_root)
         catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()

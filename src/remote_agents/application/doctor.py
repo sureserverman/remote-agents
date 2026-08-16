@@ -78,8 +78,21 @@ def production_doctor(
     registered_projects: int,
     discovered_projects: int,
     catalogue_projects: int,
+    config_drift: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Render the installed service's non-secret dependency health report."""
+    """Render the installed service's non-secret dependency health report.
+
+    `config_drift` arrives as plain data, already compared against the schema by the caller.
+    The comparison cannot happen here: DEC-015 confines this layer to `application`, `domain`
+    and `ports`, so `remote_agents.config` -- where the schema constants live -- is not
+    importable, and `tests/architecture/check_imports.py` fails the build if it becomes so.
+
+    It is carried as its own sub-dict, following the `projects` precedent below, rather than
+    as a health reason. `health.py`'s `_safe_code` raises on anything outside `[a-z0-9_]+`, so
+    the drifted key names could not travel through a reason code even though they are exactly
+    what makes the report actionable: the runbook's fix for this incident is four lines of
+    TOML, and naming the keys turns that into a copy-paste.
+    """
     profiles_ready = bool(profiles) and all(profile.available for profile in profiles)
     report = health_report(
         {
@@ -96,5 +109,14 @@ def production_doctor(
         "discovered": discovered_projects,
         "catalogue": catalogue_projects,
     }
+    if config_drift is not None:
+        report["config"] = config_drift
+        # A config the code cannot load is not a healthy deploy, whatever else is answering.
+        # Every other component here can be green while the service crash-loops on startup --
+        # which is precisely what happened, three restarts running, and why reporting the
+        # drift without letting it move `healthy` would leave the report agreeing with the
+        # failure it just diagnosed.
+        if not config_drift.get("readable", True):
+            report["healthy"] = False
     report.update(profile_doctor(profiles))
     return report
