@@ -1436,6 +1436,41 @@ async def test_a_session_the_owner_has_already_dealt_with_is_not_notified_about(
     assert bot.sends == []
 
 
+async def test_only_an_actionable_report_about_a_live_session_reaches_the_owner(
+    tmp_path,
+) -> None:
+    """The whole of the value filter, driven through the real drain and the real notifier.
+
+    Each half is already pinned on its own -- the mapping drops `SessionEnd` and the idle
+    timer in `tests/unit/application/test_activity.py`, and `_display_for` declines a finished
+    session above. Neither of those runs the two together, and the two together are what the
+    owner actually experiences: one pass, four spooled records, one message.
+
+    Worth its own test rather than left to the pair because the failure it catches is a seam.
+    A mapping that dropped nothing and a liveness check that declined everything would each
+    pass their own tests while this one found an empty chat or a full one.
+    """
+    live = _running()
+    finished = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+    boundary, bot = _notified(live, finished)
+    spool = tmp_path / "activity"
+    _spool(spool, str(live.session_id), event="SessionEnd", stamp="000001")
+    _spool(spool, str(live.session_id), event="Notification", reason="idle_prompt", stamp="000002")
+    _spool(spool, str(finished.session_id), stamp="000003")
+    _spool(spool, str(live.session_id), stamp="000004")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1, "only the Stop from the running session is worth sending"
+    assert live.display.rendered in str(bot.sends[0]["text"])
+    assert "finished its work" in str(bot.sends[0]["text"])
+    assert list(spool.iterdir()) == [], "a dropped record is still drained off disk"
+
+
 async def test_a_session_that_stops_while_its_notification_waits_is_not_notified(
     tmp_path,
 ) -> None:

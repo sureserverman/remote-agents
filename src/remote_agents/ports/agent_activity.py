@@ -78,8 +78,10 @@ class ActivityConfidence(Enum):
     Two members for one guess is deliberate. This records a property of the *observation* --
     whether anything actually said it -- rather than a count of today's sources, so a signal
     arriving from somewhere new is classified before anyone chooses its words. That ordering is
-    what kept a retired upstream timer from ever reaching the owner in the grammar of something
-    the agent had said.
+    what kept Claude's sixty-second idle notification, which `application/activity.py` no longer
+    maps at all, from ever reaching the owner in the grammar of something the agent had said.
+    Naming it here rather than leaving it as "a retired upstream signal" is the point of the
+    example: the member that outlived it is the one a reader is entitled to ask about.
     """
 
     REPORTED = "reported"

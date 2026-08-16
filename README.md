@@ -97,9 +97,12 @@ qualified enable/disable interaction; it never carries a prompt, transcript, or 
 
 The service also speaks first, once per observation, when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, it is waiting for an answer,
-its session ended, or — for the profiles with no hook system — its pane has produced no output
-since a stated time, which is said as the guess it is. Each notification is its own message beside
-the live view, with one button that opens the session it names. A managed Claude session reports this itself through a global Claude
+or — for the profiles with no hook system — its pane has produced no output since a stated time,
+which is said as the guess it is. It speaks only about a session that is still live, and only when
+there is something to do about it: an agent reporting after the owner has already stopped its
+session is telling them their own action back. Each notification is its own message beside the
+live view, with one button that opens the session it names. A managed Claude session reports this
+itself through a global Claude
 Code hook, installed once with `remote-agents install-agent-hooks` and removed with `--remove`. The
 hook fires in every Claude session on the host — it starts a short-lived Python process each time —
 but it writes nothing and exits 0 unless the environment carries the session identifier this

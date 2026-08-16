@@ -7,13 +7,18 @@ cannot read rather than raising, and a record that reaches no mapping is dropped
 guessed at. Reporting the wrong reason an agent stopped is worse than reporting nothing: the
 owner acts on these.
 
-Two events are dropped for a second reason, which is not that they cannot be read but that
-nothing follows from them. `SessionEnd` confirms a stop the owner has just pressed, and the
-sixty-second idle notification fires on an agent that is merely thinking. Both were mapped
-once. Everything built from these records arrives unprompted, so an observation that is true
-and carries nothing to do is a cost with no return -- and the mapping is the right place to
-decide that, because a kind that is never produced cannot then be rendered, rate-limited, or
-delivered by mistake somewhere further down.
+Two events are dropped for a second reason, which is not that they cannot be read but that the
+owner has nothing to do about either. Both were mapped once, and they fail that bar
+differently. `SessionEnd` reports an exit the owner usually caused -- pressing Stop types
+`/exit` into the pane -- and it cannot say so: every `reason` it carries, `logout` and `clear`
+and the rest, maps to one sentence, so at best it repeats an action they just took and at worst
+it announces an ending it cannot characterise. The sixty-second idle notification fails it for
+the opposite reason: it is unreliable in both directions, and on the occasions it is right,
+`permission_prompt` or `agent_needs_input` has usually already said the same thing as a fact
+rather than a guess. Everything built from these records arrives unprompted, so an observation
+that is true and carries nothing to do is a cost with no return -- and the mapping is the right
+place to decide that, because a kind that is never produced cannot then be rendered,
+rate-limited, or delivered by mistake somewhere further down.
 
 Draining deletes. A record turned into activity is gone from disk before it is returned, so a
 service that restarts halfway through a delivery cannot tell the owner the same thing twice.

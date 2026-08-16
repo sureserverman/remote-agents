@@ -88,11 +88,12 @@ an upstream idle timer that is no longer mapped at all. Stating this plainly doe
 this module's first rule: what reaches here is an agent asking permission or an agent saying it
 needs input, and in both the agent is the one making the claim.
 
-Worded around one word deliberately. `check_telegram_actions.py` rejects the bare substring
-this sentence wants for its first case, anywhere in this package, because a Telegram adapter
-that can put a question into a pane is the surface that audit exists to keep closed. The check
-cannot tell prose from code, and it is right not to try: a term that has to be spelled around
-in a comment is a term nobody adds to a call site by accident.
+"An agent asking permission" is spelled the long way round on purpose: upstream calls that case
+`permission_` followed by the word for a question put to a terminal, and
+`check_telegram_actions.py` rejects that bare substring anywhere in this package, because a
+Telegram adapter that can put a question into a pane is the surface that audit exists to keep
+closed. The check cannot tell prose from code, and it is right not to try: a term that has to
+be spelled around in a comment is a term nobody adds to a call site by accident.
 """
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from

@@ -360,14 +360,31 @@ stays where it was.
 | `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
 | `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
 | `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
-| `needs_answer` | "The agent may be waiting for an answer." | Claude's `Notification` hook, `notification_type: idle_prompt` | inferred |
-| `ended` | "The session has ended." | Claude's `SessionEnd` hook, any `reason` | reported |
 | `quiet` | "No output since 14:05 UTC." | this service watching the pane | inferred |
 
-The first six are the agent reporting on itself, and each carries at most one bounded, escaped
+The first four are the agent reporting on itself, and each carries at most one bounded, escaped
 line of what it last said. Everything else those hook fields can carry — every other value of
 `error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
 reporting the wrong reason an agent stopped is worse than reporting nothing.
+
+**A notification has to be worth acting on, and two kinds that once appeared here were not.** The
+bar is no longer only "does this say why the agent stopped" but "is there anything for the owner
+to do about it", and both are now checked at the mapping, so a record that fails the second is
+drained, deleted and dropped exactly like one that fails the first:
+
+- **`ended`**, from `SessionEnd`. It fired whenever a session ended, including one the owner had
+  just ended themselves — the graceful stop types `/exit` into the pane, so pressing Stop in
+  Telegram reliably produced a message reporting that press back. Every `reason` mapped to the
+  same sentence, so it could not even distinguish the owner's exit from any other.
+- **the inferred `needs_answer`**, from `notification_type: idle_prompt`. A sixty-second timer
+  upstream, with recorded false positives and false negatives. When it was wrong it interrupted
+  the owner for nothing; when it was right, `permission_prompt` or `agent_needs_input` had usually
+  said so already, and said it as a fact rather than a guess.
+
+The hook still fires for both, and `install-agent-hooks` still registers `SessionEnd` — the
+records are still written and still drained off disk. What changed is that nothing is built from
+them, which is deliberate: a kind that is never produced cannot then be rendered, rate-limited, or
+delivered by mistake somewhere downstream.
 
 `limit_reached` and `output_limit` are separate because the next move differs: a rate limit is
 waited out or paid around and the work is untouched, while a reply that hit its output ceiling is
@@ -381,15 +398,18 @@ unreachable: a managed session stopping on a rate limit spooled a record whose r
 the drain dropped it, silently. `tests/live/test_agent_activity_hooks.py` now reads the installed
 bundle rather than a fixture, so the same drift fails a test instead of losing notifications.
 
-`SessionEnd` fires whenever a session ends, including one the owner ended: the graceful stop types
-`/exit` into the pane, so pressing Stop in Telegram normally produces an `ended` notification
-confirming what the owner just did. Every `reason` maps to the same sentence, so the message does
-not distinguish an owner-initiated exit from any other.
+**Notifications are only sent about a session that is still live** — `starting` or `running`.
+A record that has reached `stop_requested`, `preserved`, `failed`, `ended` or `orphaned` is one
+the owner has already dealt with, so an agent's report about it tells them their own action back.
+That check is made when the message is *sent*, not when the record was drained, which is the case
+that matters: an activity can wait in the retry queue across passes while Telegram is refusing
+sends, and the owner can press Stop while it waits. Declining to speak is logged as
+`not notifying about a session that is no longer running`, separately from the rarer
+`dropping an activity this service will not speak about`, which means a session this service can
+no longer identify at all.
 
-The two inferred kinds append one further sentence, "This is a guess, not something it reported.",
-and they are guesses of different sizes. `idle_prompt` is a sixty-second timer upstream with
-recorded false positives and false negatives, so its wording is weakened to "may be waiting" rather
-than dropped. `quiet` is this service's own heuristic, and the only signal available for the three
+`quiet` appends one further sentence, "This is a guess, not something it reported." It is this
+service's own heuristic, and the only signal available for the three
 profiles with no hook system: the pane's captured output is digested each poll, and a digest that
 has not changed for the configured number of polls is reported once. It says what was observed —
 that no output has appeared since a given minute — and never that the agent finished, because the
