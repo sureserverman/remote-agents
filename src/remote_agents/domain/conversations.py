@@ -52,7 +52,19 @@ class ProviderConversationId:
 
 @dataclass(frozen=True, slots=True)
 class ConversationSummary:
-    """Safe selection metadata; provider IDs remain server-side."""
+    """Selection metadata: an opaque reference out, the provider ID never in.
+
+    The old summary line said "safe selection metadata", which read as a claim about the
+    whole record and was only ever true of half of it. `reference` is the server-resolved
+    opaque key, `ProviderConversationId` is not a field here at all, and that boundary is
+    enforced and covered by `tests/security/test_session_catalog.py`. `description` is a
+    weaker claim and is now written as one: it is the owner's own last prompt or generated
+    title (`adapters/agents/claude_sessions.py` `_resume_description`), checked below only
+    for length and printability and never for content, so it can carry a filesystem path
+    the owner typed. Both surfaces render it verbatim. Filtering it was considered and
+    declined -- "path-shaped" has no clean definition, and a picker row redacted into
+    ambiguity is worse at the one job the list has (BL-007).
+    """
 
     reference: ConversationReference
     profile_id: ProfileId
