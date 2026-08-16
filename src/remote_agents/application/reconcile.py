@@ -84,6 +84,12 @@ def reconcile(
 
 _ConfirmReady = Callable[[SessionId, ProfileId], Awaitable[TerminalObservation]]
 
+#: How long a repair write waits for a session's lock before giving up and leaving the record
+#: to the next pass. Short on purpose: a lock held longer than this belongs to a mutation that
+#: is either mid-flight (in which case this pass must not write anyway) or wedged (in which
+#: case waiting is how one stuck session takes the whole reconciliation loop with it).
+_REPAIR_LOCK_TIMEOUT_SECONDS = 1.0
+
 
 class ReconciliationService:
     """Persist deterministic terminal evidence and only quarantine trusted unknown tags."""
@@ -159,15 +165,37 @@ class ReconciliationService:
 
         Takes `for_session` alone and never `operation()`, so there is no lock-ordering cycle
         with `SessionService`, which takes them in that order.
+
+        **The acquisition is bounded, and that bound is load-bearing.** `_has_settled`
+        consults the lock only for STARTING and STOP_REQUESTED; every other state is waved
+        through and reaches this method, where an unbounded `async with` would wait on
+        whatever holds it. `force_stop`, `cleanup`, `answer_trust`, `set_remote_control` and
+        `refresh_readiness` all hold `for_session` across a terminal call, and
+        `adapters/tmux/gateway.py` awaits `process.communicate()` with no timeout of its own,
+        so "whatever holds it" can be a hung tmux invocation. Blocking here would stall the
+        *whole pass* -- including records for other sessions later in the loop -- and
+        `bootstrap._reconcile_quietly` catches exceptions, not hangs, so there would be no
+        log, no retry and no recovery short of a restart. Skipping one record for one pass is
+        the recoverable failure; losing the loop is not. Found by the Stage 4 gate evaluator,
+        which reproduced the stall and showed an unrelated STARTING record left unrepaired.
         """
         if self._locks is None:
             await self._store.record_event(record.session_id, event)
             return
-        async with self._locks.for_session(record.session_id):
+        lock = self._locks.for_session(record.session_id)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=_REPAIR_LOCK_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # Whoever holds it is mid-flight, which is exactly when this pass must not write.
+            # The next pass looks again.
+            return
+        try:
             current = await self._store.get(record.session_id)
             if current is None or current.state is not record.state:
                 return
             await self._store.record_event(record.session_id, event)
+        finally:
+            lock.release()
 
     async def _is_ready(self, record: SessionRecord) -> bool:
         """Whether the agent behind a live pane is actually ready to be called RUNNING.

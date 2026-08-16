@@ -222,3 +222,30 @@ async def test_a_launch_in_flight_is_visible_to_the_reconciler_as_busy() -> None
 
     assert observed == [True], "a launch in flight was invisible to the reconciler"
     assert locks.session_is_busy(session_id) is False
+
+
+async def test_a_wedged_lock_costs_one_record_not_the_whole_pass() -> None:
+    """A held lock must never be able to stall reconciliation for every other session.
+
+    `_has_settled` consults the lock only for STARTING and STOP_REQUESTED, so a RUNNING
+    record is waved through and reaches the repair write, which takes the lock. If that
+    acquisition were unbounded, a mutation wedged on a hung tmux call would block the pass
+    there -- and `bootstrap._reconcile_quietly` catches exceptions, not hangs, so nothing
+    would log it, retry it, or recover short of a restart. The records *after* it in the loop
+    are the real cost: an unrelated session left unrepaired indefinitely.
+
+    Found by the Stage 4 gate evaluator, which reproduced the stall and observed exactly that
+    neighbour left behind.
+    """
+    wedged, neighbour = _running_record(), _running_record()
+    store = _Store(wedged, neighbour)
+    locks = SessionLocks()
+    reconciler = ReconciliationService(store, settle_after=timedelta(0), locks=locks)
+
+    async with locks.for_session(wedged.session_id):
+        # Both panes are gone, so the pass wants to end both records. The first is wedged.
+        await asyncio.wait_for(reconciler.reconcile(()), timeout=10)
+
+    # The wedged record is left for the next pass; the neighbour is repaired regardless.
+    assert store.records[wedged.session_id].state is SessionState.RUNNING
+    assert store.records[neighbour.session_id].state is SessionState.ENDED
