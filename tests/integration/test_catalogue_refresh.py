@@ -369,6 +369,84 @@ async def test_a_ranked_catalogue_is_re_read_on_the_next_refresh(
     assert launcher.reads == 2
 
 
+def _buttons(rendered: dict[str, object]) -> list[tuple[str, str]]:
+    markup = rendered.get("reply_markup")
+    if markup is None:
+        return []
+    return [(button.text, button.callback_data) for row in markup.inline_keyboard for button in row]
+
+
+class _CountingSource:
+    """A catalogue source that records how often it was asked, not just what it answered."""
+
+    def __init__(self, provider: ProjectCatalogueProvider) -> None:
+        self._provider = provider
+        self.reads = 0
+
+    def __call__(self) -> tuple:
+        self.reads += 1
+        return self._provider.refresh().catalogue
+
+
+def _picker_boundary(
+    dev_root: Path, registry_path: Path
+) -> tuple[PrivateBotBoundary, _CountingSource]:
+    provider = ProjectCatalogueProvider(registry_path, dev_root)
+    source = _CountingSource(provider)
+    boundary = PrivateBotBoundary(
+        1, 2, catalogue=provider.refresh().catalogue, catalogue_source=source
+    )
+    return boundary, source
+
+
+async def test_opening_launch_picks_up_a_project_created_outside_the_bot(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """The gap Refresh existed to cover: a project the bot did not create.
+
+    Creation *through* the bot has always refreshed at the end of its own flow, so the only
+    way to hold a stale catalogue was to add a project by some other route -- an editor, the
+    TUI, the registry by hand -- and then open the picker.
+    """
+    boundary, _ = _picker_boundary(dev_root, registry_path)
+    assert "new-project" not in {project.name for project in boundary.catalogue}
+
+    _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    projects = await boundary._reply_for("launch.open", "projects")
+
+    assert "new-project" in {text for text, _ in _buttons(projects)}
+
+
+async def test_opening_resume_picks_up_a_project_created_outside_the_bot(
+    dev_root: Path, registry_path: Path
+) -> None:
+    boundary, _ = _picker_boundary(dev_root, registry_path)
+
+    _service(dev_root, registry_path).create(CreateProjectCommand("infra", "new-project"))
+    projects = await boundary._reply_for("resume.open", "projects")
+
+    assert "new-project" in {text for text, _ in _buttons(projects)}
+
+
+async def test_paging_a_picker_does_not_re_read_the_catalogue(
+    dev_root: Path, registry_path: Path
+) -> None:
+    """Opening is where a new order is expected; paging is where it must not arrive.
+
+    A refresh clears `_project_views` and re-ranks, so re-reading here would reshuffle the
+    very list the owner is paging through -- the invariant
+    `test_a_ranked_catalogue_is_re_read_on_the_next_refresh` states from the other side.
+    """
+    boundary, source = _picker_boundary(dev_root, registry_path)
+
+    await boundary._reply_for("launch.open", "projects")
+    assert source.reads == 1
+    await boundary._reply_for("launch.page", "all|1")
+    await boundary._reply_for("resume.projects", "all|1")
+
+    assert source.reads == 1
+
+
 async def test_an_unranked_catalogue_survives_a_launcher_that_cannot_report_usage(
     dev_root: Path, registry_path: Path
 ) -> None:

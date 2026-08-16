@@ -65,9 +65,11 @@ token is stored in SQLite and is valid for the message it was drawn on rather th
 so one drawn before a service restart still works after it. Replacing a screen prunes the tokens
 it drew, so a press that lands after a redraw says the screen has moved on and shows Home.
 
-Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
-`Refresh` on the two views whose answer goes stale on its own — Home's counts and the sessions
-list — and `Home`. An action that makes you wait, such as a launch or a stop that polls a pane,
+Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it, and
+`Home`. There is no `Refresh`: every screen re-derives what it shows on entry, so the two views
+whose answer goes stale on its own — Home's counts and the sessions list — are current whenever
+you arrive at them, and `Back` out of a session returns to the page of the list it was opened
+from. An action that makes you wait, such as a launch or a stop that polls a pane,
 replaces the screen with what it is waiting for and drops the keyboard until it finishes, so a
 press cannot be repeated into a second launch.
 

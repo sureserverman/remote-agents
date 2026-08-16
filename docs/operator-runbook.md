@@ -52,7 +52,9 @@ commands; the bot description and short description are checked against the revi
 ## Telegram acceptance checklist
 
 Begin with `/start`. Use only the configured private chat. The Home dashboard shows Active and
-Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, `/sessions`, and
+Preserved counts, then Launch and Sessions. There is no Refresh: every route back to a screen
+re-reads what it shows, so the counts and the session list are current on arrival. `/launch`,
+`/sessions`, and
 `/help` offer the same owner-only entry points from Telegram's command menu.
 
 1. Open Launch and use Search to find a project by name. The reply prompt names the expected
@@ -77,10 +79,11 @@ Preserved counts, then Launch and Sessions, and closes with Refresh. `/launch`, 
    the outcome, above an empty list.
 6. For a separate active session, use Force stop and verify the confirmation names the session
    and offers Cancel before the kill. Cancel it once, then confirm it.
-7. With more sessions than one page holds, page through Sessions with Previous and Next, and
-   verify Refresh redraws the page you are on rather than returning Home.
+7. With more sessions than one page holds, page through Sessions with Previous and Next, open a
+   row from a page other than the first, and verify Back returns to that page rather than to
+   the top of the list. Home's Sessions button and `/sessions` still open the first page.
 8. Open Launch. The project you have launched from most recently is first, ahead of registry
-   order — including on the first Launch after a service restart, with no Refresh pressed
+   order — including on the first Launch after a service restart, with nothing pressed
    beforehand. Confirm Resume and a search that matches both projects agree with it.
 9. Restart `remote-agents.service`, press a button drawn before the restart, and verify that it
    still works: it renders the screen it names rather than reporting anything. Verify the
@@ -573,8 +576,9 @@ person while working in the terminal, and do not drive one session from both sur
 moment.
 
 Each process also holds its own catalogue and its own profile probe, both taken when it starts. A
-project created in the terminal is invisible to a running service until it re-reads — press
-Refresh in any paginated view — and one created from Telegram or the command line is invisible in
+project created in the terminal is invisible to a running service until it re-reads — opening
+Launch or Resume re-reads the catalogue, as does `/launch`, so no Refresh press is needed for
+this — and one created from Telegram or the command line is invisible in
 a running terminal until it re-reads the catalogue — press Ctrl+R on the project list, the
 resume project list, or use Add Project, which re-reads on the way out. Ctrl+R re-reads only
 what the screen it is pressed on shows, and the catalogue is what those two show; on the

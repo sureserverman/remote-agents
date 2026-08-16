@@ -214,8 +214,13 @@ async def test_a_created_project_is_offered_by_launch_without_a_restart() -> Non
     assert "new-project" in str(launch["text"]) or "new-project" in " ".join(_buttons(launch))
 
 
-async def test_refreshing_home_re_reads_a_project_created_by_another_process() -> None:
-    """The command line writes from a separate process, so Home refresh must re-read."""
+async def test_opening_launch_re_reads_a_project_created_by_another_process() -> None:
+    """The command line writes from a separate process, so opening a picker must re-read.
+
+    This used to be Home's Refresh, which is why the read is asserted as absent on `nav.home`
+    first: the dashboard shows no projects, so re-walking the registry to draw it was work
+    for a screen that could not display the result. The picker is where the answer is used.
+    """
     created = CatalogProject("opaque-new", "cli-made", "infra", "Registered")
     reads: list[str] = []
 
@@ -228,7 +233,7 @@ async def test_refreshing_home_re_reads_a_project_created_by_another_process() -
     await boundary._reply_for("nav.home", "home")
     assert reads == []
 
-    await boundary._reply_for("nav.refresh", "home")
+    await boundary._reply_for("launch.open", "projects")
     assert reads == ["read"]
     assert boundary.catalogue == (created,)
 

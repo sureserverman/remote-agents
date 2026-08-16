@@ -415,4 +415,8 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     assert first["text"].startswith("Stopped ")
     assert second["text"].startswith("That action has already run.")
     labels = [button.text for row in second["reply_markup"].inline_keyboard for button in row]
-    assert labels[-2:] == ["Refresh", "Home"], "it answers on the list, not on a lone Home"
+    # The list's own keyboard, not a lone Home. Asserted as "Sessions plus its Launch" rather
+    # than by the footer, which used to read ["Refresh", "Home"] and now reads ["Home"] on
+    # every screen alike -- a signature that no longer distinguishes the list from a dead end.
+    assert "Sessions" in second["text"]
+    assert labels == ["Launch", "Home"], "it answers on the list, not on a lone Home"

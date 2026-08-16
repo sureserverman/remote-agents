@@ -89,7 +89,6 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
 
 def render_home(
     *,
-    refresh: str,
     launch: str,
     sessions: str,
     active: int,
@@ -97,28 +96,26 @@ def render_home(
     resume: str | None = None,
     add_project: str | None = None,
 ) -> RenderedMessage:
-    """Render the fixed root view, closed by the refresh its counts need.
+    """Render the fixed root view: the two counts, and the ways out of them.
 
-    The counts here are the one number on the dashboard that moves without the owner
-    touching anything — a session can end, or a launch can become ready, while this screen
-    sits on their phone. `refresh` used to be minted and then dropped on the floor by this
-    function, which left the bot with a live `nav.refresh` handler that no button in the
-    interface could reach, and an error message elsewhere telling the owner to refresh.
+    The counts move without the owner touching anything — a session can end, or a launch can
+    become ready, while this screen sits on their phone — and this screen used to close with a
+    Refresh that re-read them in place. It no longer does. Every button here re-derives the
+    counts on the way back (`_home_reply` reads the store on every entry), so the button
+    only ever saved the owner a tap, and the transition it existed to surface now arrives on
+    its own through `notifications`.
 
-    It takes that one callback rather than a whole `NavigationCallbacks`, which obliged the
-    caller to mint five tokens for a screen that shows one. Four of them were minted, bound
-    to the message, and never rendered — free while tokens expired in fifteen minutes, and
-    real rows against a size-bounded store once they stopped expiring.
+    It takes its callbacks one at a time rather than a whole `NavigationCallbacks`, which
+    obliged the caller to mint five tokens for a screen that shows two or four. The unrendered
+    ones were still minted, still bound, and real rows against a size-bounded store.
     """
 
-    _validate_callback(refresh)
     return _message(
         f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
         ((Button("Launch", launch),),)
         + (((Button("Resume", resume),),) if resume is not None else ())
         + ((Button("Sessions", sessions),),)
-        + (((Button("Add Project", add_project),),) if add_project is not None else ())
-        + ((Button("Refresh", refresh),),),
+        + (((Button("Add Project", add_project),),) if add_project is not None else ()),
     )
 
 

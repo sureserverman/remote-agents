@@ -247,6 +247,23 @@ class PrivateBotBoundary:
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
+    _sessions_page: int = 1
+    """The page number the sessions list is currently drawn at, so Back can return to it.
+
+    Written by `_sessions_reply` — the one place that renders the list — and read only by the
+    session detail, whose Back used to point at `sessions.open` and so dropped the owner on
+    page 1 whatever page they had opened the row from. That was survivable while Refresh
+    existed to re-read a page in place; removing Refresh made it the only way back, so it has
+    to land where the owner was.
+
+    Deliberately *what is on screen* rather than *where the owner has been*. A stop renders
+    the list at page 1, and this becomes 1 with it, because the detail's Back must agree with
+    the list the owner is actually looking at.
+
+    Process-local, like `_project_views`, and for the same reason: it describes a render, and
+    a restart has no render to describe. A detail button that outlives one falls back to
+    page 1, which is exactly where Back went before this existed.
+    """
     project_page_size: int = 10
     session_page_size: int = 8
     #: The host's configured bound, which may be tighter than the domain ceiling but never
@@ -282,6 +299,17 @@ class PrivateBotBoundary:
         without a ranking call per rendered row, and without either picker knowing that a
         ranking exists. It is also why a session launched during the run changes the next
         render's order: the usage read happens on the refresh that follows it.
+
+        Called when a picker **opens** — `launch.open`, `resume.open`, `/launch` — and not on
+        a timer. `self.catalogue` is read by those two screens and by search, so re-reading it
+        where it is about to be rendered makes it fresh exactly when that matters, at a moment
+        the owner is already waiting for a screen to draw. Before this it was refreshed only by
+        `nav.refresh` and by the end of project creation, which left one real gap: a project
+        created outside the bot stayed invisible until the owner thought to press Refresh.
+
+        Deliberately not called from `launch.page` or `resume.page`. Paging must not re-read —
+        this clears `_project_views` and re-ranks, so a refresh under a thumb would reshuffle
+        the list being paged through. Opening is the boundary where a new order is expected.
         """
         if self.catalogue_source is None:
             return
@@ -512,6 +540,7 @@ class PrivateBotBoundary:
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
+            await self.refresh_catalogue()
             await self._answer_command(
                 update.effective_message,
                 _reply_arguments(self._projects_reply(self.catalogue, view_id="all")),
@@ -682,13 +711,10 @@ class PrivateBotBoundary:
         """
         await self.view.render(query.get_bot(), arguments, retire=retire)
 
-    async def _home_reply(self, *, refresh: bool = False) -> dict[str, object]:
-        if refresh:
-            await self.refresh_catalogue()
+    async def _home_reply(self) -> dict[str, object]:
         records = await self._records()
         return _reply_arguments(
             render_home(
-                refresh=self._callback("nav.refresh", "home"),
                 launch=self._callback("launch.open", "projects"),
                 resume=(self._callback("resume.open", "projects") if self.conversations else None),
                 sessions=self._callback("sessions.open", "sessions"),
@@ -702,7 +728,13 @@ class PrivateBotBoundary:
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
-            return await self._home_reply(refresh=action == "nav.refresh")
+            # `nav.refresh` no longer has a button. It stays handled because a token outlives
+            # the deploy that stopped drawing it: tokens live in SQLite and are valid for the
+            # message they were drawn on rather than for a clock, so a Home screen rendered
+            # before the upgrade still carries a live Refresh. Answering it with Home is what
+            # that button now means; dropping the case would make it a dead button instead,
+            # which is the one state the callback store exists to prevent.
+            return await self._home_reply()
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token, message_id)
         if action == "remote.confirm":
@@ -714,6 +746,7 @@ class PrivateBotBoundary:
         if action == "project.open":
             return _reply_arguments(await self._project_areas_reply())
         if action == "launch.open":
+            await self.refresh_catalogue()
             return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
         if action == "launch.page":
             return _reply_arguments(self._project_page_reply(entity_id))
@@ -726,6 +759,7 @@ class PrivateBotBoundary:
         if action == "sessions.page":
             return _reply_arguments(await self._sessions_reply(_page_number(entity_id)))
         if action == "resume.open":
+            await self.refresh_catalogue()
             return _reply_arguments(self._resume_projects_reply())
         if action == "resume.projects":
             return _reply_arguments(self._project_page_reply(entity_id, flow="resume"))
@@ -953,13 +987,17 @@ class PrivateBotBoundary:
             await self.launcher.refresh_readiness()
         records = await self._records()
         if not records:
+            self._sessions_page = 1
             return self._message(
                 f"{self._notice_line(notice)}<b>Sessions</b>\nNothing is running.",
                 ((Button("Launch", self._callback("launch.open", "projects")),),),
-                refresh=self._callback("sessions.page", "1"),
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
+        # After the clamp, not before: `_sessions_page` is read as the page to *return* to, so
+        # it has to be a page that exists. A request past the end renders the last one, and
+        # remembering the request rather than the render would send Back somewhere emptier.
+        self._sessions_page = index
         start = (index - 1) * self.session_page_size
         buttons = [
             (
@@ -980,7 +1018,6 @@ class PrivateBotBoundary:
         return self._message(
             f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>",
             tuple(buttons),
-            refresh=self._callback("sessions.page", str(index)),
         )
 
     @staticmethod
@@ -992,14 +1029,28 @@ class PrivateBotBoundary:
         """
         return "" if notice is None else f"{escape(notice)}\n"
 
+    def _sessions_back(self) -> str:
+        """A Back that lands on the page of the sessions list the owner actually left.
+
+        `sessions.page` rather than `sessions.open`, because the two differ by exactly the
+        thing this fixes: `sessions.open` renders `_sessions_reply()` at its default first
+        page. Opening a row from page 3 and pressing Back used to answer page 1, and the only
+        way back to page 3 was Refresh — which is now gone, so this is the whole route.
+
+        `sessions.open` keeps meaning *the top of the list*, which is what Home's Sessions
+        button and `/sessions` should still do. Only the detail, which was opened from a
+        known page, is entitled to return to one.
+        """
+        return self._callback("sessions.page", str(self._sessions_page))
+
     async def _detail_reply(self, session_value: str, message_id: int = 0) -> RenderedMessage:
         record = await self._record(session_value)
         if record is None:
             # Reached by opening a row that ended under the owner, so the list they came
-            # from is exactly where they need to go — not Home.
+            # from is exactly where they need to go — not Home, and not its first page.
             return self._message(
                 "That session is no longer available.",
-                back=self._callback("sessions.open", "sessions"),
+                back=self._sessions_back(),
             )
         buttons = [
             (Button("Inspect", self._callback("session.inspect", session_value)),),
@@ -1065,7 +1116,7 @@ class PrivateBotBoundary:
             f"State: {record.state.value}\n"
             f"{_state_explanation(record.state, record.orphan_provenance)}",
             tuple(buttons),
-            back=self._callback("sessions.open", "sessions"),
+            back=self._sessions_back(),
         )
 
     async def _attach_reply(self, session_value: str) -> RenderedMessage:
@@ -1804,7 +1855,6 @@ class PrivateBotBoundary:
         keyboard: tuple[tuple[Button, ...], ...] = (),
         *,
         back: str | None = None,
-        refresh: str | None = None,
     ) -> RenderedMessage:
         """Render one screen and close it with the navigation row it is entitled to.
 
@@ -1812,15 +1862,15 @@ class PrivateBotBoundary:
         a session came from cost two taps and a second search for the row. `back` takes the
         callback of the screen that owns this one; pass it wherever there is a real parent.
 
-        `refresh` takes the callback that re-renders *this* screen, so it is offered only
-        where the answer can go stale under the owner — the dashboard counts and the
-        sessions list. Everything else would be a button that redraws what it already shows.
+        There was a third slot here, `refresh`, offered on the two screens whose answer goes
+        stale under the owner — the dashboard counts and the sessions list. Both re-derive
+        their answer on every entry, so it only ever saved a tap, and the one thing it did
+        that no other route did — return to the sessions page it was pressed on — is now what
+        `_sessions_back` gives Back.
         """
         navigation = []
         if back is not None:
             navigation.append(Button("Back", back))
-        if refresh is not None:
-            navigation.append(Button("Refresh", refresh))
         navigation.append(Button("Home", self._callback("nav.home", "home")))
         return render_message(text, keyboard + (tuple(navigation),))
 

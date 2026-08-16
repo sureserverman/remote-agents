@@ -245,7 +245,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
     labels = tuple(button.text for row in reply.keyboard for button in row)
     assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
-    assert labels[1:] == ("Refresh", "Home")
+    assert labels[1:] == ("Home",)
     assert "ended" not in labels
 
 
@@ -901,33 +901,75 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
 
 
 @pytest.mark.asyncio
-async def test_refresh_is_reachable_from_the_two_screens_whose_answer_goes_stale() -> None:
-    """`nav.refresh` had a live handler and no button anywhere that could reach it."""
+async def test_no_screen_offers_refresh_now_that_every_route_re_reads() -> None:
+    """The button is gone from both screens that carried it, and from nowhere else.
+
+    It was offered on exactly two — Home and the sessions list — because those are the two
+    whose answer moves without the owner touching anything. Both re-derive that answer on
+    every entry, so what it bought was a tap.
+    """
     boundary, _ = _stop_boundary(_record(SessionState.RUNNING, "active", ProjectId("a" * 24)))
 
     home = await boundary._home_reply()
     sessions = await boundary._sessions_reply()
 
-    def _resolved_action(token: str) -> str | None:
-        boundary.callbacks.bind_pending(11, 1)
-        state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)
-        return None if state is None else state.action
+    home_labels = {button.text for row in home["reply_markup"].inline_keyboard for button in row}
+    sessions_labels = {button.text for row in sessions.keyboard for button in row}
+    assert "Refresh" not in home_labels
+    assert "Refresh" not in sessions_labels
 
-    home_refresh = next(
-        button.callback_data
-        for row in home["reply_markup"].inline_keyboard
-        for button in row
-        if button.text == "Refresh"
+
+@pytest.mark.asyncio
+async def test_a_refresh_token_drawn_before_the_button_was_removed_still_answers() -> None:
+    """Tokens outlive the deploy that stopped drawing them, so `nav.refresh` stays handled.
+
+    A button is valid for the message it was drawn on rather than for a clock, so a Home
+    screen rendered before this change still carries a live Refresh. Dropping the case would
+    turn it into the dead button the callback store exists to prevent.
+    """
+    boundary, _ = _stop_boundary(_record(SessionState.RUNNING, "active", ProjectId("a" * 24)))
+
+    reply = await boundary._reply_for("nav.refresh", "home")
+
+    assert "Remote agents" in str(reply["text"])
+    assert "Active: 1" in str(reply["text"])
+
+
+@pytest.mark.asyncio
+async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from() -> None:
+    """The one thing Refresh did that no other route did, now carried by Back.
+
+    `sessions.open` renders the first page by design — it is what Home's Sessions button and
+    `/sessions` mean. Back out of a detail is the one case with a known page to return to.
+    """
+    records = [
+        _record(SessionState.RUNNING, f"active-{index}", ProjectId("a" * 24)) for index in range(9)
+    ]
+    boundary, _ = _stop_boundary(*records)
+    boundary.session_page_size = 4
+
+    listing = await boundary._sessions_reply(3)
+    assert "Sessions 3/3" in listing.text
+    row = next(
+        button
+        for button_row in listing.keyboard
+        for button in button_row
+        if button.text not in {"Previous", "Next", "Home"}
     )
-    sessions_refresh = next(
-        button.callback_data
-        for row in sessions.keyboard
-        for button in row
-        if button.text == "Refresh"
-    )
-    assert _resolved_action(home_refresh) == "nav.refresh"
-    # Sessions refreshes itself rather than bouncing the owner to the dashboard.
-    assert _resolved_action(sessions_refresh) == "sessions.page"
+    boundary.callbacks.bind_pending(11, 1)
+    opened = boundary.callbacks.resolve(row.callback_data, owner_id=7, chat_id=11, message_id=1)
+    assert opened is not None
+    detail = await boundary._detail_reply(opened.entity_id)
+
+    back = next(button for row_ in detail.keyboard for button in row_ if button.text == "Back")
+    boundary.callbacks.bind_pending(11, 1)
+    state = boundary.callbacks.resolve(back.callback_data, owner_id=7, chat_id=11, message_id=1)
+
+    assert state is not None
+    assert state.action == "sessions.page"
+    assert state.entity_id == "3"
+    returned = await boundary._sessions_reply(int(state.entity_id))
+    assert "Sessions 3/3" in returned.text
 
 
 @pytest.mark.asyncio
@@ -1010,7 +1052,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     # why this keyboard no longer carries it or the Back that led out of that dead end.
     assert "Sessions 1/1" in reply["text"]
     labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
-    assert labels[-2:] == ["Refresh", "Home"]
+    assert labels[-1:] == ["Home"]
     assert "Back" not in labels
     assert "Open session" not in labels
     assert labels[0].startswith("Demo"), "the session that would not stop is on the list"
