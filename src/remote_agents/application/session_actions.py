@@ -454,3 +454,36 @@ def state_word(state: SessionState, orphan_provenance: OrphanProvenance | None) 
     if orphan_provenance is OrphanProvenance.AMBIGUOUS:
         return "unverifiable"
     return state.value
+
+
+_NOTIFIABLE = frozenset(
+    {
+        SessionState.STARTING,
+        SessionState.RUNNING,
+    }
+)
+
+
+def notifiable(state: SessionState) -> bool:
+    """Whether an unprompted notification about `state` could still be news to the owner.
+
+    Lives here for the same reason `state_word` does (DEC-001, DEC-029): what a state *means*
+    to a surface is lifecycle policy, and a driver adapter that keeps its own copy of such a
+    rule is how two surfaces come to disagree about the same record. So this sits beside
+    `available_actions` and `state_word` rather than in the bot that happens to send first.
+
+    An unprompted notification makes a claim — *an agent was working, and it has stopped* — so
+    it is worth sending only about a session where that claim could still be new information.
+    A session the owner stopped themselves, preserved, or watched fail is one where the message
+    reports the owner's own action back to them, and that is the specific complaint this
+    answers: the bot notified on STOP_REQUESTED, PRESERVED, FAILED and ENDED records, so every
+    ordinary stop produced a message about something the owner had just done.
+
+    **STARTING is in the true half deliberately**, and it is the member an edit is likeliest to
+    remove as an oversight. A hook can fire before reconciliation has promoted the record to
+    RUNNING, so a launch that reports promptly is still STARTING when its first report arrives;
+    refusing those would drop a real agent's first word on a race, and drop it silently. The
+    inverse mistake — a notification about a session that never got going — is bounded by the
+    hook having fired at all, which is itself evidence of an agent that ran.
+    """
+    return state in _NOTIFIABLE
