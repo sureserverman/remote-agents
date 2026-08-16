@@ -40,6 +40,15 @@ def _activity(
     )
 
 
+def _group(*activities: AgentActivity) -> SessionGroup:
+    """One session's news, for a renderer that no longer takes a lone observation.
+
+    Most of this file's cases are about one observation's wording and are unaffected by
+    grouping, so they wrap it here rather than each building a bundle inline.
+    """
+    return SessionGroup(activities[0].session_id, activities)
+
+
 def _utf16_units(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
@@ -59,7 +68,7 @@ def test_every_kind_names_the_session_and_offers_to_open_it(kind: ActivityKind) 
         ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
     )
     message = render_activity(
-        _activity(kind, confidence=confidence), display=DISPLAY, open_session=OPEN
+        _group(_activity(kind, confidence=confidence)), display=DISPLAY, open_session=OPEN
     )
 
     assert DISPLAY in message.text
@@ -73,14 +82,14 @@ def test_every_kind_says_something_distinct() -> None:
     one thing while the service knows another."""
     rendered = {
         other: render_activity(
-            _activity(
+            _group(_activity(
                 other,
                 confidence=(
                     ActivityConfidence.INFERRED
                     if other is ActivityKind.QUIET
                     else ActivityConfidence.REPORTED
                 ),
-            ),
+            )),
             display=DISPLAY,
             open_session=OPEN,
         ).text
@@ -92,7 +101,9 @@ def test_every_kind_says_something_distinct() -> None:
 
 def test_a_completed_session_carries_what_the_agent_said() -> None:
     message = render_activity(
-        _activity(ActivityKind.COMPLETED, detail="Refactored the parser and ran the suite."),
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="Refactored the parser and ran the suite.")
+        ),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -101,7 +112,7 @@ def test_a_completed_session_carries_what_the_agent_said() -> None:
 
 def test_detail_is_escaped_rather_than_rendered_as_markup() -> None:
     message = render_activity(
-        _activity(ActivityKind.COMPLETED, detail="<b>bold</b> & <script>alert(1)</script>"),
+        _group(_activity(ActivityKind.COMPLETED, detail="<b>bold</b> & <script>alert(1)</script>")),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -112,7 +123,7 @@ def test_detail_is_escaped_rather_than_rendered_as_markup() -> None:
 
 def test_a_display_identity_carrying_markup_is_escaped_too() -> None:
     message = render_activity(
-        _activity(ActivityKind.COMPLETED),
+        _group(_activity(ActivityKind.COMPLETED)),
         display="<i>project</i> · claude",
         open_session=OPEN,
     )
@@ -124,7 +135,7 @@ def test_an_unbounded_detail_still_fits_the_telegram_budget() -> None:
     """The application layer bounds detail to 240 characters, and this bounds it again — the
     renderer is not entitled to assume the only caller it has today."""
     message = render_activity(
-        _activity(ActivityKind.COMPLETED, detail="x" * 20_000),
+        _group(_activity(ActivityKind.COMPLETED, detail="x" * 20_000)),
         display="y" * 20_000,
         open_session=OPEN,
     )
@@ -139,7 +150,7 @@ def test_a_need_for_an_answer_is_stated_plainly_because_the_agent_asked() -> Non
     weakened sentence makes a weak signal read better, not become worth sending.
     """
     message = render_activity(
-        _activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.REPORTED),
+        _group(_activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.REPORTED)),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -153,7 +164,7 @@ def test_quiet_is_a_report_of_silence_and_never_a_claim_of_completion() -> None:
     """The Stage 2 gate's judgment criterion, pinned: the heuristic describes what was
     observed — no output — and never the conclusion the owner might jump to."""
     message = render_activity(
-        _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -166,7 +177,7 @@ def test_quiet_is_a_report_of_silence_and_never_a_claim_of_completion() -> None:
 
 def test_quiet_names_the_time_it_stopped_being_observed_to_change() -> None:
     message = render_activity(
-        _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -177,11 +188,11 @@ def test_quiet_renders_the_same_moment_whatever_offset_it_arrived_in() -> None:
     """An observation is an instant; two spellings of one instant must not read as two."""
     elsewhere = OBSERVED.astimezone(timezone(timedelta(hours=5, minutes=30)))
     message = render_activity(
-        _activity(
+        _group(_activity(
             ActivityKind.QUIET,
             confidence=ActivityConfidence.INFERRED,
             observed_at=elsewhere,
-        ),
+        )),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -192,11 +203,11 @@ def test_quiet_never_renders_agent_text_even_if_a_caller_supplies_it() -> None:
     """Nothing said this. A quiet report that carried a parting sentence would present the
     last thing on the screen as a statement the agent chose to make."""
     message = render_activity(
-        _activity(
+        _group(_activity(
             ActivityKind.QUIET,
             detail="I have completed the migration.",
             confidence=ActivityConfidence.INFERRED,
-        ),
+        )),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -210,7 +221,7 @@ def test_an_inferred_report_says_so_rather_than_asserting_it() -> None:
     confidence, so a future inferred kind cannot arrive unhedged by whoever writes its wording.
     """
     message = render_activity(
-        _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -224,7 +235,7 @@ def test_a_callback_that_is_not_an_opaque_token_is_refused() -> None:
     for rejected in ("session.detail:42", "", "c1_" + "x" * 100, "c1_ünicode"):
         with pytest.raises(ValueError):
             render_activity(
-                _activity(ActivityKind.COMPLETED), display=DISPLAY, open_session=rejected
+                _group(_activity(ActivityKind.COMPLETED)), display=DISPLAY, open_session=rejected
             )
 
 
@@ -381,10 +392,10 @@ def test_an_output_ceiling_is_not_worded_as_a_usage_limit() -> None:
     """Two facts, two next moves: a rate limit is waited out, an output ceiling is continued
     from. One sentence for both named the alarming one for the routine event."""
     usage = render_activity(
-        _activity(ActivityKind.LIMIT_REACHED), display=DISPLAY, open_session=OPEN
+        _group(_activity(ActivityKind.LIMIT_REACHED)), display=DISPLAY, open_session=OPEN
     )
     output = render_activity(
-        _activity(ActivityKind.OUTPUT_LIMIT), display=DISPLAY, open_session=OPEN
+        _group(_activity(ActivityKind.OUTPUT_LIMIT)), display=DISPLAY, open_session=OPEN
     )
 
     assert "usage limit" in usage.text
@@ -402,7 +413,7 @@ def test_text_no_encoder_can_carry_is_replaced_rather_than_raising() -> None:
     notification, for every session, queued behind it silently.
     """
     message = render_activity(
-        _activity(ActivityKind.COMPLETED, detail="done \ud800 here"),
+        _group(_activity(ActivityKind.COMPLETED, detail="done \ud800 here")),
         display="proj \udcff x",
         open_session=OPEN,
     )
@@ -645,3 +656,175 @@ def test_a_collapsed_observation_takes_the_place_its_newest_copy_earned() -> Non
         ActivityKind.NEEDS_ANSWER,
         ActivityKind.COMPLETED,
     ]
+
+
+# Rendering a group -- one message per session, however much it has to say -----------------
+
+
+def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_them() -> None:
+    """The whole point of grouping, at the renderer.
+
+    Three observations, one message, one name, one button. Asserted on the *count* of lines as
+    well as their content, because a renderer that concatenated the three into a paragraph
+    would satisfy a substring check and be unreadable on a phone.
+    """
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="Ran the suite."),
+            _activity(ActivityKind.NEEDS_ANSWER, detail="Overwrite config.toml?"),
+            _activity(ActivityKind.LIMIT_REACHED),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    body = message.text.split("\n")
+    assert body[0] == f"<b>{DISPLAY}</b>"
+    assert len(body) == 4, "one header line and one line per observation"
+    assert "finished its work" in body[1] and "Ran the suite." in body[1]
+    assert "waiting for an answer" in body[2] and "Overwrite config.toml?" in body[2]
+    assert "usage limit" in body[3]
+    assert len(message.keyboard[0]) == 1
+
+
+def test_a_lone_observation_still_reads_exactly_as_it_always_has() -> None:
+    """The common case must not pay for the rare one.
+
+    Almost every notification carries one observation, and a bullet in front of a single
+    sentence is clutter the owner did not have before. The grouped shape appears only when
+    there is something to group.
+    """
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="Ran the suite.")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert message.text == f"<b>{DISPLAY}</b>\nThe agent has finished its work.\nRan the suite."
+
+
+def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -> None:
+    """A cap the owner is told about, rather than a silent truncation.
+
+    Seven observations in one pass is already pathological -- the rate limit collapses a
+    burst, and the duplicate collapse folds repeats -- so the cap is a backstop. What it may
+    not do is drop four observations and look like a complete account of the session.
+    """
+    message = render_activity(
+        _group(
+            *(
+                _activity(ActivityKind.COMPLETED, detail=f"Step {index}.")
+                for index in range(7)
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    body = message.text.split("\n")
+    assert len(body) == 7, "a header, five observations, and the count of what is missing"
+    assert "2 more" in body[-1]
+
+
+def test_one_hedge_covers_a_group_however_many_guesses_are_in_it() -> None:
+    """The hedge is a property of the message, not a refrain.
+
+    Repeated per line it would read as emphasis -- as though the service were unusually
+    unsure this time -- when it is saying the same structural thing about the same kind.
+    """
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+            _activity(
+                ActivityKind.QUIET,
+                confidence=ActivityConfidence.INFERRED,
+                observed_at=datetime(2026, 8, 11, 15, 30, tzinfo=UTC),
+            ),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert message.text.count("This is a guess") == 1
+
+
+def test_a_reported_group_carries_no_hedge_at_all() -> None:
+    """The other direction, because a hedge appended unconditionally would be worse than none:
+    it would teach the owner to discount the reports that are facts."""
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="Ran the suite."),
+            _activity(ActivityKind.NEEDS_ANSWER, detail="Which file?"),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "This is a guess" not in message.text
+
+
+def test_a_grouped_quiet_report_still_carries_no_agent_text() -> None:
+    """`QUIET` drops detail regardless of what a caller supplies, and grouping must not be the
+    seam where that rule is lost -- the last line of an idle screen rendered under a session's
+    name reads exactly like a parting statement."""
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.QUIET,
+                detail="sk-not-a-real-key-000",
+                confidence=ActivityConfidence.INFERRED,
+            ),
+            _activity(ActivityKind.QUIET, detail="and a transcript", observed_at=OBSERVED),
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "sk-not-a-real-key-000" not in message.text
+    assert "transcript" not in message.text
+
+
+def test_a_group_of_pathological_details_still_fits_the_telegram_budget() -> None:
+    """Five bounded details are not a bounded message.
+
+    The application layer caps each detail at 240 characters, and HTML-escaping can expand a
+    character fivefold (`&` becomes `&amp;`), so five details inside one message can reach
+    six thousand UTF-16 units against a ceiling of 4096. One observation could never do this,
+    which is why the single-observation bound this replaced was sufficient and is not any
+    more. Telegram rejects the send outright, so the failure is a notification that never
+    arrives rather than one that arrives ugly.
+    """
+    message = render_activity(
+        _group(
+            *(
+                _activity(
+                    ActivityKind.COMPLETED,
+                    detail="&" * 240,
+                    observed_at=datetime(2026, 8, 11, 14, index, tzinfo=UTC),
+                )
+                for index in range(5)
+            )
+        ),
+        display="z" * 400,
+        open_session=OPEN,
+    )
+
+    assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
+
+
+def test_a_pathological_name_truncates_itself_rather_than_the_agents_words() -> None:
+    """The bounding order, at group scale. A display identity carries an owner-supplied label,
+    so it is the attacker-controlled half; the observations are what the message exists to
+    deliver. A name fitted first would push them out."""
+    message = render_activity(
+        _group(
+            _activity(ActivityKind.COMPLETED, detail="Ran the suite."),
+            _activity(ActivityKind.NEEDS_ANSWER, detail="Which file?"),
+        ),
+        display="y" * 20_000,
+        open_session=OPEN,
+    )
+
+    assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
+    assert "Ran the suite." in message.text
+    assert "Which file?" in message.text

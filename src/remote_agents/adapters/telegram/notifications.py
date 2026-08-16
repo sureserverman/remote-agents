@@ -101,32 +101,104 @@ be spelled around in a comment is a term nobody adds to a call site by accident.
 # twice are two escapers and two budgets, and only one of them ever gets fixed.
 
 
-def activity_text(activity: AgentActivity, *, display: str) -> str:
-    """The message's words, which depend on nothing Telegram has to answer for first.
+_MAXIMUM_LINES_PER_MESSAGE = 5
+"""How many of a session's observations one message will spell out.
+
+A backstop, not the mechanism: the rate limit already collapses a burst of one kind and
+`grouped_for_delivery` already folds exact repeats, so a group reaching six has genuinely said
+six different things in one pass. What this may not do is drop the rest silently -- a message
+that looks like a complete account of a session and is not is worse than one that says how much
+it left out, which is why the count below is part of the rule rather than a nicety.
+"""
+
+_BULLET = "• "
+"""Worn only when there is more than one line to tell apart. See `activity_text`."""
+
+_RESERVED_NAME_UNITS = 48
+"""The slice of the budget the observations may not spend, so the session can still be named.
+
+An untitled message is not a cheaper message, it is an unusable one: the owner reads these on a
+phone, several sessions deep, and a wall of sentences with no idea which agent produced them
+cannot be acted on at all.
+"""
+
+
+def activity_text(group: SessionGroup, *, display: str) -> str:
+    """One session's news as the whole message the owner receives about it.
 
     Split out from `render_activity` because the delivery order is send-then-mint: the
     notification's token is bound to the message the send answers with, so the text has to
     exist before the token does. Nothing about the wording depends on the button, which is
     what makes that order available at all.
 
-    The bounding order is detail first, then the name. Either can be pathological -- a display
-    identity carries an owner-supplied label -- and reserving the detail's slot before fitting
-    the name means a long name truncates itself rather than silently deleting what the agent
-    said.
+    **A lone observation reads exactly as it always did**, sentence then detail on its own
+    line, and only a group of two or more takes bullets with the detail folded onto the
+    sentence's line. Two shapes is a real cost and it buys the two things that matter. Almost
+    every notification carries one observation, so a bullet in front of a single sentence would
+    be clutter added to the common case for the sake of the rare one. And in a group the fold
+    is not cosmetic: with each detail on its own line, three observations produce six lines
+    with nothing saying which text belongs to which sentence, and the owner attributes the
+    agent's words to the wrong event.
+
+    **The budget is spent outward from the observations.** The old order -- bound the detail,
+    then fit the name into what was left -- was sufficient for exactly one observation and is
+    not any more: the application layer caps each detail at `MAXIMUM_DETAIL_CHARACTERS`, but
+    escaping can quintuple a character (`&` becomes `&amp;`), so five capped details can reach
+    six thousand UTF-16 units against a ceiling of 4096, with no single one of them at fault.
+    Telegram refuses the send outright, so the failure mode is a notification that never
+    arrives. So the details share what is left after the sentences, the hedge and a reserved
+    slot for the name, and the name is fitted last into whatever remains -- a long name
+    truncates itself rather than deleting what an agent said, which is the right way round,
+    since the name carries an owner-supplied label and the observations are what the message
+    exists to deliver.
+
+    **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
+    the service were less sure this time -- when it is saying the same structural thing about
+    the same kind.
     """
-    sentence = _sentence(activity)
-    hedge = _HEDGE if activity.confidence is ActivityConfidence.INFERRED else ""
+    shown = group.activities[:_MAXIMUM_LINES_PER_MESSAGE]
+    hidden = len(group.activities) - len(shown)
+    bulleted = len(shown) > 1
 
-    detail = _bounded_escaped(_detail_of(activity) or "", MAXIMUM_DETAIL_CHARACTERS)
-    tail = (f"\n{detail}" if detail else "") + (f"\n{hedge}" if hedge else "")
+    sentences = [_sentence(activity) for activity in shown]
+    details = [_detail_of(activity) for activity in shown]
+    hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
-    skeleton = f"<b></b>\n{sentence}{tail}"
-    name = _bounded_escaped(display, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(skeleton))
-    return f"<b>{name}</b>\n{sentence}{tail}"
+    trailers = ([f"and {hidden} more."] if hidden else []) + ([_HEDGE] if hedged else [])
+    # Measured with the details empty, because they are the only part with a budget to
+    # negotiate; everything else in the message is ours and fixed.
+    spent = _utf16_units("<b></b>\n" + "\n".join(_lines(sentences, [None] * len(shown), bulleted)))
+    spent += _utf16_units("\n" + "\n".join(trailers)) if trailers else 0
+    share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
+        1, sum(1 for detail in details if detail)
+    )
+
+    bounded = [
+        _bounded_escaped(detail, min(MAXIMUM_DETAIL_CHARACTERS, share)) if detail else None
+        for detail in details
+    ]
+    body = "\n".join(_lines(sentences, bounded, bulleted) + trailers)
+    name = _bounded_escaped(display, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"<b></b>\n{body}"))
+    return f"<b>{name}</b>\n{body}"
 
 
-def render_activity(activity: AgentActivity, *, display: str, open_session: str) -> RenderedMessage:
-    """Render one observation as the whole message the owner receives about it.
+def _alone(activity: AgentActivity) -> SessionGroup:
+    """One observation as a group of one, for a caller that has not been grouped yet."""
+    return SessionGroup(activity.session_id, (activity,))
+
+
+def _lines(sentences: list[str], details: list[str | None], bulleted: bool) -> list[str]:
+    """One line per observation when they must be told apart, two when there is only one."""
+    if not bulleted:
+        return [sentences[0]] + ([details[0]] if details and details[0] else [])
+    return [
+        f"{_BULLET}{sentence}" + (f" — {detail}" if detail else "")
+        for sentence, detail in zip(sentences, details, strict=True)
+    ]
+
+
+def render_activity(group: SessionGroup, *, display: str, open_session: str) -> RenderedMessage:
+    """Render one session's group as the whole message the owner receives about it.
 
     Pure, and deliberately ignorant of Telegram's transport: it is handed the session's
     display identity and an already-minted callback token because resolving either would mean
@@ -135,7 +207,7 @@ def render_activity(activity: AgentActivity, *, display: str, open_session: str)
     """
     _validate_callback(open_session)
     return render_message(
-        activity_text(activity, display=display),
+        activity_text(group, display=display),
         ((Button(OPEN_SESSION_LABEL, open_session),),),
     )
 
@@ -446,7 +518,13 @@ class ActivityNotifier:
 
         message_id = await self._view.send_apart(
             self._bot,
-            {"text": activity_text(activity, display=display), "parse_mode": ParseMode.HTML},
+            {
+                # A group of one, until Task 2.3 makes delivery group-shaped end to end. The
+                # renderer takes a bundle now, and this is the narrowest possible adaptation
+                # to it -- one observation per message is still what `deliver` produces.
+                "text": activity_text(_alone(activity), display=display),
+                "parse_mode": ParseMode.HTML,
+            },
         )
         # Recorded before the keyboard, because by here the owner has already been told. A
         # markup failure below must not re-send the message it is trying to decorate.
@@ -470,7 +548,7 @@ class ActivityNotifier:
                 self._view.chat_id,
                 message_id,
             )
-            rendered = render_activity(activity, display=display, open_session=token)
+            rendered = render_activity(_alone(activity), display=display, open_session=token)
             await self._bot.edit_message_reply_markup(
                 chat_id=self._view.chat_id,
                 message_id=message_id,
