@@ -1304,7 +1304,7 @@ def _running(label: str = "one") -> SessionRecord:
     return _record(SessionState.RUNNING, label, ProjectId("p" * 24))
 
 
-async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file(
+async def test_a_spooled_activity_is_delivered_once_and_leaves_no_file(
     tmp_path,
 ) -> None:
     """The spool is drained by delivery, not merely read by it.
@@ -1312,6 +1312,10 @@ async def test_each_spooled_activity_becomes_one_notification_and_leaves_no_file
     Exactly-once here is a property of two things agreeing: the drain deletes what it returns,
     and the notifier sends what the drain returned. A pass that sent without draining would
     repeat the same message every poll for as long as the file sat there.
+
+    Named for the *activity* rather than the message since delivery became grouped: one record
+    still reaches the owner once, but a second record from the same session in the same pass
+    now rides in the same message rather than a second one, which the old name asserted.
     """
     record = _running()
     boundary, bot = _notified(record)
@@ -1757,3 +1761,82 @@ def test_doctor_stale_config_out_of_bounds_value_reports_the_drift_rather_than_r
     # config fine.
     assert report["config"]["invalid"]
     assert "max_label_length" in report["config"]["invalid"][0]
+
+
+async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_path) -> None:
+    """The owner's complaint, end to end: an agent that says three things is not three alerts.
+
+    Driven through the real drain and the real notifier rather than the grouping function,
+    because the two halves have to agree about what a pass *is* -- the drain returns a batch
+    ordered by observation time and the notifier groups whatever is in its queue, and a version
+    that grouped only within one drain's batch would pass a unit test and still send a second
+    message for anything held from an earlier pass.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    session_id = str(record.session_id)
+    _spool(spool, session_id, stamp="000001")
+    _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
+    _spool(
+        spool, session_id, event="Notification", reason="permission_prompt", stamp="000003"
+    )
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1, "three observations, one session, one message"
+    text = str(bot.sends[0]["text"])
+    assert text.count("•") == 3
+    assert record.display.rendered in text
+    assert "finished its work" in text
+    assert "usage limit" in text
+    assert "waiting for an answer" in text
+
+
+async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
+    """Grouping is per session, not per pass. Collapsing across sessions would put two agents'
+    news under one name, which is worse than the flood it would be fixing."""
+    first = _running("one")
+    second = _record(SessionState.RUNNING, "two", ProjectId("r" * 24))
+    boundary, bot = _notified(first, second)
+    spool = tmp_path / "activity"
+    _spool(spool, str(first.session_id), stamp="000001")
+    _spool(spool, str(second.session_id), stamp="000002")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 2
+    named = {str(send["text"]).split("\n")[0] for send in bot.sends}
+    assert len(named) == 2, "each message is headed by its own session"
+
+
+async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> None:
+    """A `Stop` hook fires per turn, so a long instruction spools the same sentence repeatedly.
+
+    The rate limit already collapses a burst *across* passes; this is the within-pass half,
+    where every copy arrives in one drain and no window has elapsed between them.
+    """
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    for index in range(4):
+        _spool(spool, str(record.session_id), stamp=f"00000{index}")
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+        )
+    )
+
+    assert len(bot.sends) == 1
+    text = str(bot.sends[0]["text"])
+    assert text.count("finished its work") == 1, "four identical reports are one line"
+    assert "•" not in text, "one surviving observation renders in the ungrouped shape"

@@ -1359,3 +1359,48 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
     # The detail was drawn into a message of its own rather than over the notification: had the
     # notification been adopted, discarding it afterwards would have deleted the live view too.
     assert "Demo · Claude · regular · #1" in chat.messages[boundary.view.anchor()].text
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_several_things_to_say_costs_the_chat_one_message() -> None:
+    """The grouping, at the surface the owner actually sees.
+
+    The unit tests prove one message is *built*; this proves one message is what lands in the
+    chat, and — the part only an end-to-end run can check — that the menu is still the last
+    thing in it afterwards. The move-to-bottom runs once per pass rather than once per
+    notification, so a pass that grouped its sends but moved per observation would leave the
+    same visible result here while re-sending the owner's screen twice for nothing.
+    """
+    record = _a_running_session()
+    boundary, _ = _renameable(record)
+    chat = FakeChat()
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    before = len(chat.bot_messages)
+    boundary.notifier.attach(chat.bot)
+
+    await boundary.notifier.deliver(
+        [
+            AgentActivity(
+                session_id=str(record.session_id),
+                kind=kind,
+                detail=detail,
+                observed_at=datetime(2026, 8, 11, 14, 5 + index, tzinfo=UTC),
+            )
+            for index, (kind, detail) in enumerate(
+                (
+                    (ActivityKind.COMPLETED, "Ran the suite."),
+                    (ActivityKind.NEEDS_ANSWER, "Overwrite config.toml?"),
+                )
+            )
+        ]
+    )
+
+    # One new message in the chat, not two: the menu is *moved* below the notification -- the
+    # anchor is deleted and re-sent -- so it does not add to the count, and two observations
+    # cost the chat exactly one message.
+    assert len(chat.bot_messages) == before + 1, chat.transcript()
+    notification = chat.bot_messages[-2]
+    assert "Ran the suite." in notification.text
+    assert "Overwrite config.toml?" in notification.text
+    assert chat.bot_messages[-1].message_id == boundary.view.anchor()
+    assert "Sessions" in chat.messages[boundary.view.anchor()].text
