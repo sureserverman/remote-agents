@@ -786,12 +786,34 @@ class ActivityNotifier:
         backoff to two minutes -- a backoff that could never reach its second step, which is
         exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
         one; the entry is inert during it, since the window has already passed.
+
+        **Under a floor, and the floor is the whole of the taper working at all.** Both terms
+        above scale with the count they exist to preserve, so at zero repeats the horizon was
+        four minutes -- and a kind observed less often than *that* always found its own entry
+        already discarded, was re-created at zero, and could never reach the first doubling.
+        The counter is what makes each wait longer, and it could not climb. `Stop` fires per
+        turn and a turn routinely takes longer than four minutes, so this was the ordinary
+        case: a lone `Stop` every five minutes produced 96 messages over eight hours against a
+        taper intending twelve, and every notification in the pile was individually true.
+
+        The bootstrapping problem is why a proportional horizon cannot fix itself: the entry
+        must already have a high count to be kept long enough to earn a high count. So the
+        floor is a fixed quantity that does not consult the count at all -- the widest window
+        the backoff can ever reach. Anything reporting more often than that hourly cap now
+        accumulates, which is every case the cap was designed for.
+
+        It is a floor rather than a removal because the map is still unbounded over the life
+        of a service launching sessions all day, and forgetting is what bounds it. A kind that
+        genuinely stops reporting is still forgotten -- an hour or so later than before, one
+        small entry per (session, kind) -- and that is the whole price.
         """
         moment = self._now()
+        floor = self._window(_MAXIMUM_BACKOFF_DOUBLINGS)
         expired = [
             key
             for key, sent in self._last_sent.items()
-            if moment - sent.sent_at >= self._window(sent.repeats) * _RETENTION_WINDOWS
+            if moment - sent.sent_at
+            >= max(self._window(sent.repeats) * _RETENTION_WINDOWS, floor)
         ]
         for key in expired:
             del self._last_sent[key]

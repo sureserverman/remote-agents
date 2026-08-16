@@ -311,7 +311,16 @@ async def test_the_same_kind_is_delivered_again_once_the_window_has_passed() -> 
 
 async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() -> None:
     """One entry per (session, kind) is small; unbounded over a service that launches
-    sessions all day is not. An entry older than the window suppresses nothing."""
+    sessions all day is not. An entry older than the window suppresses nothing.
+
+    The clock advance below used to be 241 seconds, and that number is why the taper was
+    broken for a year: it pinned the retention horizon at `_window(0) * _RETENTION_WINDOWS`,
+    which is exactly the horizon that discarded a repeat count before any kind reporting more
+    slowly than four minutes could accumulate one. The test was green throughout and asserted
+    the defect. What this is *for* is that the map does not grow for the life of the service,
+    and that claim is independent of how long an entry is kept -- so it now steps past the
+    floored horizon instead, and the taper has its own test.
+    """
     clock = _Clock()
     notifier, _ = _notifier(clock)
 
@@ -328,8 +337,9 @@ async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() ->
         )
     assert len(notifier._last_sent) == 25
 
-    # Past the window *and* the retention that keeps a lapsed entry's repeat count readable.
-    clock.advance(241)
+    # Past the window, the retention that keeps a lapsed entry's repeat count readable, and
+    # the floor under both that lets a slow-reporting kind accumulate one at all.
+    clock.advance(60 * 60 * 3)
     await notifier.deliver([])
 
     assert notifier._last_sent == {}, "expired suppressions were kept for the life of the run"
@@ -1125,3 +1135,49 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent() -> 
     clock.advance(1)
     assert await notifier.deliver([]) == 1
     assert "Which file?" in str(view.sent[-1]["text"])
+
+
+async def test_a_kind_reporting_slower_than_its_first_window_still_backs_off() -> None:
+    """The taper has to survive the gap between reports, and it did not.
+
+    `_forget_expired_limits` pruned an entry at `_window(repeats) * _RETENTION_WINDOWS`, which
+    at zero repeats is four minutes. A kind observed less often than that always found its own
+    note already discarded, was re-created at zero, and so never doubled -- the counter is what
+    makes the next wait longer, and it could not climb. A `Stop` hook fires per turn and a turn
+    routinely takes longer than four minutes, so this was the ordinary case rather than an edge
+    one: measured at 120 messages over eight hours where the taper intends twelve.
+
+    Retention now has a floor that does not depend on the count it is trying to preserve.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    # Eight hours of an agent finishing a turn every five minutes.
+    for _ in range(8 * 12):
+        await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
+        clock.advance(300)
+
+    assert len(view.sent) <= 15, (
+        f"the taper never engaged: {len(view.sent)} messages in eight hours"
+    )
+    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats >= 5, (
+        "the repeat count must survive the gap between reports"
+    )
+
+
+async def test_a_kind_nobody_reports_any_more_is_still_forgotten() -> None:
+    """The floor must not turn the map into a leak.
+
+    `_forget_expired_limits` exists because one entry per (session, kind) is unbounded over the
+    life of a service launching sessions all day. A floor that kept everything for ever would
+    trade one defect for that one.
+    """
+    clock = _Clock()
+    notifier, _ = _notifier(clock)
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
+    assert notifier._last_sent
+
+    clock.advance(60 * 60 * 6)
+    await notifier.deliver([])
+
+    assert notifier._last_sent == {}, "a session that stopped reporting must not be kept for ever"
