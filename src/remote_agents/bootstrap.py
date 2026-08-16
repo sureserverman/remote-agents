@@ -232,8 +232,15 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
 
     This loop runs beside the one that serves the owner, so a failure anywhere in it is logged
     and costs one pass. The two sources are gathered into one list on purpose: they answer the
-    same question about different profiles, and the owner is owed one message per observation
+    same question about different profiles, and an observation is owed the same weight
     regardless of which of them noticed.
+
+    Gathering them is also what lets the notifier group by session across both, which it could
+    not do if each source delivered its own batch. In practice the two never meet in one group
+    -- `HOOK_SOURCED_PROFILES` is subtracted from the pane watch precisely so a session is
+    watched or hooked and never both -- so this is a property of the seam rather than a case
+    anyone will see. It is worth stating because the alternative shape, one `deliver` call per
+    source, looks equivalent and quietly reintroduces two messages per session per pass.
 
     **Each source is guarded separately, and that is not tidiness.** `poll()` commits its own
     dedup state as a side effect of deciding a pane has gone quiet -- it marks the spell

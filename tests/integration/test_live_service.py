@@ -1804,8 +1804,19 @@ async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
     second = _record(SessionState.RUNNING, "two", ProjectId("r" * 24))
     boundary, bot = _notified(first, second)
     spool = tmp_path / "activity"
+    # Two observations each, deliberately: with one apiece this test would pass unchanged under
+    # the retired one-message-per-observation delivery, and so would prove nothing about
+    # grouping at all.
     _spool(spool, str(first.session_id), stamp="000001")
     _spool(spool, str(second.session_id), stamp="000002")
+    _spool(spool, str(first.session_id), event="StopFailure", reason="rate_limit", stamp="000003")
+    _spool(
+        spool,
+        str(second.session_id),
+        event="Notification",
+        reason="permission_prompt",
+        stamp="000004",
+    )
 
     await _watch_quiet_once(
         ServiceComposition(
@@ -1813,9 +1824,11 @@ async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
         )
     )
 
-    assert len(bot.sends) == 2
+    assert len(bot.sends) == 2, "four observations, two sessions, two messages"
     named = {str(send["text"]).split("\n")[0] for send in bot.sends}
     assert len(named) == 2, "each message is headed by its own session"
+    for send in bot.sends:
+        assert str(send["text"]).count("•") == 2, "each session's own two, and no one else's"
 
 
 async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> None:

@@ -724,7 +724,9 @@ def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -
 
     body = message.text.split("\n")
     assert len(body) == 7, "a header, five observations, and the count of what is missing"
-    assert "2 more" in body[-1]
+    assert "2 earlier" in body[-1]
+    assert "Step 6." in message.text, "the newest observation is spelled out, not counted"
+    assert "Step 0." not in message.text, "the stalest is what the counter stands for"
 
 
 def test_one_hedge_covers_a_group_however_many_guesses_are_in_it() -> None:
@@ -989,4 +991,94 @@ async def test_a_kind_that_was_not_in_the_message_still_starts_over() -> None:
 
     assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0, (
         "a different kind means something changed, so the untouched kind starts over"
+    )
+
+
+async def test_a_suppressed_kind_does_not_have_its_own_backoff_reset_by_its_suppression() -> None:
+    """The storm the gate's evaluator measured: 75 to 255 messages where the taper intends 12.
+
+    The mechanism was the notifier reading its own suppression as evidence against itself. A
+    standing `needs_answer` backed off to sixty-four minutes is absent from sixty-three of every
+    sixty-four minutes' messages; the send filtered it out for being inside its window, and
+    `_record_sent` was then told only about the kinds that survived that filter, so it saw the
+    held kind as "not in this message" and read that as the session having reported something
+    different. Its backoff went to zero and it fired again on the next thirty-second pass.
+
+    `Stop` fires per turn, so a companion kind arriving periodically is the ordinary case for an
+    agent working through a long instruction -- not a contrived one.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+    for seconds in (121, 241):
+        clock.advance(seconds)
+        await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+    backed_off = notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats
+    assert backed_off == 2
+
+    # A companion kind arrives while the standing one is still inside its window.
+    clock.advance(60)
+    await notifier.deliver(
+        [
+            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment),
+            _for(SESSION_A, ActivityKind.COMPLETED, "Ran the linter.", clock.moment),
+        ]
+    )
+
+    assert notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats > backed_off, (
+        "the held kind's own suppression must not read as a change"
+    )
+    assert "waiting for an answer" in str(view.sent[-1]["text"]), (
+        "and since a message was going out anyway, it rides along rather than being deleted"
+    )
+
+
+async def test_an_observation_is_never_deleted_from_a_message_that_is_going_out() -> None:
+    """Anything still queued has by construction never been sent, so dropping it loses it.
+
+    The window exists to stop *messages*, and a second line inside one the owner is already
+    receiving costs them nothing. Filtering the group by window meant a message went out with
+    one line used and four spare while something the agent had said was discarded.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "wrote the parser", 
+                                 clock.moment)])
+    clock.advance(10)
+    await notifier.deliver(
+        [
+            _for(SESSION_A, ActivityKind.COMPLETED, "and then ran the suite", clock.moment),
+            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "May I push?", clock.moment),
+        ]
+    )
+
+    latest = str(view.sent[-1]["text"])
+    assert "May I push?" in latest
+    assert "and then ran the suite" in latest, "a distinct, never-sent line was deleted"
+    assert notifier.pending_count() == 0
+
+
+async def test_a_full_queue_costs_the_session_that_filled_it_not_the_quiet_ones() -> None:
+    """Retention was global while delivery was per session, so one session could evict all news.
+
+    `observe_quiet` reports once per spell and re-arms only when the pane changes, and the drain
+    deletes a record before returning it, so a quiet session's evicted report is gone for good --
+    there is no second chance anywhere in the system.
+    """
+    clock = _Clock()
+    notifier, _ = _notifier(clock)
+    notifier._bot = None  # hold everything: no delivery, so the cap is what is under test
+
+    for index in range(5):
+        await notifier.deliver([_for(f"quiet-{index}", ActivityKind.QUIET, None, clock.moment)])
+    for index in range(400):
+        await notifier.deliver(
+            [_for("loud", ActivityKind.COMPLETED, f"step {index}", clock.moment)]
+        )
+
+    held = {activity.session_id for activity in notifier._pending}
+    assert {f"quiet-{index}" for index in range(5)} <= held, (
+        "the quiet sessions' only reports were evicted by a louder neighbour"
     )

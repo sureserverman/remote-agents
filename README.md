@@ -95,12 +95,13 @@ Copy Attach is offered only for a currently trusted live managed pane. Claude Re
 available only on a live managed Claude pane, requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
-The service also speaks first, once per observation, when a managed agent stops working: it has
+The service also speaks first when a managed agent stops working: it has
 finished, it hit a usage limit, one reply hit its output length limit, it is waiting for an answer,
 or — for the profiles with no hook system — its pane has produced no output since a stated time,
 which is said as the guess it is. It speaks only about a session that is still live, and only when
 there is something to do about it: an agent reporting after the owner has already stopped its
-session is telling them their own action back. Each notification is its own message beside the
+session is telling them their own action back. **One session gets one message per pass**, listing
+everything it has said since the last one and saying anything repeated only once, beside the
 live view, with one button that opens the session it names. A managed Claude session reports this
 itself through a global Claude
 Code hook, installed once with `remote-agents install-agent-hooks` and removed with `--remove`. The
