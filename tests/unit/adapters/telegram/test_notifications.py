@@ -22,6 +22,7 @@ from remote_agents.ports.agent_activity import (
 OPEN = "c1_open_session_token"
 DISPLAY = "atlas · claude · fresh · #4"
 OBSERVED = datetime(2026, 8, 11, 14, 5, tzinfo=UTC)
+REPORTED = ActivityConfidence.REPORTED
 
 
 def _activity(
@@ -828,3 +829,103 @@ def test_a_pathological_name_truncates_itself_rather_than_the_agents_words() -> 
     assert _utf16_units(message.text) <= MAX_TELEGRAM_TEXT_UNITS
     assert "Ran the suite." in message.text
     assert "Which file?" in message.text
+
+
+# Delivering groups -- one message per session per pass ------------------------------------
+
+
+def _for(session_id: str, kind: ActivityKind, detail: str | None, moment: datetime):
+    return AgentActivity(
+        session_id=session_id, kind=kind, detail=detail, observed_at=moment, confidence=REPORTED
+    )
+
+
+async def test_a_pass_sends_one_message_per_session_however_much_each_has_to_say() -> None:
+    """The cap counts messages now, which is what it was always trying to bound.
+
+    Twenty sessions with two observations each used to be forty sends against a per-chat rate
+    limit; it is now twenty, spread across two passes because ten is the per-pass ceiling.
+    Nothing is dropped -- the remainder waits.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    burst = [
+        activity
+        for index in range(20)
+        for activity in (
+            _for(f"session-{index}", ActivityKind.COMPLETED, "Ran it.", clock.moment),
+            _for(f"session-{index}", ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment),
+        )
+    ]
+
+    assert await notifier.deliver(burst) == 10
+    assert len(view.sent) == 10, "ten sessions, ten messages, not twenty sends"
+    assert notifier.pending_count() == 20, "the other ten sessions' observations wait"
+
+    assert await notifier.deliver([]) == 10
+    assert notifier.pending_count() == 0
+    assert len(view.sent) == 20
+    for message in view.sent:
+        assert str(message["text"]).count("•") == 2, "both observations rode in one message"
+
+
+async def test_a_refused_group_comes_back_whole_and_regroups_with_what_arrives_next() -> None:
+    """The queue is the only copy, so a refused group may not be dropped or split.
+
+    `drain_activity` deletes a record before returning it (DEC-013 cost 3), and DEC-026 keeps
+    this queue in memory with nothing behind it, so an activity that reaches here and is
+    neither sent nor held is gone. The regrouping half matters just as much: a group held from
+    an earlier pass must merge with news that arrived since, or the owner gets two messages
+    about one session and the grouping has bought nothing.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    class _Refusing:
+        chat_id = 11
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+            self.refuse = True
+
+        async def send_apart(self, _bot: object, arguments: dict[str, object]) -> int:
+            if self.refuse:
+                raise RuntimeError("Telegram is not answering")
+            self.sent.append(arguments)
+            return 901
+
+    refusing = _Refusing()
+    notifier._view = refusing
+
+    first = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it.", clock.moment)
+    assert await notifier.deliver([first]) == 0
+    assert notifier.pending_count() == 1, "a refused group is held, not lost"
+
+    refusing.refuse = False
+    clock.advance(30)
+    later = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+
+    assert await notifier.deliver([later]) == 1
+    assert len(refusing.sent) == 1, "one message, not one for the held half and one for the new"
+    text = str(refusing.sent[0]["text"])
+    assert "Ran it." in text and "Which file?" in text
+
+
+async def test_a_group_that_the_rate_limit_empties_sends_nothing_at_all() -> None:
+    """An emptied group is finished business, not a failed send.
+
+    Every observation in it has already been reported inside its window, so there is nothing
+    to say -- and holding it for retry would mean re-deciding the same suppression every pass
+    for as long as the window lasts.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    first = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it.", clock.moment)
+
+    assert await notifier.deliver([first]) == 1
+
+    clock.advance(10)
+    again = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it again.", clock.moment)
+    assert await notifier.deliver([again]) == 0
+    assert len(view.sent) == 1, "the second is inside the window and is not a second message"
+    assert notifier.pending_count() == 0, "suppressed is settled, not held"

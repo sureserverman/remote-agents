@@ -182,11 +182,6 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     return f"<b>{name}</b>\n{body}"
 
 
-def _alone(activity: AgentActivity) -> SessionGroup:
-    """One observation as a group of one, for a caller that has not been grouped yet."""
-    return SessionGroup(activity.session_id, (activity,))
-
-
 def _lines(sentences: list[str], details: list[str | None], bulleted: bool) -> list[str]:
     """One line per observation when they must be told apart, two when there is only one."""
     if not bulleted:
@@ -435,19 +430,34 @@ class ActivityNotifier:
         if self._bot is None:
             return 0
         self._forget_expired_limits()
+        # Grouped from the *whole* queue rather than from this pass's arrivals, which is what
+        # makes a held group merge with news that came in since: an activity Telegram refused
+        # last pass and one spooled a minute later belong to the same session and must leave
+        # as one message, or the grouping has bought the owner nothing.
+        held: list[AgentActivity] = []
         sent = 0
-        while self._pending and sent < _MAXIMUM_SENDS_PER_PASS:
-            activity = self._pending[0]
+        refused = False
+        for group in grouped_for_delivery(self._pending):
+            if refused or sent >= _MAXIMUM_SENDS_PER_PASS:
+                held.extend(group.activities)
+                continue
             try:
-                delivered = await self._send(activity)
+                delivered = await self._send(group)
             except Exception:
-                # Left at the head deliberately: the record is already off disk, so dropping it
-                # here loses it outright. Stopping the pass rather than skipping to the next
-                # keeps the order and avoids hammering a Telegram that just refused us.
+                # Held whole, and the pass stops. The record is already off disk -- the drain
+                # deletes before it returns (DEC-013 cost 3) and DEC-026 keeps this queue in
+                # memory with nothing behind it -- so an activity neither sent nor held here is
+                # gone outright. Stopping rather than skipping to the next session keeps the
+                # order and avoids hammering a Telegram that just refused us.
                 _LOG.warning("could not deliver an activity notification; holding it for retry")
-                break
-            self._pending.popleft()
+                held.extend(group.activities)
+                refused = True
+                continue
             sent += int(delivered)
+        # What is held is the *collapsed* set, not what arrived: two identical observations are
+        # one thing said twice, and re-holding both would resurrect a duplicate the next pass
+        # has already been told to fold.
+        self._pending = deque(held)
         if sent:
             # Once per pass, not once per message: the menu only has to end up below the last
             # notification, and moving it five times to get there would delete and re-send the
@@ -493,18 +503,24 @@ class ActivityNotifier:
                 _LOG.warning("dropping the oldest undelivered notification; the queue is full")
             self._pending.append(activity)
 
-    async def _send(self, activity: AgentActivity) -> bool:
-        """Deliver one observation, or decline to, and say which.
+    async def _send(self, group: SessionGroup) -> bool:
+        """Deliver one session's news as one message, or decline to, and say which.
 
-        Declining is not failing: a collapsed burst and a session that can no longer be named
-        are both finished business, so the caller drops them. Only a raise means "try again".
+        Declining is not failing: a group the rate limit emptied and a session that can no
+        longer be named are both finished business, so the caller drops them rather than
+        holding them. Only a raise means "try again".
+
+        **The window is evaluated per observation, not per group.** A group is a bundle of
+        different things a session said, and they are not all equally old news -- an agent that
+        finished twice in two minutes and *also* asked a question has one observation to
+        suppress and one to deliver. Judged as a unit, either the question would be swallowed
+        by the repeat or the repeat would ride in on the question's back.
         """
         moment = self._now()
-        key = (activity.session_id, activity.kind)
-        entry = self._last_sent.get(key)
-        if entry is not None and moment - entry.sent_at < self._window(entry.repeats):
+        due = tuple(activity for activity in group.activities if self._due(activity, moment))
+        if not due:
             return False
-        display = await self._display(activity.session_id)
+        display = await self._display(group.session_id)
         if display is None:
             # Two refusals arrive as one `None`, and this module is deliberately unable to
             # tell them apart: the session cannot be named, or it is no longer one worth
@@ -516,19 +532,21 @@ class ActivityNotifier:
             _LOG.info("dropping an activity this service will not speak about")
             return False
 
+        sending = SessionGroup(group.session_id, due)
         message_id = await self._view.send_apart(
             self._bot,
             {
-                # A group of one, until Task 2.3 makes delivery group-shaped end to end. The
-                # renderer takes a bundle now, and this is the narrowest possible adaptation
-                # to it -- one observation per message is still what `deliver` produces.
-                "text": activity_text(_alone(activity), display=display),
+                "text": activity_text(sending, display=display),
                 "parse_mode": ParseMode.HTML,
             },
         )
         # Recorded before the keyboard, because by here the owner has already been told. A
-        # markup failure below must not re-send the message it is trying to decorate.
-        self._record_sent(key, moment, entry)
+        # markup failure below must not re-send the message it is trying to decorate. Every
+        # kind the message actually carried is stamped -- a kind that rode along silently
+        # would be free to ride again on the very next pass.
+        for activity in due:
+            key = (activity.session_id, activity.kind)
+            self._record_sent(key, moment, self._last_sent.get(key))
         # The guard covers the mint and the render as well as the call, and the width is the
         # point. An earlier version wrapped only `edit_message_reply_markup`, which left two
         # raising steps outside it -- and a raise there escaped into `deliver`, which logged
@@ -543,12 +561,12 @@ class ActivityNotifier:
                 # it the chat's live view -- see `service._NOTIFIED_DETAIL`. It opens the same
                 # screen; it just says where the thumb was.
                 NOTIFIED_DETAIL_ACTION,
-                activity.session_id,
+                group.session_id,
                 self._owner_user_id,
                 self._view.chat_id,
                 message_id,
             )
-            rendered = render_activity(_alone(activity), display=display, open_session=token)
+            rendered = render_activity(sending, display=display, open_session=token)
             await self._bot.edit_message_reply_markup(
                 chat_id=self._view.chat_id,
                 message_id=message_id,
@@ -560,6 +578,11 @@ class ActivityNotifier:
             # would be the storm this class exists to prevent.
             _LOG.warning("an activity notification was sent without its Open session button")
         return True
+
+    def _due(self, activity: AgentActivity, moment: datetime) -> bool:
+        """Whether this one observation is news, given when its kind was last sent."""
+        entry = self._last_sent.get((activity.session_id, activity.kind))
+        return entry is None or moment - entry.sent_at >= self._window(entry.repeats)
 
     def _window(self, repeats: int) -> timedelta:
         """How long this news stays old, given how many times it has already been sent.
