@@ -39,6 +39,13 @@ class InMemoryStore:
     async def save(self, item: SessionRecord) -> None:
         self.records[item.session_id] = item
 
+    async def get(self, session_id: SessionId) -> SessionRecord | None:
+        # On the port since before this fake existed, and unimplemented here until the
+        # reconciler needed it -- the same class of gap the `record_event` comment below
+        # names. A fake narrower than the port it stands in for passes tests the production
+        # path would fail.
+        return self.records.get(session_id)
+
     async def list(self) -> tuple[SessionRecord, ...]:
         return tuple(self.records.values())
 

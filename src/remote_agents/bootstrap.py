@@ -733,7 +733,16 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
     """Read the checked private EnvironmentFile for this read-only metadata audit."""
     environment_path = paths.require_private_environment()
     environment: dict[str, str] = {}
-    for line in environment_path.read_text(encoding="utf-8").splitlines():
+    try:
+        contents = environment_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        # The fourth member of the decode class swept in this stage, and the only one that
+        # had no handler at all: every other malformed-environment-file path here raises
+        # ConfigError, so a truncated or wrongly-encoded file was the one shape that came out
+        # as a raw traceback. The message deliberately says nothing about the file's content
+        # -- this is the credential file.
+        raise ConfigError("Telegram environment file is unreadable") from error
+    for line in contents.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue

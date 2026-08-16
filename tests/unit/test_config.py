@@ -134,3 +134,27 @@ def test_the_shipped_example_config_satisfies_the_schema_the_code_requires() -> 
     unknown, missing = drift["unknown"], drift["missing"]
     assert unknown == [], f"example config carries keys the code rejects: {unknown}"
     assert missing == [], f"example config lacks keys the code requires: {missing}"
+
+
+def test_a_config_that_is_not_utf8_is_diagnosed_rather_than_a_decode_traceback(tmp_path) -> None:
+    """`UnicodeDecodeError` is a `ValueError`, so an `OSError` handler does not catch it.
+
+    A truncated or wrongly-encoded config is a real deploy fault -- it crash-loops `serve`
+    like any other unusable config -- and it was the one shape that came out of both readers
+    as a raw decode traceback instead of the diagnosis every other malformed config gets.
+    Found by the Stage 2 gate evaluator.
+    """
+    from remote_agents.config import describe_schema_drift
+
+    corrupt = tmp_path / "config.toml"
+    corrupt.write_bytes(b'[paths]\ndev_root = "\xff\xfe not utf-8"\n')
+
+    # The reporting path answers rather than raising, which is its whole contract.
+    drift = describe_schema_drift(corrupt)
+    assert drift["readable"] is False
+    assert "cannot read configuration" in drift["detail"]
+
+    # And the loading path raises the project's own error rather than a decode error.
+    with pytest.raises(ConfigError) as refusal:
+        load_config(corrupt)
+    assert "cannot read configuration" in str(refusal.value)

@@ -76,7 +76,12 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
     }
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        # `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so it was escaping both
+        # here and in `load_config` below -- a truncated or wrongly-encoded config produced a
+        # decode traceback rather than a diagnosis, from the command whose whole job is to
+        # diagnose an unusable config. Reported by the Stage 2 gate evaluator, reproduced
+        # against a file of raw bytes.
         report["detail"] = f"cannot read configuration: {error}"
         return report
 
@@ -136,7 +141,11 @@ def load_config(path: Path) -> AppConfig:
     """Load and validate the complete non-secret TOML configuration."""
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as error:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        # The same class as the handler in `describe_schema_drift` above, and the reason this
+        # one matters independently: `serve`, `tui` and `add-project` all reach here, and a
+        # non-UTF-8 config crashed each of them with a decode traceback instead of the
+        # `ConfigError` every other malformed-config path produces.
         raise ConfigError(f"cannot read configuration: {error}") from error
     _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root")
     paths = _mapping(raw["paths"], "paths")

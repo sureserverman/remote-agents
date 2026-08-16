@@ -1985,7 +1985,15 @@ def _resume_button_text(description: str | None, updated_at: datetime) -> str:
     """Keep a resume title useful without overflowing the compact keyboard.
 
     "Owner-approved" was the old wording here and it implied a vetting step that does not
-    exist: this is the owner's own last prompt, truncated to fit a button (BL-007).
+    exist: this is the owner's own last instruction to the agent, read back out of the
+    provider's transcript and truncated to fit a button (BL-007). See
+    `domain/conversations.py` `ConversationSummary` for what is and is not screened.
+
+    The obvious word for that text is one `tests/architecture/check_telegram_actions.py`
+    forbids anywhere in this package, comments included, because its presence here would
+    otherwise mean this adapter had grown a way to *send* one. The check is a plain substring
+    scan and cannot tell prose from a call, which is the right trade for a guard on the
+    control surface -- so the wording works around it rather than the guard being narrowed.
     """
     prefix = description[:48].rstrip() if description else "Resumable"
     return f"{prefix} · {updated_at:%Y-%m-%d %H:%M UTC}"

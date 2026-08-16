@@ -39,9 +39,10 @@ pytestmark = pytest.mark.asyncio
 
 
 class _Store:
-    def __init__(self, record: SessionRecord) -> None:
-        self.records = {record.session_id: record}
+    def __init__(self, *records: SessionRecord) -> None:
+        self.records = {record.session_id: record for record in records}
         self.events: list[LifecycleEvent] = []
+        self.on_write: object | None = None
 
     async def get(self, session_id: SessionId) -> SessionRecord | None:
         return self.records.get(session_id)
@@ -50,6 +51,8 @@ class _Store:
         return tuple(self.records.values())
 
     async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord:
+        if self.on_write is not None:
+            await self.on_write()
         current = self.records[session_id]
         # The real store re-reads the state and validates the transition against it, which is
         # what raised in production. A fake that skipped that could not reproduce the crash.
@@ -76,6 +79,16 @@ class _BlockingTerminal:
     async def graceful_stop(self, session_id: SessionId, profile_id: ProfileId):
         self.entered.set()
         await self.release.wait()
+        return TerminalObservation(session_id, live=False, preserved=True)
+
+    async def cleanup(self, session_id: SessionId) -> None:
+        return None
+
+
+class _PromptTerminal:
+    """A terminal whose stop completes at once, for the test that parks the *reconciler*."""
+
+    async def graceful_stop(self, session_id: SessionId, profile_id: ProfileId):
         return TerminalObservation(session_id, live=False, preserved=True)
 
     async def cleanup(self, session_id: SessionId) -> None:
@@ -118,3 +131,43 @@ async def test_a_reconcile_pass_landing_inside_a_graceful_stop_does_not_crash_it
 
     assert store.records[record.session_id].state is SessionState.ENDED
     assert LifecycleEvent.PANE_EXITED in store.events
+
+
+async def test_a_stop_landing_mid_pass_is_not_written_over_by_the_rest_of_that_pass() -> None:
+    """The half the settle check alone cannot cover, and the reason the write takes the lock.
+
+    `_has_settled` is evaluated for every record at the top of a pass, but the loop under it
+    awaits -- on the readiness check, and on each write. So a stop can begin *after* the
+    settle check cleared a session and *before* the pass reaches its write, and the check
+    would still say it was safe.
+
+    Two sessions are the minimum needed to show it: the reconciler yields inside its write to
+    the first, an owner's graceful stop runs to completion on the second in that gap, and the
+    pass then reaches its write for the second holding a reading taken before any of it. With
+    the write unguarded that lands `reconciled_terminal_missing` on a record that is already
+    ENDED -- the same crash class as the one above, arriving a different way.
+    """
+    first, second = _running_record(), _running_record()
+    store = _Store(first, second)
+    locks = SessionLocks()
+    service = SessionService(store, _PromptTerminal(), locks=locks)
+    reconciler = ReconciliationService(store, settle_after=timedelta(0), locks=locks)
+
+    stopped = False
+
+    async def stop_the_second_session() -> None:
+        nonlocal stopped
+        if stopped:
+            return
+        stopped = True
+        await service.graceful_stop(GracefulStopCommand(second.session_id, second.profile_id))
+
+    store.on_write = stop_the_second_session
+
+    # No observations at all: both panes are gone, so the pass wants to end both records.
+    await reconciler.reconcile(())
+
+    assert stopped, "the interleaving under test did not happen"
+    # The stop owns the second record's ending; the pass must not have written over it.
+    assert store.records[second.session_id].state is SessionState.ENDED
+    assert store.events.count(LifecycleEvent.RECONCILED_TERMINAL_MISSING) == 1

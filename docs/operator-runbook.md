@@ -155,8 +155,10 @@ journalctl --user -u remote-agents.service -n 100 --no-pager
 > the drift under `config` — `missing` and `unknown` naming the keys, and `invalid` carrying the
 > refusal for **any other reason `load_config` says no once the key sets agree**. That is wider
 > than an out-of-range number: a section that is not a TOML table, a path that is relative or does
-> not exist, and the refusal of a file carrying a token or secret all land there too, each with
-> the message naming which setting was at fault. `healthy` is `false` for any of them. Naming the keys is the point: the fix above
+> not exist, and the refusal of a file carrying a token or secret all land there too — as does a
+> file that is not valid UTF-8. Most name the setting at fault; the token refusal deliberately
+> names nothing, and reads only `TOML must not contain tokens or secrets`. `healthy` is `false`
+> for any of them. Naming the keys is the point: the fix above
 > is four lines of TOML, and a report that said only "the config is wrong" would send you back
 > here to work out which four.
 

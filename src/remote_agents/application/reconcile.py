@@ -132,8 +132,42 @@ class ReconciliationService:
                 # from the readiness check that already knows it.
                 continue
             if event is not None:
-                await self._store.record_event(record.session_id, event)
+                await self._record_if_unchanged(record, event)
         return results
+
+    async def _record_if_unchanged(self, record: SessionRecord, event: LifecycleEvent) -> None:
+        """Write the repair under the session's own lock, and only if nothing moved.
+
+        `_has_settled` is evaluated for every record at the top of the pass, but the loop
+        above it awaits -- on `_is_ready`, and on each `record_event`. So a stop can begin
+        *after* the settle check cleared a session and *before* this pass reaches its write,
+        and the check would still say it was safe. Reproduced with two sessions: the
+        reconciler yields inside its write to the first, an owner's graceful stop runs to
+        completion on the second in that gap, and the pass then writes
+        `reconciled_terminal_missing` to a record that is already ENDED.
+
+        That is the same crash class this stage exists to close, so closing it halfway would
+        have been worse than not claiming it. The settle check stays -- it is what keeps an
+        in-flight record out of `records` entirely, which `also_known` depends on -- and the
+        write is made atomic with respect to the service here.
+
+        The state re-read is not redundant with the lock. A mutation that completed *before*
+        this coroutine acquired the lock leaves nothing held to see, so the lock alone would
+        admit a write against a record that has already moved on. When it has, this pass is
+        working from a stale reading and the right answer is to do nothing: whatever moved
+        the record knows more than this pass does, and the next pass looks again.
+
+        Takes `for_session` alone and never `operation()`, so there is no lock-ordering cycle
+        with `SessionService`, which takes them in that order.
+        """
+        if self._locks is None:
+            await self._store.record_event(record.session_id, event)
+            return
+        async with self._locks.for_session(record.session_id):
+            current = await self._store.get(record.session_id)
+            if current is None or current.state is not record.state:
+                return
+            await self._store.record_event(record.session_id, event)
 
     async def _is_ready(self, record: SessionRecord) -> bool:
         """Whether the agent behind a live pane is actually ready to be called RUNNING.
