@@ -234,6 +234,69 @@ bound there is, and what it turns away is dropped rather than spilled anywhere.
 """
 
 
+@dataclass(frozen=True, slots=True)
+class SessionGroup:
+    """One session's news for one delivery pass, in the order it should be read."""
+
+    session_id: str
+    activities: tuple[AgentActivity, ...]
+
+
+def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGroup, ...]:
+    """Fold a pass's observations into one bundle per session, saying each thing once.
+
+    Pure and clock-free: it is handed everything the pass observed and reads nothing else, so
+    the three rules below are exercised without a Telegram, a session store or a sleep.
+
+    **Sessions come back in the order they were first heard from.** The queue behind this is
+    FIFO, and that fairness is what keeps a burst of twenty sessions spread across passes
+    rather than starving the unlucky ones -- a property that survives grouping only if grouping
+    preserves it. Ordering by session id would hand the chat to whoever's identifier sorts
+    early, every pass, for as long as the backlog lasts, and that identifier is not something
+    the owner chose or can see. Ordering by time across sessions is the subtler mistake: it
+    would decide a group's place from a stamp on one observation *inside* it, so the collapse
+    below -- which changes which observation that is -- would be quietly re-deciding an order
+    the queue had already settled.
+
+    **Within a session, identical `(kind, detail)` observations collapse to the newest.** A
+    `Stop` hook fires per turn rather than per task, so an agent working through one long
+    instruction reports "finished" repeatedly and every report is true; the pane watch has the
+    same shape, since `QUIET` carries no agent text at all and two quiet spells in one pass are
+    indistinguishable here. What does not collapse is two `completed` observations carrying
+    *different* text: those are two different things the agent said, and folding them on the
+    kind alone would delete one of them silently. The pair is the identity, never the kind.
+
+    **What survives is then ordered by `observed_at`.** After the collapse rather than before,
+    and the order matters: a survivor carries the newest stamp of its duplicates, so a sentence
+    first said at 14:00 and repeated at 14:20 belongs below whatever was said at 14:10. Sorted
+    first and collapsed after, it would print above it -- a timeline running backwards inside a
+    single message, which reads as the service having confused two sessions.
+
+    Ties fall back to the collapse order, which is first appearance of each `(kind, detail)`
+    pair; the sort is stable and this relies on that. Two observations sharing an instant carry
+    no fact about which came first, so what is worth guaranteeing is not the true order but a
+    repeatable one: the same input has to produce the same bundle on a retry, because a message
+    that reshuffles itself between one send and the next reads as fresh news.
+    """
+    collapsed: dict[str, dict[tuple[ActivityKind, str | None], AgentActivity]] = {}
+    for activity in activities:
+        seen = collapsed.setdefault(activity.session_id, {})
+        key = (activity.kind, activity.detail)
+        held = seen.get(key)
+        if held is None or activity.observed_at > held.observed_at:
+            # Assignment to an existing key keeps its position, so replacing a duplicate does
+            # not move the survivor to the back of its group -- the collapse order stays first
+            # appearance, which is what the stable sort below falls back on.
+            seen[key] = activity
+    return tuple(
+        SessionGroup(
+            session_id,
+            tuple(sorted(observations.values(), key=lambda activity: activity.observed_at)),
+        )
+        for session_id, observations in collapsed.items()
+    )
+
+
 class ActivityNotifier:
     """Send each observation to the owner, at least once, and never as a storm.
 
