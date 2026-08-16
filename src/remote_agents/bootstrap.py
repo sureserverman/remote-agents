@@ -418,6 +418,17 @@ def main(
             return 1
         finally:
             connection.close()
+        # Closed above, exec'd below, and that order is the guarantee (DEC-023). The alternative
+        # was Textual's `App.suspend()`, which would have kept this process — and therefore this
+        # connection — alive underneath the attached tmux client, buying a detach that returns the
+        # owner to the session list instead of to the shell. It was declined: a suspended surface
+        # holds the SQLite handle for the whole attached session, which breaks what
+        # README.md:173-175 states outright ("the attached terminal holds no database handle") and
+        # changes the two-writer story DEC-005 accepted, where the bot and this terminal share the
+        # store and the terminal simply lets go while the owner is attached. Declining costs a UX
+        # nicety — a re-entry is a fresh launch; adopting costs a documented guarantee, and the
+        # guarantee is load-bearing in a way the nicety is not. DEC-005 stands unamended; DEC-023
+        # declines to override it and records no supersede.
         return attach_to(request)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
