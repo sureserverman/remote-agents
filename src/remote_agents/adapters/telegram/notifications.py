@@ -544,9 +544,7 @@ class ActivityNotifier:
         # markup failure below must not re-send the message it is trying to decorate. Every
         # kind the message actually carried is stamped -- a kind that rode along silently
         # would be free to ride again on the very next pass.
-        for activity in due:
-            key = (activity.session_id, activity.kind)
-            self._record_sent(key, moment, self._last_sent.get(key))
+        self._record_sent(group.session_id, (activity.kind for activity in due), moment)
         # The guard covers the mint and the render as well as the call, and the width is the
         # point. An earlier version wrapped only `edit_message_reply_markup`, which left two
         # raising steps outside it -- and a raise there escaped into `deliver`, which logged
@@ -604,20 +602,34 @@ class ActivityNotifier:
         return self._rate_limit * (2 ** min(repeats, _MAXIMUM_BACKOFF_DOUBLINGS))
 
     def _record_sent(
-        self, key: tuple[str, ActivityKind], moment: datetime, prior: _Sent | None
+        self, session_id: str, kinds: Iterable[ActivityKind], moment: datetime
     ) -> None:
-        """Stamp this send, and let anything else about the same session start over.
+        """Stamp every kind this message carried, and let the rest of the session start over.
 
         A repeat count is a claim that *nothing has changed*. The moment a session reports a
         different kind, something has: an agent that finishes, is asked something, and finishes
         again is not repeating itself, and backing its second "finished" off to an hour would
         answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
         so their base windows still collapse a genuine burst.
+
+        **The kinds this message carried are exempt from that reset, and the exemption is the
+        whole reason this takes a batch rather than a key.** The rule was written when a
+        message carried exactly one kind, and applied per-kind to a grouped one it turns on
+        itself: recording the second kind resets the first, which was recorded a moment earlier
+        in the same send and is not evidence that anything changed. A standing condition would
+        then zero its own backoff on every pass that happened to carry a companion, and the
+        doubling that exists to stop a message every two minutes at three in the morning would
+        never advance past its first step -- silently, since nothing about the message would
+        look wrong. So the reset applies to what the message did *not* say, which is what "a
+        different kind" always meant.
         """
-        self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
-        session = key[0]
+        carried = set(kinds)
+        for kind in carried:
+            key = (session_id, kind)
+            prior = self._last_sent.get(key)
+            self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
         for other, sent in self._last_sent.items():
-            if other[0] == session and other != key and sent.repeats:
+            if other[0] == session_id and other[1] not in carried and sent.repeats:
                 self._last_sent[other] = _Sent(sent.sent_at, 0)
 
     def _forget_expired_limits(self) -> None:

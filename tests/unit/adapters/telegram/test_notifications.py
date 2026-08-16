@@ -929,3 +929,64 @@ async def test_a_group_that_the_rate_limit_empties_sends_nothing_at_all() -> Non
     assert await notifier.deliver([again]) == 0
     assert len(view.sent) == 1, "the second is inside the window and is not a second message"
     assert notifier.pending_count() == 0, "suppressed is settled, not held"
+
+
+async def test_two_kinds_in_one_message_do_not_reset_each_other_s_backoff() -> None:
+    """The cross-kind reset was written when a message carried exactly one kind.
+
+    Its rule is sound: a *different* kind means something changed, so the session's other
+    repeat counts are a claim that nothing has, and they start over. Applied to two kinds
+    riding in one message it turns on itself -- recording the second zeroes the first, which
+    was recorded a line earlier and is not evidence that anything changed. A standing
+    condition would then reset its own backoff on every pass that carried a companion, and the
+    doubling that exists to stop a three-in-the-morning message every two minutes would never
+    advance past its first step.
+
+    What may still reset is a kind that was *not* in this message: that is the original rule,
+    and it is left alone.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    # A standing condition, repeated until its window has doubled twice. Each advance clears
+    # the *current* window without reaching the retention horizon, which is that window times
+    # `_RETENTION_WINDOWS` -- overshoot it and the entry is forgotten, so the next send reads
+    # as a first sighting and the count never climbs.
+    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+    for seconds in (121, 241):
+        clock.advance(seconds)
+        await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+    waiting = notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)]
+    assert waiting.repeats == 2, "the standing condition must have backed off to begin with"
+
+    clock.advance(481)
+
+    # Now it repeats *alongside* a second kind, in one message.
+    await notifier.deliver(
+        [
+            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment),
+            _for(SESSION_A, ActivityKind.COMPLETED, "Ran it.", clock.moment),
+        ]
+    )
+
+    assert notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats > waiting.repeats, (
+        "its own companion must not have reset it"
+    )
+
+
+async def test_a_kind_that_was_not_in_the_message_still_starts_over() -> None:
+    """The half of the reset that is still right, pinned so the fix above cannot delete it."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
+    for seconds in (121, 241):
+        clock.advance(seconds)
+        await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
+    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 2
+
+    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+
+    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0, (
+        "a different kind means something changed, so the untouched kind starts over"
+    )
