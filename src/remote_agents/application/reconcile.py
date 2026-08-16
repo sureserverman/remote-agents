@@ -204,12 +204,14 @@ class ReconciliationService:
         inside it. If that lock is held, a caller is between two writes *right now*, and no
         elapsed time makes reconciling it safe.
 
-        The second is the settle window, which covers the case the lock cannot: `launch`
-        takes `operation()` alone, because there is no session id to key on until the record
-        exists. A launching record is fresh by construction, so measuring from `created_at`
-        is exactly right there -- and it is also what resolves a record left in STARTING by a
-        process that has since died, which has no live caller and must be repaired rather
-        than protected forever.
+        The second is the settle window, and after the Stage 4 gate review its job is
+        narrower than it first appears. `launch` and `resume` now take `for_session` for
+        everything after the record exists, so they are covered by the lock like any other
+        mutation; before that fix they were not, and a launch slower than the window was
+        reconciled to FAILED underneath itself. What the window is left covering is the
+        genuinely abandoned record -- one left in STARTING or STOP_REQUESTED by a process
+        that has since died, which holds no lock because nothing is running, and which must
+        be repaired rather than protected forever.
 
         **What was wrong before:** the window was the only guard, so it was doing both jobs
         and could only do one. `now - created_at` asks how old the *session* is, so the guard
@@ -220,8 +222,12 @@ class ReconciliationService:
         `InvalidTransition: pane_exited is not legal while session is running`, reaching the
         owner as "callback action failed while its pending notice was on screen".
 
-        Every test in `tests/unit/application/test_reconcile.py` passed `settle_after=0`,
-        which disables the window entirely, so nothing exercised the axis it was wrong about.
+        Every test in `tests/unit/application/test_reconcile.py` but one passed
+        `settle_after=0`, which disables the window entirely. The exception
+        (`test_a_session_inside_its_settle_window_is_not_mistaken_for_an_unknown_pane`) uses a
+        real two-minute window on a *fresh* STARTING record -- the case the old form got
+        right. So the axis it got wrong, an aged record past the window, was covered by
+        nothing.
 
         The lock guard is only as wide as the process holding it. DEC-005 accepts a second
         writer -- the local terminal -- and no asyncio lock reaches it; that race is unchanged
@@ -358,8 +364,11 @@ class SessionLocks:
         between two writes. Reading `locked()` is sound here because both sides run on the
         one event loop in the one process: the reconciler is a task beside the service, not a
         thread, so there is no window between this answer and acting on it. It says nothing
-        about the *other* writer DEC-005 accepts -- the local terminal is a separate process,
-        and no asyncio lock spans processes.
+        about the *other* writer DEC-005 accepts -- the local TUI drives its own
+        `SessionService` in a separate process with its own `SessionLocks`, and no asyncio
+        lock spans processes. ("The local TUI", not "the local terminal": this file uses
+        *terminal* for the `TerminalPort` both services share in-process, which is a
+        different thing.)
         """
         lock = self._locks.get(session_id)
         return lock is not None and lock.locked()

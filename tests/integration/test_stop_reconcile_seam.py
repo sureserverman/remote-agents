@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from remote_agents.application.commands import GracefulStopCommand
+from remote_agents.application.commands import GracefulStopCommand, LaunchCommand
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import (
@@ -41,11 +41,24 @@ pytestmark = pytest.mark.asyncio
 class _Store:
     def __init__(self, *records: SessionRecord) -> None:
         self.records = {record.session_id: record for record in records}
+        self.claimed: set[str] = set()
         self.events: list[LifecycleEvent] = []
         self.on_write: object | None = None
 
     async def get(self, session_id: SessionId) -> SessionRecord | None:
         return self.records.get(session_id)
+
+    async def claim_idempotency_key(self, key: str) -> bool:
+        if key in self.claimed:
+            return False
+        self.claimed.add(key)
+        return True
+
+    async def next_sequence(self, project_id: ProjectId, profile_id: ProfileId) -> int:
+        return 1
+
+    async def save(self, record: SessionRecord) -> None:
+        self.records[record.session_id] = record
 
     async def list(self) -> tuple[SessionRecord, ...]:
         return tuple(self.records.values())
@@ -171,3 +184,41 @@ async def test_a_stop_landing_mid_pass_is_not_written_over_by_the_rest_of_that_p
     # The stop owns the second record's ending; the pass must not have written over it.
     assert store.records[second.session_id].state is SessionState.ENDED
     assert store.events.count(LifecycleEvent.RECONCILED_TERMINAL_MISSING) == 1
+
+
+async def test_a_launch_in_flight_is_visible_to_the_reconciler_as_busy() -> None:
+    """The other half of the seam, and the one the settle window used to hide.
+
+    `launch` took `operation()` alone, having no session id until the record exists -- so for
+    its whole duration `session_is_busy` answered False and the reconciler fell back to the
+    settle window. A launch slower than that window (a cold agent CLI) was therefore
+    reconciled to FAILED underneath itself, and the launch's own `record_event` then ran
+    `transition(FAILED, STARTUP_ERROR)`, which is not in the matrix. Same InvalidTransition
+    class as the stop half, on a longer fuse. Found by the Stage 4 gate review.
+    """
+    store = _Store()
+    locks = SessionLocks()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[bool] = []
+
+    class _SlowTerminal:
+        async def launch(self, session_id, project_id, profile_id):
+            started.set()
+            await release.wait()
+            return TerminalObservation(session_id, live=True, preserved=False)
+
+    service = SessionService(store, _SlowTerminal(), locks=locks)
+    command = LaunchCommand(ProjectId("p"), ProfileId("claude"), "idem-1", None)
+    launch = asyncio.create_task(service.launch(command))
+    await started.wait()
+
+    # The record exists and its launch is mid-flight; the reconciler must see that.
+    session_id = next(iter(store.records))
+    observed.append(locks.session_is_busy(session_id))
+
+    release.set()
+    await launch
+
+    assert observed == [True], "a launch in flight was invisible to the reconciler"
+    assert locks.session_is_busy(session_id) is False
