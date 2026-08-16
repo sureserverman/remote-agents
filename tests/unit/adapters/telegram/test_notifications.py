@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from telegram.error import BadRequest
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.notifications import (
@@ -247,6 +248,7 @@ class _RecordingView:
 
     def __init__(self) -> None:
         self.sent: list[dict[str, object]] = []
+        self.bot: _SilentBot | None = None
         self._next_id = 900
 
     async def send_apart(self, _bot: object, arguments: dict[str, object]) -> int:
@@ -256,8 +258,22 @@ class _RecordingView:
 
 
 class _SilentBot:
+    """The Bot surface a notifier uses, recording the edits a standing message receives.
+
+    `edits` is the half that matters now. A session owns one message, so what it *says* is
+    the send that created it followed by every edit since -- and a test that reads only
+    `view.sent` cannot see any news after the first, which is most of what these cases are
+    about.
+    """
+
+    def __init__(self) -> None:
+        self.edits: list[dict[str, object]] = []
+
     async def edit_message_reply_markup(self, **_kwargs: object) -> None:
         return None
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        self.edits.append(kwargs)
 
 
 class _Clock:
@@ -287,26 +303,56 @@ def _notifier(clock: _Clock, *, rate_limit_seconds: float = 120.0):
         rate_limit_seconds=rate_limit_seconds,
         now=clock,
     )
-    notifier.attach(_SilentBot())
+    bot = _SilentBot()
+    notifier.attach(bot)
+    view.bot = bot
     return notifier, view
 
 
-async def test_the_same_kind_is_delivered_again_once_the_window_has_passed() -> None:
-    """The suppression window has two halves and only one of them had a test.
+def _showing(view: _RecordingView) -> str:
+    """What the session's one message says right now: its send, as amended by every edit.
 
-    A rate limit that never expires is not a rate limit, it is a mute: the second time an
-    agent finishes — an hour later, on a different task — the owner is owed that message.
+    The assertion these tests want in one place, because "how many messages went out" stopped
+    being the interesting question the moment a session started owning exactly one.
+    """
+    if view.bot is not None and view.bot.edits:
+        return str(view.bot.edits[-1]["text"])
+    return str(view.sent[-1]["text"])
+
+
+def _messages(view: _RecordingView) -> int:
+    """How many messages this session has occupied in the chat -- edits are not messages."""
+    return len(view.sent)
+
+
+async def test_later_news_amends_the_session_s_message_instead_of_joining_it() -> None:
+    """What a second report owes the owner is the news, not a second message.
+
+    The rate limit used to answer this: suppress the repeat, and once the window passed, send
+    the later report as a message of its own. The shape that produced is the one the owner
+    reported — three messages about one session, an hour of scrolling between the first and
+    the last — and no window setting fixes it, because two turns an hour apart are outside
+    any window worth having.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
-    activity = _activity(ActivityKind.COMPLETED)
+    first = _activity(ActivityKind.COMPLETED, detail="wrote the parser")
 
-    assert await notifier.deliver([activity]) == 1
-    assert await notifier.deliver([activity]) == 0, "the burst was not collapsed"
+    assert await notifier.deliver([first]) == 1
+    assert await notifier.deliver([first]) == 0, "the same sentence twice is one sentence"
 
     clock.advance(121)
-    assert await notifier.deliver([activity]) == 1
-    assert len(view.sent) == 2
+    later = _activity(
+        ActivityKind.COMPLETED,
+        detail="ran the suite",
+        observed_at=OBSERVED + timedelta(seconds=121),
+    )
+    assert await notifier.deliver([later]) == 1
+
+    assert _messages(view) == 1, "the session still occupies one message"
+    showing = _showing(view)
+    assert "wrote the parser" in showing, "the earlier report was not thrown away"
+    assert "ran the suite" in showing
 
 
 async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() -> None:
@@ -434,45 +480,118 @@ def test_text_no_encoder_can_carry_is_replaced_rather_than_raising() -> None:
     assert "done" in message.text and "proj" in message.text
 
 
-async def test_a_standing_condition_backs_off_instead_of_repeating_every_window() -> None:
-    """`needs_answer` repeats for as long as the owner does not answer.
+async def test_a_message_the_owner_has_opened_is_replaced_rather_than_edited() -> None:
+    """Pressing Open session consumes the message, so the next news needs a new one.
 
-    A fixed window turns that into a message every two minutes all night. The window doubles
-    per consecutive repeat instead — the first message is as prompt as ever, and only the
-    copies get rarer.
+    `service` deletes it and tells the notifier; without that the next report would be edited
+    into a message that is no longer in the chat, and the owner would hear nothing at all
+    until Telegram got round to refusing the edit.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
-    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+    session = _activity(ActivityKind.COMPLETED).session_id
+
+    assert await notifier.deliver([_for(session, ActivityKind.COMPLETED, "one", clock.moment)]) == 1
+    notifier.forget(session)
+
+    clock.advance(121)
+    assert await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)]) == 1
+
+    assert _messages(view) == 2, "a consumed message cannot be amended"
+    assert "two" in str(view.sent[-1]["text"])
+    assert "one" not in str(view.sent[-1]["text"]), "the new message starts from now"
+
+
+async def test_a_message_that_can_no_longer_be_edited_is_replaced() -> None:
+    """Telegram stops accepting edits after 48 hours, and the owner may delete a message.
+
+    Either way the answer is a new message rather than an error: the news is real and the
+    place it was going to be written no longer exists. Every *other* refusal still raises, so
+    a 429 is held for the next pass instead of being spent on a duplicate.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    session = _activity(ActivityKind.COMPLETED).session_id
+
+    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "one", clock.moment)])
+
+    async def refuse(**_kwargs: object) -> None:
+        raise BadRequest("Message to edit not found")
+
+    view.bot.edit_message_text = refuse
+    clock.advance(121)
+    assert await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)]) == 1
+
+    assert _messages(view) == 2
+    assert "two" in str(view.sent[-1]["text"])
+
+
+async def test_a_refused_edit_that_is_not_about_the_message_holds_the_news() -> None:
+    """A 429 is Telegram asking for a moment, not telling us the message is gone."""
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    session = _activity(ActivityKind.COMPLETED).session_id
+
+    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "one", clock.moment)])
+
+    async def refuse(**_kwargs: object) -> None:
+        raise BadRequest("Flood control exceeded")
+
+    view.bot.edit_message_text = refuse
+    clock.advance(121)
+    assert await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)]) == 0
+
+    assert _messages(view) == 1, "a refusal must not become a duplicate message"
+    assert notifier.pending_count() == 1, "and the news is owed, not spent"
+
+
+async def test_a_standing_condition_never_becomes_a_second_message() -> None:
+    """`needs_answer` repeats for as long as the owner does not answer — all night.
+
+    The backoff was the old answer: double the window so the copies get rarer, twelve
+    messages instead of two hundred. One message per session is the stronger answer, because
+    the number it bounds is zero. A question still waiting at three in the morning is the
+    same question, and it is already on the owner's screen.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    waiting = _activity(ActivityKind.NEEDS_ANSWER, detail="May I force-push?")
 
     assert await notifier.deliver([waiting]) == 1
-    clock.advance(121)
-    assert await notifier.deliver([waiting]) == 1, "the second copy is still owed"
+    for _ in range(20):
+        clock.advance(121)
+        assert await notifier.deliver([waiting]) == 0, "a repeat is not news"
 
-    # Now backed off to 240s: at 121s more it is still suppressed.
-    clock.advance(121)
-    assert await notifier.deliver([waiting]) == 0
-    clock.advance(121)
-    assert await notifier.deliver([waiting]) == 1
-    assert len(view.sent) == 3
+    assert _messages(view) == 1
+    assert "May I force-push?" in _showing(view)
 
 
 async def test_a_different_kind_from_the_same_session_starts_the_count_over() -> None:
-    """A repeat count claims nothing has changed. A different kind is something changing."""
+    """A repeat count claims nothing has changed. A different kind is something changing.
+
+    Read on `_last_sent` rather than on messages, because messages no longer answer it: every
+    line below lands in the session's one message. The counts still govern whether a *new*
+    message may be created — after the owner has opened this one and it has left the chat —
+    so the bookkeeping is still worth pinning.
+    """
     clock = _Clock()
     notifier, view = _notifier(clock)
-    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+    session = _activity(ActivityKind.NEEDS_ANSWER).session_id
 
-    assert await notifier.deliver([waiting]) == 1
-    clock.advance(121)
-    assert await notifier.deliver([waiting]) == 1  # repeats == 1, window now 240s
-    clock.advance(121)
-    assert await notifier.deliver([_activity(ActivityKind.COMPLETED)]) == 1
+    for index in range(3):
+        clock.advance(121)
+        await notifier.deliver(
+            [_for(session, ActivityKind.NEEDS_ANSWER, f"question {index}", clock.moment)]
+        )
+    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 2
 
-    # The answer arrived and the agent moved on, so waiting again is news, not a repeat.
     clock.advance(121)
-    assert await notifier.deliver([waiting]) == 1
-    assert len(view.sent) == 4
+    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "moved on", clock.moment)])
+
+    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 0, (
+        "the agent said something different, so the waiting count is no longer a claim"
+    )
+    assert _messages(view) == 1, "and none of it was a second message"
 
 
 async def test_a_backed_off_entry_is_not_forgotten_while_it_is_still_suppressing() -> None:
@@ -484,18 +603,18 @@ async def test_a_backed_off_entry_is_not_forgotten_while_it_is_still_suppressing
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
-    waiting = _activity(ActivityKind.NEEDS_ANSWER)
+    session = _activity(ActivityKind.NEEDS_ANSWER).session_id
 
-    await notifier.deliver([waiting])
+    await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "first", clock.moment)])
     clock.advance(121)
-    await notifier.deliver([waiting])  # window now 240s
+    await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "second", clock.moment)])
 
     clock.advance(121)
     await notifier.deliver([])  # a pass that prunes but sends nothing
 
     assert len(notifier._last_sent) == 1, "an entry still suppressing was pruned"
-    assert await notifier.deliver([waiting]) == 0
-    assert len(view.sent) == 2
+    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 1
+    assert _messages(view) == 1
 
 
 async def test_many_sessions_at_once_are_spread_across_passes_not_fired_at_the_chat() -> None:
@@ -923,12 +1042,13 @@ async def test_a_refused_group_comes_back_whole_and_regroups_with_what_arrives_n
     assert "Ran it." in text and "Which file?" in text
 
 
-async def test_a_group_that_the_rate_limit_empties_sends_nothing_at_all() -> None:
-    """An emptied group is finished business, not a failed send.
+async def test_news_arriving_inside_the_window_is_folded_in_rather_than_dropped() -> None:
+    """Inside the window is a reason not to send a *message*, never a reason not to say it.
 
-    Every observation in it has already been reported inside its window, so there is nothing
-    to say -- and holding it for retry would mean re-deciding the same suppression every pass
-    for as long as the window lasts.
+    The window used to decide both at once, so a second thing the agent said within two
+    minutes of the first was discarded outright -- it was not shown, and it was not held. With
+    one message per session the two decisions come apart: no second message is created, and
+    the sentence still reaches the owner, because the message it belongs in is already there.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
@@ -938,9 +1058,13 @@ async def test_a_group_that_the_rate_limit_empties_sends_nothing_at_all() -> Non
 
     clock.advance(10)
     again = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it again.", clock.moment)
-    assert await notifier.deliver([again]) == 0
-    assert len(view.sent) == 1, "the second is inside the window and is not a second message"
-    assert notifier.pending_count() == 0, "suppressed is settled, not held"
+    assert await notifier.deliver([again]) == 1
+
+    assert _messages(view) == 1, "inside the window is still not a second message"
+    showing = _showing(view)
+    assert "Ran it." in showing
+    assert "Ran it again." in showing, "a distinct sentence was dropped for being prompt"
+    assert notifier.pending_count() == 0, "said is settled, not held"
 
 
 async def test_two_kinds_in_one_message_do_not_reset_each_other_s_backoff() -> None:
@@ -991,13 +1115,15 @@ async def test_a_kind_that_was_not_in_the_message_still_starts_over() -> None:
     clock = _Clock()
     notifier, view = _notifier(clock)
 
-    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
-    for seconds in (121, 241):
+    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 0", clock.moment)])
+    for index, seconds in enumerate((121, 241), start=1):
         clock.advance(seconds)
-        await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.COMPLETED, f"turn {index}", clock.moment)]
+        )
     assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 2
 
-    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
+    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "asked", clock.moment)])
 
     assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0, (
         "a different kind means something changed, so the untouched kind starts over"
@@ -1064,9 +1190,11 @@ async def test_an_observation_is_never_deleted_from_a_message_that_is_going_out(
         ]
     )
 
-    latest = str(view.sent[-1]["text"])
+    latest = _showing(view)
     assert "May I push?" in latest
     assert "and then ran the suite" in latest, "a distinct, never-sent line was deleted"
+    assert "wrote the parser" in latest, "and the line it was amending is still there"
+    assert _messages(view) == 1
     assert notifier.pending_count() == 0
 
 
@@ -1132,9 +1260,13 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent() -> 
     assert notifier.pending_count() == 1, "and it is owed, not spent"
 
     # The next pass says it, rather than it being lost with the group that could not carry it.
+    # It has to claim a slot from a line the message already showed: there is no second
+    # message to escape into, so an owed observation that merely re-merged would lose the
+    # same contest every pass, forever.
     clock.advance(1)
     assert await notifier.deliver([]) == 1
-    assert "Which file?" in str(view.sent[-1]["text"])
+    assert "Which file?" in _showing(view)
+    assert _messages(view) == 1
 
 
 async def test_a_kind_reporting_slower_than_its_first_window_still_backs_off() -> None:

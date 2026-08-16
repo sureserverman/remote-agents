@@ -683,6 +683,11 @@ class PrivateBotBoundary:
                 # dead-button state this store exists to make impossible.
                 self.callbacks.prune_for_message(chat_id, message_id)
                 await self.view.discard(query.get_bot(), message_id)
+                # The notifier holds this message as the session's standing one and would
+                # otherwise edit what the line above deleted. Told rather than left to find
+                # out, which it can -- an uneditable message is replaced -- but only after
+                # paying for the refused call, and only on the next pass.
+                self.notifier.forget(state.entity_id)
         except Exception:
             if pending is None:
                 raise

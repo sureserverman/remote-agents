@@ -1292,6 +1292,7 @@ class _NotifyBot:
     def __init__(self, *, first_id: int = 900, fail_sends: int = 0) -> None:
         self.sends: list[dict[str, object]] = []
         self.markups: list[dict[str, object]] = []
+        self.edits: list[dict[str, object]] = []
         self._next_id = first_id
         self._failures = fail_sends
 
@@ -1306,6 +1307,13 @@ class _NotifyBot:
 
     async def edit_message_reply_markup(self, **kwargs: object) -> None:
         self.markups.append(kwargs)
+
+    async def edit_message_text(self, **kwargs: object) -> None:
+        # A session owns one message, so everything it says after the first thing arrives
+        # here rather than in `sends`. A double without this raised out of the re-render and
+        # the notifier read that as Telegram refusing it, which is a real failure path and
+        # exactly the wrong one to exercise by accident.
+        self.edits.append(kwargs)
 
 
 def _spool(
@@ -1400,11 +1408,16 @@ async def test_a_restart_over_a_drained_spool_sends_no_notification(tmp_path) ->
     assert restarted_bot.sends == []
 
 
-async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path) -> None:
+async def test_everything_one_session_says_lands_in_that_session_s_one_message(
+    tmp_path,
+) -> None:
     """A hook that fires on every turn is a notification storm, not a signal.
 
-    Collapsed per session *and* per kind: an agent that finishes and then needs an answer has
-    said two different things and is entitled to two messages.
+    A different kind used to earn a second message, on the reasoning that an agent which
+    finishes and then needs an answer has said two different things. It has — and both of them
+    belong in the message that session already owns. The owner's report is what settled it:
+    what buries the useful signal is not how many *things* a session says, it is how many
+    places in the chat it says them.
     """
     record = _running()
     boundary, bot = _notified(record)
@@ -1421,7 +1434,12 @@ async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path
     assert len(bot.sends) == 1
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000009")
     await _watch_quiet_once(composition)
-    assert len(bot.sends) == 2, "a different kind was suppressed by another kind's rate limit"
+
+    assert len(bot.sends) == 1, "the second kind opened a second message"
+    assert len(bot.edits) == 1, "and it was not folded into the first one either"
+    amended = str(bot.edits[-1]["text"])
+    assert "finished its work" in amended
+    assert "usage limit" in amended, "the different kind is in there"
 
 
 async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_path) -> None:

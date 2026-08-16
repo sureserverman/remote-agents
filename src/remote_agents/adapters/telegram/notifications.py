@@ -31,8 +31,9 @@ from datetime import UTC, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
-from remote_agents.adapters.telegram.live_view import LiveView
+from remote_agents.adapters.telegram.live_view import LiveView, _is_uneditable
 from remote_agents.adapters.telegram.presenters import (
     MAX_TELEGRAM_TEXT_UNITS,
     Button,
@@ -298,6 +299,31 @@ class _Sent:
     repeats: int
 
 
+@dataclass(frozen=True, slots=True)
+class _Standing:
+    """The one message a session owns in the chat, and what it currently says.
+
+    A session gets a message, not a stream of them. New news re-renders this one rather than
+    arriving beside it, so a session that reports for eight hours occupies one slot in the
+    chat instead of ninety-six -- which is the whole point, and is what per-pass grouping
+    could never reach: two turns thirty minutes apart are in different passes by definition.
+
+    `activities` is what the message spells out, kept so the re-render can carry the whole
+    story rather than only the newest arrival. Without it an edit would replace "finished,
+    then asked a question" with "asked a question", silently deleting agent output that the
+    drain has already removed from disk.
+
+    `token` is the callback the message's button already carries. Kept rather than re-minted
+    because a token is bound to its message and this is the same message: minting a second
+    one per edit would put a row per update into a size-bounded store, for a button that
+    already works.
+    """
+
+    message_id: int
+    activities: tuple[AgentActivity, ...]
+    token: str
+
+
 _RETENTION_WINDOWS = 2
 """How many of its own windows an entry is kept for after its suppression has lapsed.
 
@@ -418,6 +444,83 @@ def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGr
     )
 
 
+def _merged(
+    carried: tuple[AgentActivity, ...], arrived: tuple[AgentActivity, ...]
+) -> tuple[AgentActivity, ...]:
+    """Fold new observations into what a standing message already says.
+
+    Delegated to `grouped_for_delivery` rather than re-implemented, because the two rules that
+    matter here are its rules: identical `(kind, detail)` pairs collapse to the newest, and
+    what survives is ordered by `observed_at`. A second copy of them would drift, and the
+    drift would be invisible -- a message whose lines are subtly out of order reads as the
+    service having confused two sessions, which is exactly what that function's docstring is
+    about.
+
+    Both arguments belong to one session, so there is exactly one group to unpack.
+    """
+    groups = grouped_for_delivery((*carried, *arrived))
+    return groups[0].activities if groups else ()
+
+
+def _for_update(
+    session_id: str,
+    carried: tuple[AgentActivity, ...],
+    arrived: tuple[AgentActivity, ...],
+) -> SessionGroup:
+    """Lay out a re-render so the lines nobody has seen yet are the ones it spells out.
+
+    `shown_in_message` takes the newest five, which is right for a message being sent for the
+    first time and wrong for one being amended. An observation that arrives *older* than five
+    the message already carries -- a `needs_answer` queued behind five newer `completed`
+    reports -- would be folded into "and N earlier" on this pass, and on every pass after it,
+    forever: the merge keeps putting it back in the same losing position. Under the old shape
+    it escaped because the next pass sent it as a message of its own. There is no next message
+    now, so the room has to be made here, and the drain deleted its record long ago.
+
+    So arrivals claim slots first, the previously-shown fill what is left, and the result is
+    laid out with those slots **last**, because the end of the tuple is where
+    `shown_in_message` looks. Ordering within the shown set stays by `observed_at`, so the
+    message still reads as a timeline.
+    """
+    fresh = tuple(activity for activity in carried if activity in arrived)
+    keep: list[AgentActivity] = list(fresh[-_MAXIMUM_LINES_PER_MESSAGE:])
+    for activity in reversed(carried):
+        if len(keep) >= _MAXIMUM_LINES_PER_MESSAGE:
+            break
+        if activity not in keep:
+            keep.append(activity)
+    shown = sorted(keep, key=lambda activity: activity.observed_at)
+    buried = [activity for activity in carried if activity not in keep]
+    return SessionGroup(session_id, (*buried, *shown))
+
+
+def _told(
+    arrived: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
+) -> tuple[ActivityKind, ...]:
+    """The kinds this pass both heard and put in front of the owner.
+
+    The rate limit's question is how often a session *reports* a kind, so a line the message
+    is merely still displaying is not an answer to it. See the call site for why narrowing to
+    this is not the narrowing `_record_sent` warns against.
+    """
+    return tuple(activity.kind for activity in shown if activity in arrived)
+
+
+def _unsaid(
+    arrived: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
+) -> tuple[AgentActivity, ...]:
+    """Which of this pass's arrivals the message did not spell out, and therefore still owes.
+
+    Measured against the arrivals rather than against everything the message accounts for,
+    because those are two different sets once a message can be re-rendered. An observation
+    that has dropped out of the newest five was *shown* on an earlier pass -- it has been
+    told, and re-queueing it would print it a second time. One that arrived now and did not
+    fit has been told to nobody, and the drain has already deleted its record, so letting it
+    go loses agent output permanently.
+    """
+    return tuple(activity for activity in arrived if activity not in shown)
+
+
 class ActivityNotifier:
     """Send each observation to the owner, at least once, and never as a storm.
 
@@ -472,10 +575,25 @@ class ActivityNotifier:
         #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
         self._sent_this_pass = False
         self._last_sent: dict[tuple[str, ActivityKind], _Sent] = {}
+        self._standing: dict[str, _Standing] = {}
+        self._added_message = False
 
     def attach(self, bot: object) -> None:
         """Learn which Telegram application to speak through, once there is one."""
         self._bot = bot
+
+    def forget(self, session_id: str) -> None:
+        """Give up the standing message for a session, so its next news starts a new one.
+
+        Called when the message has left the chat: the owner pressed its button and `service`
+        discarded it. Editing a deleted message is an error Telegram answers late and this
+        object would otherwise answer by re-sending, so the cheap correct thing is to be told.
+
+        Not the only defence -- `_send` treats an uneditable message as a message to replace,
+        which covers a deletion this never heard about -- but it is the one that avoids paying
+        for a failed API call to learn something the caller already knew.
+        """
+        self._standing.pop(session_id, None)
 
     async def deliver(self, activities: Iterable[AgentActivity]) -> int:
         """Take a pass's observations and answer how many reached the owner.
@@ -488,6 +606,12 @@ class ActivityNotifier:
             return 0
         self._forget_expired_limits()
         self._sent_this_pass = False
+        #: Whether this pass put a *new* message into the chat, which is a different question
+        #: from whether it delivered anything. Only a new message lands below the live view and
+        #: pushes it out of sight; an edit leaves the chat's order exactly as it was. Moving the
+        #: menu for an edit would delete and re-send the owner's screen to fix a problem that
+        #: did not happen -- visible churn in answer to a silent update.
+        self._added_message = False
         # Grouped from the *whole* queue rather than from this pass's arrivals, which is what
         # makes a held group merge with news that came in since: an activity Telegram refused
         # last pass and one spooled a minute later belong to the same session and must leave
@@ -519,10 +643,11 @@ class ActivityNotifier:
         # one thing said twice, and re-holding both would resurrect a duplicate the next pass
         # has already been told to fold.
         self._pending = deque(held)
-        if sent:
+        if self._added_message:
             # Once per pass, not once per message: the menu only has to end up below the last
             # notification, and moving it five times to get there would delete and re-send the
-            # owner's screen five times.
+            # owner's screen five times. Nor at all for a pass that only amended messages
+            # already in the chat -- those did not move, so nothing got in front of the menu.
             try:
                 await self._view.move_to_bottom(self._bot)
             except Exception:
@@ -644,7 +769,13 @@ class ActivityNotifier:
         next reader does not take "the storm is closed" for "the backoff works".
         """
         moment = self._now()
-        if not any(self._due(activity, moment) for activity in group.activities):
+        standing = self._standing.get(group.session_id)
+        # The window gates *new messages*, which is the cost the owner feels. It has no say
+        # over a session that already owns a message: folding a line into a message that is
+        # already in the chat adds nothing to scroll past, and holding news back from it would
+        # leave the standing message saying something the service knows to be out of date --
+        # the one failure this shape exists to remove.
+        if standing is None and not any(self._due(a, moment) for a in group.activities):
             return False, ()
         display = await self._display(group.session_id)
         if display is None:
@@ -658,6 +789,42 @@ class ActivityNotifier:
             _LOG.info("dropping an activity this service will not speak about")
             return False, ()
 
+        if standing is not None:
+            carried = _merged(standing.activities, group.activities)
+            if carried == standing.activities:
+                # The re-render would say exactly what the message already says -- the burst
+                # case, an agent repeating one sentence. Nothing is sent, and nothing is held
+                # either: the observations are already on the owner's screen, so they are
+                # finished business rather than a debt. This is the collapse the rate limit
+                # used to perform, now performed by comparing against what was actually said.
+                return False, ()
+            updated = _for_update(group.session_id, carried, group.activities)
+            shown = shown_in_message(updated)
+            if await self._rerender(standing, updated, display=display):
+                self._standing[group.session_id] = _Standing(
+                    standing.message_id, shown, standing.token
+                )
+                # Stamped for what *arrived* and was shown, not for everything on screen. The
+                # two were the same thing when a message was built from one pass's news and
+                # thrown away after; a standing message goes on displaying every kind it has
+                # ever carried, so reading the screen would report each of them as reported
+                # again on every pass -- the counts would climb without the agent saying
+                # anything, and `_record_sent`'s cross-kind reset could never fire, because no
+                # kind is ever absent from a message that keeps them all.
+                #
+                # This is a narrowing, and `_record_sent`'s docstring warns about one. It is
+                # not that one: the argument there was narrowed by *suppression*, so the
+                # notifier read its own silence as the session having changed the subject.
+                # This narrows to what the session actually said this pass, which is the
+                # question the taper was always asking.
+                self._record_sent(group.session_id, _told(group.activities, shown), moment)
+                return True, _unsaid(group.activities, shown)
+            # The message is gone from the chat -- deleted by the owner, or too old to edit.
+            # Forget it and fall through to sending a new one, which is the same answer
+            # `LiveView` gives for its own anchor and for the same reason: a screen the API
+            # will not write to is a screen that has to be replaced, not an error to report.
+            self._standing.pop(group.session_id, None)
+
         message_id = await self._view.send_apart(
             self._bot,
             {
@@ -665,6 +832,7 @@ class ActivityNotifier:
                 "parse_mode": ParseMode.HTML,
             },
         )
+        self._added_message = True
         # Recorded before the keyboard, because by here the owner has already been told. A
         # markup failure below must not re-send the message it is trying to decorate.
         #
@@ -699,12 +867,47 @@ class ActivityNotifier:
                 message_id=message_id,
                 reply_markup=_markup(rendered.keyboard),
             )
+            # Recorded only once the button exists, because a standing message is one this
+            # object will later *edit*, and an edit re-sends the keyboard from `token`. A
+            # message remembered without one would have its missing button made permanent by
+            # every subsequent update, where a message not remembered is merely replaced by
+            # the next piece of news -- degraded once instead of degraded for good.
+            self._standing[group.session_id] = _Standing(message_id, shown, token)
         except Exception:
             # The words are what the notification is for; the button is how it is convenient.
             # A message that arrived without one is degraded, and re-sending it to fix that
             # would be the storm this class exists to prevent.
             _LOG.warning("an activity notification was sent without its Open session button")
-        return True, group.activities[: len(group.activities) - len(shown)]
+        return True, _unsaid(group.activities, shown)
+
+    async def _rerender(self, standing: _Standing, group: SessionGroup, *, display: str) -> bool:
+        """Rewrite a session's standing message, and answer whether it is still there.
+
+        False means the message can no longer be written to, which the caller answers by
+        sending a new one. Every other failure raises, because `deliver` holding the group for
+        the next pass is the right answer to a 429 or an outage, and swallowing those here
+        would lose observations the drain has already taken off disk.
+
+        The keyboard is re-sent from the token the message already carries rather than being
+        left to Telegram's discretion: `editMessageText` without `reply_markup` drops the
+        inline keyboard, which would strip the Open session button off every message the
+        moment it was updated.
+        """
+        rendered = render_activity(group, display=display, open_session=standing.token)
+        try:
+            await self._bot.edit_message_text(
+                chat_id=self._view.chat_id,
+                message_id=standing.message_id,
+                text=rendered.text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_markup(rendered.keyboard),
+            )
+        except BadRequest as error:
+            if _is_uneditable(error):
+                _LOG.info("a session's standing notification can no longer be edited; replacing it")
+                return False
+            raise
+        return True
 
     def _due(self, activity: AgentActivity, moment: datetime) -> bool:
         """Whether this one observation is news, given when its kind was last sent."""
