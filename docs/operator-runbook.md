@@ -149,6 +149,14 @@ journalctl --user -u remote-agents.service -n 100 --no-pager
 > owner never learns they have. The cost is this upgrade step, and the error names both keys.
 > Found by the acceptance run on 2026-08-11 rather than by any test, because every test builds its
 > own config and so can never be out of date with the code.
+>
+> **`doctor` now catches this class before the restart does.** Run `remote-agents doctor --json`
+> against the deployed config first: it no longer raises on a config it cannot load, and reports
+> the drift under `config` — `missing` and `unknown` naming the keys, `invalid` carrying the
+> refusal when every key is present but a value is out of range. All three are ways `load_config`
+> says no, and `healthy` is `false` for any of them. Naming the keys is the point: the fix above
+> is four lines of TOML, and a report that said only "the config is wrong" would send you back
+> here to work out which four.
 
 The service sends unprompted messages when a managed agent stops working, one message per
 observation, beside the live view rather than inside it. Two sources feed them and only one has

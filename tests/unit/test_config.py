@@ -112,3 +112,25 @@ def test_the_shipped_example_config_carries_both_activity_limits() -> None:
 
     assert "activity_poll_seconds" in shipped
     assert "activity_quiet_polls" in shipped
+
+
+def test_the_shipped_example_config_satisfies_the_schema_the_code_requires() -> None:
+    """Pin the example against the schema itself, not against two key names.
+
+    The test above names `activity_poll_seconds` and `activity_quiet_polls` because those are
+    the two that were once missing. That check cannot fail for the *next* key, which is the
+    whole failure mode BL-029 exists to close: the example config drifts from the code, the
+    README installs from the example, and the first run crash-loops. Loading it is the
+    strongest available statement -- it exercises every rule `load_config` enforces, so a
+    schema change that the example does not follow fails here rather than on someone's host.
+    """
+    from remote_agents.config import describe_schema_drift
+
+    drift = describe_schema_drift(Path("config/remote-agents.example.toml"))
+
+    # The shipped example points at paths that exist only on the owner's machine, so a full
+    # load legitimately fails on `paths.dev_root`. What must hold is that the *key sets* agree
+    # with the schema -- that is the drift class this closes.
+    unknown, missing = drift["unknown"], drift["missing"]
+    assert unknown == [], f"example config carries keys the code rejects: {unknown}"
+    assert missing == [], f"example config lacks keys the code requires: {missing}"

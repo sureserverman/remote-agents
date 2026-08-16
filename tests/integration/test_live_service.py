@@ -1536,7 +1536,7 @@ async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tm
     assert boundary.notifier.pending_count() == 0
 
 
-def _doctor_config_text(tmp_path: Path, limits: str) -> str:
+def _doctor_config_text(tmp_path, limits: str) -> str:
     return (
         "[paths]\n"
         f'dev_root = "{tmp_path}"\n'
@@ -1593,3 +1593,63 @@ def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagn
     # that says only "config_schema_drift" sends the operator back to the runbook to find out
     # which four.
     assert set(report["config"]["missing"]) == {"activity_poll_seconds", "activity_quiet_polls"}
+
+
+def test_doctor_stale_config_unknown_key_reports_the_drift_rather_than_raising(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The other direction of the same drift: a key the code used to have and dropped.
+
+    A rollback produces this as readily as an upgrade produces the missing-key case --
+    `_require_exact_keys` refuses both -- so a check proven only on the incident that
+    happened to occur would leave `doctor` crashing on the one that happens next.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(
+            tmp_path,
+            "max_label_length = 40\nproject_page_size = 10\n"
+            "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n"
+            "retired_knob = 7\n",
+        ),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["unknown"] == ["retired_knob"]
+    assert report["config"]["missing"] == []
+
+
+def test_doctor_stale_config_out_of_bounds_value_reports_the_drift_rather_than_raising(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The third way `load_config` refuses: every key present, one value out of range.
+
+    Structurally complete and still unloadable. This is the case a key-set comparison alone
+    cannot see, which is why the drift check asks `load_config` itself rather than reasoning
+    about keys and stopping there.
+    """
+    _arrange_doctor(
+        tmp_path,
+        monkeypatch,
+        _doctor_config_text(
+            tmp_path,
+            "max_label_length = 4000\nproject_page_size = 10\n"
+            "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        ),
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["healthy"] is False
+    assert report["config"]["unknown"] == []
+    assert report["config"]["missing"] == []
+    # No key is wrong, so the key lists are empty and `invalid` is the only thing carrying the
+    # diagnosis. A report that said nothing here would be a report that called an unloadable
+    # config fine.
+    assert report["config"]["invalid"]
+    assert "max_label_length" in report["config"]["invalid"][0]
