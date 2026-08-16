@@ -293,6 +293,15 @@ managed Claude sessions finish work is this fault; a spool that grows without sh
 opposite one, and points at the service rather than at the hook — check
 `journalctl --user -u remote-agents.service` for `activity watch pass failed`.
 
+The other way notifications go missing is a restart. While Telegram is refusing sends, the
+undelivered ones are held **in memory only**, and every pass says so — `holding N undelivered
+notification(s) in memory; a restart now loses them`. There is nothing behind that queue, and that
+is DEC-026 rather than an omission: a durable queue was weighed against a schema migration and a
+second spool to drain and bound forever, and declined, because the session itself is the
+authoritative record of what an agent did. What a restart during an outage costs the owner is
+being told, not the fact. So if that warning is in the journal and you must restart anyway, read
+the sessions afterwards rather than waiting on the notifications — they are not coming.
+
 ### What each notification means
 
 Each message names the session by its display identity, gives one sentence, and carries a single

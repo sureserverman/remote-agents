@@ -11,6 +11,13 @@ Draining deletes. A record turned into activity is gone from disk before it is r
 service that restarts halfway through a delivery cannot tell the owner the same thing twice.
 The cost is the opposite failure -- a crash between the delete and the send loses one
 notification -- and that is the right way round for a message that says an agent is waiting.
+
+DEC-026 re-examined that cost at the magnitude an outage reaches, where a Telegram that is
+refusing sends leaves a hundred undelivered notifications in the notifier's memory rather than
+one, and left it as recorded: no durable queue and no schema change, because the session is the
+authoritative record of what an agent did either way, so what a restart takes is the owner being
+told rather than anything only the notification knew. It is a reaffirmation of DEC-013 at a size
+DEC-013 did not consider, not a change to it.
 """
 
 from __future__ import annotations

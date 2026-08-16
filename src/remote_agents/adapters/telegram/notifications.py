@@ -216,6 +216,11 @@ The drain has already deleted the spool files by the time a send is refused, so 
 the only remaining copy -- which is the argument for holding some, and the reason it cannot be
 unbounded. An outage long enough to overflow this has produced news too stale to send anyway,
 so the oldest is dropped and said out loud.
+
+That there is nothing *behind* this cap is DEC-026 rather than an omission. A durable queue was
+weighed and declined: it buys back a convenience at the price of a schema migration and a second
+spool that must then be drained, bounded and reasoned about forever. So this number is the only
+bound there is, and what it turns away is dropped rather than spilled anywhere.
 """
 
 
@@ -235,7 +240,9 @@ class ActivityNotifier:
     - **`_pending`** is the retry queue. `drain_activity` deletes a record before returning it,
       so an activity that reaches this object and is not sent exists nowhere else. A send that
       Telegram refuses therefore leaves the activity at the head of the queue rather than
-      dropping it, and the next pass tries again.
+      dropping it, and the next pass tries again. *Nowhere else* includes disk: DEC-026 keeps
+      this queue in memory with no durable counterpart, so a restart takes whatever it is
+      holding with it.
     - **`_last_sent`** is the rate limit, keyed by session *and* kind.
     - **`_bot`** arrives after construction. The boundary is built by the composition root
       long before there is a Telegram application to speak through, and a pass that runs
@@ -318,8 +325,12 @@ class ActivityNotifier:
 
         The queue is process-local and there is no durable counterpart, which is a deliberate
         limitation rather than an oversight -- the spool it came from deletes before it
-        delivers, so the same "lost on a crash" cost is already accepted one layer down. What
-        was missing was any way for an operator to *know* it applies right now: a restart
+        delivers, so the same "lost on a crash" cost is already accepted one layer down.
+        DEC-026 is where that cost was looked at again at the size an outage reaches, a hundred
+        held notifications rather than the one DEC-013 reasoned about, and left where DEC-013
+        recorded it: the session itself is the authoritative record of what an agent did, so
+        what a restart destroys is the owner being *told* rather than the fact. What was
+        missing was any way for an operator to *know* it applies right now: a restart
         during an outage takes the whole backlog with it, and nothing said the backlog existed.
         Saying it on every pass makes the window visible in the journal while it is open,
         rather than inferable afterwards from a notification that never came.
