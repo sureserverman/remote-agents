@@ -24,7 +24,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import LifecycleEvent
-from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_activity import HOOK_SOURCED_PROFILES, ActivityKind
 from remote_agents.ports.terminal import TerminalObservation
 
 _SECRETS = TelegramSecrets("token", 7, 11)
@@ -307,11 +307,23 @@ async def _running(store: SQLiteSessionStore, profile: str) -> SessionId:
 async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
     tmp_path: Path,
 ) -> None:
-    """A session with a hook is already telling us; watching it too would say it twice."""
+    """A session with a hook is already telling us; watching it too would say it twice.
+
+    **Every** member of `HOOK_SOURCED_PROFILES` is enrolled, derived from the frozenset rather
+    than named here, and that indirection is the point rather than tidiness. This subtraction
+    is now the whole of the rule that `quiet` reaches the hookless profiles *only* — the owner
+    kept the heuristic on the grounds that `codex`, `opencode` and `cursor-agent` have no hook
+    system and would otherwise notify nothing at all, while a hooked session watched as well
+    would tell them the same thing twice, once as a report and once as a guess. Written as a
+    hand-copied pair, this test would keep passing for `claude` and `claude-remote` while a
+    profile added to the frozenset later went unwatched *and* unasserted.
+    """
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
-        hooked = await _running(store, "claude")
-        also_hooked = await _running(store, "claude-remote")
+        assert HOOK_SOURCED_PROFILES, "a frozenset that emptied would make this test vacuous"
+        hooked = {
+            profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES
+        }
         watched = await _running(store, "codex")
         terminal = CapturingTerminal()
         watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
@@ -319,8 +331,8 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
         await watcher.poll()
 
         assert terminal.asked == [str(watched)]
-        assert str(hooked) not in terminal.asked
-        assert str(also_hooked) not in terminal.asked
+        for profile, session_id in hooked.items():
+            assert session_id not in terminal.asked, f"{profile} reports for itself"
 
 
 async def test_activity_watching_survives_a_capture_that_raises(tmp_path: Path) -> None:
