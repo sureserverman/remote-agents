@@ -363,18 +363,20 @@ def main(
         # (BL-029). Diagnose first, then decide whether there is anything left to check.
         drift = describe_schema_drift(config_path)
         if not drift["readable"]:
-            report = production_doctor(
-                core_ready=False,
-                database_ready=False,
-                tmux_ready=False,
-                telegram_ready=False,
-                service_ready=False,
-                profiles=(),
-                registered_projects=0,
-                discovered_projects=0,
-                catalogue_projects=0,
-                config_drift=drift,
-            )
+            # Report the one thing that was actually observed, and say plainly that nothing
+            # else was. The obvious shape here is to call `production_doctor` with every
+            # component set False, and it is wrong: `core_ready=False` renders as
+            # `registry_unavailable`, `tmux_ready=False` as `tmux_unavailable`, and neither
+            # was ever probed -- the registry path and the database path are read *out of*
+            # the config that would not load. That report would assert six failures nobody
+            # looked for, on a host where tmux may be perfectly fine, and send an operator
+            # chasing five phantoms behind one real fault.
+            report = {
+                "healthy": False,
+                "config": drift,
+                "components": {},
+                "checked": False,
+            }
             print(json.dumps(report, sort_keys=True) if arguments.json else report)
             return 1
         config = load_config(config_path)
@@ -397,6 +399,10 @@ def main(
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
             catalogue_projects=len(catalogue.catalogue),
+            # Carried on the healthy path too, so a green report says the config *was*
+            # compared rather than leaving the operator to infer it from the absence of a
+            # complaint. Silence and a passed check look identical otherwise.
+            config_drift=drift,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":

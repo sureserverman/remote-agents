@@ -116,6 +116,10 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
     report = __import__("json").loads(capsys.readouterr().out)
     assert report["healthy"] is True
     assert set(report["components"]) == {"core", "store", "tmux", "telegram", "service", "profiles"}
+    # A green report says the config was compared, rather than leaving the operator to infer
+    # it from the absence of a complaint.
+    assert report["config"]["readable"] is True
+    assert report["config"]["missing"] == [] and report["config"]["unknown"] == []
     assert [profile["status"] for profile in report["profiles"]] == ["AVAILABLE"] * 5
 
 
@@ -1589,6 +1593,11 @@ def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagn
     report = json.loads(capsys.readouterr().out)
     assert report["healthy"] is False
     assert report["config"]["readable"] is False
+    # Nothing else was probed -- the registry and database paths are read *out of* the config
+    # that would not load -- so nothing else is claimed. A report asserting six component
+    # failures nobody looked for would send an operator chasing phantoms behind one fault.
+    assert report["checked"] is False
+    assert report["components"] == {}
     # Naming the keys is the whole point: the runbook fix is four lines of TOML, and a report
     # that says only "config_schema_drift" sends the operator back to the runbook to find out
     # which four.
