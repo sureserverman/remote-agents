@@ -85,8 +85,14 @@ _WAITING = "The agent is waiting for an answer."
 
 There were two, chosen by confidence, and the weaker of them -- "may be waiting" -- existed for
 an upstream idle timer that is no longer mapped at all. Stating this plainly does not loosen
-this module's first rule: what reaches here is a permission prompt or an agent saying it needs
-input, and in both the agent is the one making the claim.
+this module's first rule: what reaches here is an agent asking permission or an agent saying it
+needs input, and in both the agent is the one making the claim.
+
+Worded around one word deliberately. `check_telegram_actions.py` rejects the bare substring
+this sentence wants for its first case, anywhere in this package, because a Telegram adapter
+that can put a question into a pane is the surface that audit exists to keep closed. The check
+cannot tell prose from code, and it is right not to try: a term that has to be spelled around
+in a comment is a term nobody adds to a call site by accident.
 """
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
@@ -364,9 +370,14 @@ class ActivityNotifier:
             return False
         display = await self._display(activity.session_id)
         if display is None:
-            # Nothing to name it and nothing for its button to open. Rare -- the store outlives
-            # a session -- and a message reading "a session has finished" is worse than silence.
-            _LOG.info("dropping an activity for a session this service can no longer name")
+            # Two refusals arrive as one `None`, and this module is deliberately unable to
+            # tell them apart: the session cannot be named, or it is no longer one worth
+            # speaking about. Both are finished business rather than a failed send, so both
+            # get the same treatment here -- dropped, not held for retry. Which of the two it
+            # was is decided and logged by the boundary that owns the lifecycle
+            # (`service._display_for`), because a notifier that branched on session state
+            # would be a driver adapter making lifecycle policy (DEC-001).
+            _LOG.info("dropping an activity this service will not speak about")
             return False
 
         message_id = await self._view.send_apart(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1265,18 +1266,28 @@ class _NotifyBot:
         self.markups.append(kwargs)
 
 
-def _spool(directory, session_id: str, *, event: str = "Stop", stamp: str = "000001") -> None:
+def _spool(
+    directory,
+    session_id: str,
+    *,
+    event: str = "Stop",
+    stamp: str = "000001",
+    reason: str | None = None,
+) -> None:
     directory.mkdir(parents=True, exist_ok=True)
+    record: dict[str, object] = {
+        "session_id": session_id,
+        "event": event,
+        "observed_at": "2026-08-11T14:05:00+00:00",
+        "detail": "Ran the suite.",
+    }
+    # `StopFailure` and `Notification` discriminate on a field of their own, so a test that
+    # wants a second *kind* has to be able to set it. Omitted rather than defaulted, because a
+    # record carrying a reason the event does not use is not one the hook would ever write.
+    if reason is not None:
+        record["reason"] = reason
     (directory / f"{session_id}-20260811T140500{stamp}Z.json").write_text(
-        json.dumps(
-            {
-                "session_id": session_id,
-                "event": event,
-                "observed_at": "2026-08-11T14:05:00+00:00",
-                "detail": "Ran the suite.",
-            }
-        ),
-        encoding="utf-8",
+        json.dumps(record), encoding="utf-8"
     )
 
 
@@ -1362,7 +1373,7 @@ async def test_a_burst_of_one_kind_collapses_into_a_single_notification(tmp_path
     await _watch_quiet_once(composition)
 
     assert len(bot.sends) == 1
-    _spool(spool, session_id, event="SessionEnd", stamp="000009")
+    _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000009")
     await _watch_quiet_once(composition)
     assert len(bot.sends) == 2, "a different kind was suppressed by another kind's rate limit"
 
@@ -1387,14 +1398,34 @@ async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_p
     assert record.display.rendered in str(bot.sends[0]["text"])
 
 
-async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> None:
-    """The sessions list hides an ENDED record, and `SessionEnd` is precisely the event whose
-    record is ENDED by the time it is delivered. Resolving the name through the list would
-    have dropped every one of them."""
-    record = _record(SessionState.ENDED, "finished", ProjectId("q" * 24))
+@pytest.mark.parametrize(
+    "state",
+    [
+        SessionState.ENDED,
+        SessionState.STOP_REQUESTED,
+        SessionState.PRESERVED,
+        SessionState.FAILED,
+    ],
+)
+async def test_a_session_the_owner_has_already_dealt_with_is_not_notified_about(
+    tmp_path, state: SessionState
+) -> None:
+    """The inverse of what this test asserted before, and the inversion is the point.
+
+    It used to prove that an ENDED record was *still named* by its notification, because
+    `SessionEnd` was precisely the kind whose record had ENDED by delivery time and resolving
+    the name through the sessions list would have dropped every one of them. That kind is
+    retired, and with it the only reason to speak about a session the owner has finished with:
+    a `Stop` arriving for a session they already stopped reports their own action back.
+
+    Parametrized over the states rather than pinned to ENDED, because the defect is about the
+    whole not-working half of the lifecycle and a check naming one member of it could pass
+    while the other three still notified.
+    """
+    record = _record(state, "finished", ProjectId("q" * 24))
     boundary, bot = _notified(record)
     spool = tmp_path / "activity"
-    _spool(spool, str(record.session_id), event="SessionEnd")
+    _spool(spool, str(record.session_id))
 
     await _watch_quiet_once(
         ServiceComposition(
@@ -1402,8 +1433,37 @@ async def test_an_ended_session_is_still_named_by_its_notification(tmp_path) -> 
         )
     )
 
-    assert len(bot.sends) == 1
-    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert bot.sends == []
+
+
+async def test_a_session_that_stops_while_its_notification_waits_is_not_notified(
+    tmp_path,
+) -> None:
+    """Liveness is read when the message is sent, not when the record was drained.
+
+    The gap is real and is exactly where the owner's complaint lives: the drain deletes a
+    record before returning it, a refused send leaves that activity in the retry queue, and
+    the owner presses Stop while it sits there. Checking at drain time would have found a
+    RUNNING session and sent the message a pass later anyway.
+    """
+    record = _running()
+    boundary, bot = _notified(record, fail_sends=1)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    composition = ServiceComposition(
+        boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
+    )
+
+    await _watch_quiet_once(composition)
+    assert bot.sends == [], "the double was supposed to refuse the first send"
+
+    # The owner presses Stop while the activity is held for retry. Nothing re-drains it; the
+    # only copy left is the one in the notifier's queue.
+    boundary.launcher.records = [replace(record, state=SessionState.STOP_REQUESTED)]
+
+    await _watch_quiet_once(composition)
+
+    assert bot.sends == []
 
 
 async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
