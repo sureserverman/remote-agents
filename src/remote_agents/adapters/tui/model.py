@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from remote_agents.adapters.tui.context import ProfileChoice
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
+from remote_agents.application.session_actions import state_word
 from remote_agents.domain.conversations import ConversationSummary
 from remote_agents.domain.models import SessionRecord, normalize_label
 from remote_agents.domain.projects import ProjectIdentity
@@ -118,4 +119,10 @@ def conversation_row(summary: ConversationSummary) -> str:
 
 
 def session_row(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
+    """One list row. The state word comes from the shared policy, never from `state.value`.
+
+    Both surfaces had this exact line, independently, which is how they rendered both kinds
+    of ORPHANED identically (BL-031). `state_word` is the single authority now.
+    """
+    word = state_word(record.state, record.orphan_provenance)
+    return f"{record.display.rendered} · {word} · {age(record.created_at)}"

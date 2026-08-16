@@ -78,6 +78,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     explain_state,
     remote_control_available,
+    state_word,
     trust_available,
 )
 from remote_agents.config import TelegramSecrets
@@ -2024,7 +2025,10 @@ def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[But
 
 
 def _session_row_label(record: SessionRecord) -> str:
-    return f"{record.display.rendered} · {record.state.value} · {age(record.created_at)}"
+    # The shared authority, not `state.value` -- the identical line in `adapters/tui/model.py`
+    # is why both surfaces rendered the two kinds of ORPHANED the same way (BL-031).
+    word = state_word(record.state, record.orphan_provenance)
+    return f"{record.display.rendered} · {word} · {age(record.created_at)}"
 
 
 def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:

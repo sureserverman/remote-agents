@@ -20,7 +20,24 @@ present; version reporting is informative and local updates remain launchable. A
 executable is `BLOCKED` and must not be launched from Telegram. Each launch still has to reach
 its agent-specific readiness state.
 The full doctor reports the non-secret state of core, store, tmux, Telegram credential-file
-boundary, service, and each profile. It must report `healthy: true` before normal operation.
+boundary, service, each profile, and — since BL-029 — the deployed **config** checked against
+the schema this build requires. It must report `healthy: true` before normal operation. An
+unreadable config reports `healthy: false` with `checked: false` and an empty `components`,
+because the registry and database paths are read out of the config that would not load, so
+nothing else was probed and nothing else is claimed.
+
+`doctor` also reads back one session's recorded lifecycle history (BL-030). The
+`session_events` table has been the durable audit trail since the first migration and had no
+read path, so the only way to see it was to open sqlite by hand:
+
+```bash
+uv run --locked remote-agents doctor --history <session-id>
+uv run --locked remote-agents doctor --history <session-id> --json | python -m json.tool
+```
+
+Events are listed in write order, not timestamp order — a graceful stop records its request,
+the pane exit and the cleanup inside one operation, and the second-resolution timestamps tie.
+The callback token stored on each row is never printed; the sanitized `error_code` is.
 
 Confirm Telegram's discoverable owner shell without printing the credential:
 

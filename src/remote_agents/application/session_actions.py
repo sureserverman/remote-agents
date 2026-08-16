@@ -424,3 +424,33 @@ def force_stop_failure(observation: _StopObservation) -> StopFailure | None:
         return None
     summary, remedy = known
     return StopFailure(observation.detail, summary, remedy)
+
+
+def state_word(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:
+    """The word a list row shows for a session's state (BL-031).
+
+    Lives beside `available_actions` for the same reason and under the same rule (DEC-001):
+    what a state is *called* is a property of the lifecycle, not of whichever surface renders
+    it, and the two surfaces had identical copies of the row format that would drift apart the
+    moment one of them changed.
+
+    **The one place it differs from `state.value` is ORPHANED**, which DEC-020 split into two
+    situations that get different actions. The detail screen already distinguishes them --
+    different sentence, and only the adopted half carries a Force stop row -- but both list
+    rows read `· orphaned ·`, so an owner scanning the list could not tell which without
+    opening each one. The complaint DEC-020 answers is felt in the list, which is where the
+    owner looks first; that is BL-031, and the owner's decision was distinct words rather than
+    a suffix.
+
+    A row written before migration 6 has no provenance and cannot have it back-derived, so it
+    keeps the bare word. That is the same three-way `None` this module's `available_actions`
+    already handles, and it is honest: an unqualified `orphaned` says "this is orphaned and
+    nobody recorded which kind", which is exactly true.
+    """
+    if state is not SessionState.ORPHANED:
+        return state.value
+    if orphan_provenance is OrphanProvenance.ADOPTED:
+        return "adopted"
+    if orphan_provenance is OrphanProvenance.AMBIGUOUS:
+        return "unverifiable"
+    return state.value

@@ -309,6 +309,13 @@ def main(
     doctor_parser.add_argument("--fake-terminal", action="store_true")
     doctor_parser.add_argument("--profiles", action="store_true")
     doctor_parser.add_argument("--json", action="store_true")
+    # BL-030: the append-only lifecycle history has been written since migration 1 with
+    # nothing able to read it back, so the runbook described an audit trail an operator could
+    # only reach by opening sqlite by hand. It lands on `doctor` rather than on the bot or the
+    # TUI because it is a read-only diagnostic, which is what `doctor` already is -- and
+    # because adding a row to either surface would move the parity contract for a report
+    # neither surface has a use for mid-session.
+    doctor_parser.add_argument("--history", type=str, default=None)
     restore_parser = subcommands.add_parser("restore-database")
     restore_parser.add_argument("--database", type=Path, required=True)
     restore_parser.add_argument("--backup", type=Path)
@@ -355,6 +362,8 @@ def main(
             result = profile_doctor(probe_profiles(closed_profiles()))
             print(json.dumps(result, sort_keys=True) if arguments.json else result)
             return 0
+        if arguments.history is not None:
+            return _print_session_history(arguments)
         paths = ProductionPaths.for_home(Path.home())
         config_path = arguments.config or paths.config_path
         # `add-project` and `tui` have both caught ConfigError here for as long as they have
@@ -753,3 +762,56 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
     secrets = load_secrets(environment)
     assert secrets is not None
     return secrets
+
+
+def _print_session_history(arguments) -> int:
+    """Print one session's recorded lifecycle events (BL-030).
+
+    Reads through the same private-state guard every other command uses, so a history read
+    cannot be pointed at a database outside the owner's state directory. Nothing here is
+    mutable and nothing is sent anywhere -- it is the read half the table has been missing.
+    """
+    paths = ProductionPaths.for_home(Path.home())
+    try:
+        # Called for its refusal, not its value: `_private_state_config` raises when the
+        # config names a database outside the owner's private state directory, which is what
+        # stops a history read being pointed at an arbitrary file.
+        _private_state_config(arguments.config or paths.config_path, paths)
+        session_id = SessionId.parse(arguments.history)
+    except (ConfigError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    connection = paths.open_database(open_database, migrations=MIGRATIONS)
+    try:
+        store = SQLiteSessionStore(connection)
+        record = asyncio.run(store.get(session_id))
+        if record is None:
+            print(f"no session recorded for {session_id}", file=sys.stderr)
+            return 1
+        events = asyncio.run(store.events(session_id))
+    finally:
+        connection.close()
+    if arguments.json:
+        print(
+            json.dumps(
+                {
+                    "session": str(session_id),
+                    "state": record.state.value,
+                    "events": [
+                        {
+                            "event": event.event_type,
+                            "at": event.created_at.isoformat(),
+                            "error_code": event.error_code,
+                        }
+                        for event in events
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(f"{session_id} · {record.state.value}")
+    for event in events:
+        suffix = f" ({event.error_code})" if event.error_code else ""
+        print(f"  {event.created_at.isoformat()}  {event.event_type}{suffix}")
+    return 0
