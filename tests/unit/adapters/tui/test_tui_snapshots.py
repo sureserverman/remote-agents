@@ -137,6 +137,7 @@ _POSITIONS = (
     "PROJECT_REVIEW",
     "SESSIONS",
     "SESSION_DETAIL",
+    "RENAME",
     "FORCE_MODAL",
     "REMOTE_CONTROL_MODAL",
     "INSPECT",
@@ -393,9 +394,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     if step == "SESSIONS":
         await app.show_sessions()
         return None
-    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_MODAL", "INSPECT"}:
+    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_MODAL", "INSPECT", "RENAME"}:
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
+        if step == "RENAME":
+            # Through the detail's own handler, so the baseline captures the entry the Rename
+            # row actually opens rather than a screen the test pushed itself.
+            await app.screen.show_rename()
+            return None
         if step == "FORCE_MODAL":
             # Handed back rather than awaited: a modal suspends the caller that asked until
             # it is answered, and answering it is exactly what would take the screen being
