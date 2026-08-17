@@ -85,9 +85,10 @@ class SQLiteSessionStore:
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
                    resume_profile_id, resume_source_id, terminal_reason, orphan_provenance,
                    remote_control_state
-            FROM sessions WHERE resume_profile_id = ? AND resume_source_id = ?
+            FROM sessions
+            WHERE resume_profile_id = ? AND resume_source_id = ? AND state <> ?
             """,
-            (str(profile_id), source_id),
+            (str(profile_id), source_id, SessionState.ENDED.value),
         ).fetchone()
         return _record_from_row(row) if row is not None else None
 

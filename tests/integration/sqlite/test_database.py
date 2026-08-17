@@ -37,7 +37,7 @@ def record() -> SessionRecord:
 def test_clean_database_creates_versioned_projection_and_event_tables(tmp_path: Path) -> None:
     connection = open_database(tmp_path / "sessions.sqlite3")
 
-    assert current_version(connection) == 7
+    assert current_version(connection) == 8
     names = {
         row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
     }
@@ -64,7 +64,7 @@ def test_upgrade_creates_backup_before_new_migration(tmp_path: Path) -> None:
 
     connection = open_database(path)
 
-    assert current_version(connection) == 7
+    assert current_version(connection) == 8
     assert path.with_suffix(".sqlite3.bak").exists()
 
 
@@ -82,11 +82,12 @@ def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
                 (5, ""),
                 (6, ""),
                 (7, ""),
-                (8, "CREATE TABLE broken ("),
+                (8, ""),
+                (9, "CREATE TABLE broken ("),
             ),
         )
 
-    assert current_version(connection) == 7
+    assert current_version(connection) == 8
 
 
 def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks(
@@ -98,7 +99,7 @@ def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks
 
     connection = open_database(path)
 
-    assert current_version(connection) == 7
+    assert current_version(connection) == 8
     callback_columns = [row[1] for row in connection.execute("PRAGMA table_info(callback_states)")]
     assert callback_columns == [
         "token",

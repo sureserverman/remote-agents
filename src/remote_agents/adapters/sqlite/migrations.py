@@ -94,6 +94,31 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         7,
         "ALTER TABLE sessions ADD COLUMN remote_control_state TEXT;",
     ),
+    # A conversation's resume identity is exclusive while its session can still be live, and
+    # released once it cannot. Before this, the index held for the row's whole existence and
+    # nothing deletes a session row -- so one resume bound a conversation to one session
+    # forever, and after that session ended the tool could never resume it again. Removing
+    # the bot's resume confirmation is what made a mis-tap enough to trigger it, which is how
+    # it was found.
+    #
+    # `state <> 'ended'` rather than a list, because ENDED is exactly
+    # `state_machine.TERMINAL_STATES` -- the states the transition matrix offers no way out
+    # of. A row leaves the index when it reaches ENDED and the next resume may bind, while
+    # two live panes on one conversation stay impossible, which is what the index was for.
+    #
+    # The ended row keeps its `resume_profile_id`/`resume_source_id`: history is what answers
+    # *what was resumed*, and a partial index releases exclusivity without erasing it.
+    (
+        8,
+        """
+        DROP INDEX sessions_resume_identity;
+        CREATE UNIQUE INDEX sessions_resume_identity
+        ON sessions(resume_profile_id, resume_source_id)
+        WHERE resume_profile_id IS NOT NULL
+          AND resume_source_id IS NOT NULL
+          AND state <> 'ended';
+        """,
+    ),
 )
 
 
