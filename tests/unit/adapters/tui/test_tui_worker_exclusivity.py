@@ -55,6 +55,7 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.screens import ResumeConfirmScreen
 from remote_agents.application.project_admin import CreatedProject
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationReference,
     ConversationState,
@@ -124,7 +125,7 @@ class _SlowLauncher:
         return await self._record_and_wait("launch")
 
     async def resume(self, _command):
-        return await self._record_and_wait("resume")
+        return ResumeOutcome(await self._record_and_wait("resume"), created=True)
 
     async def graceful_stop(self, _command):
         await self._record_and_wait("graceful")

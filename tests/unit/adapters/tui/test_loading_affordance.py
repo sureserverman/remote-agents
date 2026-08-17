@@ -39,6 +39,7 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -143,9 +144,9 @@ class _Launcher:
         await self._gated()
         return _record(self.state)
 
-    async def resume(self, _command) -> SessionRecord:
+    async def resume(self, _command) -> ResumeOutcome:
         await self._gated()
-        return _record(self.state)
+        return ResumeOutcome(_record(self.state), created=True)
 
     async def graceful_stop(self, _command) -> TerminalObservation:
         await self._gated()

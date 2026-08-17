@@ -53,6 +53,7 @@ from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.screens import ResumeConfirmScreen
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationReference,
     ConversationState,
@@ -140,7 +141,7 @@ class _RecordingLauncher:
 
     async def resume(self, _command):
         self.issued.append("resume")
-        return _record()
+        return ResumeOutcome(_record(), created=True)
 
 
 class _UnusedCreator:

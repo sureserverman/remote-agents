@@ -23,7 +23,8 @@ from __future__ import annotations
 import ast
 import pathlib
 
-_TELEGRAM = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents" / "adapters" / "telegram"
+_ADAPTERS = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents" / "adapters"
+_TELEGRAM = _ADAPTERS / "telegram"
 
 #: The renders that legitimately carry no navigation bar, as `module.py` -> why.
 #:
