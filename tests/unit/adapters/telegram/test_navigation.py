@@ -745,6 +745,96 @@ async def test_owner_commands_answer_resume_even_where_it_is_unavailable() -> No
     assert _unmarked(_rows(shown)[-1]) == ["Sessions", "Launch"]
 
 
+class _ResumingLauncher(_Launcher):
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.commands: list[object] = []
+
+    async def list_sessions(self):
+        return []
+
+    async def resume(self, command):
+        self.commands.append(command)
+        return self.record
+
+
+def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
+    launcher = _ResumingLauncher(_record())
+    return (
+        PrivateBotBoundary(
+            OWNER,
+            CHAT,
+            catalogue=(PROJECT,),
+            profiles=(ProfileAvailability("claude", True, None),),
+            launcher=launcher,
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
+        launcher,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_without_review_reaches_a_session_at_launch_s_depth() -> None:
+    """Launch stopped asking for a review when choosing the agent became the act. Choosing a
+    named conversation is a *more* specific choice than choosing an agent, so resume was
+    charging an extra press for less ambiguity."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary, launcher = _resume_boundary()
+
+    await boundary.resume_command(chat.message_update("/resume"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Claude")), None)
+    conversation = _rows(chat.messages[anchor])[0][0]
+    await boundary.callback(chat.press(_button(chat.messages[anchor], conversation)), None)
+
+    assert len(launcher.commands) == 1, "choosing the conversation is the act"
+    assert "Session resumed" in chat.messages[anchor].text
+    assert "Review resume" not in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_resume_without_review_drops_a_repeated_press(monkeypatch) -> None:
+    """DEC-008 is what makes one press safe without a confirmation in front of it: the
+    one-shot claim drops the second press rather than servicing it into a second session."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary, launcher = _resume_boundary()
+
+    await boundary.resume_command(chat.message_update("/resume"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Claude")), None)
+    conversation = _rows(chat.messages[anchor])[0][0]
+    token = _button(chat.messages[anchor], conversation)
+
+    await boundary.callback(chat.press(token, on=anchor), None)
+    await boundary.callback(chat.press(token, on=anchor), None)
+
+    assert len(launcher.commands) == 1, "the repeat was dropped, not serviced twice"
+
+
+@pytest.mark.asyncio
+async def test_resume_without_review_still_refuses_a_project_that_left_the_catalogue() -> None:
+    """The check the deleted review screen carried. It has to move to the act rather than
+    leave with the screen — and before the claim, so a stale one-shot is not burned on a
+    project that has gone, which is the reasoning `_launch_reply` already records."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary, launcher = _resume_boundary()
+
+    await boundary.resume_command(chat.message_update("/resume"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Claude")), None)
+    conversation = _rows(chat.messages[anchor])[0][0]
+    token = _button(chat.messages[anchor], conversation)
+
+    boundary.catalogue = ()
+    await boundary.callback(chat.press(token, on=anchor), None)
+
+    assert launcher.commands == []
+    assert "no longer available" in chat.messages[anchor].text
+
+
 @pytest.mark.asyncio
 async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
     """The bar is the one row the owner builds muscle memory for, so it is also the worst

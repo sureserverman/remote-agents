@@ -80,10 +80,8 @@ async def test_owner_resume_journey_uses_a_catalogue_reference_not_provider_inpu
     boundary.callbacks.bind_pending(11, 1)
     selected = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
     assert selected is not None
-    confirmation = await boundary._resume_confirm_reply(selected.entity_id)
-    boundary.callbacks.bind_pending(11, 1)
 
-    await boundary._resume_reply(selected.entity_id, confirmation.keyboard[0][0].callback_data, 1)
+    await boundary._resume_reply(selected.entity_id, selection, 1)
 
     assert len(launcher.commands) == 1
     assert launcher.commands[0].conversation.provider_conversation_id.value == "provider-id"

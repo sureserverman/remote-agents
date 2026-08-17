@@ -857,8 +857,6 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._resume_profiles_reply(entity_id))
         if action in {"resume.profile", "resume.page"}:
             return _reply_arguments(await self._resume_catalogue_reply(entity_id))
-        if action == "resume.select":
-            return _reply_arguments(await self._resume_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id, message_id))
         if action == "session.attach":
@@ -935,6 +933,27 @@ class PrivateBotBoundary:
     ) -> dict[str, object]:
         if self.launcher is None or self.conversations is None:
             return _reply_arguments(self._message("Resuming is unavailable."))
+        # Everything re-derivable is re-derived **before** the claim, which is the ordering
+        # `_launch_reply` records and the ordering this path did not have: claiming first
+        # burns the one-shot on a conversation or a project that has since gone, and leaves
+        # the owner a button that answers "already run" for something that never ran.
+        resolved = await self._resolve_resume(reference_value)
+        if resolved is None or resolved.summary.project_id is None:
+            return _reply_arguments(self._message("That conversation is no longer available."))
+        # The check the review screen used to carry. It moved to the act rather than leaving
+        # with the screen -- a rendered row outlives the catalogue it was drawn from.
+        if not any(
+            project.opaque_id == str(resolved.summary.project_id) for project in self.catalogue
+        ):
+            return _reply_arguments(self._message("The project is no longer available."))
+        # Re-checked at the *act*, not only where the row was drawn. This is the mitigation
+        # `StopController.execute` already applies to every stop -- the rendered row is
+        # re-tested against the shared policy before the command goes out -- and the resume
+        # path did not have it on either surface. It matters more now that the row *is* the
+        # act: there is no second screen between the catalogue read that drew it and the
+        # resume it performs.
+        if not resume_available(resolved.summary):
+            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -942,20 +961,6 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        resolved = await self._resolve_resume(reference_value)
-        if resolved is None or resolved.summary.project_id is None:
-            return _reply_arguments(self._message("That conversation is no longer available."))
-        # Re-checked at the *act*, not only where the review screen was drawn. This is the
-        # mitigation `StopController.execute` already applies to every stop — the rendered row
-        # is re-tested against the shared policy before the command goes out — and the resume
-        # path did not have it on either surface. `_resume_confirm_reply` checks while building
-        # the screen, which is a different moment: the resolve above is a second, independent
-        # read, so a conversation the policy refuses could be resumed here after passing there.
-        # Found by the Stage 3 gate's adversarial pass, which noted the very shape this fix
-        # was for — the rule written down in some places and not others — reappearing on the
-        # other surface.
-        if not resume_available(resolved.summary):
-            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
         record = await self.launcher.resume(
             ResumeCommand(
                 resolved.summary.project_id,
@@ -1883,7 +1888,14 @@ class PrivateBotBoundary:
             (
                 Button(
                     _resume_button_text(summary.description, summary.updated_at),
-                    self._callback("resume.select", str(summary.reference)),
+                    # The act, not a step toward it. Launch stopped asking for a review when
+                    # choosing the agent became the act; choosing a *named conversation* is a
+                    # more specific choice than choosing an agent, so resume was charging an
+                    # extra press for less ambiguity. DEC-008's one-shot claim is what makes
+                    # a single press safe without a confirmation in front of it.
+                    self._callback(
+                        "resume.confirm", str(summary.reference), mutation=True
+                    ),
                 ),
             )
             for summary in result.conversations
@@ -1922,43 +1934,6 @@ class PrivateBotBoundary:
             "Select a resumable conversation.",
             tuple(rows),
             back=back,
-        )
-
-    async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
-        resolved = await self._resolve_resume(reference_value)
-        if resolved is None or resolved.summary.project_id is None:
-            return self._message("That conversation is no longer available.")
-        summary = resolved.summary
-        if not resume_available(summary):
-            return self._message("That conversation cannot be resumed safely.")
-        project = next(
-            (item for item in self.catalogue if item.opaque_id == str(summary.project_id)), None
-        )
-        if project is None:
-            return self._message("The project is no longer available.")
-        return self._message(
-            f"<b>Review resume</b>\nProject: {escape(project.name)}\n"
-            f"Agent: {_profile_name(str(summary.profile_id))}\n"
-            f"Last updated: {summary.updated_at:%Y-%m-%d %H:%M UTC}",
-            (
-                (
-                    Button(
-                        "Resume",
-                        self._callback("resume.confirm", reference_value, mutation=True),
-                    ),
-                ),
-                # Back to the conversations for this project and agent -- the screen this
-                # one was chosen from -- rather than out of the resume flow entirely.
-                (
-                    Button(
-                        "Cancel",
-                        self._callback(
-                            "resume.page",
-                            f"{summary.project_id}|{summary.profile_id}|1",
-                        ),
-                    ),
-                ),
-            ),
         )
 
     async def _resolve_resume(self, reference_value: str):

@@ -106,15 +106,12 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         assert profiles.keyboard[0][0].text == "Claude"
         catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
         boundary.callbacks.bind_pending(11, 1)
+        selection = catalogue.keyboard[0][0].callback_data
         selected = boundary.callbacks.resolve(
-            catalogue.keyboard[0][0].callback_data, owner_id=7, chat_id=11, message_id=1
+            selection, owner_id=7, chat_id=11, message_id=1
         )
         assert selected is not None
-        confirmation = await boundary._resume_confirm_reply(selected.entity_id)
-        boundary.callbacks.bind_pending(11, 1)
-        await boundary._resume_reply(
-            selected.entity_id, confirmation.keyboard[0][0].callback_data, 1
-        )
+        await boundary._resume_reply(selected.entity_id, selection, 1)
 
         record = (await service.list_sessions())[0]
         assert record.state is SessionState.RUNNING

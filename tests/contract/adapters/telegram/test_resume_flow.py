@@ -92,18 +92,16 @@ async def test_resume_picker_is_opaque_paginated_and_requires_one_confirmation()
     selection_state = boundary.callbacks.resolve(selection, owner_id=7, chat_id=11, message_id=1)
 
     assert "Cursor Agent (structured_catalogue_unavailable)" in profiles.text
-    assert selection_state is not None and selection_state.action == "resume.select"
+    assert selection_state is not None and selection_state.action == "resume.confirm"
     assert "provider-private-id" not in catalogue.text + selection
 
-    confirmation = await boundary._resume_confirm_reply(selection_state.entity_id)
-    token = confirmation.keyboard[0][0].callback_data
-    boundary.callbacks.bind_pending(11, 1)
-    result = await boundary._resume_reply(selection_state.entity_id, token, 1)
+    # One press, not two: the row carries the mutation rather than opening a review.
+    result = await boundary._resume_reply(selection_state.entity_id, selection, 1)
 
     assert "Session resumed" in result["text"]
     assert len(launcher.commands) == 1
     assert launcher.commands[0].conversation == resolved
-    replayed = await boundary._resume_reply(selection_state.entity_id, token, 1)
+    replayed = await boundary._resume_reply(selection_state.entity_id, selection, 1)
     assert replayed["text"] == "That action has already run."
 
 
