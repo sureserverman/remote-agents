@@ -122,9 +122,16 @@ def _rows(message) -> list[list[str]]:
 
 
 def _button(message, label: str) -> str:
+    """The token behind a button, found by its label and tolerant of the active-tab marker.
+
+    A bar button carries the marker exactly when the owner is already inside that flow, so a
+    lookup that matched only the bare label would silently fail on the half of the cases
+    where the tab is the one being stood in — which is most of them.
+    """
     for row in message.reply_markup.inline_keyboard:
         for button in row:
-            if button.text == label or button.text.startswith(label):
+            text = button.text.removeprefix("• ")
+            if text == label or text.startswith(label):
                 return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
@@ -280,6 +287,74 @@ def test_an_activity_notification_stays_barless_and_carries_only_its_one_button(
 
     keyboard = [[button.text for button in row] for row in rendered.keyboard]
     assert keyboard == [["Open session"]]
+
+
+class _Creator:
+    """Enough of a project creator that the Add Project step can be opened."""
+
+    def available_areas(self) -> tuple[str, ...]:
+        return ("infra",)
+
+
+def _open_boxes(chat: FakeChat) -> list[object]:
+    """The input boxes still standing in the chat, found by their ForceReply markup."""
+    return [
+        message
+        for message in chat.messages.values()
+        if type(getattr(message, "reply_markup", None)).__name__ == "ForceReply"
+    ]
+
+
+async def _open_entry(chat: FakeChat, boundary: PrivateBotBoundary, entry: str) -> int:
+    """Leave one guided text step open, and answer with the live view's anchor."""
+    if entry == "session.rename":
+        await boundary.sessions_command(chat.message_update("/sessions"), None)
+        anchor = chat.bot_messages[0].message_id
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Rename")), None)
+        return anchor
+    if entry == "project.area":
+        # Reached through Home, which is still where Add Project lives at this stage; Task
+        # 2.2 moves it onto the launch list and this route goes with it.
+        await boundary.start(chat.message_update("/start"), None)
+        anchor = chat.bot_messages[0].message_id
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "infra")), None)
+        return anchor
+    await boundary.launch_command(chat.message_update("/launch"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Search")), None)
+    return anchor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry", ["launch.search", "session.rename", "project.area"])
+@pytest.mark.parametrize("tab", ["Sessions", "Launch", "Resume"])
+async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
+    entry: str, tab: str
+) -> None:
+    """The TUI greys the keys that leave a flow holding unsaved work; Telegram has no such
+    state, so the bar has to *do* something coherent instead. Abandoning matches what every
+    other button here already does, and a stranded input box — one the owner can still type
+    into, attached to a step nothing is waiting on — is the worse of the two answers."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_Launcher(_record()),
+        conversations=ConversationService(_Catalogue(_resolved())),
+        creator=_Creator(),
+    )
+
+    anchor = await _open_entry(chat, boundary, entry)
+    assert _open_boxes(chat), f"{entry} did not leave an input box open"
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], tab)), None)
+
+    assert _open_boxes(chat) == [], f"pressing {tab} stranded the {entry} input box"
+    assert _unmarked(_rows(chat.messages[anchor])[-1])[0] == "Sessions"
 
 
 @pytest.mark.asyncio
