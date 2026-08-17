@@ -9,6 +9,8 @@ from enum import StrEnum
 from string import ascii_lowercase, digits
 from uuid import UUID, uuid4
 
+from remote_agents.domain.remote_control import RemoteControlState
+
 MAX_LABEL_LENGTH = 40
 """The hard bound on a session label. A host may configure something smaller, never larger.
 
@@ -215,6 +217,25 @@ class SessionRecord:
     It outlives ORPHANED. DEC-020 gives the state one way out, so a force-stopped adopted
     record reaches ENDED still carrying `ADOPTED` — which is what lets the audit trail answer
     *what was killed*, rather than only that something was.
+    """
+    remote_control_state: RemoteControlState | None = None
+    """The last Remote Control state this service *observed* for the pane, or `None`.
+
+    Appended after `orphan_provenance` deliberately, and the reason is written one file over
+    in `tests/integration/sqlite/test_orphan_provenance.py`: `record_event` and `set_label`
+    rebuild this record positionally, so an appended field is exactly the shape those two
+    silently drop. That test exists because it happened; this field is covered by the same
+    shape of test rather than trusting that it will not happen again.
+
+    `None` means nobody knows, and it has three causes that all take the same branch: the
+    session has never been toggled, the row predates migration 7, or a toggle came back
+    UNKNOWN. Every surface answers unknown by offering **both** Remote Control actions, which
+    is what all of them did before anything was stored — so the fallback is the old
+    behaviour rather than a new failure mode.
+
+    Deliberately not authoritative. It records what a toggle *returned*; a pane can be
+    changed from inside the session without this service seeing it. So it is grounds for
+    hiding the action that would do nothing, never a claim about the pane right now.
     """
 
     def __post_init__(self) -> None:

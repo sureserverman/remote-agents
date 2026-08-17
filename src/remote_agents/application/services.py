@@ -225,7 +225,15 @@ class SessionService:
                 raise ValueError("remote control is available only for Claude")
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("remote control callback was already handled")
-            return await self._terminal.remote_control(command.session_id, command.desired_state)
+            observed = await self._terminal.remote_control(
+                command.session_id, command.desired_state
+            )
+            # Persisted so a surface can hide the action that would do nothing. Inside the
+            # session lock, after the pane has answered, and never before: recording the
+            # *desired* state would claim an outcome the terminal had not reported yet, and
+            # a toggle that fails would leave the record asserting a pane it never changed.
+            await self._store.set_remote_control_state(command.session_id, observed)
+            return observed
 
     async def trust_state(self, session_id: SessionId) -> TrustState:
         """Read whether this session's pane is waiting on the folder-trust question.

@@ -31,6 +31,10 @@ class Store:
         self.claims.add(key)
         return True
 
+    async def set_remote_control_state(self, session_id, state):
+        self.observed = (session_id, state)
+        return self.record
+
 
 async def test_remote_control_is_typed_profile_limited_and_idempotent():
     record = SessionRecord(

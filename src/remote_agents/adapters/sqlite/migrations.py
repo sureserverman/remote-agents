@@ -85,6 +85,15 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         6,
         "ALTER TABLE sessions ADD COLUMN orphan_provenance TEXT;",
     ),
+    # Nullable, and deliberately not backfilled -- for DEC-020's reason one column over. An
+    # unmigrated row and a session nobody has toggled are both genuinely *unknown*, and the
+    # surfaces treat unknown by offering both Remote Control actions, which is exactly what
+    # they did before this column existed. Backfilling either value would hand a surface an
+    # action to hide on the strength of a guess about a pane it never observed.
+    (
+        7,
+        "ALTER TABLE sessions ADD COLUMN remote_control_state TEXT;",
+    ),
 )
 
 

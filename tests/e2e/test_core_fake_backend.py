@@ -19,10 +19,12 @@ from remote_agents.application.services import SessionService
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
+    SessionDisplayIdentity,
     SessionId,
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import LifecycleEvent, transition
 
 
@@ -59,6 +61,36 @@ class InMemorySessionStore:
         # store carries and the test would still pass.
         current = self.records[session_id]
         updated = replace(current, state=transition(current.state, event).to_state)
+        self.records[session_id] = updated
+        return updated
+
+    async def set_label(self, session_id: SessionId, label: str | None) -> SessionRecord:
+        current = self.records[session_id]
+        updated = replace(
+            current,
+            display=SessionDisplayIdentity(
+                current.display.project_slug,
+                current.display.agent_label,
+                current.display.mode,
+                current.display.sequence,
+                label,
+            ),
+        )
+        self.records[session_id] = updated
+        return updated
+
+    async def set_remote_control_state(
+        self, session_id: SessionId, state: RemoteControlState
+    ) -> SessionRecord:
+        """`replace`, and clearing on UNKNOWN, for the same two reasons the real store does.
+
+        This double had already drifted from the port before Remote Control state existed --
+        `set_label` was missing too -- and drift is invisible until some later test drives the
+        method that is not there. Both are implemented now so the fake answers the whole port.
+        """
+        current = self.records[session_id]
+        stored = None if state is RemoteControlState.UNKNOWN else state
+        updated = replace(current, remote_control_state=stored)
         self.records[session_id] = updated
         return updated
 
