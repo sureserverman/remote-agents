@@ -109,9 +109,10 @@ on that press: the bot reviews neither a launch nor a resume, so nothing stands 
 choice and the session, and a second press of the same button is dropped rather than serviced
 into a second session. The local terminal surface deliberately keeps its resume review, and
 that difference between the two surfaces is intended rather than an omission. A conversation
-is attached to the session it starts and cannot be resumed again while that session is alive —
-pressing it then reports what it is attached to and what became of it, rather than claiming a
-resume — and it becomes resumable once that session has ended. The ended record keeps the
+is attached to the session it starts and cannot be resumed again until that session has
+**ended** — not merely stopped, so a preserved, failed, orphaned or stopping session still
+holds it. Pressing it before then reports what it is attached to and what became of it, rather
+than claiming a resume, and closing that session releases the conversation. The ended record keeps the
 conversation it was resumed from, so the history still answers what was resumed.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
 available only on a live managed Claude pane, offers the one direction its last observed state

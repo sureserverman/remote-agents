@@ -821,8 +821,8 @@ class PrivateBotBoundary:
             # `nav.refresh` no longer has a button. It stays handled because a token outlives
             # the deploy that stopped drawing it: tokens live in SQLite and are valid for the
             # message they were drawn on rather than for a clock, so a Home screen rendered
-            # before the upgrade still carries a live Refresh. Answering it with Home is what
-            # that button now means; dropping the case would make it a dead button instead,
+            # before the upgrade still carries a live Refresh. Answering it with the sessions
+            # list is what that button now means; dropping the case would make it a dead button,
             # which is the one state the callback store exists to prevent. Both now answer
             # with the sessions list, which is what Home became.
             return _reply_arguments(await self._sessions_reply())
@@ -992,12 +992,18 @@ class PrivateBotBoundary:
             )
         )
         record = outcome.record
-        if record.state is SessionState.FAILED:
-            # First, and regardless of who created it: a FAILED resume identity keeps its own
-            # message about resolving trust locally, which is Stage 3's deliberate decision
-            # (`bb23946`, repaired in `4f2cf88` after the guard was duplicated and the branch
-            # went dead). Pressing again on a conversation bound to a failed session is still
-            # answered by "go and look at it locally".
+        if outcome.created and record.state is SessionState.FAILED:
+            # A resume this press really did create, whose pane did not come up. Stage 3's
+            # deliberate decision (`bb23946`, repaired in `4f2cf88`) that FAILED keeps its own
+            # message about resolving trust locally — and the message is about *this press's*
+            # resume, so it is owed the `created` guard that the rest of this method now has.
+            #
+            # It was FAILED-first and unguarded until close-out, which left the same
+            # over-claim the `created` branch below exists to remove, just narrower: pressing
+            # a conversation bound to an *existing* failed session said "Resume did not become
+            # ready" — a sentence about an attempt this press never made — and withheld the
+            # attachment explanation its sibling gives. Half-fixing an over-claim is how the
+            # remaining half stops looking like one.
             return _reply_arguments(
                 self._message(
                     "<b>Resume did not become ready</b>\nOpen Sessions after local attention."
@@ -2230,8 +2236,9 @@ def _session_scope(entity_id: str) -> str:
     """The session an entity id is about, for the composite ids some actions carry.
 
     A stop token names `session:profile` and a remote-control token names `session|state`.
-    Everything else is left whole — a project id or `home` has no session in it, and will
-    simply never match one.
+    Everything else is left whole — a project id has no session in it, and will simply never
+    match one. (This read "a project id or `home`"; no `home` entity id has been minted since
+    Stage 2, so the example named something that no longer exists.)
     """
     for separator in (":", "|"):
         entity_id = entity_id.split(separator, 1)[0]

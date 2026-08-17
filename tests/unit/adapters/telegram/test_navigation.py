@@ -910,11 +910,18 @@ class _BoundLauncher(_Launcher):
     the service does for a conversation already attached to a session: it starts nothing and
     hands back what it found.
 
-    `created` is a parameter rather than a constant because the two halves need different
-    doubles and one of them had none. A FAILED record with `created=True` is a resume that
-    really was created and whose pane did not come up, and it is a *different* screen from a
-    FAILED record with `created=False`; nothing stood one up, so the FAILED guard could have
-    been deleted with the suite still green.
+    `created` is a parameter rather than a constant because the two halves are different
+    screens and one of them had no double at all. A FAILED record with `created=True` is a
+    resume that really was created and whose pane did not come up; with `created=False` it is
+    a conversation bound to a session that failed earlier, and this press started nothing.
+
+    *An earlier version of this docstring asserted that difference while the code checked
+    FAILED first and rendered both identically, and added that the FAILED guard could have
+    been deleted with the suite still green — also false, since deleting it drops FAILED into
+    the "Not resumed" branch and fails the parametrized row. Both sentences were taken from a
+    review's premise rather than read off the code, which is the very habit that review was
+    reporting elsewhere. They are true now because close-out moved the guard behind `created`,
+    which is what makes the two screens actually differ.*
     """
 
     def __init__(self, record: SessionRecord, *, created: bool = False) -> None:
@@ -934,7 +941,11 @@ class _BoundLauncher(_Launcher):
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
-        (SessionState.FAILED, "Resume did not become ready"),
+        # FAILED answers "Not resumed" *here* because this whole parametrization runs against
+        # `_BoundLauncher`'s default `created=False` — a conversation already bound to a
+        # session that failed. The "Resume did not become ready" screen belongs to the press
+        # that actually created the failed session, and is pinned separately below.
+        (SessionState.FAILED, "Not resumed"),
         (SessionState.PRESERVED, "Not resumed"),
         (SessionState.STOP_REQUESTED, "Not resumed"),
         (SessionState.ORPHANED, "Not resumed"),
@@ -1002,16 +1013,24 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
 
 @pytest.mark.asyncio
 async def test_resume_without_review_says_when_nothing_was_started() -> None:
-    """`_resume_locked` returns the *existing* record for a conversation already bound to a
-    session, whatever state it is in — it does not start anything. Reporting that as
-    "Session resumed" described a session that had not moved."""
-    ended = replace(_record(), state=SessionState.ENDED)
+    """`_resume_locked` returns the *existing* record for a bound conversation rather than
+    starting anything, and reporting that as "Session resumed" described a session that had
+    not moved.
+
+    Stood up with STOP_REQUESTED, **not** ENDED, and the distinction is the test's whole
+    honesty: since Task 3.4, `get_by_resume_source` filters on `state <> 'ended'`
+    (`session_store.py:89`), so an ENDED record with `created=False` is a pair the service can
+    no longer produce. This test used to pin exactly that pair, and its docstring said
+    "whatever state it is in" — a sentence Task 3.4 had already made false. A test standing up
+    an impossible input proves nothing while reading as coverage.
+    """
+    stopping = replace(_record(), state=SessionState.STOP_REQUESTED)
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
         catalogue=(PROJECT,),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(ended),
+        launcher=_BoundLauncher(stopping),
         conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
@@ -1027,12 +1046,14 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
 async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -> None:
     """The half of FAILED that no double stood up, and the one the guard exists for.
 
-    `_resume_reply` checks FAILED *before* `created`, so a resume this press really did create
-    and whose pane did not come up gets "Resume did not become ready" rather than the
-    attached-elsewhere screen. Every other FAILED assertion in this file runs against
-    `_BoundLauncher`'s default `created=False`, so the guard could have been deleted outright
-    with the suite staying green — which is the dead-branch class `4f2cf88` already hit once in
-    this plan, arriving from the other side.
+    `_resume_reply` answers "Resume did not become ready" only for `created and FAILED` — a
+    session this press created whose pane did not come up. The parametrized row above covers
+    the other half, `created=False` and FAILED, which is a conversation bound to a session
+    that failed earlier and gets the attachment screen instead.
+
+    The two rows together are what pin the guard: deleting `outcome.created` from the
+    condition makes this test's session report an attachment it did not gain, and deleting the
+    FAILED branch entirely makes the row above report an attempt this press never made.
     """
     failed = replace(_record(), state=SessionState.FAILED)
     boundary = PrivateBotBoundary(

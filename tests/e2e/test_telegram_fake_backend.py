@@ -71,16 +71,34 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
 
 
 def test_fake_journey_contract_covers_commands_recovery_and_oversized_inspection() -> None:
-    """Keep the owner journey discoverable without requiring a live Telegram account."""
-    owner_commands = ("/launch", "/sessions", "/help")
-    expired = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, message_id=1)
+    """Keep the owner journey discoverable without requiring a live Telegram account.
+
+    *Three of this test's five assertions used to prove nothing.* It compared a **local
+    literal** of the command list against itself — so it could not notice that Stage 2 added
+    `/resume`, and indeed did not — and it closed with `assert "Back" != "Cancel"`, which is
+    true of every program ever written. The surviving `expired is None` check carried the
+    message "expired callbacks recover to Home", naming a screen Stage 2 abolished and a
+    concept (expiry) DEC-011 retired before that.
+
+    The command list is now read from the source of truth, so this test fails when the menu
+    changes without it, which is the only version of this assertion worth having.
+    """
+    from remote_agents.adapters.telegram.service import _OWNER_COMMANDS
+
+    unknown_token = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, message_id=1)
     attachment = inspect_capture(("x" * 30).encode(), telegram_limit=20)
 
-    assert owner_commands == ("/launch", "/sessions", "/help")
-    assert expired is None, "expired callbacks recover to Home after acknowledgement"
+    assert tuple(command.command for command in _OWNER_COMMANDS) == (
+        "launch",
+        "resume",
+        "sessions",
+        "help",
+    )
+    # Not "expired" — tokens have no clock (DEC-011). A token this store never minted is
+    # simply unknown, and the boundary answers it with "That screen has moved on."
+    assert unknown_token is None
     assert attachment.filename == "session-output.txt"
     assert attachment.attachment is not None
-    assert "Back" != "Cancel"
 
 
 @pytest.mark.asyncio

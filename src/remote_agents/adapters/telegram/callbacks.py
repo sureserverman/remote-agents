@@ -99,7 +99,11 @@ class CallbackStateStore:
         return state
 
     def claim_mutation(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
-        """The process-local twin of the SQLite claim, and it must agree about the message.
+        """The process-local twin of the SQLite claim, and it must agree with it.
+
+        *The summary line read "and it must agree about the message" until close-out, which
+        says the opposite of what the body then explains: the message is the one thing this
+        deliberately does not match on.*
 
         `message_id` is accepted and not matched on, for the reason the durable twin gives at
         length: `resolve` has already enforced message binding, and re-checking it here broke
