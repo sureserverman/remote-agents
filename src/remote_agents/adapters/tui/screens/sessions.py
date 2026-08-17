@@ -774,18 +774,19 @@ class RenameScreen(ChoiceScreen):
         UPDATE under the session lock — the same cost class as the record read directly above
         it, which is already awaited here.
 
-        **What refuses a repeat is `showing`, and an earlier version of this paragraph credited
-        the busy guard instead — which cannot do it here.** `tui.busy` is consulted by
+        **A repeat is refused by two checks together, and an earlier version of this paragraph
+        credited the busy guard alone — which cannot do it here on its own.** `tui.busy` is
+        consulted by
         `check_action` and by `on_option_list_option_selected`, so it drops a repeated *row*
         selection; nothing on the `Input.Submitted` dispatch path reads it, and `awaiting`
         covers `#choices` rather than the entry. This is the surface's only mutating submit, and
         it was written without the check both sibling committing entries have
-        (`LabelScreen.submit`, `NameScreen.submit`). `holding_the_guard`'s own docstring states
-        the division: the guard is the narrow fix for paths that can afford to block, and
-        `showing` is the one that covers every path including the ones that cannot.
+        (`LabelScreen.submit`, `NameScreen.submit`).
 
         **Both checks below are load-bearing and they cover different windows**, which is the
-        division `holding_the_guard` states when it says both are kept:
+        division `holding_the_guard` states when it says both are kept — the guard is the
+        narrow fix for paths that can afford to block, and `showing` covers every path
+        including the ones that cannot:
 
         - `showing` catches the repeat the screen's pump actually delivers. Two Enters are
           handled in order, so the second runs on a screen the first has already left.

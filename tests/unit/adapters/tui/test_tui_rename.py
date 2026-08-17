@@ -24,6 +24,7 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.screens import InspectScreen
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -319,6 +320,57 @@ async def test_a_second_enter_arriving_mid_rename_is_dropped_too() -> None:
         f"a second enter reached the store while the first was in flight: {during}"
     )
     assert step == "SESSION_DETAIL", f"a concurrent repeat left the owner on {step}"
+
+
+async def test_a_rename_landing_after_the_owner_left_does_not_pop_their_position() -> None:
+    """The post-await `showing` check, which the two repeat tests do not reach.
+
+    A re-review mutation-tested all three guards and found this one unpinned: deleting it left
+    every other test in this file green, and `test_teardown_during_flight.py` green too. Both
+    repeat tests intercept the second submit at the *entry* check, so neither ever runs the line
+    after the store call.
+
+    What reaches it is not a repeat at all — it is one submit whose write lands after the owner
+    has been taken somewhere else. `go_back` pops whatever is on top and has no liveness check
+    of its own (`app.py`'s `go_back` is an unconditional pop past the stack-depth test), so
+    without the guard a finished rename would pop the position the owner is now looking at.
+    """
+    record = _record()
+    released = asyncio.Event()
+    launcher = _Listing((record,), gate=released)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("rename")
+        await pilot.pause()
+        renamer = app.screen
+
+        parked = asyncio.create_task(renamer.submit("nightly"))
+        for _ in range(5):
+            await pilot.pause()
+        assert len(launcher.renamed) == 1, "the submit did not park in the store"
+
+        # The owner is somewhere else by the time the write lands. Pushed directly rather than
+        # navigated: every ordinary way out is refused while the guard is held, which is the
+        # point — this is the residual window `advance_to`'s docstring describes, where a
+        # priority binding reaches the App's own pump that a suspended screen handler does not
+        # hold.
+        await app.push_screen(InspectScreen("elsewhere"))
+        await pilot.pause()
+        assert position(app) == "INSPECT", "the fixture never left the rename entry"
+
+        released.set()
+        await parked
+        await pilot.pause()
+        step = position(app)
+
+    # The rename still landed — leaving is not cancelling.
+    assert launcher.renamed == [(record.session_id, "nightly")]
+    assert step == "INSPECT", f"the finished rename popped the owner to {step}"
 
 
 async def test_a_session_that_ended_while_the_box_was_open_lands_on_the_list() -> None:
