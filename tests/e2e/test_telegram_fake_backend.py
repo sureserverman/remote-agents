@@ -494,7 +494,7 @@ async def test_guided_entry_that_is_refused_re_asks_without_accumulating() -> No
 
 
 @pytest.mark.asyncio
-async def test_guided_entry_cancelled_returns_home_and_takes_the_input_box_with_it() -> None:
+async def test_guided_entry_cancelled_returns_to_sessions_and_takes_the_input_box_with_it() -> None:
     chat = FakeChat()
     boundary = _boundary()
     await boundary.start(chat.message_update("/start"), None)
@@ -508,7 +508,7 @@ async def test_guided_entry_cancelled_returns_home_and_takes_the_input_box_with_
 
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == []
-    assert chat.messages[anchor].text.startswith("<b>Remote agents</b>")
+    assert chat.messages[anchor].text.startswith("<b>Sessions</b>")
 
 
 @pytest.mark.asyncio

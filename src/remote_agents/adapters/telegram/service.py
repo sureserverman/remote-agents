@@ -371,15 +371,25 @@ class PrivateBotBoundary:
         )
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Render a fresh owner-only home view without reading command content."""
+        """Land on the sessions list, which is what this bot is for between launches.
+
+        Unconditionally, rather than "sessions if anything is running, else launch". A
+        landing screen that moves with state is one nobody can build muscle memory for, and
+        it would only save a press on a cold start -- the rarest arrival there is. The bar
+        puts Launch one press from an empty list.
+
+        Sessions rather than Launch because the frequencies are not close: a session is
+        launched once and looked at many times, the counts Home used to carry are counts of
+        sessions, and a notification summons the owner *about a session* -- so landing
+        anywhere else would make the summons and the landing disagree.
+        """
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        # Reset, like every other command handler. Home draws no bar today so nothing reads
-        # this, but a stale "• Launch" surviving onto the dashboard is precisely the bug a
-        # missing reset produces the moment Home does route through `_message`.
-        self._flow = None
-        await self._answer_command(update.effective_message, await self._home_reply())
+        self._flow = "sessions"
+        await self._answer_command(
+            update.effective_message, _reply_arguments(await self._sessions_reply())
+        )
 
     async def _answer_command(self, message, arguments: dict[str, object]) -> None:
         """Draw a command's answer into the live view and take the command back out of the chat.
@@ -421,7 +431,10 @@ class PrivateBotBoundary:
         bot = message.get_bot()
         value = message.text or ""
         if value.casefold() in {"cancel", "back"}:
-            await self._finish_entry(bot, entry, message, await self._home_reply())
+            self._flow = "sessions"
+            await self._finish_entry(
+                bot, entry, message, _reply_arguments(await self._sessions_reply())
+            )
             return
         if entry.action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
@@ -672,7 +685,8 @@ class PrivateBotBoundary:
             # expiry used to raise. The words say what happened without claiming a deadline
             # that no longer exists.
             await query.answer("That screen has moved on.")
-            await self._render(query, await self._home_reply())
+            self._flow = "sessions"
+            await self._render(query, _reply_arguments(await self._sessions_reply()))
             return
         # Set once, before any branch below draws: inspect, a text step, the pending screen
         # and `_reply_for` all render, and a flow set inside only one of them would leave the
@@ -771,13 +785,15 @@ class PrivateBotBoundary:
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
+            self._flow = "sessions"
             # `nav.refresh` no longer has a button. It stays handled because a token outlives
             # the deploy that stopped drawing it: tokens live in SQLite and are valid for the
             # message they were drawn on rather than for a clock, so a Home screen rendered
             # before the upgrade still carries a live Refresh. Answering it with Home is what
             # that button now means; dropping the case would make it a dead button instead,
-            # which is the one state the callback store exists to prevent.
-            return await self._home_reply()
+            # which is the one state the callback store exists to prevent. Both now answer
+            # with the sessions list, which is what Home became.
+            return _reply_arguments(await self._sessions_reply())
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token, message_id)
         if action == "remote.confirm":
@@ -863,6 +879,9 @@ class PrivateBotBoundary:
                     f"<b>Session did not become ready</b>\n{escape(record.display.rendered)}\n"
                     "Workspace trust is never approved remotely. Resolve any trust or startup "
                     "check locally, then open Sessions to recheck.",
+                    # Details only. "Sessions" and "Launch another" were the ways on before
+                    # a permanent way on existed, and both now name a destination the bar
+                    # carries on the next row -- "Launch another" beside a *marked* Launch.
                     (
                         (
                             Button(
@@ -870,19 +889,13 @@ class PrivateBotBoundary:
                                 self._callback("session.detail", str(record.session_id)),
                             ),
                         ),
-                        (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                        (Button("Launch another", self._callback("launch.open", "projects")),),
                     ),
                 )
             )
         return _reply_arguments(
             self._message(
                 f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
-                (
-                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
-                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                    (Button("Launch another", self._callback("launch.open", "projects")),),
-                ),
+                ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
         )
 
@@ -929,10 +942,7 @@ class PrivateBotBoundary:
         return _reply_arguments(
             self._message(
                 f"<b>Session resumed</b>\n{escape(record.display.rendered)}\nState: {record.state}",
-                (
-                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
-                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                ),
+                ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
         )
 
@@ -1004,7 +1014,6 @@ class PrivateBotBoundary:
         return _reply_arguments(
             self._message(
                 f"<b>Project created</b>\n{escape(str(created.identity))}",
-                ((Button("Launch", self._callback("launch.open", "projects")),),),
             )
         )
 
@@ -1039,9 +1048,11 @@ class PrivateBotBoundary:
         )
         if not records:
             self._sessions_page = 1
+            # No body Launch. It was the way out before a permanent way out existed; the
+            # bar now carries the identical destination on the very next row, and a button
+            # duplicating the one directly beneath it reads as a bug.
             return self._message(
-                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running.",
-                ((Button("Launch", self._callback("launch.open", "projects")),),),
+                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running."
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)

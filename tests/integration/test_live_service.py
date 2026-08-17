@@ -134,9 +134,9 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     assert (
         message.replies[0]["text"]
-        == "<b>Remote agents</b>\nActive: 0 · Preserved: 0\nChoose an action."
+        == "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running."
     )
-    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    launch = _button(message.replies[0], "Launch")
     callback = _Callback(launch)
     await boundary.callback(_trusted_update(callback=callback), None)
 
@@ -148,7 +148,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
     # The first press replaced this message's keyboard, which pruned the token it came from
     # -- so the second press of the same button is a race, answered and redrawn.
     assert callback.answers == [None, "That screen has moved on."]
-    assert callback.edits[1]["text"].startswith("<b>Remote agents</b>")
+    assert callback.edits[1]["text"].startswith("<b>Sessions</b>")
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repe
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
-    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    launch = _button(message.replies[0], "Launch")
     projects = _Callback(launch)
     await boundary.callback(_trusted_update(callback=projects), None)
     project = projects.edits[0]["reply_markup"].inline_keyboard[0][0].callback_data
@@ -209,8 +209,6 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
     assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
         "Details",
         "Sessions",
-        "Launch another",
-        "Sessions",
         "Launch",
     ]
 
@@ -220,7 +218,7 @@ async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
     boundary = PrivateBotBoundary(7, 11)
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
-    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    launch = _button(message.replies[0], "Launch")
     callback = _Callback(launch, edit_error=BadRequest("Message is not modified"))
 
     await boundary.callback(_trusted_update(callback=callback), None)
@@ -265,7 +263,7 @@ async def test_private_bot_boundary_searches_projects_and_launches_from_a_result
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
-    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    launch = _button(message.replies[0], "Launch")
     projects = _Callback(launch)
     await boundary.callback(_trusted_update(callback=projects), None)
     search = projects.edits[0]["reply_markup"].inline_keyboard[2][0].callback_data
@@ -309,8 +307,11 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     assert sessions.replies[0]["text"] == (
         "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running."
     )
-    # The empty list offers the action that fills it rather than a disabled-looking row.
-    assert sessions.replies[0]["reply_markup"].inline_keyboard[0][0].text == "Launch"
+    # The empty list no longer carries its own Launch: the bar carries that destination on
+    # the row directly beneath, and a button duplicating its neighbour reads as a bug.
+    assert [
+        button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]
+    ] == ["• Sessions", "Launch"]
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
@@ -410,7 +411,7 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
     boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, project_page_size=10)
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
-    launch = message.replies[0]["reply_markup"].inline_keyboard[0][0].callback_data
+    launch = _button(message.replies[0], "Launch")
     first = _Callback(launch)
     await boundary.callback(_trusted_update(callback=first), None)
 
@@ -938,8 +939,8 @@ async def test_a_refresh_token_drawn_before_the_button_was_removed_still_answers
 
     reply = await boundary._reply_for("nav.refresh", "home")
 
-    assert "Remote agents" in str(reply["text"])
-    assert "Active: 1" in str(reply["text"])
+    assert "Sessions" in str(reply["text"])
+    assert "1 active" in str(reply["text"])
 
 
 @pytest.mark.asyncio
@@ -1117,7 +1118,7 @@ async def test_a_press_this_screen_cannot_account_for_is_a_race_not_an_error() -
 
     assert callback.answers == ["That screen has moved on."]
     assert callback.alerts == [False]
-    assert "Remote agents" in str(callback.edits[0]["text"])
+    assert "Sessions" in str(callback.edits[0]["text"])
 
 
 def _trusted_update(*, message: _Message | None = None, callback: _Callback | None = None):
@@ -1244,11 +1245,13 @@ async def test_the_force_confirmation_button_survives_the_render_that_drew_it() 
 
 
 def _button(reply: dict[str, object], text: str) -> str:
+    # Marker-stripped: a bar button carries "• " exactly when the owner is inside that flow,
+    # which after /start lands on the sessions list is the common case rather than the rare one.
     return next(
         button.callback_data
         for row in reply["reply_markup"].inline_keyboard
         for button in row
-        if button.text == text
+        if button.text.removeprefix("• ") == text
     )
 
 

@@ -170,7 +170,7 @@ async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> 
 
     rendered = await _send(boundary, reply)
 
-    assert "Remote agents" in str(rendered["text"])
+    assert "Sessions" in str(rendered["text"])
     assert creator.commands == []
     assert (OWNER, CHAT) not in boundary._awaiting_text
 

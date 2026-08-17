@@ -8,6 +8,7 @@ regression worth catching.
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -319,9 +320,9 @@ async def _open_entry(chat: FakeChat, boundary: PrivateBotBoundary, entry: str) 
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Rename")), None)
         return anchor
     if entry == "project.area":
-        # Reached through Home, which is still where Add Project lives at this stage; Task
-        # 2.2 moves it onto the launch list and this route goes with it.
-        await boundary.start(chat.message_update("/start"), None)
+        # Reached from the launch list, where Task 2.2 moved it -- the screen that can tell
+        # you the project is missing is the screen that offers to create it.
+        await boundary.launch_command(chat.message_update("/launch"), None)
         anchor = chat.bot_messages[0].message_id
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
         await boundary.callback(chat.press(_button(chat.messages[anchor], "infra")), None)
@@ -524,6 +525,130 @@ def test_add_project_on_launch_never_appears_in_the_resume_picker() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_lands_on_sessions_whatever_is_running() -> None:
+    """Unconditionally, not "sessions if anything is running, else launch". A landing screen
+    that moves with state is one the owner cannot build muscle memory for, and the bar puts
+    Launch one press away from an empty list anyway."""
+    for states in ([SessionState.RUNNING], []):
+        chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+        boundary = _sessions_counts_boundary(states)
+
+        await boundary.start(chat.message_update("/start"), None)
+
+        shown = chat.messages[chat.bot_messages[0].message_id]
+        assert "Sessions" in shown.text and "active" in shown.text, shown.text
+        assert _rows(shown)[-1][0] == "• Sessions"
+
+
+@pytest.mark.asyncio
+async def test_start_lands_on_sessions_for_a_token_minted_before_the_upgrade() -> None:
+    """A `nav.home` token outlives the deploy that stopped drawing it — tokens live in SQLite
+    and are valid for their message, not for a clock (DEC-011). Re-pointing it is what keeps
+    it from becoming the dead button the callback store exists to prevent."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _sessions_counts_boundary([SessionState.RUNNING])
+
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    legacy = boundary._callback("nav.home", "home")
+    boundary.callbacks.bind_pending(CHAT, anchor)
+
+    await boundary.callback(chat.press(legacy, on=anchor), None)
+
+    assert "Sessions" in chat.messages[anchor].text
+    assert "no longer available" not in chat.messages[anchor].text
+
+
+class _OutcomeLauncher(_Launcher):
+    """Answers a launch with whatever state the case under test needs."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+
+    async def list_sessions(self):
+        return []
+
+    async def launch(self, _command):
+        return self.record
+
+
+class _RealCreator(_Creator):
+    def create(self, command):
+        from remote_agents.application.project_admin import CreatedProject
+        from remote_agents.domain.projects import ProjectIdentity
+
+        identity = ProjectIdentity(area=command.area, name=command.name)
+        return CreatedProject(identity, pathlib.Path("/dev") / command.area / command.name)
+
+
+def _outcome_boundary(state: SessionState) -> PrivateBotBoundary:
+    record = SessionRecord(
+        SessionId(UUID(int=9)),
+        ProjectId(PROJECT.opaque_id),
+        ProfileId("claude"),
+        SessionDisplayIdentity("Demo", "Claude", "regular", 1),
+        state,
+        datetime(2026, 8, 17, tzinfo=UTC),
+    )
+    return PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_OutcomeLauncher(record),
+        conversations=ConversationService(_Catalogue(_resolved())),
+        creator=_RealCreator(),
+    )
+
+
+async def _outcome_screens() -> dict[str, object]:
+    """The four screens the Stage 1 reviews named, rendered by the code that really draws
+    them rather than reconstructed here."""
+    empty = _sessions_counts_boundary([])  # genuinely empty, not "a boundary I hope is empty"
+    failed = _outcome_boundary(SessionState.FAILED)
+    created = _outcome_boundary(SessionState.RUNNING)
+    project = _outcome_boundary(SessionState.RUNNING)
+    launch_id = f"{PROJECT.opaque_id}|claude"
+
+    def claimed(boundary: PrivateBotBoundary, action: str, entity: str) -> str:
+        token = boundary._callback(action, entity, mutation=True)
+        boundary.callbacks.bind_pending(CHAT, 1)
+        return token
+
+    return {
+        "empty sessions": await empty._sessions_reply(),
+        "launch failed": (
+            await failed._launch_reply(launch_id, claimed(failed, "launch.profile", launch_id), 1)
+        )["reply_markup"],
+        "session created": (
+            await created._launch_reply(launch_id, claimed(created, "launch.profile", launch_id), 1)
+        )["reply_markup"],
+        "project created": (
+            await project._project_reply(
+                "infra|thing", claimed(project, "project.confirm", "infra|thing"), 1
+            )
+        )["reply_markup"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_no_screen_offers_a_body_button_that_duplicates_the_bar() -> None:
+    """The class the Stage 1 reviews enumerated: buttons that were the only way out before a
+    permanent way out existed. A body `Launch` directly above the bar's `Launch` reads as a
+    bug, and on the launch-failure screen it sat above a *marked* `• Launch`.
+
+    Swept over every screen in the set rather than the one the plan happened to name.
+    """
+    bar = {"Sessions", "Launch", "Resume", "Launch another"}
+
+    for name, rendered in (await _outcome_screens()).items():
+        keyboard = getattr(rendered, "keyboard", None) or rendered.inline_keyboard
+        rows = [[button.text for button in row] for row in keyboard]
+        body = [label for row in rows[:-1] for label in row]
+        assert not (set(body) & bar), f"{name} duplicates the bar: {body}"
+
+
+@pytest.mark.asyncio
 async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
     """The bar is the one row the owner builds muscle memory for, so it is also the worst
     thing to put a kill button immediately above. Cancel buffers it.
@@ -560,7 +685,7 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
         creator=_Creator(),
     )
 
-    await boundary.start(chat.message_update("/start"), None)
+    await boundary.launch_command(chat.message_update("/launch"), None)
     anchor = chat.bot_messages[0].message_id
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
 
