@@ -367,6 +367,10 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
+        # Reset, like every other command handler. Home draws no bar today so nothing reads
+        # this, but a stale "• Launch" surviving onto the dashboard is precisely the bug a
+        # missing reset produces the moment Home does route through `_message`.
+        self._flow = None
         await self._answer_command(update.effective_message, await self._home_reply())
 
     async def _answer_command(self, message, arguments: dict[str, object]) -> None:
@@ -1446,9 +1450,19 @@ class PrivateBotBoundary:
     async def _force_confirm_reply(self, token: str, message_id: int) -> RenderedMessage:
         """Name the session and the cost before offering the only irreversible button.
 
-        Cancel comes first and on its own row. Home is not a cancel — it is a way out of
-        the whole screen — and the destructive button should not be the one the thumb is
-        already resting near.
+        The rule is that the destructive button must not be where the thumb already rests,
+        and the **order that satisfies it changed** when the navigation bar arrived. Cancel
+        used to come first, above `Force stop`, because the row below was a lone `Home`
+        nobody pressed — so last-but-one was the safe distance. The bottom row is now the
+        bar, the one row in the bot the owner builds muscle memory for, which made
+        last-but-one the *worst* position on the screen rather than a safe one.
+
+        So `Force stop` is offered first and Cancel sits between it and the bar: the button
+        adjacent to the habitual tap target is the harmless one, and the irreversible one is
+        two rows away from it. That also puts this screen in line with every other
+        confirmation here — resume, Remote Control, create-project all offer the action
+        first and the way out beneath it; force stop was the lone inversion, for a reason
+        that has now expired.
 
         The confirming button is a **new** token carrying a different action, not the one the
         owner just pressed. Re-offering the pressed token cannot work when the screen is
@@ -1495,8 +1509,8 @@ class PrivateBotBoundary:
             "saved is lost.\n"
             f"{escape(_state_explanation(record.state, record.orphan_provenance))}",
             (
-                (Button("Cancel", self._callback("session.detail", session_value)),),
                 (Button(ACTION_LABELS[FORCE], confirmed),),
+                (Button("Cancel", self._callback("session.detail", session_value)),),
             ),
         )
 
@@ -1696,10 +1710,14 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         buttons.append((Button("Search", self._callback(picker.search, "search")),))
+        # No `back`. This screen had exactly one parent when Home was the only way to reach
+        # it; the bar reaches it in one press from anywhere, so a Back pointing at Home now
+        # lands the owner somewhere they were never standing — which is the one thing Back
+        # must not do. `_message`'s contract is "pass it wherever there is a real parent",
+        # and a screen reachable from everywhere has none. The bar is the way out.
         return self._message(
             f"<b>{picker.title} {rendered.page}/{rendered.page_count}</b>\n{picker.instruction}",
             tuple(buttons),
-            back=self._callback("nav.home", "home"),
         )
 
     def _project_page_reply(self, entity_id: str, flow: str = "launch") -> RenderedMessage:
@@ -1908,12 +1926,16 @@ class PrivateBotBoundary:
         into a second launch, and `notifications`, which is a message rather than a screen.
         Both call `render_message` directly; that is the mechanism, not an oversight.
 
-        The third is temporary and is Home. `_home_reply` renders through `presenters.
-        render_home`, which builds its own keyboard, so `/start` and every `nav.home` route
-        still answer with a barless screen. That is not a carve-out anybody wants — it is
-        the screen Stage 2 deletes outright, at which point this exception goes with it.
-        Until then, "every screen closes with the bar" is true of every screen built here
-        and not yet true of the bot.
+        The third is temporary and is Home, stated as a **mechanism rather than a route
+        list** because a route list is what keeps going stale here: every call to
+        `_home_reply` renders through `presenters.render_home`, which builds its own
+        keyboard and never reaches this method, so whatever reaches `_home_reply` gets a
+        barless screen. Two earlier drafts of this paragraph enumerated the callers instead
+        and both undercounted them.
+
+        That is not a carve-out anybody wants — it is the screen Stage 2 deletes outright,
+        and the exception goes with it. Until then, "every screen closes with the bar" is
+        true of every screen built here and not yet true of the bot.
 
         There was a third slot here once, `refresh`, offered on the two screens whose answer
         goes stale under the owner. Both re-derive their answer on every entry, so it only
@@ -2192,6 +2214,14 @@ A session's own screens — its detail, its capture, its rename, its Remote Cont
 confirmation — are the *sessions* flow, because that is where the owner came from and where
 Back returns them; the marker tracks where they are standing, not which button they last
 pressed. The bare stop actions carry no dot and are mapped beside them for the same reason.
+
+`project` is the **Add Project wizard** and nothing else: `launch.project` and
+`resume.project` partition on their own prefixes and never reach this key. It maps to
+`launch` because that is where the wizard lives once Task 2.2 moves it onto the launch
+project list — the screen you add a project from is the screen you could not find it on.
+Until that task lands the wizard is still entered from Home, so the marker is one stage
+ahead of the route; the alternative was a mapping that has to be flipped back, and this is
+the only mapping in this table whose truth is scheduled rather than current.
 """
 
 

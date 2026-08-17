@@ -298,17 +298,23 @@ def _button(message, label: str) -> str:
     Rows move as screens gain and lose actions, and an index that silently points at
     `Back` produces a test that passes by doing nothing.
     """
-    for row in message.reply_markup.inline_keyboard:
-        for button in row:
-            # A session row carries a relative age that drifts between runs, so a prefix is
-            # the only stable handle on it. Exact matches still win first.
-            #
-            # The marker is stripped first: a navigation-bar button carries it exactly when
-            # the owner is already inside that flow, so matching only the bare label would
-            # miss the tab in precisely the case it is being pressed from.
-            text = button.text.removeprefix("• ")
-            if text == label or text.startswith(label):
-                return button.callback_data
+    # A session row carries a relative age that drifts between runs, so a prefix is the only
+    # stable handle on it -- but exact matches must win first, across the *whole* keyboard
+    # rather than within the first row that happens to contain a prefix match. That was
+    # claimed here and not done: scanning row by row, a screen offering both "Launch another"
+    # and the bar's "Launch" answered a lookup for "Launch" with the body button, so the test
+    # passed while pressing something else.
+    #
+    # The marker is stripped first: a navigation-bar button carries it exactly when the owner
+    # is already inside that flow, so matching only the bare label would miss the tab in
+    # precisely the case it is being pressed from.
+    buttons = [button for row in message.reply_markup.inline_keyboard for button in row]
+    for button in buttons:
+        if button.text.removeprefix("• ") == label:
+            return button.callback_data
+    for button in buttons:
+        if button.text.removeprefix("• ").startswith(label):
+            return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 

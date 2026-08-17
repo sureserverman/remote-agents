@@ -837,10 +837,11 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 
     assert len(resume.keyboard) == len(launch.keyboard)
     assert resume.text.startswith("<b>Resume 1/10</b>")
-    assert [[button.text for button in row] for row in resume.keyboard[-4:]] == [
+    # No Back: the picker is reachable in one press from every screen, so it has no single
+    # parent for Back to name, and the bar is the way out.
+    assert [[button.text for button in row] for row in resume.keyboard[-3:]] == [
         ["Next"],
         ["Search"],
-        ["Back"],
         ["Sessions", "Launch"],
     ]
 
@@ -859,7 +860,7 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 
     assert second.text.startswith("<b>Resume 2/3</b>")
     assert _action(second.keyboard[0][0].callback_data) == "resume.project"
-    assert _action(second.keyboard[-3][0].callback_data) == "resume.search"
+    assert _action(second.keyboard[-2][0].callback_data) == "resume.search"
 
 
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
@@ -998,7 +999,7 @@ async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> 
 
 
 @pytest.mark.asyncio
-async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_kill() -> None:
+async def test_force_confirmation_names_the_session_and_buffers_the_kill_from_the_bar() -> None:
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, _ = _stop_boundary(running)
     # The name the bot shows carries the catalogue's project name, not the opaque slug.
@@ -1013,8 +1014,10 @@ async def test_force_confirmation_names_the_session_and_puts_cancel_before_the_k
     rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
     assert subject in reply["text"]
     assert "cannot be undone" in reply["text"]
-    assert rows[0] == ["Cancel"]
-    assert rows[1] == ["Force stop"]
+    # Force stop first, Cancel beneath it: the bar is the bottom row now, so last-but-one is
+    # the worst place for an irreversible button rather than a safe one.
+    assert rows[0] == ["Force stop"]
+    assert rows[1] == ["Cancel"]
 
 
 @pytest.mark.asyncio

@@ -128,11 +128,16 @@ def _button(message, label: str) -> str:
     lookup that matched only the bare label would silently fail on the half of the cases
     where the tab is the one being stood in — which is most of them.
     """
-    for row in message.reply_markup.inline_keyboard:
-        for button in row:
-            text = button.text.removeprefix("• ")
-            if text == label or text.startswith(label):
-                return button.callback_data
+    buttons = [button for row in message.reply_markup.inline_keyboard for button in row]
+    # Exact first, across the whole keyboard: a screen carrying both a body "Launch another"
+    # and the bar's "Launch" would otherwise answer "Launch" with the body button, and the
+    # test would pass having pressed the wrong thing.
+    for button in buttons:
+        if button.text.removeprefix("• ") == label:
+            return button.callback_data
+    for button in buttons:
+        if button.text.removeprefix("• ").startswith(label):
+            return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 
@@ -405,6 +410,50 @@ async def test_the_active_tab_is_marked_on_a_resume_flow_screen_too() -> None:
     # And deeper in: choosing a project stays inside the flow it was chosen from.
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
     assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
+
+
+@pytest.mark.asyncio
+async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
+    """The bar is the one row the owner builds muscle memory for, so it is also the worst
+    thing to put a kill button immediately above. Cancel buffers it.
+
+    This is the rule `_force_confirm_reply` already stated — the destructive button must not
+    be where the thumb rests — applied to a bottom row that changed underneath it.
+    """
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Force stop")), None)
+
+    rows = _rows(chat.messages[anchor])
+    assert "Force stop" in rows[-3], f"expected the confirm screen, got {rows}"
+    assert rows[-2] == ["Cancel"], "nothing harmless separates the kill button from the bar"
+    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"]
+
+
+@pytest.mark.asyncio
+async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
+    """Pinned because it is the one mapping in `_FLOW_OF_PREFIX` whose truth is scheduled:
+    the wizard is entered from Home today and moves onto the launch list in Task 2.2."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_Launcher(_record()),
+        conversations=ConversationService(_Catalogue(_resolved())),
+        creator=_Creator(),
+    )
+
+    await boundary.start(chat.message_update("/start"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
+
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume"]
 
 
 @pytest.mark.asyncio
