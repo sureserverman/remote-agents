@@ -51,11 +51,13 @@ commands; the bot description and short description are checked against the revi
 
 ## Telegram acceptance checklist
 
-Begin with `/start`. Use only the configured private chat. The Home dashboard shows Active and
-Preserved counts, then Launch and Sessions. There is no Refresh: every route back to a screen
-re-reads what it shows, so the counts and the session list are current on arrival. `/launch`,
-`/sessions`, and
-`/help` offer the same owner-only entry points from Telegram's command menu.
+Begin with `/start`. Use only the configured private chat. It lands on the sessions list,
+whose heading carries the Active and Preserved counts, and which closes — like every screen —
+with the fixed `Sessions · Launch · Resume` bar. There is no Home screen and no Refresh: every
+route back to a screen re-reads what it shows, so the counts and the session list are current
+on arrival. `/launch`, `/resume`, `/sessions`, and `/help` offer the same owner-only entry
+points from Telegram's command menu; `/start` stays registered but is not listed, because it
+lands where `/sessions` lands.
 
 1. Open Launch and use Search to find a project by name. The reply prompt names the expected
    input; use Cancel or Back to leave it, and retry an empty or unmatched search.
@@ -81,7 +83,8 @@ re-reads what it shows, so the counts and the session list are current on arriva
    and offers Cancel before the kill. Cancel it once, then confirm it.
 7. With more sessions than one page holds, page through Sessions with Previous and Next, open a
    row from a page other than the first, and verify Back returns to that page rather than to
-   the top of the list. Home's Sessions button and `/sessions` still open the first page.
+   the top of the list. The navigation bar's Sessions button and `/sessions` still open the
+   first page.
 8. Open Launch. The project you have launched from most recently is first, ahead of registry
    order — including on the first Launch after a service restart, with nothing pressed
    beforehand. Confirm Resume and a search that matches both projects agree with it.
@@ -349,8 +352,8 @@ the sessions afterwards rather than waiting on the notifications — they are no
 Each message names the session by its display identity and carries a single `Open session`
 button that renders that session's detail into the live view. There is no other button: a
 notification is not a screen, so it may not carry navigation. It is sent apart from the live
-view, so navigating the live view (Back, Home, a session detail) leaves it alone — the anchor's
-pruning does not own it.
+view, so navigating the live view (Back, a bar destination, a session detail) leaves it alone
+— the anchor's pruning does not own it.
 
 A session gets one message per delivery pass rather than one message per observation, so several
 things it has to report in one pass ride together instead of arriving as separate messages that

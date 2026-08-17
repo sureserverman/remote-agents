@@ -2275,11 +2275,12 @@ pressed. The bare stop actions carry no dot and are mapped beside them for the s
 
 `project` is the **Add Project wizard** and nothing else: `launch.project` and
 `resume.project` partition on their own prefixes and never reach this key. It maps to
-`launch` because that is where the wizard lives once Task 2.2 moves it onto the launch
-project list — the screen you add a project from is the screen you could not find it on.
-Until that task lands the wizard is still entered from Home, so the marker is one stage
-ahead of the route; the alternative was a mapping that has to be flipped back, and this is
-the only mapping in this table whose truth is scheduled rather than current.
+`launch` because that is where the wizard lives — it is entered from the launch project
+list, and the screen you add a project from is the screen that told you it was missing.
+
+*(This paragraph was written one stage early, while the wizard was still entered from Home,
+and said so. Home is gone and the entry point moved with it, so the mapping that was
+"scheduled" is now simply current.)*
 """
 
 

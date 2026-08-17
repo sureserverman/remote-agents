@@ -671,6 +671,21 @@ def test_owner_commands_no_longer_have_a_home_to_render() -> None:
 
 
 @pytest.mark.asyncio
+async def test_owner_commands_reach_the_resume_picker_when_resume_is_wired() -> None:
+    """`/resume` is new dispatch wiring, not a rename, so its success path needs its own
+    proof: nothing else shows that the *command* reaches the picker the Resume button does."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.resume_command(chat.message_update("/resume"), None)
+
+    shown = chat.messages[chat.bot_messages[0].message_id]
+    assert shown.text.startswith("<b>Resume 1/1</b>")
+    assert _rows(shown)[0] == ["Demo"]
+    assert _rows(shown)[-1] == ["Sessions", "Launch", "• Resume"]
+
+
+@pytest.mark.asyncio
 async def test_owner_commands_answer_resume_even_where_it_is_unavailable() -> None:
     """The menu is set once for the chat and cannot vary per screen the way the bar does,
     so `/resume` is listed on a composition that wires no conversation service. It answers

@@ -45,10 +45,14 @@ systemctl --user is-active remote-agents.service
 uv run --locked remote-agents doctor --json | python -m json.tool
 ```
 
-The configured owner sees only `/start`, `/launch`, `/sessions`, and `/help` in Telegram's
-command menu. `/start` opens a compact Home dashboard with active and preserved counts;
-`/launch` opens the paginated project list and `/sessions` opens the paginated list of current
-managed sessions. `/help` names the actions this deployment actually offers. Search, renaming, and
+The configured owner sees `/launch`, `/resume`, `/sessions`, and `/help` in Telegram's command
+menu, which names the same places the navigation bar does. `/start` stays registered because
+Telegram requires it of every bot, and lands where `/sessions` lands: the paginated list of
+current managed sessions, whose heading carries the active and preserved counts. `/launch`
+opens the paginated project list and `/resume` its resume counterpart. There is no Home
+screen — every screen closes with a fixed `Sessions · Launch · Resume` row, so the three
+destinations are one press away from wherever you are rather than one press away from a
+dashboard in front of them. The row marks the flow you are standing in. `/help` names the actions this deployment actually offers. Search, renaming, and
 project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
 leaving an input step stranded. Choosing an agent launches the session immediately — there is no
 review step and no label to supply first — and a session is named afterwards, or never, with
@@ -63,12 +67,15 @@ answered by redrawing it and deleting the command itself, and a reply prompt's i
 second message that goes away once it is answered or abandoned. A button does not expire: its
 token is stored in SQLite and is valid for the message it was drawn on rather than for a clock,
 so one drawn before a service restart still works after it. Replacing a screen prunes the tokens
-it drew, so a press that lands after a redraw says the screen has moved on and shows Home.
+it drew, so a press that lands after a redraw says the screen has moved on and shows the
+sessions list.
 
-Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it, and
-`Home`. There is no `Refresh`: every screen re-derives what it shows on entry, so the two views
-whose answer goes stale on its own — Home's counts and the sessions list — are current whenever
-you arrive at them, and `Back` out of a session returns to the page of the list it was opened
+Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
+on its own row, above the fixed `Sessions · Launch · Resume` bar. A screen reachable from
+everywhere has no parent, so both project pickers carry no `Back` at all. There is no
+`Refresh`: every screen re-derives what it shows on entry, so the view whose answer goes
+stale on its own — the sessions list, and the counts in its heading — is current whenever you
+arrive at it, and `Back` out of a session returns to the page of the list it was opened
 from. An action that makes you wait, such as a launch or a stop that polls a pane,
 replaces the screen with what it is waiting for and drops the keyboard until it finishes, so a
 press cannot be repeated into a second launch.
@@ -250,8 +257,8 @@ uv run --locked remote-agents add-project --area infra --name new-thing
 In Telegram, Add Project offers the area as a choice between the existing directories the server
 enumerates under the configured development root; a free-form area is never accepted. The project
 name is entered through a reply prompt and is validated before anything is created or written, and
-Review names the area and the name before the mutation happens. Cancel returns Home without a
-mutation.
+Review names the area and the name before the mutation happens. Cancel returns to the launch
+project list — the screen Add Project is offered from — without a mutation.
 
 Area and name must each be lowercase letters, digits, and single hyphens, 1 to 64 characters. The
 project is created at exactly one area directory below the configured `dev_root`, so no other
@@ -271,8 +278,8 @@ removal that itself fails is reported rather than hidden, leaving an unregistere
 
 A project created from Telegram is selectable there immediately, because the bot re-reads the
 catalogue after the mutation. One created with the command line or the local terminal surface
-lands in a separate process, so a running bot does not see it until it re-reads: press Refresh in
-any paginated view, which returns Home, then open Launch again. No registry field
+lands in a separate process, so a running bot does not see it until it re-reads: press Launch
+in the navigation bar, which re-reads the catalogue on entry. No registry field
 outside that closed schema is written, and neither surface can edit or remove an entry that
 already exists.
 
