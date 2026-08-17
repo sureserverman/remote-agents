@@ -1861,23 +1861,46 @@ class PrivateBotBoundary:
         *,
         back: str | None = None,
     ) -> RenderedMessage:
-        """Render one screen and close it with the navigation row it is entitled to.
+        """Render one screen and close it with Back, then the fixed navigation bar.
 
-        Home used to be the only way out of every screen, which made returning to the list
-        a session came from cost two taps and a second search for the row. `back` takes the
-        callback of the screen that owns this one; pass it wherever there is a real parent.
+        Every screen ends with the same three destinations in the same position, so a move
+        between flows costs one press from wherever the owner is. Before this the only way
+        out was Home, and reaching Launch from a session meant going *up* to a screen whose
+        entire content was the three buttons this row now carries everywhere — so the
+        dashboard was a waypoint charged for on every cross-flow move.
 
-        There was a third slot here, `refresh`, offered on the two screens whose answer goes
-        stale under the owner — the dashboard counts and the sessions list. Both re-derive
-        their answer on every entry, so it only ever saved a tap, and the one thing it did
-        that no other route did — return to the sessions page it was pressed on — is now what
-        `_sessions_back` gives Back.
+        `back` is the screen that owns this one, and it keeps a row of its own above the bar.
+        Merging the two would be the obvious saving and it is the wrong one: Back means
+        something different on every screen and the bar means the same thing on all of them,
+        which is the whole property that makes a fixed row worth having.
+
+        Telegram has no chrome — no menu, no tab strip — so a keyboard row is the only place
+        a persistent affordance can live, and the bottom is where a thumb already is.
+
+        Two renders deliberately do **not** come through here, and so carry no bar:
+        `callback`'s pending screen, which drops its keyboard so a wait cannot be pressed
+        into a second launch, and `notifications`, which is a message rather than a screen.
+        Both call `render_message` directly; that is the mechanism, not an oversight.
+
+        There was a third slot here once, `refresh`, offered on the two screens whose answer
+        goes stale under the owner. Both re-derive their answer on every entry, so it only
+        ever saved a tap, and the one thing it did that no other route did — return to the
+        sessions page it was pressed on — is now what `_sessions_back` gives Back.
         """
-        navigation = []
+        rows: list[tuple[Button, ...]] = []
         if back is not None:
-            navigation.append(Button("Back", back))
-        navigation.append(Button("Home", self._callback("nav.home", "home")))
-        return render_message(text, keyboard + (tuple(navigation),))
+            rows.append((Button("Back", back),))
+        # Resume is absent rather than disabled on a host that wired no conversation
+        # service: Telegram has no disabled state, and a button that answers "unavailable"
+        # is a worse answer than no button.
+        bar = [
+            Button("Sessions", self._callback("sessions.open", "sessions")),
+            Button("Launch", self._callback("launch.open", "projects")),
+        ]
+        if self.conversations is not None:
+            bar.append(Button("Resume", self._callback("resume.open", "projects")))
+        rows.append(tuple(bar))
+        return render_message(text, keyboard + tuple(rows))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
         """Mint a token for a screen that has not been delivered yet.
