@@ -774,10 +774,35 @@ class RenameScreen(ChoiceScreen):
         UPDATE under the session lock — the same cost class as the record read directly above
         it, which is already awaited here.
 
-        The guard is what refuses a repeat: enter pressed twice on a slow store issues one
-        rename, not two, which is DEC-008's shape (drop the repeat, never cancel the one in
-        flight).
+        **What refuses a repeat is `showing`, and an earlier version of this paragraph credited
+        the busy guard instead — which cannot do it here.** `tui.busy` is consulted by
+        `check_action` and by `on_option_list_option_selected`, so it drops a repeated *row*
+        selection; nothing on the `Input.Submitted` dispatch path reads it, and `awaiting`
+        covers `#choices` rather than the entry. This is the surface's only mutating submit, and
+        it was written without the check both sibling committing entries have
+        (`LabelScreen.submit`, `NameScreen.submit`). `holding_the_guard`'s own docstring states
+        the division: the guard is the narrow fix for paths that can afford to block, and
+        `showing` is the one that covers every path including the ones that cannot.
+
+        **Both checks below are load-bearing and they cover different windows**, which is the
+        division `holding_the_guard` states when it says both are kept:
+
+        - `showing` catches the repeat the screen's pump actually delivers. Two Enters are
+          handled in order, so the second runs on a screen the first has already left.
+          Renaming twice writes the same label and is invisible; popping twice is not — it
+          lands the owner on the sessions list instead of the session they just named.
+        - `tui.busy` catches a submit starting while another is still suspended, which
+          `showing` cannot see because this screen is still on top throughout. Measured
+          reachable rather than assumed: gating the store call and starting two submits puts
+          two renames through, and `test_a_second_enter_arriving_mid_rename_is_dropped_too`
+          holds that shut. This is the check `on_option_list_option_selected` already applies
+          to every mutating *row*; the entry simply never had it.
+
+        Together that is DEC-008's shape — drop the repeat, never cancel the one in flight —
+        enforced rather than asserted.
         """
+        if not self.showing or self.tui.busy:
+            return
         try:
             label = label_or_error(value, self.services.max_label_length)
         except ValueError as error:
@@ -808,6 +833,11 @@ class RenameScreen(ChoiceScreen):
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return
+        # Asked again after the await, not only on entry. `go_back` pops whatever is on top and
+        # has no liveness check of its own, so a screen left during the store read would pop
+        # somebody else's position.
+        if not self.showing:
+            return
         # Not `render_detail` on the screen beneath: `go_back` pops and awaits that screen's
         # own `on_reveal`, which re-reads this session from the store. Reaching past the pop to
         # redraw would show the record this method already has, which is the one thing that

@@ -14,6 +14,7 @@ open — issues no call at all.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -54,6 +55,11 @@ class _Listing:
     #: assertions are actually about: the screen must hand over the *normalized* value, not
     #: the raw keystrokes.
     renamed: list[tuple[SessionId, str | None]] = field(default_factory=list)
+    #: When set, `rename` records its arrival and then parks until the event is released. The
+    #: only way to hold a submit open long enough for a second one to start, which is the
+    #: window the concurrent test below exists to reach. `slots=True` rules out swapping the
+    #: method on the instance, so the seam lives here.
+    gate: asyncio.Event | None = None
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
         return self.records
@@ -72,6 +78,8 @@ class _Listing:
         that renamed nothing if the surface simply redrew the old one.
         """
         self.renamed.append((session_id, label))
+        if self.gate is not None:
+            await self.gate.wait()
         current = next(item for item in self.records if item.session_id == session_id)
         renamed = replace(current, display=replace(current.display, custom_label=label))
         self.records = tuple(
@@ -215,6 +223,102 @@ async def test_an_empty_entry_leaves_the_name_as_it_is() -> None:
 
     assert launcher.renamed == [], "an empty entry must not clear the name"
     assert step == "SESSION_DETAIL", "declining to rename returns to the session"
+
+
+async def test_a_repeated_enter_renames_once_and_does_not_pop_twice() -> None:
+    """Two Enters on the entry are one rename, and they leave the owner on the detail.
+
+    **This is the only mutating `Input.Submitted` handler in the surface, and it was written
+    without the guard its two siblings have.** `LabelScreen.submit` and `NameScreen.submit`
+    both check `showing` before acting, so a second Enter arriving after the first has left the
+    screen returns early. This one did not, and its docstring credited the busy guard for
+    refusing the repeat — which that guard cannot do here: `tui.busy` is read by
+    `check_action` and by `on_option_list_option_selected`, and nothing on the `Input` dispatch
+    path consults it. `awaiting()` does not cover the entry either, only `#choices`.
+
+    The second assertion is the one that bites. A duplicate rename writes the same label twice
+    and is invisible; a duplicate `go_back()` pops a second screen, so a doubled keystroke
+    silently lands the owner on the sessions list instead of the session they just named.
+    """
+    record = _record()
+    launcher = _Listing((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        screen = app.screen
+        await screen.choose("rename")
+        await pilot.pause()
+        entry = app.screen.query_one(Input)
+
+        # Two submits on the same screen object, which is what the screen's own message pump
+        # delivers when the owner presses enter twice: the handlers run in order, and the
+        # second one runs on a screen the first has already left.
+        renamer = app.screen
+        entry.value = "nightly"
+        await renamer.submit("nightly")
+        await pilot.pause()
+        await renamer.submit("nightly")
+        await pilot.pause()
+        step = position(app)
+
+    assert launcher.renamed == [(record.session_id, "nightly")], (
+        f"a repeated enter issued {len(launcher.renamed)} renames"
+    )
+    assert step == "SESSION_DETAIL", f"a repeated enter left the owner on {step}"
+
+
+async def test_a_second_enter_arriving_mid_rename_is_dropped_too() -> None:
+    """The other window the sequential test cannot reach: a repeat while the first is suspended.
+
+    The sequential case above is what the screen's own pump delivers. This one forces the case
+    it cannot produce — two `submit` calls genuinely in flight at once — by gating the fake's
+    rename on an event, so the first is parked inside its guarded block when the second starts.
+    Written because a review named this window specifically and neither of us could settle it
+    by reading: `holding_the_guard` sets `tui.busy`, but nothing on the `Input` path consults
+    it, so if this window is reachable the `showing` check is not enough on its own.
+    """
+    record = _record()
+    released = asyncio.Event()
+    launcher = _Listing((record,), gate=released)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.screen.choose("rename")
+        await pilot.pause()
+        renamer = app.screen
+
+        first = asyncio.create_task(renamer.submit("nightly"))
+        # Let the first reach the gated rename and park there.
+        for _ in range(5):
+            await pilot.pause()
+        assert len(launcher.renamed) == 1, (
+            f"the first submit did not park in the store: {launcher.renamed}"
+        )
+
+        second = asyncio.create_task(renamer.submit("nightly"))
+        for _ in range(5):
+            await pilot.pause()
+        # Recorded before releasing, so the assertion is about what happened *during* the
+        # window rather than after it.
+        during = list(launcher.renamed)
+
+        released.set()
+        await asyncio.gather(first, second)
+        await pilot.pause()
+        step = position(app)
+
+    assert during == [(record.session_id, "nightly")], (
+        f"a second enter reached the store while the first was in flight: {during}"
+    )
+    assert step == "SESSION_DETAIL", f"a concurrent repeat left the owner on {step}"
 
 
 async def test_a_session_that_ended_while_the_box_was_open_lands_on_the_list() -> None:
