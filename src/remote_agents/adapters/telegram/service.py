@@ -1131,6 +1131,12 @@ class PrivateBotBoundary:
         # the actions that end a session should not look like the ones that read it — a
         # graceful stop is one tap from discarding the pane's output. No state offers more
         # than two stops, so the row stays legible.
+        #
+        # Shape is no longer *only* this: the navigation bar is a second multi-button row on
+        # this screen. It does not collide, because it is three wide where the stops are two
+        # and because a full-width Back sits between them — but the distinction is now
+        # two-wide-versus-three rather than one-row-versus-the-rest, which is a narrower
+        # margin than this comment used to be able to assume.
         stops: list[Button] = []
         for action in available_actions(record.state, record.orphan_provenance):
             token = self.stops.offer(
