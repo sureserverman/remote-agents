@@ -412,6 +412,74 @@ async def test_the_active_tab_is_marked_on_a_resume_flow_screen_too() -> None:
     assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
 
 
+class _ManyLauncher(_Launcher):
+    """A mixed list, so the two counts are distinguishable from each other and from len()."""
+
+    def __init__(self, records: list[SessionRecord]) -> None:
+        self.records = records
+
+    async def list_sessions(self):
+        return self.records
+
+
+def _sessions_counts_boundary(states: list[SessionState]) -> PrivateBotBoundary:
+    records = [
+        SessionRecord(
+            SessionId(UUID(int=index + 1)),
+            ProjectId(PROJECT.opaque_id),
+            ProfileId("claude"),
+            SessionDisplayIdentity("Demo", "Claude", "regular", index + 1),
+            state,
+            datetime(2026, 8, 17, tzinfo=UTC),
+        )
+        for index, state in enumerate(states)
+    ]
+    return PrivateBotBoundary(
+        OWNER, CHAT, catalogue=(PROJECT,), launcher=_ManyLauncher(records)
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_counts_lead_the_list_that_owns_them() -> None:
+    """Home's whole content was these two numbers, and they are counts *of sessions* — so
+    they belong on the list rather than on a screen in front of it."""
+    boundary = _sessions_counts_boundary(
+        [SessionState.RUNNING, SessionState.RUNNING, SessionState.PRESERVED]
+    )
+
+    rendered = await boundary._sessions_reply()
+
+    assert "2 active" in rendered.text
+    assert "1 preserved" in rendered.text
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_counts_are_still_rendered_when_nothing_is_running() -> None:
+    """Both zero rather than absent: a line that appears and disappears is a line the owner
+    has to re-find, and the empty list is exactly when they are looking for it."""
+    boundary = _sessions_counts_boundary([])
+
+    rendered = await boundary._sessions_reply()
+
+    assert "0 active" in rendered.text
+    assert "0 preserved" in rendered.text
+    assert "Nothing is running." in rendered.text
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> None:
+    """One read, not two. A second read could disagree with the rows underneath it, and a
+    header that contradicts its own list is worse than no header."""
+    boundary = _sessions_counts_boundary([SessionState.RUNNING] * 12)
+    boundary.session_page_size = 5
+
+    second_page = await boundary._sessions_reply(2)
+
+    # Counts are of the whole list, not of the page — the page shows 5 of them.
+    assert "12 active" in second_page.text
+    assert "Sessions 2/3" in second_page.text
+
+
 @pytest.mark.asyncio
 async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
     """The bar is the one row the owner builds muscle memory for, so it is also the worst

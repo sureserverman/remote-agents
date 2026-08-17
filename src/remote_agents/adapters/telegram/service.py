@@ -1021,10 +1021,18 @@ class PrivateBotBoundary:
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
+        # Counted from the records this list is about to page, never from a second read. Two
+        # reads can disagree — a session can end between them — and a header contradicting
+        # the rows underneath it is worse than no header. These are the numbers Home used to
+        # carry, and they are counts *of sessions*, so this is where they were always about.
+        counts = (
+            f" · {sum(record.state is SessionState.RUNNING for record in records)} active"
+            f" · {sum(record.state is SessionState.PRESERVED for record in records)} preserved"
+        )
         if not records:
             self._sessions_page = 1
             return self._message(
-                f"{self._notice_line(notice)}<b>Sessions</b>\nNothing is running.",
+                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running.",
                 ((Button("Launch", self._callback("launch.open", "projects")),),),
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
@@ -1051,7 +1059,7 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         return self._message(
-            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>",
+            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>{counts}",
             tuple(buttons),
         )
 
