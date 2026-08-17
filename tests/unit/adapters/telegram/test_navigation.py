@@ -115,6 +115,7 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
         profiles=(ProfileAvailability("claude", True, None),),
         launcher=_Launcher(_record()),
         conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
+        creator=_Creator(),
     )
 
 
@@ -151,6 +152,15 @@ async def _every_screen(
     render mutates in place, so collecting the object four times collects the last screen
     four times — a test that reads as covering the bot and covers whichever screen happened
     to be drawn last.
+
+    **Breadth is the point, and it has been wrong before.** The invariants built on this
+    helper read as claims about every screen, so a family missing from here is a family
+    those invariants silently exempt — which is how a resume-flow screen with no Back
+    survived a stage. The families are: the sessions list, a session detail, a capture, the
+    launch picker, the resume picker, the Add Project wizard, a destructive confirmation,
+    and help. Screens still outside it: the launch/resume outcome screens and Copy Attach,
+    both of which need a launcher that answers, and the empty list, which needs a boundary
+    with no sessions — all three are covered by their own tests instead.
     """
     seen: list[tuple[str, list[list[str]]]] = []
 
@@ -167,8 +177,21 @@ async def _every_screen(
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
     snapshot(anchor)
 
+    # Back to the detail first: the capture screen offers no session actions of its own.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Force stop")), None)
+    snapshot(anchor)
+
     await boundary.launch_command(chat.message_update("/launch"), None)
     snapshot(anchor)
+
+    if boundary.creator is not None:
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
+        snapshot(anchor)
+
+    if boundary.conversations is not None:
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
+        snapshot(anchor)
 
     await boundary.help_command(chat.message_update("/help"), None)
     snapshot(anchor)
