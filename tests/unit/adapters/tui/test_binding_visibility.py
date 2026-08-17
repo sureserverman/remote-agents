@@ -461,8 +461,8 @@ async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> Non
     """The launch review stopped protecting work, because its work stopped being unrecoverable.
 
     It held a gathered selection *plus a typed label*, and the label was the part escape could
-    not give back — `LabelScreen.populate` cleared the entry on the way in, so walking back lost
-    it. With that step gone the review holds two list selections, and escape lands on the agent
+    not give back — the label entry cleared itself on the way in, so walking back lost it. With
+    that step gone the review holds two list selections, and escape lands on the agent
     list with both lists still there: re-picking is two keystrokes, which is the same reasoning
     that exempts the project filter above.
 

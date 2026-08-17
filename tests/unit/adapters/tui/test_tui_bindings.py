@@ -96,7 +96,6 @@ async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> No
         elif step_setup == "review":
             await app.screen.choose("opaque-existing")
             await app.screen.choose("claude")
-            app.screen.submit("")
         elif step_setup == "areas":
             await app.show_areas()
         await pilot.pause()

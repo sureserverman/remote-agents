@@ -212,8 +212,6 @@ async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
     await pilot.pause()
     await app.screen.choose("claude")
     await pilot.pause()
-    app.screen.submit("")
-    await pilot.pause()
 
 
 async def _walk_to_resume_confirm(app: RemoteAgentsTui, pilot) -> None:
