@@ -90,6 +90,53 @@ def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
     assert current_version(connection) == 8
 
 
+def test_migration_eight_does_not_lose_the_resume_index_when_it_fails_partway(
+    tmp_path: Path,
+) -> None:
+    """Migration 8 is the only one that *drops* an object before recreating it, so it is the
+    only one where a partial application loses something. If its `DROP INDEX` committed and
+    its `CREATE UNIQUE INDEX` did not, the database would sit at v7 with
+    `sessions_resume_identity` **gone** — the index that stops two live sessions binding one
+    conversation — and nothing would say so.
+
+    `apply_migrations` wraps each migration in its own `BEGIN`/`commit`, so the two statements
+    are atomic *together*. This proves that on the real statements rather than trusting it:
+    the `CREATE` half is corrupted, and the index must survive the rollback intact.
+
+    The sibling test above covers the neighbouring case and is deliberately different: there,
+    the failure is in migration *9*, and version 8 correctly **stays applied**, because the
+    unit of atomicity is one migration and not the whole run.
+
+    **On `DROP INDEX IF EXISTS`, honestly:** since each migration is atomic, a retry always
+    meets the index it is about to drop, so `IF EXISTS` fixes no reachable failure today. It
+    is defence against a future edit that splits this migration or adds a statement between
+    the two — the case atomicity currently rules out. It was carried as a residual reading
+    "unreachable today, free to harden", and that is exactly what it remains.
+    """
+    path = tmp_path / "sessions.sqlite3"
+    open_database(path, migrations=MIGRATIONS[:7]).close()
+    assert current_version(sqlite3.connect(path)) == 7
+
+    broken_eight = (8, MIGRATIONS[7][1].replace("ON sessions(", "ON nonexistent_table("))
+    with pytest.raises(sqlite3.OperationalError):
+        open_database(path, migrations=(*MIGRATIONS[:7], broken_eight))
+
+    connection = sqlite3.connect(path)
+    assert current_version(connection) == 7, "a failed migration must not advance the version"
+    indexes = {
+        row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    }
+    assert "sessions_resume_identity" in indexes, (
+        "migration 8's DROP committed while its CREATE did not, so the unique index that "
+        "stops two live sessions binding one conversation is gone"
+    )
+    connection.close()
+
+    # The retry then succeeds, reaching the real v8 with the partial index in place.
+    open_database(path, migrations=MIGRATIONS).close()
+    assert current_version(sqlite3.connect(path)) == len(MIGRATIONS)
+
+
 def test_migration_five_adds_callback_state_tables_scoped_to_messages_not_clocks(
     tmp_path: Path,
 ) -> None:
