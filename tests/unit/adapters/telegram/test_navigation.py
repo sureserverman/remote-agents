@@ -480,6 +480,49 @@ async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> Non
     assert "Sessions 2/3" in second_page.text
 
 
+def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
+    return PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_Launcher(_record()),
+        conversations=ConversationService(_Catalogue(_resolved())),
+        creator=creator,
+    )
+
+
+def test_add_project_on_launch_sits_beside_search_where_the_project_is_missing() -> None:
+    """You want a new project at the moment you cannot find the one you wanted, which is
+    this screen — not a dashboard in front of it."""
+    boundary = _picker_boundary(creator=_Creator())
+
+    rendered = boundary._projects_reply(boundary.catalogue, view_id="all")
+
+    rows = [[button.text for button in row] for row in rendered.keyboard]
+    assert ["Search", "Add Project"] in rows
+
+
+def test_add_project_on_launch_is_absent_when_no_creator_is_wired() -> None:
+    boundary = _picker_boundary(creator=None)
+
+    rendered = boundary._projects_reply(boundary.catalogue, view_id="all")
+
+    labels = {label for row in rendered.keyboard for label in [b.text for b in row]}
+    assert "Add Project" not in labels
+
+
+def test_add_project_on_launch_never_appears_in_the_resume_picker() -> None:
+    """Both flows share one renderer, so this is the regression that renderer invites: you
+    cannot resume a conversation in a project that does not exist yet."""
+    boundary = _picker_boundary(creator=_Creator())
+
+    rendered = boundary._projects_reply(boundary.catalogue, view_id="all", flow="resume")
+
+    labels = {label for row in rendered.keyboard for label in [b.text for b in row]}
+    assert "Add Project" not in labels
+
+
 @pytest.mark.asyncio
 async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
     """The bar is the one row the owner builds muscle memory for, so it is also the worst

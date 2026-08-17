@@ -306,7 +306,9 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     await boundary.help_command(_trusted_update(message=help_message), None)
 
     assert launch.replies[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
-    assert sessions.replies[0]["text"] == "<b>Sessions</b>\nNothing is running."
+    assert sessions.replies[0]["text"] == (
+        "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running."
+    )
     # The empty list offers the action that fills it rather than a disabled-looking row.
     assert sessions.replies[0]["reply_markup"].inline_keyboard[0][0].text == "Launch"
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
@@ -989,10 +991,10 @@ async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> 
     last = await boundary._sessions_reply(3)
     beyond = await boundary._sessions_reply(99)
 
-    assert first.text == "<b>Sessions 1/3</b>"
+    assert first.text.startswith("<b>Sessions 1/3</b> · ")
     assert [button.text for button in first.keyboard[-2]] == ["Next"]
     assert len(first.keyboard) == 4 + 2
-    assert last.text == "<b>Sessions 3/3</b>"
+    assert last.text.startswith("<b>Sessions 3/3</b> · ")
     assert [button.text for button in last.keyboard[-2]] == ["Previous"]
     # A page number past the end clamps rather than rendering an empty list.
     assert beyond.text == last.text

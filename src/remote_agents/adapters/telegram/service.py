@@ -157,6 +157,13 @@ class _ProjectPicker:
     search: str
     title: str
     instruction: str
+    creates_projects: bool = False
+    """Whether this flow may offer Add Project beside Search.
+
+    Launch only. You cannot resume a prior conversation in a project that does not exist
+    yet, so offering it there would be a route to a guaranteed dead end -- and since both
+    flows share one renderer, that is exactly the regression sharing invites.
+    """
 
 
 _PROJECT_PICKERS = {
@@ -166,6 +173,7 @@ _PROJECT_PICKERS = {
         search="launch.search",
         title="Projects",
         instruction="Select a project to launch.",
+        creates_projects=True,
     ),
     "resume": _ProjectPicker(
         select="resume.project",
@@ -1723,7 +1731,13 @@ class PrivateBotBoundary:
             )
         if navigation:
             buttons.append(tuple(navigation))
-        buttons.append((Button("Search", self._callback(picker.search, "search")),))
+        # Beside Search, because they answer the same moment: the project you wanted is not
+        # on this screen. Add Project used to live on Home, one level up from the only screen
+        # that can tell you it is missing.
+        finders = [Button("Search", self._callback(picker.search, "search"))]
+        if picker.creates_projects and self.creator is not None:
+            finders.append(Button("Add Project", self._callback("project.open", "areas")))
+        buttons.append(tuple(finders))
         # No `back`. This screen had exactly one parent when Home was the only way to reach
         # it; the bar reaches it in one press from anywhere, so a Back pointing at Home now
         # lands the owner somewhere they were never standing — which is the one thing Back

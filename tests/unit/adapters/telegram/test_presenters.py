@@ -181,7 +181,7 @@ async def test_sessions_notice_leads_the_screen_without_disturbing_what_it_showe
     noticed = await boundary._sessions_reply(notice="Stopped Demo")
 
     assert noticed.text == f"Stopped Demo\n{plain.text}"
-    assert noticed.text.startswith("Stopped Demo\n<b>Sessions 1/1</b>")
+    assert noticed.text.startswith("Stopped Demo\n<b>Sessions 1/1</b> · 1 active · 0 preserved")
     # Labels and shape, never the callback data: a token is minted fresh on every render, so
     # comparing keyboards wholesale would fail on two renders of the identical screen.
     assert _labels(noticed) == _labels(plain), "a notice is not a reason to move a button"
@@ -214,8 +214,9 @@ async def test_sessions_notice_survives_the_list_being_empty() -> None:
     plain = await boundary._sessions_reply()
     noticed = await boundary._sessions_reply(notice="Stopped Demo")
 
-    assert plain.text == "<b>Sessions</b>\nNothing is running."
-    assert noticed.text == "Stopped Demo\n<b>Sessions</b>\nNothing is running."
+    counts = " · 0 active · 0 preserved"
+    assert plain.text == f"<b>Sessions</b>{counts}\nNothing is running."
+    assert noticed.text == f"Stopped Demo\n<b>Sessions</b>{counts}\nNothing is running."
     assert _labels(noticed) == _labels(plain)
 
 
@@ -225,5 +226,7 @@ async def test_sessions_notice_left_unset_renders_byte_identically_to_before() -
     screen quietly becomes a test of the notice parameter instead."""
     boundary = _sessions_boundary(_a_running_session())
 
-    assert (await boundary._sessions_reply()).text == "<b>Sessions 1/1</b>"
-    assert (await boundary._sessions_reply(notice=None)).text == "<b>Sessions 1/1</b>"
+    # The counts are the header now; what this pins is that `None` adds nothing to it.
+    header = "<b>Sessions 1/1</b> · 1 active · 0 preserved"
+    assert (await boundary._sessions_reply()).text == header
+    assert (await boundary._sessions_reply(notice=None)).text == header
