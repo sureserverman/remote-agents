@@ -46,7 +46,9 @@ def _boundary() -> tuple[PrivateBotBoundary, _RecordingLauncher]:
 def _button(message, label: str) -> str:
     for row in message.reply_markup.inline_keyboard:
         for button in row:
-            if button.text == label:
+            # Marker-stripped: a navigation-bar button carries it when the owner is
+            # already inside that flow.
+            if button.text.removeprefix("• ") == label:
                 return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 

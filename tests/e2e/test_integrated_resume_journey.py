@@ -140,7 +140,8 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         # The one button did the whole stop: the reopened detail has no second step left.
         boundary.callbacks.bind_pending(11, 1)
         detail = await boundary._detail_reply(str(record.session_id), 1)
-        assert [button.text for row in detail.keyboard for button in row] == ["Back", "Home"]
+        labels = [button.text for row in detail.keyboard for button in row]
+        assert labels == ["Back", "Sessions", "Launch", "Resume"]
     finally:
         for record in await service.list_sessions():
             try:

@@ -210,7 +210,8 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
         "Details",
         "Sessions",
         "Launch another",
-        "Home",
+        "Sessions",
+        "Launch",
     ]
 
 
@@ -245,7 +246,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
     labels = tuple(button.text for row in reply.keyboard for button in row)
     assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
-    assert labels[1:] == ("Home",)
+    assert labels[1:] == ("Sessions", "Launch")
     assert "ended" not in labels
 
 
@@ -311,7 +312,8 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
-    assert help_message.replies[0]["reply_markup"].inline_keyboard[-1][-1].text == "Home"
+    help_rows = help_message.replies[0]["reply_markup"].inline_keyboard
+    assert [button.text for button in help_rows[-1]] == ["Sessions", "Launch"]
 
 
 @pytest.mark.asyncio
@@ -835,10 +837,11 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 
     assert len(resume.keyboard) == len(launch.keyboard)
     assert resume.text.startswith("<b>Resume 1/10</b>")
-    assert [[button.text for button in row] for row in resume.keyboard[-3:]] == [
+    assert [[button.text for button in row] for row in resume.keyboard[-4:]] == [
         ["Next"],
         ["Search"],
-        ["Back", "Home"],
+        ["Back"],
+        ["Sessions", "Launch"],
     ]
 
 
@@ -856,7 +859,7 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 
     assert second.text.startswith("<b>Resume 2/3</b>")
     assert _action(second.keyboard[0][0].callback_data) == "resume.project"
-    assert _action(second.keyboard[-2][0].callback_data) == "resume.search"
+    assert _action(second.keyboard[-3][0].callback_data) == "resume.search"
 
 
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
@@ -896,8 +899,9 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
 
     rows = [[button.text for button in row] for row in detail.keyboard]
     assert rows[0] == ["Inspect"]
-    assert rows[-2] == ["Stop and close", "Force stop"]
-    assert rows[-1] == ["Back", "Home"]
+    assert rows[-3] == ["Stop and close", "Force stop"]
+    assert rows[-2] == ["Back"]
+    assert rows[-1] == ["Sessions", "Launch"]
 
 
 @pytest.mark.asyncio
@@ -954,7 +958,7 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
         button
         for button_row in listing.keyboard
         for button in button_row
-        if button.text not in {"Previous", "Next", "Home"}
+        if button.text not in {"Previous", "Next", "Sessions", "Launch", "Resume"}
     )
     boundary.callbacks.bind_pending(11, 1)
     opened = boundary.callbacks.resolve(row.callback_data, owner_id=7, chat_id=11, message_id=1)
@@ -1052,7 +1056,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     # why this keyboard no longer carries it or the Back that led out of that dead end.
     assert "Sessions 1/1" in reply["text"]
     labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
-    assert labels[-1:] == ["Home"]
+    assert labels[-2:] == ["Sessions", "Launch"]
     assert "Back" not in labels
     assert "Open session" not in labels
     assert labels[0].startswith("Demo"), "the session that would not stop is on the list"

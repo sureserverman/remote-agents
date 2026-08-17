@@ -302,7 +302,12 @@ def _button(message, label: str) -> str:
         for button in row:
             # A session row carries a relative age that drifts between runs, so a prefix is
             # the only stable handle on it. Exact matches still win first.
-            if button.text == label or button.text.startswith(label):
+            #
+            # The marker is stripped first: a navigation-bar button carries it exactly when
+            # the owner is already inside that flow, so matching only the bare label would
+            # miss the tab in precisely the case it is being pressed from.
+            text = button.text.removeprefix("• ")
+            if text == label or text.startswith(label):
                 return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
@@ -674,8 +679,8 @@ async def test_inspect_document_is_its_own_message_and_goes_when_the_session_doe
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
     assert documents[0].message_id in chat.messages, chat.transcript()
 
-    # Home is.
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    # Leaving it for another screen is.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert documents[0].message_id not in chat.messages, chat.transcript()
     assert len(chat.bot_messages) == 1, chat.transcript()
@@ -881,7 +886,7 @@ async def test_inspecting_the_same_session_twice_leaves_one_document_not_two() -
     documents = [message for message in chat.bot_messages if message.document is not None]
     assert len(documents) == 1, chat.transcript()
 
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert [message.document for message in chat.bot_messages] == [None], chat.transcript()
 
@@ -945,7 +950,7 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
     await press("Search")  # 3
     await boundary.text(chat.message_update("Demo"), None)  # 4
     await press("Demo")  # 5 — profiles
-    await press("Home")  # 6
+    await press("Sessions")  # 6
     await boundary.sessions_command(chat.message_update("/sessions"), None)  # 7
     await press("Demo · Claude · regular · #1")  # 8 — detail
     await press("Inspect")  # 9
@@ -955,7 +960,7 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
         "the inspect step is meant to put a file in the chat, or step 10 proves nothing"
     )
     await press("Back")  # 10 — detail again
-    await press("Home")  # 11
+    await press("Sessions")  # 11
     await boundary.help_command(chat.message_update("/help"), None)  # 12
 
     assert len(chat.bot_messages) == 1, chat.transcript()
@@ -1037,7 +1042,7 @@ async def test_navigating_away_by_button_takes_the_unanswered_question_with_it()
 
     for _ in range(3):
         await _open_a_search(chat, boundary, anchor)
-        await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
         assert len(chat.bot_messages) == 1, chat.transcript()
 
     assert chat.owner_messages == []
@@ -1093,7 +1098,7 @@ async def test_a_document_telegram_refuses_to_delete_is_retried_not_forgotten() 
         await original(**kwargs)
 
     chat.bot.delete_message = _refuse
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
     assert document.message_id in chat.messages, "Telegram refused, so it is still there"
     assert boundary._attachment is not None, "and it must still be tracked, or it is lost"
 
@@ -1162,7 +1167,7 @@ async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() ->
     open_session = _button(chat.messages[notification], "Open session")
     anchor = boundary.view.anchor()
 
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Launch")), None)
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert notification in chat.messages, chat.transcript()
@@ -1220,7 +1225,7 @@ async def test_a_notification_moves_the_menu_below_it_so_it_stays_reachable() ->
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     first_anchor = chat.bot_messages[0].message_id
-    sessions_token = _button(chat.messages[first_anchor], "Home")
+    sessions_token = _button(chat.messages[first_anchor], "Sessions")
 
     notification = await _notify(chat, boundary, _finished(record))
 

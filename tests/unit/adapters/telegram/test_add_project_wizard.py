@@ -109,7 +109,7 @@ async def test_area_choices_come_from_the_server_not_from_typed_text() -> None:
 
     rendered = await boundary._reply_for("project.open", "areas")
 
-    assert _buttons(rendered) == ["dev-area", "infra", "Cancel", "Home"]
+    assert _buttons(rendered) == ["dev-area", "infra", "Cancel", "Sessions", "Launch"]
 
 
 async def test_an_area_that_the_identity_rule_rejects_is_never_offered() -> None:
@@ -117,7 +117,7 @@ async def test_an_area_that_the_identity_rule_rejects_is_never_offered() -> None
 
     rendered = await boundary._reply_for("project.open", "areas")
 
-    assert _buttons(rendered) == ["infra", "big-projects", "Cancel", "Home"]
+    assert _buttons(rendered) == ["infra", "big-projects", "Cancel", "Sessions", "Launch"]
 
 
 async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> None:
@@ -126,7 +126,7 @@ async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> No
     rendered = await boundary._reply_for("project.open", "areas")
 
     assert "No area is available" in str(rendered["text"])
-    assert _buttons(rendered) == ["Home"]
+    assert _buttons(rendered) == ["Sessions", "Launch"]
 
 
 @pytest.mark.parametrize(
@@ -157,7 +157,7 @@ async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
     assert "Review new project" in str(rendered["text"])
     assert "infra" in str(rendered["text"])
     assert "new-project" in str(rendered["text"])
-    assert _buttons(rendered) == ["Create", "Back", "Cancel", "Home"]
+    assert _buttons(rendered) == ["Create", "Back", "Cancel", "Sessions", "Launch"]
     assert creator.commands == []
     assert (OWNER, CHAT) not in boundary._awaiting_text
 
