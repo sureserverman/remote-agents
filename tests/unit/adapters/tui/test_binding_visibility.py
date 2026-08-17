@@ -456,6 +456,37 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
         )
 
 
+@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> None:
+    """The launch review stopped protecting work, because its work stopped being unrecoverable.
+
+    It held a gathered selection *plus a typed label*, and the label was the part escape could
+    not give back — `LabelScreen.populate` cleared the entry on the way in, so walking back lost
+    it. With that step gone the review holds two list selections, and escape lands on the agent
+    list with both lists still there: re-picking is two keystrokes, which is the same reasoning
+    that exempts the project filter above.
+
+    The project review is deliberately *not* exempted with it, and the difference is the test of
+    whether this is a principled narrowing or a convenient one: that screen holds a typed project
+    name, `NameScreen.populate` clears it too, and so it keeps the protection this one loses.
+    `_PROTECTS_WORK` below is what pins the pair.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW", f"the walk landed on {app.screen.position}"
+
+        active = app.screen.active_bindings
+        assert binding in active, f"{binding} is not offered on the review at all"
+        assert active[binding].enabled, (
+            f"{binding} is greyed on the review, which now holds nothing escape cannot give back"
+        )
+
+
 #: The positions that protect work, named rather than derived. `_WORK_SCREENS` is computed from
 #: the code, so a screen that stopped protecting its work would drop out of that parametrization
 #: and take its own coverage with it — the tests would shrink to fit the regression and stay
@@ -464,7 +495,6 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
 _PROTECTS_WORK = {
     "NameScreen",
     "RenameScreen",
-    "ReviewScreen",
     "ProjectReviewScreen",
 }
 
@@ -504,13 +534,24 @@ def test_exactly_these_positions_protect_work_in_flight() -> None:
     assert actual == _PROTECTS_WORK
 
 
-async def test_the_gathered_launch_survives_a_flow_jump_at_the_review_step() -> None:
-    """The journey the review reproduced, driven end to end rather than asserted on a flag.
+async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselections() -> None:
+    """The inverse of what this asserted, recorded as a deliberate change rather than deleted.
 
-    Project, then agent, then a label committed with enter — at which point the entry is empty
-    and the first version of this rule considered nothing to be in flight. Ctrl+S there
-    unwound the stack to the sessions list and the next project choice replaced the selection
-    outright, so three screens of the owner's choices were gone with no way back to them.
+    **Its premise was the label, and the label is gone.** It read: project, then agent, then a
+    label committed with enter — "at which point the entry is empty and the first version of
+    this rule considered nothing to be in flight". Ctrl+S there unwound the stack and the next
+    project choice replaced the selection outright, so three screens of choices went with no way
+    back to them. The protection was bought for the typed label sitting invisibly behind an
+    empty entry.
+
+    With that step removed the review holds two list selections and nothing typed, so the jump
+    is allowed and this test records what it costs: the owner lands on the sessions list, and
+    getting back to a launch means re-picking a project and an agent — two selections from two
+    lists that are both still there. That is the same trade the project filter has always made.
+
+    Asserted rather than assumed, because it *is* a loss, just a small and recoverable one. If a
+    future step puts typed work back into this flow, this test is where the argument has to be
+    reopened.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
@@ -519,19 +560,25 @@ async def test_the_gathered_launch_survives_a_flow_jump_at_the_review_step() -> 
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        app.screen.submit("nightly run")
-        await pilot.pause()
         assert app.screen.position == "REVIEW"
-        assert app.selection.label == "nightly run"
-        depth = len(app.screen_stack)
+        assert app.selection.project is not None and app.selection.profile is not None
 
         await pilot.press("ctrl+s")
         await pilot.pause()
 
-        assert app.screen.position == "REVIEW", "a flow jump discarded the gathered launch"
-        assert len(app.screen_stack) == depth
-        assert app.selection.label == "nightly run"
-        assert app.selection.project is not None and app.selection.profile is not None
+        assert app.screen.position == "SESSIONS", (
+            "the jump was refused at the review, which is the protection this step no longer "
+            "has anything to protect"
+        )
+        # The way back, and the whole reason the loss is acceptable: the resting position is one
+        # escape away and both lists are intact.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.position == "PROJECTS"
+        keys = [option.id for option in app.screen.query_one("#choices", OptionList).options]
+        assert "opaque-existing" in keys, (
+            f"the project must still be there to re-pick from; the list offered {keys}"
+        )
 
 
 async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:

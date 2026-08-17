@@ -194,15 +194,17 @@ def _queue_two(app: RemoteAgentsTui, key: str) -> None:
 
 
 async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
-    """Gather a project, an agent and an empty label, and stop on Review.
+    """Gather a project and an agent, and stop on Review.
 
-    Driven through the screens' own `choose`/`submit` rather than through keys, exactly as the
-    exclusivity tests next door do: the wizard's three earlier steps are not what is under
+    Driven through the screens' own `choose` rather than through keys, exactly as the
+    exclusivity tests next door do: the wizard's earlier steps are not what is under
     test, and the burst has to land on a Review screen that was reached the ordinary way.
+
+    Two choices, not three and no submit: the agent choice is the arrival at the review since
+    the launch flow lost its label step.
     """
     await app.screen.choose("opaque-existing")
     await app.screen.choose("claude")
-    app.screen.submit("")
     await settle(app, pilot)
     assert position(app) == "REVIEW", f"the wizard stopped on {position(app)}"
 

@@ -29,7 +29,6 @@ from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
-    GatheredSelectionScreen,
 )
 from remote_agents.application.project_catalog import search_catalogue
 
@@ -256,8 +255,24 @@ class ProfilesScreen(ChoiceScreen):
         await self.advance_to(ReviewScreen())
 
 
-class ReviewScreen(GatheredSelectionScreen):
-    """The last position before a launch is issued, resting on Back rather than Launch."""
+class ReviewScreen(ChoiceScreen):
+    """The last position before a launch is issued, resting on Back rather than Launch.
+
+    **It was a `GatheredSelectionScreen` and no longer needs to be, because the work it was
+    protecting was the label.** That base class exists for a review position holding "a whole
+    flow's worth of choices... one keystroke from being discarded with no way back to them", and
+    the load-bearing half of that is *no way back*: this screen held the gathered selection plus
+    a typed label, and walking back cleared the entry on the way in, so the label was genuinely
+    unrecoverable. What is left is two list selections, and escape lands on the agent list with
+    both lists still standing — two keystrokes to re-pick, which is the same reasoning that has
+    always exempted the project filter from the flow-jump protection.
+
+    `ProjectReviewScreen` keeps the base class, and that asymmetry is the point rather than an
+    oversight: it holds a *typed* project name that `NameScreen.populate` also clears, so its
+    work is still work escape cannot give back. `GatheredSelectionScreen` therefore has one
+    subclass, which is one more than none — the class stays because the screen that needs it
+    needs it, not because two screens once shared it.
+    """
 
     #: Launch, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
