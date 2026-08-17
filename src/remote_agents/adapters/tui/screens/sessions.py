@@ -22,12 +22,13 @@ from textual.binding import Binding
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, TextArea
 
-from remote_agents.adapters.tui.model import _BACK, session_row
+from remote_agents.adapters.tui.model import _BACK, label_or_error, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
 )
+from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -434,6 +435,12 @@ class SessionDetailScreen(ChoiceScreen):
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.capture is not None:
             entries.append(("inspect", "Inspect output"))
+        # Grouped with the read-only rows above rather than with the stops below, and the bot's
+        # twin gives the reason in the same words: renaming changes what the session is called
+        # and nothing about what it is doing. Offered in every state for the reason
+        # `SessionService.rename` does not gate on one — naming a session that has just ended is
+        # harmless, and the row it is on is still listed until reconciliation removes it.
+        entries.append(("rename", "Rename"))
         if trust_available(record, trust):
             # Above the stop rows and below the read-only ones, because it is neither: it
             # unblocks a session rather than reading or ending it. Defaults to absent --
@@ -461,6 +468,8 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_attach()
         elif key == "inspect":
             await self.show_inspect()
+        elif key == "rename":
+            await self.show_rename()
         elif key == "trust":
             await self.answer_trust()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
@@ -685,6 +694,125 @@ class SessionDetailScreen(ChoiceScreen):
                 return
             text = render_capture(captured, self.services.capture_redactions)
             await self.advance_to(InspectScreen(text or "This session has produced no output yet."))
+
+    async def show_rename(self) -> None:
+        """Re-read the session, then open the entry that names it.
+
+        The read happens *before* the push for the reason `show_inspect` gives: a session that
+        has gone must be reported onto this detail, not onto an entry the owner would have to
+        leave in order to read why their typing went nowhere.
+        """
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
+            if record is None:
+                await self.refuse()
+                return
+            await self.advance_to(RenameScreen(self.session_value))
+
+
+class RenameScreen(ChoiceScreen):
+    """One optional name for a session that already exists.
+
+    **This is where naming a session lives, and the launch wizard is where it used to.** A
+    label chosen before the launch is chosen before there is anything to look at, and it could
+    never be changed afterwards — so the local surface had the naming step at the one moment
+    the owner knows least, and the bot, which has no such step, could rename at will. DEC-007
+    makes the local terminal a full control plane rather than a launch wizard; this row is the
+    last post-launch capability it was missing.
+
+    **`entry_is_a_commitment` is set, and it was first written here as `False` on an argument
+    that did not survive contact with the invariant.** That argument was that the two screens
+    already declaring it carry their typed value forward into a further step which holds it,
+    whereas `submit` here mutates outright — so before enter there is one retypable string and
+    nothing assembled. `test_every_screen_that_commits_typed_text_declares_it` rejects that
+    reasoning, and is right to: the rule it pins is `entry_is_a_commitment == hasattr(screen,
+    "submit")`, and what the flag protects is typed text a global key would discard silently,
+    which this screen has as much as the project-name entry does. The distinction drawn above
+    is real but is not the one the flag turns on.
+    """
+
+    #: a text entry, not a list.
+    empty_state = NEVER_EMPTY
+
+    position = "RENAME"
+    filter_placeholder = "New name"
+    # Typed here and committed by `submit`; leaving discards it.
+    entry_is_a_commitment = True
+    #: Its own name rather than the choice that led here: the detail one level down already
+    #: carries the session, and a trail that repeats its own last entry says nothing twice.
+    crumb = "Rename"
+
+    def __init__(self, session_value: str) -> None:
+        super().__init__()
+        self.session_value = session_value
+
+    async def populate(self) -> None:
+        self.set_status("Enter a name for this session, then press enter. Leave empty to keep it.")
+        # `valid_empty` left at its default: an empty entry is the documented way to leave the
+        # name alone, so the box must not open refusing the value it is about to be given.
+        self.text_entry(
+            "New name",
+            validators=[LabelWithinBound(self.services.max_label_length)],
+        )
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Say the bound is broken at the keystroke that broke it, not at the enter after it."""
+        event.stop()
+        self.announce_rejection(event.validation_result)
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        await self.submit(event.value)
+
+    async def submit(self, value: str) -> None:
+        """Validate, then rename — re-reading the session first, because it may have gone.
+
+        Awaited inline under the guard rather than run on a worker, matching `answer_trust`
+        rather than `ProjectReviewScreen._create_project`. That screen went off the pump
+        because creating a project scans the development root and writes a directory, so
+        holding the pump made `ctrl+q` unanswerable for the duration. A rename is one indexed
+        UPDATE under the session lock — the same cost class as the record read directly above
+        it, which is already awaited here.
+
+        The guard is what refuses a repeat: enter pressed twice on a slow store issues one
+        rename, not two, which is DEC-008's shape (drop the repeat, never cancel the one in
+        flight).
+        """
+        try:
+            label = label_or_error(value, self.services.max_label_length)
+        except ValueError as error:
+            # A toast rather than the status line, which still holds the instruction the owner
+            # is in the middle of following. Overwriting it would leave them told what was
+            # wrong and no longer told what to do about it.
+            self.announce(str(error), severity="warning")
+            return
+        if label is None:
+            # Declining to name is not the same act as clearing a name, and only one of the two
+            # is offered. The store supports `set_label(None)` and no screen on either surface
+            # reaches it — the bot's Skip is explicit that clearing on an empty entry would make
+            # this the only way to lose a name and would do it by accident.
+            await self.tui.go_back()
+            return
+        async with self.holding_the_guard():
+            record = await self.tui.current_record(self.session_value)
+            if record is None:
+                # The session ended under the owner while the box was open. Its detail is gone
+                # too, so the list is the only honest place to land — the same answer the bot's
+                # rename gives, for the same reason.
+                self.announce("That session is no longer available.", severity="warning")
+                await self.tui.show_sessions()
+                return
+            try:
+                async with self.awaiting("Renaming…"):
+                    await self.services.launcher.rename(record.session_id, label)
+            except Exception as error:
+                self.tui.report_store_failure(error, self)
+                return
+        # Not `render_detail` on the screen beneath: `go_back` pops and awaits that screen's
+        # own `on_reveal`, which re-reads this session from the store. Reaching past the pop to
+        # redraw would show the record this method already has, which is the one thing that
+        # cannot prove the write landed.
+        await self.tui.go_back()
 
 
 class InspectScreen(ChoiceScreen):

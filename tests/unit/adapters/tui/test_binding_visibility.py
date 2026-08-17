@@ -145,6 +145,7 @@ def _arrangements():
         ProjectReviewScreen,
         ProjectsScreen,
         RemoteControlConfirmModal,
+        RenameScreen,
         ResumeConfirmScreen,
         ResumeConversationsScreen,
         ResumeProfilesScreen,
@@ -172,6 +173,7 @@ def _arrangements():
         ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
         SessionsScreen: SessionsScreen,
         SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
+        RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
         InspectScreen: lambda: InspectScreen("some output"),
         ResumeProjectsScreen: ResumeProjectsScreen,
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
@@ -461,16 +463,29 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
 #: and take its own coverage with it — the tests would shrink to fit the regression and stay
 #: green. Verified: deleting the review screens' override passed every case until this list
 #: existed. A literal is the only form that can fail.
-_PROTECTS_WORK = {"LabelScreen", "NameScreen", "ReviewScreen", "ProjectReviewScreen"}
+_PROTECTS_WORK = {
+    "LabelScreen",
+    "NameScreen",
+    "RenameScreen",
+    "ReviewScreen",
+    "ProjectReviewScreen",
+}
 
 
 def test_exactly_these_positions_protect_work_in_flight() -> None:
     """Which screens have something to lose is a decision, so it is written down.
 
-    Two kinds: the two that gather typed text, and the two review steps that hold a whole
+    Two kinds: the three that gather typed text, and the two review steps that hold a whole
     flow's worth of choices with an empty entry. The second kind is the one a rule written
     against the input widget misses, which is what a stage review found by walking to Review
     with a label committed and pressing Ctrl+S.
+
+    `RenameScreen` joined the first kind rather than being argued out of it. It was written
+    declaring no commitment, on the reasoning that its `submit` mutates outright instead of
+    carrying the value into a further step — true, and not what the flag turns on:
+    `test_every_screen_that_commits_typed_text_declares_it` pins `entry_is_a_commitment ==
+    hasattr(screen, "submit")`, and a name being typed is discardable by a global key exactly
+    as a project name is.
     """
     # `"work_in_flight" in vars(screen)` was the original predicate and stopped seeing two of
     # these when the launch and project reviews were given a shared `GatheredSelectionScreen`
