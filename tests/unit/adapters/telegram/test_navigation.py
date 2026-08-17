@@ -14,6 +14,7 @@ from uuid import UUID
 import pytest
 from fake_telegram import FakeChat
 
+from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
@@ -35,6 +36,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 
 OWNER = 7
 CHAT = 11
@@ -77,6 +79,18 @@ def _record() -> SessionRecord:
         SessionState.RUNNING,
         datetime(2026, 8, 17, tzinfo=UTC),
     )
+
+
+def _activity_group() -> SessionGroup:
+    session = "0191f2c2-0000-7000-8000-00000000abcd"
+    activity = AgentActivity(
+        session_id=session,
+        kind=ActivityKind.COMPLETED,
+        detail="wrote the parser",
+        observed_at=datetime(2026, 8, 17, 12, tzinfo=UTC),
+        confidence=ActivityConfidence.REPORTED,
+    )
+    return SessionGroup(session, (activity,))
 
 
 def _resolved() -> ResolvedConversation:
@@ -199,6 +213,73 @@ async def test_the_navigation_bar_replaced_the_home_button_on_every_screen() -> 
     for text, rows in await _every_screen(chat, boundary):
         labels = {label for row in rows for label in row}
         assert "Home" not in labels, f"screen {text!r} still offers Home"
+
+
+class _LaunchingLauncher(_Launcher):
+    """Answers a launch, so the pending screen this test is about is actually drawn."""
+
+    async def launch(self, _command):
+        return self.record
+
+
+def _recording(chat: FakeChat) -> list[tuple[str, object]]:
+    """Every render this chat receives, in order, including ones later replaced.
+
+    The chat holds one bot message that each render overwrites, so a screen that exists
+    only until the next one lands — which is exactly what a pending screen is — leaves no
+    trace in the final state. Recording the edits is the only way to assert about it.
+    """
+    seen: list[tuple[str, object]] = []
+    original = chat.bot.edit_message_text
+
+    async def recording(**kwargs):
+        seen.append((str(kwargs.get("text", "")), kwargs.get("reply_markup")))
+        await original(**kwargs)
+
+    chat.bot.edit_message_text = recording
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_the_pending_screen_stays_barless_while_it_waits() -> None:
+    """A wait must not be pressable into a second launch, so it drops the whole keyboard —
+    and the bar is not exempt from that. `callback` renders it through `render_message`
+    directly rather than through `_message`, which is the mechanism, not an oversight."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_LaunchingLauncher(_record()),
+    )
+    rendered = _recording(chat)
+
+    await boundary.launch_command(chat.message_update("/launch"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Claude")), None)
+
+    pending = [markup for text, markup in rendered if "Launching" in text]
+    assert pending, f"no pending screen was drawn; saw {[text for text, _ in rendered]}"
+    for markup in pending:
+        # No *buttons*, rather than no markup: an empty keyboard still arrives as an empty
+        # `InlineKeyboardMarkup`, and what must not be pressable is a button.
+        buttons = [button for row in getattr(markup, "inline_keyboard", ()) for button in row]
+        assert buttons == [], f"the pending screen offered {[b.text for b in buttons]}"
+
+
+def test_an_activity_notification_stays_barless_and_carries_only_its_one_button() -> None:
+    """A notification is a message, not a screen. It is not somewhere the owner navigates
+    from, and it is deleted when its one button is pressed."""
+    group = _activity_group()
+
+    rendered = render_activity(
+        group, display="Demo · Claude · regular · #1", open_session="c1_open"
+    )
+
+    keyboard = [[button.text for button in row] for row in rendered.keyboard]
+    assert keyboard == [["Open session"]]
 
 
 @pytest.mark.asyncio
