@@ -8,6 +8,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -55,13 +56,16 @@ class Launcher:
 
     async def resume(self, command):
         self.commands.append(command)
-        return SessionRecord(
-            SessionId.new(),
-            command.project_id,
-            command.profile_id,
-            SessionDisplayIdentity("opaque-editor", "claude", "resumed", 1),
-            SessionState.RUNNING,
-            datetime.now(UTC),
+        return ResumeOutcome(
+            SessionRecord(
+                SessionId.new(),
+                command.project_id,
+                command.profile_id,
+                SessionDisplayIdentity("opaque-editor", "claude", "resumed", 1),
+                SessionState.RUNNING,
+                datetime.now(UTC),
+            ),
+            created=True,
         )
 
 

@@ -983,7 +983,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        record = await self.launcher.resume(
+        outcome = await self.launcher.resume(
             ResumeCommand(
                 resolved.summary.project_id,
                 resolved.summary.profile_id,
@@ -991,20 +991,28 @@ class PrivateBotBoundary:
                 token,
             )
         )
+        record = outcome.record
         if record.state is SessionState.FAILED:
+            # First, and regardless of who created it: a FAILED resume identity keeps its own
+            # message about resolving trust locally, which is Stage 3's deliberate decision
+            # (`bb23946`, repaired in `4f2cf88` after the guard was duplicated and the branch
+            # went dead). Pressing again on a conversation bound to a failed session is still
+            # answered by "go and look at it locally".
             return _reply_arguments(
                 self._message(
                     "<b>Resume did not become ready</b>\nOpen Sessions after local attention."
                 )
             )
-        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
-            # Checked *after* FAILED, which is a session that really was created and did
-            # not come up -- it keeps its own message about resolving trust locally.
-            # `SessionService._resume_locked` returns the *existing* record for a conversation
-            # already bound to one, whatever state it is in, rather than starting anything. So
-            # a conversation whose earlier session has since stopped answered "Session
-            # resumed … State: ended" over a session that had not moved. Say what actually
-            # happened instead.
+        if not outcome.created:
+            # Nothing was started: the conversation was already bound and the service handed
+            # back the existing record. This asks what the service **did**, where it used to
+            # ask what state the record was in — and no question about the state can answer
+            # it, because an already-bound RUNNING session and a resume that has just come up
+            # are indistinguishable. That is how "Session resumed" came to be printed over a
+            # live session this press had not touched, contradicting both the README and step
+            # 12 of the acceptance checklist. The states that used to reach here (ENDED,
+            # PRESERVED, STOP_REQUESTED, ORPHANED) still do, and RUNNING and STARTING now do
+            # too, which is the whole of the repair.
             return _reply_arguments(
                 self._message(
                     f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
@@ -1599,11 +1607,15 @@ class PrivateBotBoundary:
         redrawn in place: the render that draws this screen prunes what the previous keyboard
         left on the message, and the re-offered token is part of exactly that set.
         """
-        state = self.callbacks.resolve(
+        # A re-read, not a re-resolve: `callback` resolved this token for this message before
+        # it dispatched here, and `_release_attachment` and `_abandon_entry` have awaited since.
+        # A notification delivered in that gap rebinds the token, and re-asking the message
+        # question would refuse the confirmation screen for a force stop that is still legal.
+        # The same defect as `StopController.claim`, one window narrower.
+        state = self.callbacks.reread(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            message_id=message_id,
         )
         if state is None:
             return self._message("That action is no longer available.")
@@ -1945,7 +1957,6 @@ class PrivateBotBoundary:
                     # *repeats* — `claim_mutation` admits one caller per token, which makes
                     # the **second** press safe and says nothing about the first, unintended
                     # one. What the first press costs here is not what it costs on launch:
-                    # What the first press costs is still not what it costs on launch:
                     # `SessionService._resume_locked` binds a conversation to the session it
                     # creates. Migration 8 is what stops that being *permanent* — the unique
                     # index is partial on `state <> 'ended'`, so the conversation binds again
@@ -2010,9 +2021,14 @@ class PrivateBotBoundary:
             Button(
                 _profile_name(profile.profile_id),
                 # The mutation is claimed here rather than on a review screen that no longer
-                # exists. DEC-008 is what makes one press safe: a second press of the same
-                # button is dropped by the one-shot claim, never serviced into a second
-                # session, and Sub-plan 1 made that claim durable rather than process-local.
+                # exists. DEC-008 makes the *repeat* safe — a second press of the same button
+                # is dropped by the one-shot claim, never serviced into a second session, and
+                # Sub-plan 1 made that claim durable rather than process-local. It says
+                # nothing about the first, unintended press; what makes that acceptable here
+                # is specific to launch, namely that an unwanted launch creates a disposable
+                # session and costs a stop. The resume path thirty lines below carries the
+                # same correction, because assuming DEC-008 covered the first press is exactly
+                # the error that let a one-press resume ship and become a gate escalation.
                 self._callback(
                     "launch.profile", f"{project_id}|{profile.profile_id}", mutation=True
                 ),

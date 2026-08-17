@@ -8,6 +8,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -43,7 +44,7 @@ class FakeLauncher:
 
     async def resume(self, command):
         self.commands.append(command)
-        return type(
+        record = type(
             "Record",
             (),
             {
@@ -52,6 +53,11 @@ class FakeLauncher:
                 "display": type("Display", (), {"rendered": "opaque-editor · Claude · resumed #1"})(),
             },
         )()
+        # `created=True`: this double stands for a resume that really started a session, which
+        # is what this journey exercises. The `created=False` half — a conversation already
+        # bound, where the bot must not claim a resume — is pinned in
+        # `test_navigation.py::test_resume_without_review_answers_every_state_it_can_return`.
+        return ResumeOutcome(record, created=True)
 
 
 async def test_owner_resume_journey_uses_a_catalogue_reference_not_provider_input() -> None:

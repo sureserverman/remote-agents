@@ -71,9 +71,16 @@ async def test_resume_is_idempotent_by_provider_source_identity() -> None:
         ResumeCommand(command.project_id, command.profile_id, command.conversation, "resume-2")
     )
 
-    assert first.session_id == second.session_id
-    assert first.resume_source_id == "source-123"
-    assert first.display.mode == "resumed"
+    assert first.record.session_id == second.record.session_id
+    assert first.record.resume_source_id == "source-123"
+    assert first.record.display.mode == "resumed"
+    # The idempotency the assertions above pin was always true and always invisible to the
+    # caller: both calls answer with the same record, so a surface could not tell the one that
+    # created it from the one that merely found it. That is what let the bot print "Session
+    # resumed" over a session it had not started. The bit is asserted here, at the only place
+    # both halves of the pair exist at once.
+    assert first.created is True
+    assert second.created is False
 
 
 def test_resume_rejects_a_resolved_conversation_for_another_profile() -> None:

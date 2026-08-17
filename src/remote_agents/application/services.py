@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from remote_agents.application.commands import (
@@ -54,6 +55,24 @@ _STOP_EVENTS: dict[str, LifecycleEvent] = {
     UNKNOWN_SESSION: LifecycleEvent.GRACEFUL_STOP_NEVER_SENT,
     GRACEFUL_TIMEOUT: LifecycleEvent.GRACEFUL_STOP_TIMED_OUT,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeOutcome:
+    """A resume's record, and whether this call is what created it.
+
+    `created` cannot be derived from `record`. A conversation already bound to a RUNNING
+    session and a resume that has just come up both answer RUNNING, so a surface reading only
+    the record has no way to tell "I started this" from "this already existed and I started
+    nothing" — and both surfaces reported the second as "Session resumed".
+
+    It is a separate field rather than a sentinel state because the honest answer is about
+    *this call*, not about the session: the same record is a correct "created" answer to the
+    call that made it and a correct "already attached" answer to every call after.
+    """
+
+    record: SessionRecord
+    created: bool
 
 
 class SessionService:
@@ -108,7 +127,7 @@ class SessionService:
                 event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
                 return await self._store.record_event(session_id, event)
 
-    async def resume(self, command: ResumeCommand) -> SessionRecord:
+    async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         """Create one managed identity for a server-resolved provider conversation."""
         async with self._locks.operation():
             async with self._locks.for_conversation(
@@ -116,12 +135,21 @@ class SessionService:
             ):
                 return await self._resume_locked(command)
 
-    async def _resume_locked(self, command: ResumeCommand) -> SessionRecord:
-        """Create or return a durable resume identity while its conversation lock is held."""
+    async def _resume_locked(self, command: ResumeCommand) -> ResumeOutcome:
+        """Create or return a durable resume identity while its conversation lock is held.
+
+        Returns **what it did**, not only what it found. A surface cannot recover that from
+        the record: an already-bound RUNNING session and a resume that has just succeeded are
+        the same state, so a caller branching on `record.state` alone reported "Session
+        resumed" over a live session it had not touched. That was invisible for a stage
+        because every state the earlier tests covered — PRESERVED, ENDED, STOP_REQUESTED,
+        ORPHANED — happens to be one a *new* resume never returns, so the ambiguous pair was
+        exactly the pair nothing exercised.
+        """
         source_id = command.conversation.provider_conversation_id.value
         existing = await self._store.get_by_resume_source(command.profile_id, source_id)
         if existing is not None:
-            return existing
+            return ResumeOutcome(existing, created=False)
         if not await self._store.claim_idempotency_key(command.idempotency_key):
             raise DuplicateCommandError("resume callback was already handled")
         session_id = SessionId.new()
@@ -150,7 +178,7 @@ class SessionService:
                 command.conversation.provider_conversation_id,
             )
             event = LifecycleEvent.READY if observation.live else LifecycleEvent.STARTUP_ERROR
-            return await self._store.record_event(session_id, event)
+            return ResumeOutcome(await self._store.record_event(session_id, event), created=True)
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         return tuple(await self._store.list())

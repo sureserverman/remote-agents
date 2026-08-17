@@ -21,6 +21,7 @@ from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -756,7 +757,7 @@ class _ResumingLauncher(_Launcher):
 
     async def resume(self, command):
         self.commands.append(command)
-        return self.record
+        return ResumeOutcome(self.record, created=True)
 
 
 def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
@@ -775,10 +776,19 @@ def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
 
 
 @pytest.mark.asyncio
-async def test_resume_without_review_reaches_a_session_at_launch_s_depth() -> None:
+async def test_resume_without_review_makes_the_conversation_choice_the_act() -> None:
     """Launch stopped asking for a review when choosing the agent became the act. Choosing a
     named conversation is a *more* specific choice than choosing an agent, so resume was
-    charging an extra press for less ambiguity."""
+    charging an extra press for less ambiguity.
+
+    **Renamed from `..._reaches_a_session_at_launch_s_depth`, which claimed a comparison
+    nothing here makes** — and one that is false as stated: resume is three presses
+    (project, profile, conversation) against launch's two, because it has one more thing to
+    choose. The plan's own residual records that. What is actually asserted, and what the
+    stage was about, is that no *review* stands between the terminal choice and the act; a
+    name that promises a tap count invites the next reader to trust an assertion that was
+    never written, which is the over-claiming DEC-019 exists to police.
+    """
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary, launcher = _resume_boundary()
 
@@ -796,8 +806,12 @@ async def test_resume_without_review_reaches_a_session_at_launch_s_depth() -> No
 
 @pytest.mark.asyncio
 async def test_resume_without_review_drops_a_repeated_press(monkeypatch) -> None:
-    """DEC-008 is what makes one press safe without a confirmation in front of it: the
-    one-shot claim drops the second press rather than servicing it into a second session."""
+    """DEC-008 makes the *repeat* safe: the one-shot claim drops the second press rather than
+    servicing it into a second session. It says nothing about the first, unintended press —
+    the phrasing this docstring used to carry ("what makes one press safe") is the exact
+    error that let a one-press resume ship and become a gate escalation, and what actually
+    bounds the first press is migration 8, which frees the conversation once its session
+    ends."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary, launcher = _resume_boundary()
 
@@ -892,8 +906,9 @@ async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow(
 
 
 class _BoundLauncher(_Launcher):
-    """Answers resume with an already-terminal record, which is what the service does for a
-    conversation already attached to a session."""
+    """Answers resume with an existing record and `created=False`, which is what the service
+    does for a conversation already attached to a session: it starts nothing and hands back
+    what it found."""
 
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
@@ -904,7 +919,7 @@ class _BoundLauncher(_Launcher):
 
     async def resume(self, command):
         self.commands.append(command)
-        return self.record
+        return ResumeOutcome(self.record, created=False)
 
 
 @pytest.mark.asyncio
@@ -915,6 +930,15 @@ class _BoundLauncher(_Launcher):
         (SessionState.PRESERVED, "Not resumed"),
         (SessionState.STOP_REQUESTED, "Not resumed"),
         (SessionState.ORPHANED, "Not resumed"),
+        # The two the list omitted, and the two that matter most: RUNNING and STARTING are
+        # the *commonest* things `_resume_locked` hands back for an already-bound
+        # conversation, and they are the states a genuine resume also returns. Branching on
+        # the state alone therefore cannot tell "I started this" from "this was already
+        # attached and I started nothing" — which is why the bot claimed "Session resumed"
+        # over a live session it had not touched, contradicting both the README and step 12
+        # of the acceptance checklist.
+        (SessionState.RUNNING, "Not resumed"),
+        (SessionState.STARTING, "Not resumed"),
     ],
 )
 async def test_resume_without_review_answers_every_state_it_can_return(
@@ -1039,3 +1063,56 @@ async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> Non
     assert len(launcher.launched) == 1, "the launch ran"
     shown = chat.messages[boundary.view.anchor()].text
     assert "already run" not in shown, shown
+
+
+@pytest.mark.parametrize("action", ["graceful", "cleanup", "force.confirmed"])
+def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> None:
+    """The same race as the launch above, on the path that fix did not reach.
+
+    `ded49ab` removed the `message_id` match from `claim_mutation`, on the reasoning that
+    `resolve` had already enforced message binding "before any caller reaches here -- all six
+    call sites resolve first". That is true of five. `StopController.claim` performs its
+    **own** `resolve` (`stops.py:144`), and it runs on the far side of the pending-screen
+    round trip -- inside the very window the fix was written for -- so all three stops still
+    answered "That action has already run" for a stop that never ran.
+
+    Parametrized over the three stop actions rather than asserted for one, because
+    `_PENDING_NOTICES` carries all three and the defect is a property of the path, not of
+    the action travelling it. The force case is why this is a Critical rather than a nuisance:
+    the owner has just passed a second confirmation on an irreversible kill, is told it
+    already happened, and the pane survives.
+    """
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_Launcher(_record()),
+    )
+    # `cleanup` is offered for PRESERVED and `graceful` for RUNNING (`available_actions`), so
+    # each action is offered from the state that actually permits it rather than from one
+    # state that would silently mint nothing for two of the three.
+    record = _record()
+    if action == "cleanup":
+        record = replace(record, state=SessionState.PRESERVED)
+    if action == "force.confirmed":
+        token = boundary.stops.offer_confirmed_force(
+            record.session_id, record.profile_id, record.state, None, OWNER, CHAT
+        )
+    else:
+        token = boundary.stops.offer(
+            record.session_id, record.profile_id, record.state, None, action, OWNER, CHAT
+        )
+    assert token is not None, f"{action} was not offered for a {record.state.name} session"
+
+    anchor = 500
+    boundary.callbacks.bind_pending(CHAT, anchor)
+    # Exactly what `LiveView.move_to_bottom` does when a notification pushes the screen down.
+    boundary.callbacks.rebind(CHAT, anchor, anchor + 1)
+
+    request = boundary.stops.claim(token, OWNER, CHAT, anchor)
+
+    assert request is not None, (
+        f"{action} was refused after a rebind: the stop would answer "
+        '"That action has already run" for a stop that never ran'
+    )

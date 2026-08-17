@@ -87,6 +87,17 @@ class CallbackStateStore:
             return None
         return state
 
+    def reread(self, token: str, *, owner_id: int, chat_id: int) -> CallbackState | None:
+        """The process-local twin of the durable re-read, which gives the reason at length.
+
+        A twin that kept asking the message question would answer differently from the store
+        the service actually runs on, which is worse than either behaviour on its own.
+        """
+        state = self._states.get(token)
+        if state is None or owner_id != state.owner_id or chat_id != state.chat_id:
+            return None
+        return state
+
     def claim_mutation(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
         """The process-local twin of the SQLite claim, and it must agree about the message.
 
