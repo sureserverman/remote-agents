@@ -104,7 +104,11 @@ class SQLiteCallbackStateStore:
         rebinds a message's tokens inside exactly that gap whenever an activity notification
         arrives. The token is then bound to the message that replaced the pressed one, the
         second `resolve` compares it against the pressed one, and a stop the owner had just
-        confirmed answered "That action has already run" while the pane went on running.
+        confirmed answers "That action has already run" while the pane goes on running.
+
+        **Whenever a notification lands in that gap** — not on every press. The defect is a
+        race, and stating it unconditionally would misdescribe both how often it fires and how
+        it is reproduced.
 
         Owner and chat are still matched. They are the authorization half, they do not move
         under a rebind, and keeping them means this is not a bare token lookup.
@@ -138,10 +142,12 @@ class SQLiteCallbackStateStore:
         having resolved nothing themselves — they are downstream of the dispatcher's single
         resolve, which is what makes them safe. The sixth, `StopController.claim`, performed
         its **own** second `resolve` on the far side of the pending-screen round trip, so
-        removing the message check *here* left the identical defect alive one layer up, and
-        every stop still answered "That action has already run" while the pane went on
-        running. The claim had been checked by counting call sites rather than by asking when
-        each one runs. Both downstream readers now use `reread`, which is the method that
+        removing the message check *here* left the identical defect alive one layer up: all
+        three stops went on answering "That action has already run", for a stop that never
+        ran, whenever a notification landed inside that trip. The claim had been checked by
+        counting call sites rather than by asking when each one runs.
+
+        Both downstream readers now use `reread`, which is the method that
         exists to make "the dispatcher already asked this" a thing the code says rather than a
         thing a comment asserts.
 

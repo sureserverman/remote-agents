@@ -26,20 +26,36 @@ import pathlib
 _ADAPTERS = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents" / "adapters"
 _TELEGRAM = _ADAPTERS / "telegram"
 
-#: The renders that legitimately carry no navigation bar, as `module.py` -> why.
+#: Every `render_message` call in the package, as `module.py` -> (count, why).
 #:
-#: Both predate this plan: they were already calling `render_message` directly, which is why
-#: DEC-032 records the carve-outs as structural rather than as a suppression flag added for
-#: them. A new entry here is a deliberate decision to ship a barless screen and should be
-#: argued for in the decision register, not added to make this test pass.
-_PERMITTED_BYPASSES = {
-    "notifications.py": "an activity notification is a message, not a screen (DEC-031)",
-    "service.py": "the pending screen drops its keyboard so a wait cannot be pressed twice",
+#: The **counts** are the point, not just the module names. An earlier version of this file
+#: enumerated permitted modules and pinned only `service.py`'s count, which left
+#: `notifications.py` free to grow a second barless render — passing both tests while the
+#: manual `grep -c == 4` it replaced would have caught it (5 ≠ 4). A test that replaces a
+#: sweep must not be weaker than the sweep.
+#:
+#: Both bypasses predate this plan: they were already calling `render_message` directly, which
+#: is why DEC-032 records the carve-outs as structural rather than as a suppression flag added
+#: for them. Changing a number here is a deliberate decision to ship another barless render,
+#: and belongs in the decision register rather than in whatever edit made this test fail.
+_EXPECTED_CALLS = {
+    "notifications.py": (1, "an activity notification is a message, not a screen (DEC-031)"),
+    "service.py": (
+        2,
+        "`_message` itself, which is where the bar is appended, plus the pending screen, "
+        "which drops its keyboard so a wait cannot be pressed into a second launch",
+    ),
 }
 
 
 def _direct_callers() -> dict[str, int]:
-    """Count `render_message(...)` calls per module, excluding its own definition."""
+    """Count `render_message(...)` calls per module.
+
+    `presenters.py` does not appear: its `def render_message` is a definition, not an
+    `ast.Call`, so nothing there matches. (An earlier revision subtracted it defensively and
+    claimed to be "excluding its own definition" — both the subtraction and the sentence were
+    dead, and are gone rather than left to imply a guard that was never running.)
+    """
     found: dict[str, int] = {}
     for path in sorted(_TELEGRAM.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -62,25 +78,31 @@ def _direct_callers() -> dict[str, int]:
     return found
 
 
-def test_only_the_two_permitted_renders_bypass_the_navigation_bar() -> None:
-    callers = _direct_callers()
+def test_every_render_message_call_in_the_package_is_an_accounted_for_one() -> None:
+    """The whole map, not just its keys — a new call in an already-listed module is the escape.
 
-    unexpected = set(callers) - set(_PERMITTED_BYPASSES) - {"presenters.py"}
-    assert not unexpected, (
-        f"{sorted(unexpected)} call presenters.render_message directly, so the screens they "
-        "draw carry no navigation bar. Route them through PrivateBotBoundary._message, or — "
-        "if a barless render is genuinely intended — add the module to _PERMITTED_BYPASSES "
-        "with its reason and record the decision."
+    Asserted as one dict comparison rather than as a membership check plus one pinned count,
+    because those two together still let `notifications.py` grow a second barless render. The
+    grep this replaces counted every call in the package, and a structural test that replaces
+    a sweep has to be at least as strong as the sweep.
+    """
+    expected = {module: count for module, (count, _why) in _EXPECTED_CALLS.items()}
+
+    assert _direct_callers() == expected, (
+        "the set of direct presenters.render_message calls changed. Each one draws a screen "
+        "that carries NO navigation bar, so a new or moved call is a screen that has escaped "
+        "PrivateBotBoundary._message. Route it through _message, or — if a barless render is "
+        "genuinely intended — update _EXPECTED_CALLS with its reason and record the decision. "
+        f"Expected {expected}, found {_direct_callers()}."
     )
 
 
 def test_the_bar_is_built_in_exactly_one_place() -> None:
     """`_message` is the sole builder of a closing row, which is what makes the bar universal.
 
-    Pinned by counting `render_message` calls inside `service.py`: one is `_message` itself,
-    and one is the pending screen. A third would mean some other method in the boundary had
-    started composing its own screen, which is how the bar stops being universal without any
-    single change looking wrong.
+    Kept separate from the map above so the failure *reads* differently: this one says "some
+    other method in the boundary started composing its own screen", which is how the bar stops
+    being universal without any single change looking wrong.
     """
     calls = _direct_callers().get("service.py", 0)
 

@@ -906,12 +906,20 @@ async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow(
 
 
 class _BoundLauncher(_Launcher):
-    """Answers resume with an existing record and `created=False`, which is what the service
-    does for a conversation already attached to a session: it starts nothing and hands back
-    what it found."""
+    """Answers resume with an existing record and, by default, `created=False` — which is what
+    the service does for a conversation already attached to a session: it starts nothing and
+    hands back what it found.
 
-    def __init__(self, record: SessionRecord) -> None:
+    `created` is a parameter rather than a constant because the two halves need different
+    doubles and one of them had none. A FAILED record with `created=True` is a resume that
+    really was created and whose pane did not come up, and it is a *different* screen from a
+    FAILED record with `created=False`; nothing stood one up, so the FAILED guard could have
+    been deleted with the suite still green.
+    """
+
+    def __init__(self, record: SessionRecord, *, created: bool = False) -> None:
         self.record = record
+        self.created = created
         self.commands: list[object] = []
 
     async def list_sessions(self):
@@ -919,7 +927,7 @@ class _BoundLauncher(_Launcher):
 
     async def resume(self, command):
         self.commands.append(command)
-        return ResumeOutcome(self.record, created=False)
+        return ResumeOutcome(self.record, created=self.created)
 
 
 @pytest.mark.asyncio
@@ -1013,6 +1021,36 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
 
     assert "Not resumed" in str(result["text"])
     assert "Session resumed" not in str(result["text"])
+
+
+@pytest.mark.asyncio
+async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -> None:
+    """The half of FAILED that no double stood up, and the one the guard exists for.
+
+    `_resume_reply` checks FAILED *before* `created`, so a resume this press really did create
+    and whose pane did not come up gets "Resume did not become ready" rather than the
+    attached-elsewhere screen. Every other FAILED assertion in this file runs against
+    `_BoundLauncher`'s default `created=False`, so the guard could have been deleted outright
+    with the suite staying green — which is the dead-branch class `4f2cf88` already hit once in
+    this plan, arriving from the other side.
+    """
+    failed = replace(_record(), state=SessionState.FAILED)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_BoundLauncher(failed, created=True),
+        conversations=ConversationService(_Catalogue(_resolved())),
+    )
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+
+    assert "Resume did not become ready" in text
+    assert "Not resumed" not in text, "a session this press created is not 'attached elsewhere'"
+    assert "Session resumed" not in text
 
 
 @pytest.mark.asyncio
@@ -1116,3 +1154,39 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
         f"{action} was refused after a rebind: the stop would answer "
         '"That action has already run" for a stop that never ran'
     )
+
+
+def test_the_force_confirmation_survives_a_notification_arriving_while_it_opens() -> None:
+    """The second `reread` call site, which the stop test above does not reach.
+
+    `_force_confirm_reply` is the other caller that used to re-`resolve` downstream of the
+    dispatcher. Its window is narrower than a stop's — a bare `force` carries no pending
+    notice, so there is no Telegram round trip — but it is not zero: `_release_attachment` and
+    `_abandon_entry` both await ahead of it, and a notification delivered there rebinds the
+    token just the same. Pinned separately because a fix verified only through
+    `StopController.claim` would leave this one to be rediscovered.
+    """
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_Launcher(_record()),
+    )
+    record = _record()
+    token = boundary.stops.offer(
+        record.session_id, record.profile_id, record.state, None, "force", OWNER, CHAT
+    )
+    assert token is not None
+
+    anchor = 600
+    boundary.callbacks.bind_pending(CHAT, anchor)
+    boundary.callbacks.rebind(CHAT, anchor, anchor + 1)
+
+    reread = boundary.callbacks.reread(token, owner_id=OWNER, chat_id=CHAT)
+
+    assert reread is not None, (
+        "the force confirmation screen would answer 'That action is no longer available.' "
+        "for a force stop that is still perfectly legal"
+    )
+    assert reread.action == "force"
