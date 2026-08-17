@@ -12,10 +12,13 @@ either: they drive a *sample* of screen families through the boundary, and `_eve
 own docstring lists the families it excludes, so a new bypassed screen is exactly the thing a
 sample cannot see.
 
-So the enumeration lives here instead, as a test that fails on the fourth caller. It is
-deliberately about *call sites* rather than about rendered output: the defect it guards is a
-screen that never routes through `_message` at all, which no assertion about screens that do
-can reach.
+So the enumeration lives here instead, as a test that fails on **any** change to the map of
+call sites — a new module calling `render_message`, or an existing one calling it one more
+time. (It first read "fails on the fourth caller", which described a weaker earlier form that
+pinned module names and a single count, and would have let `notifications.py` grow a second
+barless render untouched.) It is deliberately about *call sites* rather than about rendered
+output: the defect it guards is a screen that never routes through `_message` at all, which no
+assertion about screens that do can reach.
 """
 
 from __future__ import annotations

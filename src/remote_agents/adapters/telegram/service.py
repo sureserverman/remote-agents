@@ -2236,9 +2236,15 @@ def _session_scope(entity_id: str) -> str:
     """The session an entity id is about, for the composite ids some actions carry.
 
     A stop token names `session:profile` and a remote-control token names `session|state`.
-    Everything else is left whole — a project id has no session in it, and will simply never
-    match one. (This read "a project id or `home`"; no `home` entity id has been minted since
-    Stage 2, so the example named something that no longer exists.)
+    Everything else is left whole — a project id, or the `home` a pre-upgrade `nav.home` or
+    `nav.refresh` token still carries, has no session in it and will simply never match one.
+
+    *A close-out edit "corrected" this to drop `home`, on the grounds that nothing has minted
+    such an entity id since Stage 2. Minting is not the same as reaching: those tokens are
+    durable in SQLite and outlive the deploy that stopped drawing them — which is the whole
+    of DEC-011 and the reason `_reply_for` keeps the handler — so `home` still arrives here
+    and `test_live_service.py:941` pins exactly that. The example was right; the correction
+    was the thing taken from a premise rather than read off the code.*
     """
     for separator in (":", "|"):
         entity_id = entity_id.split(separator, 1)[0]

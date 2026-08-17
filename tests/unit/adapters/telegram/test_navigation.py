@@ -1177,7 +1177,8 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
     )
 
 
-def test_the_force_confirmation_survives_a_notification_arriving_while_it_opens() -> None:
+@pytest.mark.asyncio
+async def test_the_force_confirmation_survives_a_notification_arriving_while_it_opens() -> None:
     """The second `reread` call site, which the stop test above does not reach.
 
     `_force_confirm_reply` is the other caller that used to re-`resolve` downstream of the
@@ -1204,10 +1205,17 @@ def test_the_force_confirmation_survives_a_notification_arriving_while_it_opens(
     boundary.callbacks.bind_pending(CHAT, anchor)
     boundary.callbacks.rebind(CHAT, anchor, anchor + 1)
 
-    reread = boundary.callbacks.reread(token, owner_id=OWNER, chat_id=CHAT)
+    # Through the real entry point. An earlier version of this test called
+    # `callbacks.reread` directly and asserted its semantics — which are covered elsewhere —
+    # while its docstring claimed to pin this call site. It would have stayed green through a
+    # "defence in depth" edit restoring `resolve(..., message_id=...)` at service.py:1621,
+    # which is the one change it exists to catch.
+    rendered = await boundary._force_confirm_reply(token, anchor)
 
-    assert reread is not None, (
-        "the force confirmation screen would answer 'That action is no longer available.' "
-        "for a force stop that is still perfectly legal"
+    assert "no longer available" not in rendered.text, (
+        "the force confirmation refused a force stop that is still perfectly legal, because a "
+        "notification rebound its token between the dispatcher's resolve and this screen"
     )
-    assert reread.action == "force"
+    assert "Force stop" in rendered.text
+    labels = [button.text for row in rendered.keyboard for button in row]
+    assert "Force stop" in labels and "Cancel" in labels
