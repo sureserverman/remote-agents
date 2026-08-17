@@ -171,12 +171,40 @@ on the first bump attempt and was closed before the commit.
 
 ### 1.7 The deploy
 
+Run 2026-08-17, at the owner's explicit approval for both the backup and the restart.
+
 ```
-$ <backup command and output — recorded at deploy time>
+$ cp -p sessions.sqlite3 sessions.sqlite3.pre-bot-navigation-20260817T1826Z.bak
+   backup: integrity_check ok · schema_version 6 · 185 sessions · 675 events
+
 $ systemctl --user restart remote-agents.service
 $ systemctl --user is-active remote-agents.service
+   active
+
+   after the restart: schema_version 8 · 185 sessions · 675 events
+                      remote_control_state column present
+                      2 nav.home tokens still live
+
 $ uv run --locked remote-agents doctor --json
+   healthy: True
+     core healthy · profiles healthy · service healthy
+     store healthy · telegram healthy · tmux healthy
+   config readable, nothing invalid, nothing missing
+
+$ python -c "import remote_agents; print(remote_agents.__version__)"
+   0.12.0
 ```
+
+The production jump was **v6 → v8 in one restart**, applying both of this release's migrations
+against 185 real sessions. Row and event counts are identical either side of it, which is the
+claim migration 7's "no backfill" and migration 8's index rebuild both rest on. Task 3.2 had
+rehearsed this on a copied database; this is the same result on the real one.
+
+**The two `nav.home` tokens survived the migration and the restart**, which is what keeps Part 2
+step 1 runnable. That was the reason for reading them *before* the deploy: had they not
+survived, the check would have been unrunnable and nobody would have known why.
+
+`journalctl --user -u remote-agents.service` shows a clean stop and start with no errors.
 
 **Note on `doctor` before the restart:** it reports `store: degraded / database_unavailable`,
 and that is correct rather than a fault. `database_is_ready` compares the file's schema version
