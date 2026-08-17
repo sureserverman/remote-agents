@@ -991,28 +991,6 @@ class PrivateBotBoundary:
                 token,
             )
         )
-        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
-            # `SessionService._resume_locked` returns the *existing* record for a conversation
-            # already bound to one, whatever state it is in, rather than starting anything. So
-            # a conversation whose earlier session has since stopped answered "Session
-            # resumed … State: ended" over a session that had not moved. Say what actually
-            # happened instead.
-            return _reply_arguments(
-                self._message(
-                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
-                    f"This conversation is already attached to that session, which is now "
-                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
-                    "again is not something this tool can do.",
-                    (
-                        (
-                            Button(
-                                "Details",
-                                self._callback("session.detail", str(record.session_id)),
-                            ),
-                        ),
-                    ),
-                )
-            )
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -1030,9 +1008,10 @@ class PrivateBotBoundary:
             return _reply_arguments(
                 self._message(
                     f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
-                    f"This conversation is already attached to that session, which is now "
-                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
-                    "again is not something this tool can do.",
+                    f"This conversation is attached to that session, which is now "
+                    f"{state_word(record.state, record.orphan_provenance)}. It becomes "
+                    "resumable again once that session has ended — open it to see what it "
+                    "offers.",
                     (
                         (
                             Button(
@@ -1966,11 +1945,12 @@ class PrivateBotBoundary:
                     # *repeats* — `claim_mutation` admits one caller per token, which makes
                     # the **second** press safe and says nothing about the first, unintended
                     # one. What the first press costs here is not what it costs on launch:
+                    # What the first press costs is still not what it costs on launch:
                     # `SessionService._resume_locked` binds a conversation to the session it
-                    # creates, that binding is a UNIQUE index, and no code deletes a session
-                    # row — so an unwanted resume permanently attaches the conversation to a
-                    # session the owner then has to keep or lose. Recorded as an open
-                    # decision rather than papered over here.
+                    # creates. Migration 8 is what stops that being *permanent* — the unique
+                    # index is partial on `state <> 'ended'`, so the conversation binds again
+                    # once its session has ended. An unwanted resume therefore costs a
+                    # session to stop, not a conversation forever.
                     self._callback(
                         "resume.confirm", str(summary.reference), mutation=True
                     ),

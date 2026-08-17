@@ -908,6 +908,67 @@ class _BoundLauncher(_Launcher):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        (SessionState.FAILED, "Resume did not become ready"),
+        (SessionState.PRESERVED, "Not resumed"),
+        (SessionState.STOP_REQUESTED, "Not resumed"),
+        (SessionState.ORPHANED, "Not resumed"),
+    ],
+)
+async def test_resume_without_review_answers_every_state_it_can_return(
+    state: SessionState, expected: str
+) -> None:
+    """Every state `_resume_locked` can hand back, not just the one that was easy to build.
+
+    The gap this closes is specific: the FAILED branch was shadowed by a duplicated guard and
+    nothing noticed, because no test asserted the FAILED-on-resume message. A resume that
+    really did create a session which failed to come up was being told its conversation was
+    attached to something it could not recover — when `refresh_readiness` and a force stop are
+    both real recoveries.
+    """
+    record = replace(_record(), state=state)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_BoundLauncher(record),
+        conversations=ConversationService(_Catalogue(_resolved())),
+    )
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    result = await boundary._resume_reply("c-0123456789abcdef", token, 1)
+
+    assert expected in str(result["text"])
+    assert "Session resumed" not in str(result["text"])
+
+
+@pytest.mark.asyncio
+async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> None:
+    """Migration 8 releases the conversation once its session ends, so the message must not
+    say recovery is impossible — it was false for PRESERVED, which one Clean up releases."""
+    record = replace(_record(), state=SessionState.PRESERVED)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_BoundLauncher(record),
+        conversations=ConversationService(_Catalogue(_resolved())),
+    )
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    text = str((await boundary._resume_reply("c-0123456789abcdef", token, 1))["text"])
+
+    assert "not something this tool can do" not in text
+    assert "once that session has ended" in text
+
+
+@pytest.mark.asyncio
 async def test_resume_without_review_says_when_nothing_was_started() -> None:
     """`_resume_locked` returns the *existing* record for a conversation already bound to a
     session, whatever state it is in — it does not start anything. Reporting that as
