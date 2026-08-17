@@ -54,8 +54,11 @@ commands; the bot description and short description are checked against the revi
 ## Telegram acceptance checklist
 
 Begin with `/start`. Use only the configured private chat. It lands on the sessions list,
-whose heading carries the Active and Preserved counts, and which closes — like every screen —
-with the fixed `Sessions · Launch · Resume` bar. There is no Home screen and no Refresh: every
+whose heading carries the total, active, and preserved counts — the total because a row can be
+starting, stop-requested, failed, or orphaned and so in neither of the other two buckets — and
+which closes, like every screen, with the fixed `Sessions · Launch · Resume` bar. That bar
+carries no `Resume` on a host that wired no conversation service. There is no Home screen and
+no Refresh: every
 route back to a screen re-reads what it shows, so the counts and the session list are current
 on arrival. `/launch`, `/resume`, `/sessions`, and `/help` offer the same owner-only entry
 points from Telegram's command menu; `/start` stays registered but is not listed, because it
@@ -81,8 +84,10 @@ lands where `/sessions` lands.
    reaches ENDED in that single action with its pane gone from
    `tmux -L remote-agents list-panes -a`. Stopping the *last* running session should still show
    the outcome, above an empty list.
-6. For a separate active session, use Force stop and verify the confirmation names the session
-   and offers Cancel before the kill. Cancel it once, then confirm it.
+6. For a separate active session, use Force stop and verify the confirmation names the session,
+   says what is lost, and explains the state it is in. The kill is the first row and Cancel sits
+   between it and the navigation bar, so the button adjacent to the bar is the harmless one.
+   Cancel it once, then confirm it.
 7. With more sessions than one page holds, page through Sessions with Previous and Next, open a
    row from a page other than the first, and verify Back returns to that page rather than to
    the top of the list. The navigation bar's Sessions button and `/sessions` still open the
@@ -95,15 +100,29 @@ lands where `/sessions` lands.
    remaining managed session has the same identity.
 10. Use `tmux -L remote-agents list-panes -a` only for local read-only confirmation. Never use
    the default tmux server for this service.
-11. For a live managed Claude session only, open Details and confirm Enable or Disable Remote
-    Control. If its state is unknown, do not retry remotely; inspect and recover locally. Never
-    share the resulting Remote Control URL or a pane capture outside the owner workflow.
+11. For a live managed Claude session only, open Details. It offers the one Remote Control
+    direction the session's last observed state leaves open — Enable for one known inactive,
+    Disable for one known active — and both only while nothing has been observed for it, which
+    is how a session nobody has toggled and a record predating this release both read. Confirm
+    the change on the step that follows. The observed result is stored with the session, so the
+    detail offers the opposite direction next time, on this surface and in the terminal, and
+    still does after a service restart. A toggle whose result comes back unknown stores nothing
+    and leaves both directions offered: if its state is unknown, do not retry remotely; inspect
+    and recover locally. Never share the resulting Remote Control URL or a pane capture outside
+    the owner workflow.
 12. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
-    provider title or resume description when supplied, never a provider ID. The bot does not
-    scan, control, or adopt arbitrary local agent processes; use only provider-catalogued
-    conversations to create a new managed session.
-13. Open Add Project. The area buttons must name only eligible existing directories under the
-    configured `dev_root`, excluding hidden ones, `archive`, and `archives`. Enter a rejected name
+    provider title or resume description when supplied, never a provider ID. Pressing one
+    resumes it on that press — there is no review screen in front of it, exactly as there is
+    none in front of a launch — and a second press of the same button is dropped rather than
+    starting a second session. Press a conversation whose earlier session is still live and
+    verify the bot reports what that conversation is attached to and what became of it rather
+    than claiming a resume; stop that session, then resume the same conversation again and
+    verify it starts a new one. The bot does not scan, control, or adopt arbitrary local agent
+    processes; use only provider-catalogued conversations to create a new managed session.
+13. Open Launch and, from its project list, Add Project — it sits beside Search there, and the
+    resume project list never offers it. The area buttons must name only eligible existing
+    directories under the configured `dev_root`, excluding hidden ones, `archive`, and
+    `archives`. Enter a rejected name
     such as `New Thing` and confirm it is refused with no directory created, then enter a valid
     name and confirm that Review shows the area and the name before the mutation. Cancel at Review
     and verify nothing was created or appended. Repeat and confirm, then verify that the new
@@ -605,9 +624,9 @@ moment.
 
 Each process also holds its own catalogue and its own profile probe, both taken when it starts. A
 project created in the terminal is invisible to a running service until it re-reads — opening
-Launch or Resume re-reads the catalogue, as does `/launch`, so no Refresh press is needed for
-this — and one created from Telegram or the command line is invisible in
-a running terminal until it re-reads the catalogue — press Ctrl+R on the project list, the
+Launch or Resume from the navigation bar re-reads the catalogue, as do `/launch` and `/resume`,
+so no Refresh press is needed for this — and one created from Telegram or the command line is
+invisible in a running terminal until it re-reads the catalogue — press Ctrl+R on the project list, the
 resume project list, or use Add Project, which re-reads on the way out. Ctrl+R re-reads only
 what the screen it is pressed on shows, and the catalogue is what those two show; on the
 sessions view it re-runs the readiness pass and the session list instead. No screen's Refresh
@@ -651,9 +670,12 @@ uv run --locked remote-agents tui
    same action and the session reaches ENDED, so its output is not left to read. Clean up is
    therefore the answer to a pane that died on its own, which reconciliation preserves for
    inspection until the owner closes it. Claude Remote Control is offered only for a RUNNING
-   Claude session. The record is read again and the policy re-checked at the moment the action is
-   issued, so an action that has become illegal since the list was drawn is explained rather than
-   attempted.
+   Claude session, and only in the one direction its last observed state leaves open — both
+   directions appear only while nothing has been observed for that session. That answer comes
+   from the same shared policy Telegram reads, so the two surfaces cannot disagree about which
+   direction a session is offered. The record is read again and the policy re-checked at the
+   moment the action is issued, so an action that has become illegal since the list was drawn is
+   explained rather than attempted.
 5. Force stop is confirmed a second time, on a screen of its own that names the session and
    states that the kill is immediate, cannot be undone, and loses whatever the agent has not
    saved. Cancel is the first entry and the highlighted one, so a stray or repeated enter aborts;
@@ -681,7 +703,12 @@ uv run --locked remote-agents tui
 Ctrl+O opens Resume, which starts a new managed session continuing a saved conversation, and it
 is offered only for profiles that report themselves resume-capable on this host. When a session
 cannot be salvaged, force stopping it and resuming its conversation into a fresh session is the
-local recovery route that keeps the prior work.
+local recovery route that keeps the prior work. That route depends on a conversation being bound
+only to a session that has not ended: force stop takes the session to ENDED, which frees the
+conversation to be resumed again. While the earlier session is still live, resuming the same
+conversation returns that session rather than starting a second one — on either surface — so
+end it first. The ended record keeps the conversation it was resumed from, so the audit trail
+still says what was resumed.
 
 A stop issued from the terminal reaches a session the service launched, and one issued from
 Telegram reaches a session the terminal launched, because the profile a graceful stop needs is

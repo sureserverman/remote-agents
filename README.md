@@ -48,11 +48,14 @@ uv run --locked remote-agents doctor --json | python -m json.tool
 The configured owner sees `/launch`, `/resume`, `/sessions`, and `/help` in Telegram's command
 menu, which names the same places the navigation bar does. `/start` stays registered because
 Telegram requires it of every bot, and lands where `/sessions` lands: the paginated list of
-current managed sessions, whose heading carries the active and preserved counts. `/launch`
-opens the paginated project list and `/resume` its resume counterpart. There is no Home
-screen — every screen closes with a fixed `Sessions · Launch · Resume` row, so the three
-destinations are one press away from wherever you are rather than one press away from a
-dashboard in front of them. The row marks the flow you are standing in. `/help` names the actions this deployment actually offers. Search, renaming, and
+current managed sessions, whose heading carries the total, active, and preserved counts.
+`/launch` opens the paginated project list and `/resume` its resume counterpart.
+There is no Home screen — every screen closes with a fixed `Sessions · Launch · Resume` row,
+so the three destinations are one press away from wherever you are rather than one press away from a
+dashboard in front of them. The row marks the flow you are standing in, and carries no
+`Resume` at all on a host that wired no conversation service; `/resume` stays in the menu
+there, because Telegram sets that menu once for the chat rather than per screen, and answers
+that resuming is unavailable. `/help` names the actions this deployment actually offers. Search, renaming, and
 project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
 leaving an input step stranded. Choosing an agent launches the session immediately — there is no
 review step and no label to supply first — and a session is named afterwards, or never, with
@@ -87,8 +90,10 @@ is read-only captured output, never an input channel.
 For safe stop behavior, choose Stop and close: the agent exits on its own terms and its pane is
 removed in the same action, so the session ends in one step and its output is not kept. Clean up
 remains for a session whose pane died on its own, which is preserved for inspection until you
-close it. Force stop names the session and what will be lost, offers Cancel first, and is for a
-live session that cannot exit gracefully. Each of them reports what the session actually did, and
+close it. Force stop names the session, says what will be lost, and explains the state it is in;
+it offers the kill first with Cancel between that button and the navigation bar, so the row
+nearest the habitual tap target is the harmless one. It is for a live session that cannot exit
+gracefully. Each of them reports what the session actually did, and
 a graceful stop that did not take effect says which of two unrelated things went wrong: the stop
 was never sent, because no agent profile could be resolved on this host, or no clean exit was
 seen before the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
@@ -99,9 +104,19 @@ Resume uses a server-resolved catalogue selection. It may show a bounded provide
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
 title is available); provider IDs and transcript output remain server-side. The bot does not scan,
 identify, terminate, or adopt arbitrary local agent processes. Only provider-catalogued
-conversations can be resumed into a new managed tmux pane.
+conversations can be resumed into a new managed tmux pane. Choosing a conversation resumes it
+on that press: the bot reviews neither a launch nor a resume, so nothing stands between the
+choice and the session, and a second press of the same button is dropped rather than serviced
+into a second session. The local terminal surface deliberately keeps its resume review, and
+that difference between the two surfaces is intended rather than an omission. A conversation
+is attached to the session it starts and cannot be resumed again while that session is alive —
+pressing it then reports what it is attached to and what became of it, rather than claiming a
+resume — and it becomes resumable once that session has ended. The ended record keeps the
+conversation it was resumed from, so the history still answers what was resumed.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
-available only on a live managed Claude pane, requires a second confirmation, and uses the single
+available only on a live managed Claude pane, offers the one direction its last observed state
+leaves open — Enable for a session known inactive, Disable for one known active, and both only
+while nothing has been observed for it — requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
 The service also speaks first when a managed agent stops working: it has
@@ -219,7 +234,9 @@ no record of it — offers Force stop and nothing else, while one whose pane evi
 ambiguous offers none, as does any record predating the column that stores the difference.
 
 Both surfaces spell those actions the same way, from one map beside the policy that decides which
-of them to offer. The stops share a single row under the read-only actions, which each get a row
+of them to offer. Claude Remote Control's two directions come from that same place, so which of
+Enable and Disable a session offers is one answer both surfaces read rather than two that happen
+to agree. The stops share a single row under the read-only actions, which each get a row
 of their own: Telegram has no separator, so shape is the only thing distinguishing an action that
 ends a session from one that reads it.
 
@@ -229,7 +246,9 @@ mistaken for a surface that forgot to draw the entry. Inspect output renders the
 through the same sanitizer the bot uses, in a scrollable pane rather than under Telegram's message
 bound, and refuses output containing a NUL byte for the reason the bot refuses it: a pane emitting
 NUL is not rendering text, and printing it can corrupt the terminal. Claude Remote Control appears
-only on a running Claude pane. It and Force stop each move to a step of their own before anything
+only on a running Claude pane, offering the one direction its last observed state leaves open
+exactly as Telegram does; the observation is stored with the session, so it holds across a restart
+and across the other surface. It and Force stop each move to a step of their own before anything
 is issued, with Cancel first and resting under the cursor, so going through with either means
 choosing a different row on purpose rather than repeating the keystroke that opened the detail.
 
