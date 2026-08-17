@@ -12,15 +12,15 @@ Plan: `2026-08-17-bot-navigation-redesign-plan.md`, Stage 4 gate and close-out
 > the service was restarted onto the final code before this was signed off. An acceptance
 > document that quietly keeps its first green is worse than none.
 
-> **Status: PREPARED, NOT YET RUN.** Part 1 is recorded from its own output and is complete.
-> **Part 2 is empty on purpose** — it is the half only the owner can witness, and no line in it
-> has been filled in, guessed at, or written in advance of the owner's observation. A document
-> that arrived with both halves already answered would be worth nothing, which is the standard
-> `docs/acceptance-2026-08-11.md` sets and this one keeps.
+> **Status: RUN AND ACCEPTED, 2026-08-17.** Part 1 is recorded from its own output. Part 2 was
+> performed by the owner against the real Telegram client and the real service, and returned a
+> single blanket confirmation — "everything is fine" — across all seven steps. It is recorded
+> as one line across those steps rather than as seven readings that were never separately made,
+> which is the standard `docs/acceptance-2026-08-11.md` sets and this one keeps.
 >
 > The session that prepared this document is the session that wrote the code, which is exactly
 > the party whose observations are worth least. So Part 1 quotes commands and their output
-> rather than summarising them, and Part 2 is left for the owner.
+> rather than summarising them, and Part 2 says no more than the owner said.
 >
 > **What the machine half cannot establish, and Part 2 exists for:** that Telegram renders the
 > three-button bar legibly on a phone rather than wrapping it; that the bar reads as *navigation*
@@ -129,6 +129,17 @@ This was checked *before* the restart deliberately: the check needs a message pr
 deploy, and confirming afterwards that none had survived would have left the gate with no way
 to run it.
 
+> **`980` did not stay `980`, and that is a finding rather than a typo.** That token belongs to
+> the **live view**, which `LiveView.move_to_bottom` re-sends — and `rebind`s — every time a
+> notification pushes the screen down. By the time the owner went looking it was on **984**, and
+> the instruction naming 980 sent them to a message that did not exist. The durable half is the
+> token, not the id.
+>
+> The static `784` from 2026-08-15 is the one that stays put, because nothing has moved it.
+>
+> **Any acceptance instruction that identifies a live-view message by id has this defect.** Name
+> it by position — "the bot's most recent message" — or use a message the live view does not own.
+
 ### 1.5 The full suite
 
 ```
@@ -225,58 +236,87 @@ restart is run *before* the doctor check rather than after.
 
 ## Part 2 — what only the owner can witness
 
-**Unrun.** Each step records the owner's own observation, in the owner's words. Nothing here is
-filled in by the session that wrote the code.
+> **RUN AND ACCEPTED, 2026-08-17.** Performed by the owner against the real Telegram client and
+> the real service running `fc9d614`, and reported as a **single blanket confirmation** —
+> "everything is fine" — across the whole seven-step sequence, **not** as seven separate
+> readings.
+>
+> That distinction is preserved rather than smoothed over, for the reason
+> `docs/acceptance-2026-08-11.md` gives and `docs/acceptance-2026-08-16-notification-grouping.md`
+> repeats: what each step records is the owner's *coverage* of it, and no per-step observation
+> has been invented. The seven steps below therefore share one line rather than carrying seven.
+>
+> **One correction was needed mid-run and is recorded because it is a real finding about the
+> instructions, not about the bot.** Step 1 was first given with a fixed message id. That was
+> wrong: the message carrying the legacy `Home` button is the **live view**, which the service
+> re-sends to the bottom of the chat whenever a notification arrives, so its id changes. It had
+> moved from 980 to 984 between the id being read and the owner looking for it. The owner
+> reported "there is no such message", which was correct. Re-issued as "the bot's most recent
+> message, at the bottom of the chat", with the static 2026-08-15 19:56 message as a fallback.
+> **Any future acceptance doc naming a live-view message by id has the same defect.**
 
-Run these in the configured private chat, against the restarted service.
+Run in the configured private chat, against the restarted service.
 
 1. **The legacy token — do this first, and do not press Home before the restart.**
    Scroll back to a bot message still showing a `[Back] [Home]` row (message 980, sent today at
    17:22 UTC, is the most recent; 784 from 2026-08-15 is the fallback). Press its **Home**
    button. It must land on the sessions list rather than erroring or doing nothing.
    *This is the one behaviour no fake backend can prove.*
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 2. **`/start` lands on Sessions.** Send `/start`. It shows the sessions list, page 1, with the
    total / active / preserved counts in its heading — whether or not anything is running.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 3. **The bar reaches all three flows from a session detail.** Open any session's detail, then
    use only bar buttons to reach Launch, then Resume, then back to Sessions.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 4. **The bar works from a confirmation screen and from a search step.** Open the force-stop
    confirmation on a session and leave it via a bar button without confirming. Then start a
    Search step and leave *it* via a bar button; the reply-prompt input box must disappear rather
    than being left stranded in the chat.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 5. **A resume completes in the shortened path.** From Resume, choose a conversation. It must
    start the session on that press, with no review screen in front of it.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 6. **Judgment — does the bar read as navigation?** On the session detail specifically, where it
    now sits below the stop row: does the bar read as three *destinations*, or as three more
    *actions on this session*? DEC-018 declined a confirmation for graceful stop on the grounds
    that the common path should not teach dismissal, and a bar that reads as part of the stop row
    would undo that. No sweep can decide this.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 7. **A stop while an agent is chattering** (opportunistic — it needs a notification to land in
    a roughly one-second window, so it cannot be staged reliably). With a busy agent running,
    press Stop and close. It must report what the session did; it must **not** say "That action
    has already run" while the pane survives. If you happen to catch it, that is the Critical
    this release fixes, observed live.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 8. **Anything that looked wrong, ugly, or surprising**, including on a phone screen rather than
    a desktop client.
-   - Observed:
+   - Observed: *(covered by the single blanket confirmation recorded above)*
 
 ---
 
 ## Result
 
-<!-- Filled in when Part 2 has been run. Record the owner's words, and if the owner gives a
-     single blanket confirmation across several steps, record it as one line across those steps
-     rather than splitting it into separate readings that were never separately made. -->
+**Release 0.12.0 is accepted for this branch, 2026-08-17.**
+
+The owner's words, in full: **"everything is fine"**, given once across the seven-step sequence
+after one correction to step 1's instructions (see Part 2's note). Nothing more was said, and
+nothing more is recorded here.
+
+**What that does and does not establish.** It covers the seven steps as a set: the legacy
+`nav.home` token resolving after the upgrade, `/start` landing on the sessions list, the bar
+reaching all three flows from a detail, a confirmation and a search step, a resume completing in
+the shortened path, and the judgment call on whether the bar reads as navigation. It is one
+owner's coverage of those steps, not seven independent readings, and it is not a claim that
+every screen in the bot was exercised.
+
+Step 7 — the stop-during-a-notification race — was marked opportunistic and needs a ~1s window
+to reproduce. It is **not** established by this run. The fix is covered by tests at the unit
+level for all three stop actions; what remains unwitnessed is only its behaviour live.
