@@ -205,6 +205,24 @@ async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     app.screen.submit("new-project")
 
 
+async def _drive_to_session_detail(app: RemoteAgentsTui) -> None:
+    """The detail itself, which this file never listed while it grew mutating rows.
+
+    The two modal drives above pass straight through this position to reach their
+    confirmations, so it has been *traversed* by this file since the day it was written and
+    never *asserted*. Its resting row was pinned only by the committed SVG baselines — real
+    coverage, and the argument this file's own prose makes for why a painted-highlight
+    assertion is worth keeping, but the baselines are a net for rendering rather than a
+    statement about which row an enter activates.
+
+    Added when a gate evaluator noticed that the detail now rests one Down away from an
+    unconfirmed Clean up on a PRESERVED session: the cursor resting on a read is the whole
+    reason a stray enter there is harmless, and nothing in this file said so.
+    """
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
+
+
 # Each entry is a position whose resting row must be the one that mutates nothing.
 _RESTING = (
     pytest.param(_drive_to_force_confirm, "Cancel", "FORCE_MODAL", id="force-confirm"),
@@ -224,6 +242,10 @@ _RESTING = (
     pytest.param(_drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
+    # Not a confirmation, and the only entry here that is not: this position offers reads and
+    # stops side by side with no separator, so which row the cursor rests on is what decides
+    # whether a repeated enter reads a session or ends one.
+    pytest.param(_drive_to_session_detail, "Copy attach", "SESSION_DETAIL", id="session-detail"),
 )
 
 

@@ -145,9 +145,22 @@ _EXPLANATIONS = {
     SessionState.ENDED: "The session is closed; nothing is left to reach.",
     # The ambiguous producer, and the default for any row older than migration 6. The
     # adopted producer reads differently and is spelled out below.
+    # "Nothing offered here can end it", not "No action is offered for it": this line is
+    # rendered on a screen that also offers Copy attach, Inspect output and Rename, so the
+    # broader claim was false. It is the same correction `_ADOPTED_ORPHAN_EXPLANATION` records
+    # having made for its own branch ("not the only *action*… it is the only *stop*") and which
+    # this branch did not get at the time — found by a gate evaluator once Rename put a
+    # *mutating* row under the sentence, where before only reads sat under it.
+    #
+    # The wording avoids the words "stop" and "force" deliberately, and not for style:
+    # `test_a_muddled_evidence_orphan_promises_no_stop_that_cannot_happen` bans both as its
+    # proxy for "must not promise a stop that cannot happen". A negated mention ("no stop can
+    # reach it") satisfies that intent and trips the proxy, so the sentence is written to
+    # satisfy both rather than the test being loosened to admit it.
+    # `available_actions(ORPHANED, AMBIGUOUS)` is empty, as is the `None` case that falls here.
     SessionState.ORPHANED: (
         "This session and the panes on this host could not be reconciled, so it is held "
-        "aside. No action is offered for it."
+        "aside. Nothing offered here can end it."
     ),
 }
 
@@ -187,8 +200,9 @@ def explain_state(state: SessionState, orphan_provenance: OrphanProvenance | Non
     false for STARTING — a session that is actively coming up.
 
     Takes provenance for the same reason `available_actions` does, and is required for the
-    same reason: after DEC-020 the sentence "No action is offered for it" is false for an
-    adopted record, and a caller that forgot the argument would print it anyway.
+    same reason: after DEC-020 the ambiguous branch's "nothing offered here can end it" is
+    false for an adopted record, which force stop *can* end, and a caller that forgot the
+    argument would print it anyway.
     """
     if _is_adopted_orphan(state, orphan_provenance):
         return _ADOPTED_ORPHAN_EXPLANATION
