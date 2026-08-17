@@ -1,14 +1,16 @@
 # Acceptance: a fixed navigation bar, and no Home
 
 Date: 2026-08-17
-Release: 0.12.0 — branch `bot-navigation-redesign`, code at commit `4db46db`
-Plan: `2026-08-17-bot-navigation-redesign-plan.md`, Stage 4 gate
+Release: 0.12.0 — branch `bot-navigation-redesign`, code at commit `fc9d614`
+Plan: `2026-08-17-bot-navigation-redesign-plan.md`, Stage 4 gate and close-out
 
-> This document first pinned commit `59a5896` and the suite result taken there. Both were
-> invalidated within the same gate: the reviews that followed found a Critical, and the two
-> remediation rounds that fixed it changed the code this document is evidence *about*. The
-> figures below are re-taken at `4db46db` rather than carried over. Only this file's own
-> commit is later than that, and it changes no code.
+> **This document's figures have been re-taken twice, and saying so is the point.** It first
+> pinned `59a5896`; the gate's reviews then found a Critical and two remediation rounds
+> changed the code it is evidence *about*. It was re-taken at `4db46db`, and then again at
+> `fc9d614` after the close-out evaluator's Material findings moved a branch in
+> `_resume_reply`. Each re-take replaced the numbers rather than carrying them forward, and
+> the service was restarted onto the final code before this was signed off. An acceptance
+> document that quietly keeps its first green is worse than none.
 
 > **Status: PREPARED, NOT YET RUN.** Part 1 is recorded from its own output and is complete.
 > **Part 2 is empty on purpose** — it is the half only the owner can witness, and no line in it
@@ -131,7 +133,7 @@ to run it.
 
 ```
 $ uv run --locked pytest -q
-2028 passed, 35 skipped in 336.98s (0:05:36)
+2028 passed, 35 skipped in 331.06s (0:05:31)
 ```
 
 Baseline for this plan, measured 2026-08-17: 1956 passed, 35 skipped.
@@ -205,6 +207,13 @@ step 1 runnable. That was the reason for reading them *before* the deploy: had t
 survived, the check would have been unrunnable and nobody would have known why.
 
 `journalctl --user -u remote-agents.service` shows a clean stop and start with no errors.
+
+**Restarted a second time at 19:49Z**, onto `fc9d614`, after the close-out evaluator's Material
+findings changed `_resume_reply`. Same result: `active`, `doctor` healthy on all six
+components, schema 8, 185 sessions and 675 events, and both `nav.home` tokens still live. The
+second restart is recorded because the first one deployed code this release no longer ships,
+and an acceptance document that describes a deploy of superseded code is describing something
+nobody is running.
 
 **Note on `doctor` before the restart:** it reports `store: degraded / database_unavailable`,
 and that is correct rather than a fault. `database_is_ready` compares the file's schema version
