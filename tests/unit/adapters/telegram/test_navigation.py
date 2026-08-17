@@ -9,6 +9,7 @@ regression worth catching.
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -888,3 +889,42 @@ async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow(
     anchor = chat.bot_messages[0].message_id
 
     assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "Resume"]
+
+
+class _BoundLauncher(_Launcher):
+    """Answers resume with an already-terminal record, which is what the service does for a
+    conversation already attached to a session."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.commands: list[object] = []
+
+    async def list_sessions(self):
+        return []
+
+    async def resume(self, command):
+        self.commands.append(command)
+        return self.record
+
+
+@pytest.mark.asyncio
+async def test_resume_without_review_says_when_nothing_was_started() -> None:
+    """`_resume_locked` returns the *existing* record for a conversation already bound to a
+    session, whatever state it is in — it does not start anything. Reporting that as
+    "Session resumed" described a session that had not moved."""
+    ended = replace(_record(), state=SessionState.ENDED)
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=_BoundLauncher(ended),
+        conversations=ConversationService(_Catalogue(_resolved())),
+    )
+    token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
+    boundary.callbacks.bind_pending(CHAT, 1)
+
+    result = await boundary._resume_reply("c-0123456789abcdef", token, 1)
+
+    assert "Not resumed" in str(result["text"])
+    assert "Session resumed" not in str(result["text"])

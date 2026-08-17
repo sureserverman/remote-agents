@@ -916,6 +916,28 @@ class PrivateBotBoundary:
         )
         if record is None:
             return _reply_arguments(self._message("Session launch requested."))
+        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
+            # `SessionService._resume_locked` returns the *existing* record for a conversation
+            # already bound to one, whatever state it is in, rather than starting anything. So
+            # a conversation whose earlier session has since stopped answered "Session
+            # resumed … State: ended" over a session that had not moved. Say what actually
+            # happened instead.
+            return _reply_arguments(
+                self._message(
+                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
+                    f"This conversation is already attached to that session, which is now "
+                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
+                    "again is not something this tool can do.",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
+                )
+            )
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -991,6 +1013,28 @@ class PrivateBotBoundary:
                 token,
             )
         )
+        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
+            # `SessionService._resume_locked` returns the *existing* record for a conversation
+            # already bound to one, whatever state it is in, rather than starting anything. So
+            # a conversation whose earlier session has since stopped answered "Session
+            # resumed … State: ended" over a session that had not moved. Say what actually
+            # happened instead.
+            return _reply_arguments(
+                self._message(
+                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
+                    f"This conversation is already attached to that session, which is now "
+                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
+                    "again is not something this tool can do.",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
+                )
+            )
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -1913,8 +1957,18 @@ class PrivateBotBoundary:
                     # The act, not a step toward it. Launch stopped asking for a review when
                     # choosing the agent became the act; choosing a *named conversation* is a
                     # more specific choice than choosing an agent, so resume was charging an
-                    # extra press for less ambiguity. DEC-008's one-shot claim is what makes
-                    # a single press safe without a confirmation in front of it.
+                    # extra press for less ambiguity.
+                    #
+                    # An earlier version of this comment claimed DEC-008 made the single
+                    # press safe. It does not, and the error mattered: DEC-008 is about
+                    # *repeats* — `claim_mutation` admits one caller per token, which makes
+                    # the **second** press safe and says nothing about the first, unintended
+                    # one. What the first press costs here is not what it costs on launch:
+                    # `SessionService._resume_locked` binds a conversation to the session it
+                    # creates, that binding is a UNIQUE index, and no code deletes a session
+                    # row — so an unwanted resume permanently attaches the conversation to a
+                    # session the owner then has to keep or lose. Recorded as an open
+                    # decision rather than papered over here.
                     self._callback(
                         "resume.confirm", str(summary.reference), mutation=True
                     ),
