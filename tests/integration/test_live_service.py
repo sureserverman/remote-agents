@@ -1292,7 +1292,7 @@ class _NotifyBot:
     def __init__(self, *, first_id: int = 900, fail_sends: int = 0) -> None:
         self.sends: list[dict[str, object]] = []
         self.markups: list[dict[str, object]] = []
-        self.edits: list[dict[str, object]] = []
+        self.deletes: list[dict[str, object]] = []
         self._next_id = first_id
         self._failures = fail_sends
 
@@ -1308,12 +1308,13 @@ class _NotifyBot:
     async def edit_message_reply_markup(self, **kwargs: object) -> None:
         self.markups.append(kwargs)
 
-    async def edit_message_text(self, **kwargs: object) -> None:
-        # A session owns one message, so everything it says after the first thing arrives
-        # here rather than in `sends`. A double without this raised out of the re-render and
-        # the notifier read that as Telegram refusing it, which is a real failure path and
-        # exactly the wrong one to exercise by accident.
-        self.edits.append(kwargs)
+    async def delete_message(self, **kwargs: object) -> None:
+        # A session owns one message, so every report after the first sends a replacement and
+        # deletes the message it supersedes. A double without this raised out of the delete,
+        # which the notifier now survives -- but it survives it by logging a warning and
+        # leaving a message in the chat, so a test that hit it would be measuring the
+        # degraded path without saying so.
+        self.deletes.append(kwargs)
 
 
 def _spool(
@@ -1435,11 +1436,11 @@ async def test_everything_one_session_says_lands_in_that_session_s_one_message(
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000009")
     await _watch_quiet_once(composition)
 
-    assert len(bot.sends) == 1, "the second kind opened a second message"
-    assert len(bot.edits) == 1, "and it was not folded into the first one either"
-    amended = str(bot.edits[-1]["text"])
-    assert "finished its work" in amended
-    assert "usage limit" in amended, "the different kind is in there"
+    assert len(bot.sends) - len(bot.deletes) == 1, "the second kind opened a second message"
+    assert len(bot.deletes) == 1, "the message it replaced was left in the chat"
+    replacement = str(bot.sends[-1]["text"])
+    assert "finished its work" in replacement
+    assert "usage limit" in replacement, "the different kind is in there"
 
 
 async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_path) -> None:

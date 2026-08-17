@@ -364,20 +364,25 @@ both survive. An observation the message could not fit is not lost — it stays 
 next pass it claims a line ahead of what the message is already showing, because there is no
 second message for it to go out in.
 
-**A session owns one message, and later news is re-rendered into it.** The first observation
-creates the message; everything after it edits that message in place, however many passes later
-it arrives. This is what makes the count bounded: three turns half an hour apart used to be
-three messages, each pushing the menu further up, and are now one message amended twice.
-Two consequences are worth knowing. An edit does not re-notify your phone, so news after the
-first arrives quietly — the message is current, but nothing buzzes. And an edited message stays
-where it was sent, so a session that has been quiet for a while keeps its place in the chat
-rather than jumping to the bottom.
+**A session owns one message, and later news replaces it.** The first observation sends that
+message; each later report sends a new one carrying the story so far and deletes the one it
+supersedes. Three turns half an hour apart used to leave three messages in the chat, each
+pushing the menu further up; they now leave one, and it is the newest thing in the chat rather
+than buried where the first report landed. The `Open session` button moves onto the
+replacement, so it keeps working across the swap.
 
-The message is replaced by a fresh one only when the old one is no longer there: you pressed
-`Open session`, which deletes it, or Telegram will no longer accept edits to it — messages
-become uneditable after 48 hours. The per-`(session, kind)` window still governs whether a
-*new* message may be created; it has no say over amending one that already exists, because a
-line added to a message already on the screen costs nothing to scroll past.
+Sent-then-deleted rather than edited in place, deliberately: an edit is silent and stays where
+it was, so an updated message you are never told about is most of the value gone. The cost is
+that every update notifies — which is why the per-`(session, kind)` window still governs
+**every** send, a replacement included. Without that an agent finishing a turn every five
+minutes would buzz ninety-six times overnight while leaving one tidy message behind. Anything
+the window suppresses is dropped rather than queued: it is a report already made inside its
+own window, and holding it would have every pass report an outage that is not happening.
+
+The message is replaced from scratch — starting over from the next report rather than
+continuing the story — only once the old one has left the chat, which is what pressing
+`Open session` does. You have read those lines and acted on them; the next message is about
+what has happened since.
 
 Two things follow from Telegram ordering a chat purely by send time, and both were added after
 the first real run showed what their absence feels like. **Pressing `Open session` deletes that
@@ -386,9 +391,9 @@ alerts already dealt with, each still offering the button just pressed. And **ev
 sends a new notification moves the live view to the bottom of the chat**, re-sending it below
 whatever arrived, because a new notification always lands *below* the menu and editing the anchor
 in place cannot move it back. Without that, the menu drifts upward until reaching it means
-scrolling past the notifications. A pass that only *amends* messages already in the chat does not
-move the menu: nothing was added, so nothing got in front of it, and moving it anyway would
-delete and re-send your screen to answer an update you could not see. The move re-binds the
+scrolling past the notifications. A replacement counts here exactly like a first notification —
+it is a new message and it lands below the menu — so any pass that delivers moves the menu. The
+move re-binds the
 screen's callback tokens to the new message, so no button on it dies; if the move fails, the
 notifications are still delivered and the menu simply stays where it was.
 
