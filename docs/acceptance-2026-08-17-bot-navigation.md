@@ -1,8 +1,14 @@
 # Acceptance: a fixed navigation bar, and no Home
 
 Date: 2026-08-17
-Release: 0.12.0 — branch `bot-navigation-redesign`, commit `59a5896`
+Release: 0.12.0 — branch `bot-navigation-redesign`, code at commit `4db46db`
 Plan: `2026-08-17-bot-navigation-redesign-plan.md`, Stage 4 gate
+
+> This document first pinned commit `59a5896` and the suite result taken there. Both were
+> invalidated within the same gate: the reviews that followed found a Critical, and the two
+> remediation rounds that fixed it changed the code this document is evidence *about*. The
+> figures below are re-taken at `4db46db` rather than carried over. Only this file's own
+> commit is later than that, and it changes no code.
 
 > **Status: PREPARED, NOT YET RUN.** Part 1 is recorded from its own output and is complete.
 > **Part 2 is empty on purpose** — it is the half only the owner can witness, and no line in it
@@ -41,6 +47,18 @@ counts and one button that stood in front of every flow.
   Both appear only while nothing has been observed for that session.
 - The command menu is `/launch`, `/resume`, `/sessions`, `/help`. `/resume` is new. `/start`
   stays registered, because Telegram requires it, but is not listed.
+
+Two fixes on this branch are not navigation, and are worth knowing about because they change
+what you will see:
+
+- **A stop is no longer refused because a notification arrived while it was working.** If an
+  agent activity notification was delivered in the moment between pressing a stop and the stop
+  being claimed, the bot answered "That action has already run" — and the agent kept running.
+  It affected all three stops, including a **force stop you had already confirmed**. Found at
+  this plan's final gate, and it is the reason this release is worth deploying promptly.
+- **Pressing a conversation already attached to a live session no longer claims a resume.** It
+  reports what the conversation is attached to and what became of it. Previously it said
+  "Session resumed" over a session it had not touched.
 
 ---
 
@@ -113,11 +131,17 @@ to run it.
 
 ```
 $ uv run --locked pytest -q
-2019 passed, 35 skipped in 339.90s (0:05:39)
+2028 passed, 35 skipped in 336.98s (0:05:36)
 ```
 
-Baseline for this plan, measured 2026-08-17: 1956 passed, 35 skipped. This is the plan's single
-full pass; every intermediate stage gate ran at stage scope.
+Baseline for this plan, measured 2026-08-17: 1956 passed, 35 skipped.
+
+**This is the third full pass, not the plan's single one, and the reason is the point.** The
+first (2019 passed, at `59a5896`) was green and was superseded when the gate's reviews found a
+Critical in the stops path. The second caught something the first could not have: the repair
+changed a service return type, and four TUI test doubles had not been updated with it, so the
+suite went red in a tree the narrower re-run had not covered. The 2028 above is the pass taken
+after both remediation rounds, on the tree this release actually ships.
 
 The 35 skips are unchanged from the baseline and are not this release's doing: 1 contract skip
 (ORPHANED is the one state that does not use its own value), 14 TUI binding cases that are "not
@@ -201,7 +225,14 @@ Run these in the configured private chat, against the restarted service.
    would undo that. No sweep can decide this.
    - Observed:
 
-7. **Anything that looked wrong, ugly, or surprising**, including on a phone screen rather than
+7. **A stop while an agent is chattering** (opportunistic — it needs a notification to land in
+   a roughly one-second window, so it cannot be staged reliably). With a busy agent running,
+   press Stop and close. It must report what the session did; it must **not** say "That action
+   has already run" while the pane survives. If you happen to catch it, that is the Critical
+   this release fixes, observed live.
+   - Observed:
+
+8. **Anything that looked wrong, ugly, or surprising**, including on a phone screen rather than
    a desktop client.
    - Observed:
 
