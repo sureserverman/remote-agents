@@ -45,10 +45,17 @@ systemctl --user is-active remote-agents.service
 uv run --locked remote-agents doctor --json | python -m json.tool
 ```
 
-The configured owner sees only `/start`, `/launch`, `/sessions`, and `/help` in Telegram's
-command menu. `/start` opens a compact Home dashboard with active and preserved counts;
-`/launch` opens the paginated project list and `/sessions` opens the paginated list of current
-managed sessions. `/help` names the actions this deployment actually offers. Search, renaming, and
+The configured owner sees `/launch`, `/resume`, `/sessions`, and `/help` in Telegram's command
+menu, which names the same places the navigation bar does. `/start` stays registered because
+Telegram requires it of every bot, and lands where `/sessions` lands: the paginated list of
+current managed sessions, whose heading carries the total, active, and preserved counts.
+`/launch` opens the paginated project list and `/resume` its resume counterpart.
+There is no Home screen — every screen closes with a fixed `Sessions · Launch · Resume` row,
+so the three destinations are one press away from wherever you are rather than one press away from a
+dashboard in front of them. The row marks the flow you are standing in, and carries no
+`Resume` at all on a host that wired no conversation service; `/resume` stays in the menu
+there, because Telegram sets that menu once for the chat rather than per screen, and answers
+that resuming is unavailable. `/help` names the actions this deployment actually offers. Search, renaming, and
 project creation use Telegram reply prompts: send `Skip`, `Cancel`, or `Back` instead of
 leaving an input step stranded. Choosing an agent launches the session immediately — there is no
 review step and no label to supply first — and a session is named afterwards, or never, with
@@ -63,12 +70,15 @@ answered by redrawing it and deleting the command itself, and a reply prompt's i
 second message that goes away once it is answered or abandoned. A button does not expire: its
 token is stored in SQLite and is valid for the message it was drawn on rather than for a clock,
 so one drawn before a service restart still works after it. Replacing a screen prunes the tokens
-it drew, so a press that lands after a redraw says the screen has moved on and shows Home.
+it drew, so a press that lands after a redraw says the screen has moved on and shows the
+sessions list.
 
-Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it, and
-`Home`. There is no `Refresh`: every screen re-derives what it shows on entry, so the two views
-whose answer goes stale on its own — Home's counts and the sessions list — are current whenever
-you arrive at them, and `Back` out of a session returns to the page of the list it was opened
+Every screen closes with the navigation it is entitled to: `Back` to the screen that owns it,
+on its own row, above the fixed `Sessions · Launch · Resume` bar. A screen reachable from
+everywhere has no parent, so both project pickers carry no `Back` at all. There is no
+`Refresh`: every screen re-derives what it shows on entry, so the view whose answer goes
+stale on its own — the sessions list, and the counts in its heading — is current whenever you
+arrive at it, and `Back` out of a session returns to the page of the list it was opened
 from. An action that makes you wait, such as a launch or a stop that polls a pane,
 replaces the screen with what it is waiting for and drops the keyboard until it finishes, so a
 press cannot be repeated into a second launch.
@@ -80,8 +90,10 @@ is read-only captured output, never an input channel.
 For safe stop behavior, choose Stop and close: the agent exits on its own terms and its pane is
 removed in the same action, so the session ends in one step and its output is not kept. Clean up
 remains for a session whose pane died on its own, which is preserved for inspection until you
-close it. Force stop names the session and what will be lost, offers Cancel first, and is for a
-live session that cannot exit gracefully. Each of them reports what the session actually did, and
+close it. Force stop names the session, says what will be lost, and explains the state it is in;
+it offers the kill first with Cancel between that button and the navigation bar, so the row
+nearest the habitual tap target is the harmless one. It is for a live session that cannot exit
+gracefully. Each of them reports what the session actually did, and
 a graceful stop that did not take effect says which of two unrelated things went wrong: the stop
 was never sent, because no agent profile could be resolved on this host, or no clean exit was
 seen before the wait ran out. One is fixed with `doctor --profiles`, the other is waited out or
@@ -92,9 +104,20 @@ Resume uses a server-resolved catalogue selection. It may show a bounded provide
 or provider resume description (Claude's stored last prompt and Codex's thread preview when no
 title is available); provider IDs and transcript output remain server-side. The bot does not scan,
 identify, terminate, or adopt arbitrary local agent processes. Only provider-catalogued
-conversations can be resumed into a new managed tmux pane.
+conversations can be resumed into a new managed tmux pane. Choosing a conversation resumes it
+on that press: the bot reviews neither a launch nor a resume, so nothing stands between the
+choice and the session, and a second press of the same button is dropped rather than serviced
+into a second session. The local terminal surface deliberately keeps its resume review, and
+that difference between the two surfaces is intended rather than an omission. A conversation
+is attached to the session it starts and cannot be resumed again until that session has
+**ended** — not merely stopped, so a preserved, failed, orphaned or stopping session still
+holds it. Pressing it before then reports what it is attached to and what became of it, rather
+than claiming a resume, and closing that session releases the conversation. The ended record keeps the
+conversation it was resumed from, so the history still answers what was resumed.
 Copy Attach is offered only for a currently trusted live managed pane. Claude Remote Control is
-available only on a live managed Claude pane, requires a second confirmation, and uses the single
+available only on a live managed Claude pane, offers the one direction its last observed state
+leaves open — Enable for a session known inactive, Disable for one known active, and both only
+while nothing has been observed for it — requires a second confirmation, and uses the single
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
 The service also speaks first when a managed agent stops working: it has
@@ -212,7 +235,9 @@ no record of it — offers Force stop and nothing else, while one whose pane evi
 ambiguous offers none, as does any record predating the column that stores the difference.
 
 Both surfaces spell those actions the same way, from one map beside the policy that decides which
-of them to offer. The stops share a single row under the read-only actions, which each get a row
+of them to offer. Claude Remote Control's two directions come from that same place, so which of
+Enable and Disable a session offers is one answer both surfaces read rather than two that happen
+to agree. The stops share a single row under the read-only actions, which each get a row
 of their own: Telegram has no separator, so shape is the only thing distinguishing an action that
 ends a session from one that reads it.
 
@@ -222,7 +247,9 @@ mistaken for a surface that forgot to draw the entry. Inspect output renders the
 through the same sanitizer the bot uses, in a scrollable pane rather than under Telegram's message
 bound, and refuses output containing a NUL byte for the reason the bot refuses it: a pane emitting
 NUL is not rendering text, and printing it can corrupt the terminal. Claude Remote Control appears
-only on a running Claude pane. It and Force stop each move to a step of their own before anything
+only on a running Claude pane, offering the one direction its last observed state leaves open
+exactly as Telegram does; the observation is stored with the session, so it holds across a restart
+and across the other surface. It and Force stop each move to a step of their own before anything
 is issued, with Cancel first and resting under the cursor, so going through with either means
 choosing a different row on purpose rather than repeating the keystroke that opened the detail.
 
@@ -250,8 +277,8 @@ uv run --locked remote-agents add-project --area infra --name new-thing
 In Telegram, Add Project offers the area as a choice between the existing directories the server
 enumerates under the configured development root; a free-form area is never accepted. The project
 name is entered through a reply prompt and is validated before anything is created or written, and
-Review names the area and the name before the mutation happens. Cancel returns Home without a
-mutation.
+Review names the area and the name before the mutation happens. Cancel returns to the launch
+project list — the screen Add Project is offered from — without a mutation.
 
 Area and name must each be lowercase letters, digits, and single hyphens, 1 to 64 characters. The
 project is created at exactly one area directory below the configured `dev_root`, so no other
@@ -271,8 +298,8 @@ removal that itself fails is reported rather than hidden, leaving an unregistere
 
 A project created from Telegram is selectable there immediately, because the bot re-reads the
 catalogue after the mutation. One created with the command line or the local terminal surface
-lands in a separate process, so a running bot does not see it until it re-reads: press Refresh in
-any paginated view, which returns Home, then open Launch again. No registry field
+lands in a separate process, so a running bot does not see it until it re-reads: press Launch
+in the navigation bar, which re-reads the catalogue on entry. No registry field
 outside that closed schema is written, and neither surface can edit or remove an entry that
 already exists.
 

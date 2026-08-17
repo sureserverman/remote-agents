@@ -140,10 +140,19 @@ class StopController:
         )
 
     def claim(self, token: str, owner_id: int, chat_id: int, message_id: int) -> StopRequest | None:
-        """Claim a token that may actually run, which an unconfirmed force never is."""
-        state = self._callbacks.resolve(
-            token, owner_id=owner_id, chat_id=chat_id, message_id=message_id
-        )
+        """Claim a token that may actually run, which an unconfirmed force never is.
+
+        **This re-reads rather than re-resolves**, and the distinction is the whole of a
+        Critical found at the plan's final gate. `PrivateBotBoundary.callback` has already
+        resolved this token for this message before dispatching here, and every stop shows a
+        pending notice first — so a Telegram round trip separates that resolve from this call.
+        An activity notification delivered inside it moves the token onto the re-sent screen,
+        and the second `resolve` this method used to perform then matched nothing: the owner
+        was told "That action has already run" about a stop that had not run, with the pane
+        still alive. `message_id` is kept in the signature because the caller has it and it
+        documents which press this claim is about; it is deliberately not re-compared.
+        """
+        state = self._callbacks.reread(token, owner_id=owner_id, chat_id=chat_id)
         if state is None or state.action == FORCE:
             return None
         if not self._callbacks.claim_mutation(

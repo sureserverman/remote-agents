@@ -96,12 +96,15 @@ async def _send(boundary: PrivateBotBoundary, text: str) -> dict[str, object]:
     return message.replies[-1] if message.replies else {}
 
 
-async def test_home_offers_add_project_only_when_a_creator_is_configured() -> None:
-    with_creator = await _boundary(FakeCreator())._home_reply()
-    without_creator = await _boundary()._home_reply()
+async def test_the_launch_list_offers_add_project_only_when_a_creator_is_configured() -> None:
+    """Home used to carry this. Task 2.2 moved it to the launch picker; the gating claim is
+    unchanged and is pinned on whichever screen offers the button."""
+    with_creator = _boundary(FakeCreator())._projects_reply((), view_id="all")
+    without_creator = _boundary()._projects_reply((), view_id="all")
 
-    assert "Add Project" in _buttons(with_creator)
-    assert "Add Project" not in _buttons(without_creator)
+    labels = lambda rendered: [b.text for row in rendered.keyboard for b in row]  # noqa: E731
+    assert "Add Project" in labels(with_creator)
+    assert "Add Project" not in labels(without_creator)
 
 
 async def test_area_choices_come_from_the_server_not_from_typed_text() -> None:
@@ -109,7 +112,7 @@ async def test_area_choices_come_from_the_server_not_from_typed_text() -> None:
 
     rendered = await boundary._reply_for("project.open", "areas")
 
-    assert _buttons(rendered) == ["dev-area", "infra", "Cancel", "Home"]
+    assert _buttons(rendered) == ["dev-area", "infra", "Cancel", "Sessions", "Launch"]
 
 
 async def test_an_area_that_the_identity_rule_rejects_is_never_offered() -> None:
@@ -117,7 +120,7 @@ async def test_an_area_that_the_identity_rule_rejects_is_never_offered() -> None
 
     rendered = await boundary._reply_for("project.open", "areas")
 
-    assert _buttons(rendered) == ["infra", "big-projects", "Cancel", "Home"]
+    assert _buttons(rendered) == ["infra", "big-projects", "Cancel", "Sessions", "Launch"]
 
 
 async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> None:
@@ -126,7 +129,7 @@ async def test_an_empty_area_list_is_reported_rather_than_rendered_blank() -> No
     rendered = await boundary._reply_for("project.open", "areas")
 
     assert "No area is available" in str(rendered["text"])
-    assert _buttons(rendered) == ["Home"]
+    assert _buttons(rendered) == ["Sessions", "Launch"]
 
 
 @pytest.mark.parametrize(
@@ -157,7 +160,7 @@ async def test_a_valid_name_reaches_review_without_creating_anything() -> None:
     assert "Review new project" in str(rendered["text"])
     assert "infra" in str(rendered["text"])
     assert "new-project" in str(rendered["text"])
-    assert _buttons(rendered) == ["Create", "Back", "Cancel", "Home"]
+    assert _buttons(rendered) == ["Create", "Back", "Cancel", "Sessions", "Launch"]
     assert creator.commands == []
     assert (OWNER, CHAT) not in boundary._awaiting_text
 
@@ -170,7 +173,10 @@ async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> 
 
     rendered = await _send(boundary, reply)
 
-    assert "Remote agents" in str(rendered["text"])
+    # Back to the area picker that asked for the name, not out of the wizard. The prompt
+    # offers these two words to leave *this step*; a word that leaves the whole flow is not
+    # the word the owner was offered.
+    assert "Add project" in str(rendered["text"])
     assert creator.commands == []
     assert (OWNER, CHAT) not in boundary._awaiting_text
 

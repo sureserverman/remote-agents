@@ -39,7 +39,6 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
     )
     launcher = Launcher(record)
     boundary = PrivateBotBoundary(7, 11, launcher=launcher)
-    await boundary._home_reply()
     detail = await boundary._detail_reply(str(record.session_id))
     token = next(
         button.callback_data

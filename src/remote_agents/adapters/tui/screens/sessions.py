@@ -31,9 +31,11 @@ from remote_agents.adapters.tui.screens.confirm import (
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
+    REMOTE_CONTROL_LABELS,
     available_actions,
     explain_state,
     remote_control_available,
+    remote_control_directions,
     trust_available,
 )
 from remote_agents.domain.models import SessionRecord
@@ -46,15 +48,29 @@ _LOG = logging.getLogger(__name__)
 _INSPECT_MAX_LINES = 2000
 _INSPECT_MAX_BYTES = 512 * 1024
 
-#: The two Remote Control directions: the row key, what the row says, and the state that row
-#: asks for. One table rather than a list of rows beside a lookup, so a row cannot come to
-#: exist without a direction behind it — which is the defect the single-row version had, where
-#: the direction was decided a screen later by whichever of two buttons was pressed.
-_REMOTE_CONTROL_ROWS: tuple[tuple[str, str, RemoteControlState], ...] = (
-    ("remote-control-active", "Enable Remote Control", RemoteControlState.ACTIVE),
-    ("remote-control-inactive", "Disable Remote Control", RemoteControlState.INACTIVE),
-)
-_REMOTE_CONTROL_DIRECTIONS = {key: state for key, _label, state in _REMOTE_CONTROL_ROWS}
+#: This surface's row key for each Remote Control direction, and nothing else. The table used
+#: to carry the labels too, which made it a second source of truth for strings the shared
+#: `REMOTE_CONTROL_LABELS` now owns — two places to change, one of which the parity contract
+#: would not have caught, since it compares what each surface *renders* rather than what each
+#: surface stores. A row still cannot exist without a direction behind it: the key is derived
+#: from the state rather than sitting beside it.
+_REMOTE_CONTROL_DIRECTIONS = {
+    "remote-control-active": RemoteControlState.ACTIVE,
+    "remote-control-inactive": RemoteControlState.INACTIVE,
+}
+_REMOTE_CONTROL_KEYS = {state: key for key, state in _REMOTE_CONTROL_DIRECTIONS.items()}
+
+
+def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
+    """The (key, label) rows this surface offers for Remote Control, from the shared policy.
+
+    Module-level and named rather than inlined, so the parity contract can read exactly what
+    the screen renders without driving a Textual app to find out.
+    """
+    return tuple(
+        (_REMOTE_CONTROL_KEYS[direction], REMOTE_CONTROL_LABELS[direction])
+        for direction in remote_control_directions(record, record.remote_control_state)
+    )
 
 #: How often the sessions list re-reads the store while it is the screen on top. Long enough
 #: that a host is not answering a tmux readiness probe continuously, short enough that a
@@ -424,15 +440,13 @@ class SessionDetailScreen(ChoiceScreen):
             # `trust` is UNKNOWN unless a caller went and looked, so a surface that forgets
             # to observe renders no row rather than a row that cannot work.
             entries.append(("trust", "Trust this project"))
-        if remote_control_available(record):
-            # One row per direction, so the decision is taken here and the confirmation that
-            # follows has exactly one thing to confirm. The single "Claude Remote Control"
-            # row this replaces opened a three-row screen where Enable and Disable sat
-            # side by side under a heading — a chooser wearing a confirmation's clothes, and
-            # the reason that step could not be answered with a yes or a no. It also puts the
-            # surface back in step with the bot, which has offered these two buttons since
-            # the feature landed.
-            entries.extend((key, label) for key, label, _state in _REMOTE_CONTROL_ROWS)
+        # One row per direction, so the decision is taken here and the confirmation that
+        # follows has exactly one thing to confirm. The single "Claude Remote Control" row
+        # this replaces opened a three-row screen where Enable and Disable sat side by side
+        # under a heading — a chooser wearing a confirmation's clothes. Which directions
+        # those are is now the shared policy's answer rather than a fixed pair, so the two
+        # surfaces cannot drift on it.
+        entries.extend(remote_control_entries(record))
         entries.extend(
             (action, ACTION_LABELS[action])
             for action in available_actions(record.state, record.orphan_provenance)

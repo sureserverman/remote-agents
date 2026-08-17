@@ -71,16 +71,34 @@ async def test_fake_backend_primitives_cover_read_only_inspection_and_confirmed_
 
 
 def test_fake_journey_contract_covers_commands_recovery_and_oversized_inspection() -> None:
-    """Keep the owner journey discoverable without requiring a live Telegram account."""
-    owner_commands = ("/launch", "/sessions", "/help")
-    expired = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, message_id=1)
+    """Keep the owner journey discoverable without requiring a live Telegram account.
+
+    *Three of this test's five assertions used to prove nothing.* It compared a **local
+    literal** of the command list against itself — so it could not notice that Stage 2 added
+    `/resume`, and indeed did not — and it closed with `assert "Back" != "Cancel"`, which is
+    true of every program ever written. The surviving `expired is None` check carried the
+    message "expired callbacks recover to Home", naming a screen Stage 2 abolished and a
+    concept (expiry) DEC-011 retired before that.
+
+    The command list is now read from the source of truth, so this test fails when the menu
+    changes without it, which is the only version of this assertion worth having.
+    """
+    from remote_agents.adapters.telegram.service import _OWNER_COMMANDS
+
+    unknown_token = CallbackStateStore().resolve("missing", owner_id=7, chat_id=11, message_id=1)
     attachment = inspect_capture(("x" * 30).encode(), telegram_limit=20)
 
-    assert owner_commands == ("/launch", "/sessions", "/help")
-    assert expired is None, "expired callbacks recover to Home after acknowledgement"
+    assert tuple(command.command for command in _OWNER_COMMANDS) == (
+        "launch",
+        "resume",
+        "sessions",
+        "help",
+    )
+    # Not "expired" — tokens have no clock (DEC-011). A token this store never minted is
+    # simply unknown, and the boundary answers it with "That screen has moved on."
+    assert unknown_token is None
     assert attachment.filename == "session-output.txt"
     assert attachment.attachment is not None
-    assert "Back" != "Cancel"
 
 
 @pytest.mark.asyncio
@@ -298,12 +316,23 @@ def _button(message, label: str) -> str:
     Rows move as screens gain and lose actions, and an index that silently points at
     `Back` produces a test that passes by doing nothing.
     """
-    for row in message.reply_markup.inline_keyboard:
-        for button in row:
-            # A session row carries a relative age that drifts between runs, so a prefix is
-            # the only stable handle on it. Exact matches still win first.
-            if button.text == label or button.text.startswith(label):
-                return button.callback_data
+    # A session row carries a relative age that drifts between runs, so a prefix is the only
+    # stable handle on it -- but exact matches must win first, across the *whole* keyboard
+    # rather than within the first row that happens to contain a prefix match. That was
+    # claimed here and not done: scanning row by row, a screen offering both "Launch another"
+    # and the bar's "Launch" answered a lookup for "Launch" with the body button, so the test
+    # passed while pressing something else.
+    #
+    # The marker is stripped first: a navigation-bar button carries it exactly when the owner
+    # is already inside that flow, so matching only the bare label would miss the tab in
+    # precisely the case it is being pressed from.
+    buttons = [button for row in message.reply_markup.inline_keyboard for button in row]
+    for button in buttons:
+        if button.text.removeprefix("• ") == label:
+            return button.callback_data
+    for button in buttons:
+        if button.text.removeprefix("• ").startswith(label):
+            return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 
@@ -483,7 +512,7 @@ async def test_guided_entry_that_is_refused_re_asks_without_accumulating() -> No
 
 
 @pytest.mark.asyncio
-async def test_guided_entry_cancelled_returns_home_and_takes_the_input_box_with_it() -> None:
+async def test_guided_entry_cancelled_returns_to_its_picker_and_clears_the_box() -> None:
     chat = FakeChat()
     boundary = _boundary()
     await boundary.start(chat.message_update("/start"), None)
@@ -497,7 +526,8 @@ async def test_guided_entry_cancelled_returns_home_and_takes_the_input_box_with_
 
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == []
-    assert chat.messages[anchor].text.startswith("<b>Remote agents</b>")
+    # Back to the launch picker the search was opened from, not out of the flow.
+    assert chat.messages[anchor].text.startswith("<b>Projects")
 
 
 @pytest.mark.asyncio
@@ -674,8 +704,8 @@ async def test_inspect_document_is_its_own_message_and_goes_when_the_session_doe
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Back")), None)
     assert documents[0].message_id in chat.messages, chat.transcript()
 
-    # Home is.
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    # Leaving it for another screen is.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert documents[0].message_id not in chat.messages, chat.transcript()
     assert len(chat.bot_messages) == 1, chat.transcript()
@@ -881,7 +911,7 @@ async def test_inspecting_the_same_session_twice_leaves_one_document_not_two() -
     documents = [message for message in chat.bot_messages if message.document is not None]
     assert len(documents) == 1, chat.transcript()
 
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert [message.document for message in chat.bot_messages] == [None], chat.transcript()
 
@@ -945,7 +975,7 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
     await press("Search")  # 3
     await boundary.text(chat.message_update("Demo"), None)  # 4
     await press("Demo")  # 5 — profiles
-    await press("Home")  # 6
+    await press("Sessions")  # 6
     await boundary.sessions_command(chat.message_update("/sessions"), None)  # 7
     await press("Demo · Claude · regular · #1")  # 8 — detail
     await press("Inspect")  # 9
@@ -955,7 +985,7 @@ async def test_a_twelve_interaction_journey_ends_with_one_live_view_and_no_trans
         "the inspect step is meant to put a file in the chat, or step 10 proves nothing"
     )
     await press("Back")  # 10 — detail again
-    await press("Home")  # 11
+    await press("Sessions")  # 11
     await boundary.help_command(chat.message_update("/help"), None)  # 12
 
     assert len(chat.bot_messages) == 1, chat.transcript()
@@ -1037,7 +1067,7 @@ async def test_navigating_away_by_button_takes_the_unanswered_question_with_it()
 
     for _ in range(3):
         await _open_a_search(chat, boundary, anchor)
-        await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+        await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
         assert len(chat.bot_messages) == 1, chat.transcript()
 
     assert chat.owner_messages == []
@@ -1093,7 +1123,7 @@ async def test_a_document_telegram_refuses_to_delete_is_retried_not_forgotten() 
         await original(**kwargs)
 
     chat.bot.delete_message = _refuse
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
     assert document.message_id in chat.messages, "Telegram refused, so it is still there"
     assert boundary._attachment is not None, "and it must still be tracked, or it is lost"
 
@@ -1162,7 +1192,7 @@ async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() ->
     open_session = _button(chat.messages[notification], "Open session")
     anchor = boundary.view.anchor()
 
-    await boundary.callback(chat.press(_button(chat.messages[anchor], "Home")), None)
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Launch")), None)
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert notification in chat.messages, chat.transcript()
@@ -1220,7 +1250,7 @@ async def test_a_notification_moves_the_menu_below_it_so_it_stays_reachable() ->
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     first_anchor = chat.bot_messages[0].message_id
-    sessions_token = _button(chat.messages[first_anchor], "Home")
+    sessions_token = _button(chat.messages[first_anchor], "Sessions")
 
     notification = await _notify(chat, boundary, _finished(record))
 

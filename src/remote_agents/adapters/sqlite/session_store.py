@@ -16,6 +16,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.state_machine import TERMINAL_STATES, LifecycleEvent, transition
 from remote_agents.ports.session_store import ProjectUsage, SessionEvent
 
@@ -43,9 +44,10 @@ class SQLiteSessionStore:
                 """
                 INSERT INTO sessions(
                     session_id, project_id, profile_id, display_identity, state, created_at,
-                    resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
+                    resume_profile_id, resume_source_id, terminal_reason, orphan_provenance,
+                    remote_control_state
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(record.session_id),
@@ -58,6 +60,7 @@ class SQLiteSessionStore:
                     record.resume_source_id,
                     record.terminal_reason,
                     record.orphan_provenance.value if record.orphan_provenance else None,
+                    record.remote_control_state.value if record.remote_control_state else None,
                 ),
             )
 
@@ -66,7 +69,8 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
+                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance,
+                   remote_control_state
             FROM sessions WHERE session_id = ?
             """,
             (str(session_id),),
@@ -79,10 +83,12 @@ class SQLiteSessionStore:
         row = self._connection.execute(
             """
             SELECT session_id, project_id, profile_id, display_identity, state, created_at,
-                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance
-            FROM sessions WHERE resume_profile_id = ? AND resume_source_id = ?
+                   resume_profile_id, resume_source_id, terminal_reason, orphan_provenance,
+                   remote_control_state
+            FROM sessions
+            WHERE resume_profile_id = ? AND resume_source_id = ? AND state <> ?
             """,
-            (str(profile_id), source_id),
+            (str(profile_id), source_id, SessionState.ENDED.value),
         ).fetchone()
         return _record_from_row(row) if row is not None else None
 
@@ -90,7 +96,8 @@ class SQLiteSessionStore:
         """Return durable projections, optionally filtered by approved lifecycle states."""
         query = (
             "SELECT session_id, project_id, profile_id, display_identity, state, created_at, "
-            "resume_profile_id, resume_source_id, terminal_reason, orphan_provenance "
+            "resume_profile_id, resume_source_id, terminal_reason, orphan_provenance, "
+            "remote_control_state "
             "FROM sessions"
         )
         values: tuple[str, ...] = ()
@@ -142,6 +149,7 @@ class SQLiteSessionStore:
             current.resume_source_id,
             terminal_reason,
             orphan_provenance,
+            current.remote_control_state,
         )
         with self._connection:
             self._append_event(str(session_id), event)
@@ -262,11 +270,49 @@ class SQLiteSessionStore:
             current.resume_source_id,
             current.terminal_reason,
             current.orphan_provenance,
+            current.remote_control_state,
         )
         with self._connection:
             self._connection.execute(
                 "UPDATE sessions SET display_identity = ? WHERE session_id = ?",
                 (display.rendered, str(session_id)),
+            )
+        return updated
+
+    async def set_remote_control_state(
+        self, session_id: SessionId, state: RemoteControlState
+    ) -> SessionRecord:
+        """Record what a Remote Control toggle returned, so a surface can hide the no-op.
+
+        `UNKNOWN` **clears** rather than stores. It is the runtime saying it could not tell,
+        and writing it as a value would let a surface hide an action on the strength of
+        something nobody observed — the same reasoning that keeps migration 7 unbackfilled.
+
+        Raises `KeyError` for a session that is not stored, like `set_label`: answering
+        "recorded" for a session that does not exist lets a stale button report success
+        against nothing.
+        """
+        current = await self.get(session_id)
+        if current is None:
+            raise KeyError(f"unknown session: {session_id}")
+        stored = None if state is RemoteControlState.UNKNOWN else state
+        updated = SessionRecord(
+            current.session_id,
+            current.project_id,
+            current.profile_id,
+            current.display,
+            current.state,
+            current.created_at,
+            current.resume_profile_id,
+            current.resume_source_id,
+            current.terminal_reason,
+            current.orphan_provenance,
+            stored,
+        )
+        with self._connection:
+            self._connection.execute(
+                "UPDATE sessions SET remote_control_state = ? WHERE session_id = ?",
+                (stored.value if stored else None, str(session_id)),
             )
         return updated
 
@@ -325,7 +371,10 @@ def _instant_from_row(value: str) -> datetime:
 
 
 def _record_from_row(
-    row: tuple[str, str, str, str, str, str, str | None, str | None, str | None, str | None],
+    row: tuple[
+        str, str, str, str, str, str,
+        str | None, str | None, str | None, str | None, str | None,
+    ],
 ) -> SessionRecord:
     """Rebuild a validated domain record from one trusted SQLite projection row."""
     display_parts = row[3].split(" · ", 4)
@@ -349,7 +398,30 @@ def _record_from_row(
         row[7],
         row[8],
         _provenance_from_row(row[9]),
+        _remote_control_from_row(row[10]),
     )
+
+
+def _remote_control_from_row(value: str | None) -> RemoteControlState | None:
+    """Read a stored Remote Control state, falling to unknown on anything unrecognized.
+
+    Same shape as `_provenance_from_row` and for the same reason: a conservative reading
+    exists. `None` makes a surface offer *both* actions, which is strictly less claim than
+    either real value and is what every surface did before this column existed — so falling
+    to it costs nothing and cannot hide an action the owner needs.
+
+    `UNKNOWN` is treated as unrecognized on the way in as well as on the way out: nothing
+    writes it (`set_remote_control_state` clears instead), so a row carrying it was
+    hand-edited or written by a build that disagreed, and `None` is the same answer.
+    """
+    if value is None:
+        return None
+    try:
+        state = RemoteControlState(value)
+    except ValueError:
+        _LOG.warning("unrecognized remote control state %r; treating it as unknown", value)
+        return None
+    return None if state is RemoteControlState.UNKNOWN else state
 
 
 def _provenance_from_row(value: str | None) -> OrphanProvenance | None:

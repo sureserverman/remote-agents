@@ -8,15 +8,10 @@ import pytest
 from remote_agents.adapters.telegram.presenters import (
     MAX_TELEGRAM_TEXT_UNITS,
     Button,
-    NavigationCallbacks,
-    Page,
+    _bounded_escaped,
+    _validate_callback,
     bounded_text,
-    paginate,
-    render_degraded,
-    render_empty,
-    render_home,
     render_message,
-    render_paginated,
 )
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.application.project_catalog import CatalogProject
@@ -29,99 +24,31 @@ from remote_agents.domain.models import (
     SessionState,
 )
 
-CALLBACKS = NavigationCallbacks(
-    home="c1_home",
-    back="c1_back",
-    refresh="c1_refresh",
-    previous="c1_previous",
-    next="c1_next",
-)
-
-
-def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
-    first = render_home(launch="c1_launch", sessions="c1_sessions", active=2, preserved=1)
-    second = render_home(launch="c1_launch", sessions="c1_sessions", active=2, preserved=1)
-
-    assert first == second
-    assert first.text == "<b>Remote agents</b>\nActive: 2 · Preserved: 1\nChoose an action."
-    assert [(button.text, button.callback_data) for row in first.keyboard for button in row] == [
-        ("Launch", "c1_launch"),
-        ("Sessions", "c1_sessions"),
-    ]
-    # Home's counts do move on their own, but every route back here re-reads them, so the
-    # Refresh that used to close this screen only ever saved a tap.
-    assert "Refresh" not in {button.text for row in first.keyboard for button in row}
-
-
-def test_empty_and_degraded_views_offer_safe_recovery_actions() -> None:
-    empty = render_empty("sessions", CALLBACKS)
-    degraded = render_degraded(CALLBACKS)
-
-    assert "No sessions available." in empty.text
-    assert degraded.text == "The service is temporarily unavailable.\nRefresh to try again."
-    assert "Refresh" in degraded.text
-    assert [button.text for row in empty.keyboard for button in row] == ["Refresh", "Home"]
-    assert [button.text for row in degraded.keyboard for button in row] == ["Refresh", "Home"]
-
-
-def test_paginate_clamps_boundaries_and_keeps_button_order_stable() -> None:
-    page = paginate(("one", "two", "three"), requested_page=9, page_size=2)
-
-    assert page == Page(items=("three",), index=1, count=2)
-    assert paginate(("one", "two", "three"), requested_page=-1, page_size=2) == Page(
-        items=("one", "two"), index=0, count=2
-    )
-    rendered = render_paginated("Projects", page, CALLBACKS)
-    assert rendered.text == "<b>Projects</b>\nPage 2 of 2\nthree"
-    assert [(button.text, button.callback_data) for row in rendered.keyboard for button in row] == [
-        ("Back", "c1_back"),
-        ("Previous", "c1_previous"),
-        ("Refresh", "c1_refresh"),
-        ("Home", "c1_home"),
-    ]
-
 
 def test_presenters_escape_unicode_display_text_and_obey_telegram_text_limit() -> None:
-    rendered = render_paginated(
-        "Projects & agents",
-        paginate(('<важливо> & "quoted"',), requested_page=0, page_size=1),
-        CALLBACKS,
-    )
+    """Written against `_bounded_escaped` now that the paginated view it used to go through
+    is gone. The claim is unchanged and is the escaping helper's own: markup characters are
+    escaped, non-Latin text survives, and the UTF-16 budget is measured in code units."""
+    escaped = _bounded_escaped('<важливо> & "quoted"', MAX_TELEGRAM_TEXT_UNITS)
     oversized = bounded_text("😀" * (MAX_TELEGRAM_TEXT_UNITS + 1))
 
-    assert "&amp;" in rendered.text
-    assert "&lt;важливо&gt;" in rendered.text
+    assert "&amp;" in escaped
+    assert "&lt;важливо&gt;" in escaped
     assert oversized.endswith("…")
     assert len(oversized.encode("utf-16-le")) // 2 <= MAX_TELEGRAM_TEXT_UNITS
 
 
-def test_paginated_view_keeps_html_balanced_when_title_exceeds_text_limit() -> None:
-    rendered = render_paginated(
-        "<" * (MAX_TELEGRAM_TEXT_UNITS + 1),
-        paginate(("project",), requested_page=0, page_size=1),
-        CALLBACKS,
-    )
-
-    assert rendered.text.startswith("<b>&lt;")
-    assert "</b>\nPage 1 of 1" in rendered.text
-    assert len(rendered.text.encode("utf-16-le")) // 2 <= MAX_TELEGRAM_TEXT_UNITS
-
-
-def test_presenters_reject_non_opaque_callback_data() -> None:
-    unsafe = NavigationCallbacks(
-        home="/home/user/private",
-        back="c1_back",
-        refresh="c1_refresh",
-        previous="c1_previous",
-        next="c1_next",
-    )
-
-    try:
-        render_empty("sessions", unsafe)
-    except ValueError as error:
-        assert "opaque" in str(error)
-    else:
-        raise AssertionError("unsafe callback data was accepted")
+@pytest.mark.parametrize(
+    "unsafe",
+    ["/home/user/private", "c2_wrongprefix", "c1_" + "x" * 62, "c1_ünïcode"],
+)
+def test_presenters_reject_non_opaque_callback_data(unsafe: str) -> None:
+    """The validator outlived the navigation presenters that used to call it: it has a live
+    caller in `notifications.render_activity`, which checks a token it is handed rather than
+    trusting it. A path, a foreign prefix, an over-long token and a non-ASCII one are all
+    refused."""
+    with pytest.raises(ValueError, match="opaque"):
+        _validate_callback(unsafe)
 
 
 def test_generic_message_presenter_preserves_typed_keyboard_and_enforces_text_limit() -> None:
@@ -181,7 +108,8 @@ async def test_sessions_notice_leads_the_screen_without_disturbing_what_it_showe
     noticed = await boundary._sessions_reply(notice="Stopped Demo")
 
     assert noticed.text == f"Stopped Demo\n{plain.text}"
-    assert noticed.text.startswith("Stopped Demo\n<b>Sessions 1/1</b>")
+    header = "Stopped Demo\n<b>Sessions 1/1</b> · 1 total · 1 active · 0 preserved"
+    assert noticed.text.startswith(header)
     # Labels and shape, never the callback data: a token is minted fresh on every render, so
     # comparing keyboards wholesale would fail on two renders of the identical screen.
     assert _labels(noticed) == _labels(plain), "a notice is not a reason to move a button"
@@ -214,8 +142,9 @@ async def test_sessions_notice_survives_the_list_being_empty() -> None:
     plain = await boundary._sessions_reply()
     noticed = await boundary._sessions_reply(notice="Stopped Demo")
 
-    assert plain.text == "<b>Sessions</b>\nNothing is running."
-    assert noticed.text == "Stopped Demo\n<b>Sessions</b>\nNothing is running."
+    counts = " · 0 total · 0 active · 0 preserved"
+    assert plain.text == f"<b>Sessions</b>{counts}\nNothing is running."
+    assert noticed.text == f"Stopped Demo\n<b>Sessions</b>{counts}\nNothing is running."
     assert _labels(noticed) == _labels(plain)
 
 
@@ -225,5 +154,7 @@ async def test_sessions_notice_left_unset_renders_byte_identically_to_before() -
     screen quietly becomes a test of the notice parameter instead."""
     boundary = _sessions_boundary(_a_running_session())
 
-    assert (await boundary._sessions_reply()).text == "<b>Sessions 1/1</b>"
-    assert (await boundary._sessions_reply(notice=None)).text == "<b>Sessions 1/1</b>"
+    # The counts are the header now; what this pins is that `None` adds nothing to it.
+    header = "<b>Sessions 1/1</b> · 1 total · 1 active · 0 preserved"
+    assert (await boundary._sessions_reply()).text == header
+    assert (await boundary._sessions_reply(notice=None)).text == header

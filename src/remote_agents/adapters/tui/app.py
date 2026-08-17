@@ -676,7 +676,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._busy = True
         try:
             async with screen.awaiting("Resuming the conversation…"):
-                record = await self._services.launcher.resume(
+                outcome = await self._services.launcher.resume(
                     ResumeCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile),
@@ -684,6 +684,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         _idempotency_key(),
                     )
                 )
+            # `outcome.created` says whether this call started anything, which the record
+            # cannot: an already-bound RUNNING session and a fresh resume are the same state.
+            # This surface does not branch on it, and that is deliberate rather than an
+            # oversight — it *attaches*, and attaching to the session a conversation is
+            # already bound to is the right destination either way. The bot needs the bit
+            # because it prints a sentence, and printing "Session resumed" over a session it
+            # had not touched was the defect. Recorded here so the asymmetry reads as a
+            # decision the next person can check rather than as one surface being behind.
+            record = outcome.record
         except Exception as error:
             _LOG.exception("resume failed")
             screen.show_choices(((_BACK, "Back"),))

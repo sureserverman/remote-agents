@@ -29,6 +29,7 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -94,7 +95,7 @@ class _Everything:
 
     async def resume(self, command):
         self.issued.append(command)
-        return self.record
+        return ResumeOutcome(self.record, created=True)
 
 
 class _Conversations:

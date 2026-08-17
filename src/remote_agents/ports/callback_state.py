@@ -55,6 +55,26 @@ class CallbackStatePort(Protocol):
     def resolve(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> CallbackState | None: ...
+
+    # `reread` is `resolve` for a caller the dispatcher has already resolved for — same row,
+    # without re-asking the message question. It exists because re-asking it downstream is a
+    # *bug*, not a redundancy: `LiveView.move_to_bottom` rebinds a message's tokens whenever a
+    # notification pushes the screen down, and a second `resolve` on the far side of that
+    # rebind compares the pressed message against a token that has legitimately moved, finds
+    # nothing, and reports a stop as already run when it never ran at all.
+    #
+    # The window is not the same size for every caller, and saying "every action waits a
+    # Telegram round trip" would overstate it. The three stops each show a pending notice, so
+    # they wait a full round trip and the window is wide. A bare `force` shows none, and its
+    # window is only the `_release_attachment` and `_abandon_entry` awaits ahead of it — much
+    # narrower, and still not zero, which is why both callers use this rather than only the
+    # one where the bug was demonstrated.
+    #
+    # The split is deliberately in the *names* rather than in a flag on `resolve`. Message
+    # binding is DEC-011's resolution rule and the one thing `resolve` exists to enforce, so
+    # an optional way to skip it would put the rule one defaulted argument away from being
+    # silently lost. A caller that has not resolved must never reach this.
+    def reread(self, token: str, *, owner_id: int, chat_id: int) -> CallbackState | None: ...
     def claim_mutation(
         self, token: str, *, owner_id: int, chat_id: int, message_id: int
     ) -> bool: ...

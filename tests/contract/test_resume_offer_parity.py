@@ -108,7 +108,10 @@ async def _telegram_offers(summaries: tuple[ConversationSummary, ...]) -> set[st
             state = boundary.callbacks.resolve(
                 button.callback_data, owner_id=7, chat_id=11, message_id=100
             )
-            if state is not None and state.action == "resume.select":
+            # `resume.confirm`, not `resume.select`: the row *is* the resume since the
+            # review screen between them was removed. What this contract compares -- which
+            # conversations each surface offers -- is unchanged.
+            if state is not None and state.action == "resume.confirm":
                 offered.add(state.entity_id)
     return offered
 

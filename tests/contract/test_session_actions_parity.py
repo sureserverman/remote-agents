@@ -28,6 +28,7 @@ everywhere.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -44,6 +45,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.domain.remote_control import RemoteControlState
 
 # One decoder for both surfaces. This used to be a hand-written table mapping the bot's
 # title-cased spellings back to action ids, which existed only because the two surfaces
@@ -92,7 +94,6 @@ class _Launcher:
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
     boundary = PrivateBotBoundary(7, 11, launcher=_Launcher(record))
-    await boundary._home_reply()
     detail = await boundary._detail_reply(str(record.session_id))
     return {
         _LABEL_TO_ACTION[button.text]
@@ -183,3 +184,51 @@ async def test_the_policy_is_actually_exercised_by_this_test(surface_name: str, 
     """
     rendered = await render(_record(SessionState.RUNNING))
     assert rendered, f"{surface_name}: a RUNNING session must render at least one action"
+
+
+async def _telegram_remote_control(record: SessionRecord) -> list[str]:
+    """The Remote Control rows the bot's detail view actually puts on screen."""
+    from remote_agents.adapters.telegram.wizard import ProfileAvailability
+
+    boundary = PrivateBotBoundary(
+        7, 11, profiles=(ProfileAvailability("claude", True, None),), launcher=_Launcher(record)
+    )
+    detail = await boundary._detail_reply(str(record.session_id))
+    return [
+        button.text
+        for row in detail.keyboard
+        for button in row
+        if "Remote Control" in button.text
+    ]
+
+
+async def _terminal_remote_control(record: SessionRecord) -> list[str]:
+    """The same rows on the local surface, read from its own entry table."""
+    from remote_agents.adapters.tui.screens.sessions import remote_control_entries
+
+    return [label for _key, label in remote_control_entries(record)]
+
+
+@pytest.mark.parametrize(
+    ("observed", "expected"),
+    [
+        (None, ["Enable Remote Control", "Disable Remote Control"]),
+        (RemoteControlState.ACTIVE, ["Disable Remote Control"]),
+        (RemoteControlState.INACTIVE, ["Enable Remote Control"]),
+    ],
+)
+@pytest.mark.parametrize(
+    ("surface", "rows"),
+    [("telegram", _telegram_remote_control), ("terminal", _terminal_remote_control)],
+)
+async def test_both_surfaces_offer_the_same_remote_control_directions(
+    observed, expected, surface, rows
+) -> None:
+    """One observation, one answer, on both surfaces.
+
+    Unknown offers both, which is what every surface did before the state was stored — so the
+    fallback is the old behaviour rather than a new way to hide the action the owner needs.
+    """
+    record = replace(_record(SessionState.RUNNING), remote_control_state=observed)
+
+    assert await rows(record) == expected, f"{surface} disagrees for observed={observed}"

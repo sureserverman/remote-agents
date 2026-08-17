@@ -94,6 +94,34 @@ class SQLiteCallbackStateStore:
             return None
         return CallbackState(row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]))
 
+    def reread(self, token: str, *, owner_id: int, chat_id: int) -> CallbackState | None:
+        """Read a token the dispatcher has already resolved, without re-asking the message.
+
+        The message question is asked once, by `PrivateBotBoundary.callback`, before anything
+        awaits. Asking it again downstream is not a second line of defence but a defect: the
+        two callers that used to do so sit on the far side of an `await` — the pending-screen
+        round trip, `_release_attachment`, `_abandon_entry` — and `LiveView.move_to_bottom`
+        rebinds a message's tokens inside exactly that gap whenever an activity notification
+        arrives. The token is then bound to the message that replaced the pressed one, the
+        second `resolve` compares it against the pressed one, and a stop the owner had just
+        confirmed answers "That action has already run" while the pane goes on running.
+
+        **Whenever a notification lands in that gap** — not on every press. The defect is a
+        race, and stating it unconditionally would misdescribe both how often it fires and how
+        it is reproduced.
+
+        Owner and chat are still matched. They are the authorization half, they do not move
+        under a rebind, and keeping them means this is not a bare token lookup.
+        """
+        row = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM callback_states "
+            "WHERE token = ? AND owner_id = ? AND chat_id = ?",
+            (token, owner_id, chat_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return CallbackState(row[0], row[1], row[2], row[3], row[4], row[5], bool(row[6]))
+
     def claim_mutation(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
         """Claim a mutating token exactly once, for one writer, in one statement.
 
@@ -104,13 +132,50 @@ class SQLiteCallbackStateStore:
         double-stop this method exists to prevent — DEC-007's "no repeated keypress
         destroys anything" is the decision that binds this surface, and DEC-008 states the
         same principle for the local one.
+
+        **`message_id` is accepted and deliberately not matched on.** Message binding is the
+        *resolution* rule (DEC-011), and `PrivateBotBoundary.callback` has enforced it for this
+        exact token, owner, chat and message before dispatching to any caller here.
+
+        *This paragraph used to say "all six call sites resolve first", and that sentence was
+        wrong in a way that hid a Critical for a whole stage.* Five call sites reach the claim
+        having resolved nothing themselves — they are downstream of the dispatcher's single
+        resolve, which is what makes them safe. The sixth, `StopController.claim`, performed
+        its **own** second `resolve` on the far side of the pending-screen round trip, so
+        removing the message check *here* left the identical defect alive one layer up: all
+        three stops went on answering "That action has already run", for a stop that never
+        ran, whenever a notification landed inside that trip. The claim had been checked by
+        counting call sites rather than by asking when each one runs.
+
+        Both downstream readers now use `reread`, which is the method that
+        exists to make "the dispatcher already asked this" a thing the code says rather than a
+        thing a comment asserts.
+
+        Re-checking the message at the claim was a second enforcement of a fact already
+        established, and it was the half that broke: `LiveView.move_to_bottom` `rebind`s the
+        anchor's tokens whenever a notification pushes the screen down, and every action that
+        shows a pending screen waits a Telegram round trip between resolving and claiming. A
+        rebind inside that gap left the claim matching no row, so a launch, stop or resume
+        that never ran answered "That action has already run" — the rebind that exists to keep
+        the keyboard working across the move breaking the one thing that did not survive it.
+
+        Owner and chat stay. They are the half that is about *authorization* rather than about
+        which message is currently on screen, and neither changes under a rebind, so keeping
+        them costs nothing and preserves the defence if a caller ever reaches here without
+        resolving first.
+
+        The parameter is kept in the signature rather than removed: every caller has it, and
+        it documents which press the claim is *about*. Six call sites pass it; none of them
+        may re-compare it, and the way to read a token downstream without re-comparing it is
+        `reread` rather than a second `resolve`.
         """
+        del message_id
         with self._connection:
             cursor = self._connection.execute(
                 "UPDATE callback_states SET claimed = 1 "
-                "WHERE token = ? AND owner_id = ? AND chat_id = ? AND message_id = ? "
+                "WHERE token = ? AND owner_id = ? AND chat_id = ? "
                 "AND mutation = 1 AND claimed = 0",
-                (token, owner_id, chat_id, message_id),
+                (token, owner_id, chat_id),
             )
         return cursor.rowcount == 1
 

@@ -15,6 +15,7 @@ from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.commands import ResumeCommand
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -98,9 +99,9 @@ class _Launcher:
     async def copy_attach(self, _session_id):
         return None
 
-    async def resume(self, command: ResumeCommand) -> SessionRecord:
+    async def resume(self, command: ResumeCommand) -> ResumeOutcome:
         self.resumed.append(command)
-        return self.record
+        return ResumeOutcome(self.record, created=True)
 
 
 def _context(conversations: _Conversations, launcher: _Launcher) -> TuiContext:

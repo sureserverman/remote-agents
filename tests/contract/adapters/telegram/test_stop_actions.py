@@ -210,7 +210,8 @@ async def test_a_clean_stop_lands_on_list_naming_what_ended() -> None:
 
     assert rendered.text.startswith("Stopped Demo · Claude · regular · #1\n")
     assert "The session has ended." in rendered.text
-    assert "<b>Sessions</b>\nNothing is running." in rendered.text
+    empty_list = "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
+    assert empty_list in rendered.text
     assert "Back" not in _labels(rendered), "the list is the destination, not a stop on the way"
 
 
@@ -366,8 +367,10 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
 async def test_force_confirms_before_anything_lands_on_list() -> None:
     """Nothing above moves the one screen that stands in front of an irreversible action.
 
-    Cancel first and on its own row, so the destructive button is not the one the thumb is
-    already resting near — and force still confirms rather than landing anywhere.
+    The rule is unchanged — the destructive button must not be where the thumb already
+    rests — but the layout satisfying it is not. Cancel used to come first because the row
+    beneath was a lone Home nobody pressed. The bottom row is the navigation bar now, so
+    Force stop is offered first and Cancel buffers it from the row the owner taps most.
     """
     record = _a_session()
     boundary = _stopped_boundary(record)
@@ -382,8 +385,8 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
     assert "Force stop" in reply["text"]
     assert "cannot be undone" in reply["text"]
     rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
-    assert rows[0] == ["Cancel"]
-    assert rows[1] == ["Force stop"]
+    assert rows[0] == ["Force stop"]
+    assert rows[1] == ["Cancel"]
 
 
 @pytest.mark.asyncio
@@ -415,8 +418,9 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     assert first["text"].startswith("Stopped ")
     assert second["text"].startswith("That action has already run.")
     labels = [button.text for row in second["reply_markup"].inline_keyboard for button in row]
-    # The list's own keyboard, not a lone Home. Asserted as "Sessions plus its Launch" rather
-    # than by the footer, which used to read ["Refresh", "Home"] and now reads ["Home"] on
-    # every screen alike -- a signature that no longer distinguishes the list from a dead end.
+    # The list's own keyboard, not a lone dead end. Asserted by the empty list's own Launch
+    # row rather than by the footer, which since the navigation bar reads the same three
+    # destinations on every screen alike -- a signature that cannot distinguish the list
+    # from anywhere else.
     assert "Sessions" in second["text"]
-    assert labels == ["Launch", "Home"], "it answers on the list, not on a lone Home"
+    assert labels == ["Sessions", "Launch"], "it answers on the list, whose way out is the bar"

@@ -227,3 +227,52 @@ def test_a_moved_screen_carries_its_tokens_across_a_restart(tmp_path) -> None:
     assert (
         reopened.resolve(token, owner_id=_OWNER, chat_id=_CHAT, message_id=_MESSAGE + 5) is not None
     )
+
+
+def test_a_claim_survives_the_live_view_moving_below_a_notification(tmp_path) -> None:
+    """The window: `resolve` succeeds, a notification moves the view, then the claim runs.
+
+    `ActivityNotifier.deliver` calls `LiveView.move_to_bottom` once per pass, which `rebind`s
+    the anchor's tokens onto the re-sent message. A mutating press is resolved against the
+    message it came from, then — for every action that shows a pending screen — waits a
+    Telegram round trip before claiming. A rebind inside that gap used to make the claim match
+    no row, so a launch, stop or resume that never ran answered "That action has already run".
+
+    That is the *rebind working as designed* breaking the claim: tokens are moved precisely so
+    the keyboard keeps resolving across the move, and the claim was the one thing that did not.
+    """
+    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    token = store.create("launch.profile", "project|claude", 7, 11, mutation=True)
+    store.bind_pending(11, 100)
+
+    assert store.resolve(token, owner_id=7, chat_id=11, message_id=100) is not None
+    store.rebind(11, 100, 200)
+
+    assert store.claim_mutation(token, owner_id=7, chat_id=11, message_id=100) is True
+
+
+def test_the_one_shot_still_admits_exactly_one_caller_across_a_rebind(tmp_path) -> None:
+    """The claim stops re-checking the message; it does not stop being a one-shot. DEC-008's
+    "a destructive action drops a repeat" is the property that must survive this change."""
+    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    token = store.create("graceful", "session:claude", 7, 11, mutation=True)
+    store.bind_pending(11, 100)
+    store.rebind(11, 100, 200)
+
+    first = store.claim_mutation(token, owner_id=7, chat_id=11, message_id=100)
+    second = store.claim_mutation(token, owner_id=7, chat_id=11, message_id=200)
+
+    assert (first, second) == (True, False), "one caller, whichever message it names"
+
+
+def test_a_claim_still_refuses_another_owner_or_chat(tmp_path) -> None:
+    """Owner and chat stay in the claim. They never change under a rebind, so keeping them
+    costs nothing and they are the half that is about authorization rather than about which
+    message is currently on screen."""
+    store = SQLiteCallbackStateStore(open_database(tmp_path / "sessions.sqlite3"))
+    token = store.create("launch.profile", "project|claude", 7, 11, mutation=True)
+    store.bind_pending(11, 100)
+
+    assert store.claim_mutation(token, owner_id=8, chat_id=11, message_id=100) is False
+    assert store.claim_mutation(token, owner_id=7, chat_id=12, message_id=100) is False
+    assert store.claim_mutation(token, owner_id=7, chat_id=11, message_id=100) is True

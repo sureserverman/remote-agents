@@ -43,7 +43,6 @@ from remote_agents.adapters.telegram.notifications import ActivityNotifier
 from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
-    render_home,
     render_message,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
@@ -74,11 +73,12 @@ from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
+    REMOTE_CONTROL_LABELS,
     StopFailure,
     available_actions,
     explain_state,
     notifiable,
-    remote_control_available,
+    remote_control_directions,
     state_word,
     trust_available,
 )
@@ -105,8 +105,8 @@ _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
 _LOG = logging.getLogger(__name__)
 _OWNER_COMMANDS = (
-    BotCommand("start", "Open the status dashboard"),
     BotCommand("launch", "Launch a curated agent"),
+    BotCommand("resume", "Resume a saved conversation"),
     BotCommand("sessions", "View managed sessions"),
     BotCommand("help", "Show available actions"),
 )
@@ -157,6 +157,13 @@ class _ProjectPicker:
     search: str
     title: str
     instruction: str
+    creates_projects: bool = False
+    """Whether this flow may offer Add Project beside Search.
+
+    Launch only. You cannot resume a prior conversation in a project that does not exist
+    yet, so offering it there would be a route to a guaranteed dead end -- and since both
+    flows share one renderer, that is exactly the regression sharing invites.
+    """
 
 
 _PROJECT_PICKERS = {
@@ -166,6 +173,7 @@ _PROJECT_PICKERS = {
         search="launch.search",
         title="Projects",
         instruction="Select a project to launch.",
+        creates_projects=True,
     ),
     "resume": _ProjectPicker(
         select="resume.project",
@@ -247,6 +255,25 @@ class PrivateBotBoundary:
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
+    _flow: str | None = None
+    """Which of the bar's three flows the screen being drawn belongs to, or None for neither.
+
+    Read only by `_message`, to mark the tab the owner is standing in. Telegram will not
+    style a pressed button, so without a marker three identical rows on a dozen screens stop
+    saying anything about where you are.
+
+    Process-local render state, like `_sessions_page` and for the same reason: it describes
+    the screen currently drawn, and a restart has no screen to describe. A press that
+    outlives one falls back to an unmarked bar, which is cosmetic and self-correcting on
+    the next render.
+
+    One write outside a render would be a race, and the reason there cannot be one is not
+    local to this class: `run_private_bot` builds the application with
+    `concurrent_updates(False)`, so updates are handled one at a time. That is already
+    load-bearing for token binding — the comment there says so — and this field now rests
+    on it too. A change made for throughput would give two interleaved presses one shared
+    marker, which is the cheap half of what it would break.
+    """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
 
@@ -344,11 +371,25 @@ class PrivateBotBoundary:
         )
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Render a fresh owner-only home view without reading command content."""
+        """Land on the sessions list, which is what this bot is for between launches.
+
+        Unconditionally, rather than "sessions if anything is running, else launch". A
+        landing screen that moves with state is one nobody can build muscle memory for, and
+        it would only save a press on a cold start -- the rarest arrival there is. The bar
+        puts Launch one press from an empty list.
+
+        Sessions rather than Launch because the frequencies are not close: a session is
+        launched once and looked at many times, the counts Home used to carry are counts of
+        sessions, and a notification summons the owner *about a session* -- so landing
+        anywhere else would make the summons and the landing disagree.
+        """
         del context
         if not self.permits(update) or update.effective_message is None:
             return
-        await self._answer_command(update.effective_message, await self._home_reply())
+        self._flow = "sessions"
+        await self._answer_command(
+            update.effective_message, _reply_arguments(await self._sessions_reply())
+        )
 
     async def _answer_command(self, message, arguments: dict[str, object]) -> None:
         """Draw a command's answer into the live view and take the command back out of the chat.
@@ -390,7 +431,15 @@ class PrivateBotBoundary:
         bot = message.get_bot()
         value = message.text or ""
         if value.casefold() in {"cancel", "back"}:
-            await self._finish_entry(bot, entry, message, await self._home_reply())
+            # Back to the screen the step was opened from, not out of the flow entirely.
+            # The instruction offers these two words to leave "this step" — *this step*, and
+            # a word that walks the owner out of the whole flow is not the word they were
+            # offered. It used to answer with Home, which was defensible while Home was the
+            # root of everything; the sessions list is the root of nothing here.
+            self._flow = _flow_of(entry.action)
+            await self._finish_entry(
+                bot, entry, message, await self._entry_landing(entry)
+            )
             return
         if entry.action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
@@ -489,6 +538,23 @@ class PrivateBotBoundary:
     def _entry_key(self) -> tuple[int, int]:
         return (self.owner_user_id, self.owner_chat_id)
 
+    async def _entry_landing(self, entry: _TextEntry) -> dict[str, object]:
+        """Where abandoning a guided step puts the owner: the screen that opened it.
+
+        One place rather than four call sites, because "Cancel" and "Back" arrive by typed
+        text and by button and must agree about where they go.
+        """
+        if entry.action == "session.rename":
+            return _reply_arguments(await self._detail_reply(entry.entity_id))
+        if entry.action == "project.name":
+            # `project.name` is what the *step* is called; `project.area` is the button that
+            # opens it. Abandoning the name returns to the area picker that asked for it.
+            return _reply_arguments(await self._project_areas_reply())
+        flow = _SEARCH_ACTIONS.get(entry.action, "launch")
+        if flow == "resume":
+            return _reply_arguments(self._resume_projects_reply())
+        return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+
     async def _finish_entry(self, bot, entry: _TextEntry, message, arguments) -> None:
         """Draw the answer, then take the question and the answer out of the chat.
 
@@ -540,15 +606,40 @@ class PrivateBotBoundary:
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
+            self._flow = "launch"
             await self.refresh_catalogue()
             await self._answer_command(
                 update.effective_message,
                 _reply_arguments(self._projects_reply(self.catalogue, view_id="all")),
             )
 
+    async def resume_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Open the resume project picker, so the menu mirrors the bar rather than half of it.
+
+        Listed unconditionally while the bar's Resume button is conditional, which is a
+        deliberate asymmetry: a keyboard can omit a button, and Telegram's command menu is
+        set once for the chat rather than per screen. A composition with no conversation
+        service answers with the same "Resume is unavailable." the rest of that flow gives,
+        which is a sentence rather than a dead end.
+        """
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            self._flow = "resume"
+            if self.conversations is None:
+                await self._answer_command(
+                    update.effective_message,
+                    _reply_arguments(self._message("Resume is unavailable.")),
+                )
+                return
+            await self.refresh_catalogue()
+            await self._answer_command(
+                update.effective_message, _reply_arguments(self._resume_projects_reply())
+            )
+
     async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
+            self._flow = "sessions"
             await self._answer_command(
                 update.effective_message, _reply_arguments(await self._sessions_reply())
             )
@@ -557,13 +648,14 @@ class PrivateBotBoundary:
         """Explain the actions this deployment actually offers, and leave a way on.
 
         Help used to answer with two lines of plain text and no keyboard, which made it the
-        one screen in the bot that went nowhere, and it named only two of the four things
-        Home can offer. What is listed here is what this composition was wired with, so a
+        one screen in the bot that went nowhere, and it named two of the four destinations
+        the bot then had. What is listed here is what this composition was wired with, so a
         bot without resume or project creation does not advertise them.
         """
         del context
         if not self.permits(update) or update.effective_message is None:
             return
+        self._flow = None
         lines = [
             "<b>Remote agents</b>",
             "",
@@ -638,8 +730,13 @@ class PrivateBotBoundary:
             # expiry used to raise. The words say what happened without claiming a deadline
             # that no longer exists.
             await query.answer("That screen has moved on.")
-            await self._render(query, await self._home_reply())
+            self._flow = "sessions"
+            await self._render(query, _reply_arguments(await self._sessions_reply()))
             return
+        # Set once, before any branch below draws: inspect, a text step, the pending screen
+        # and `_reply_for` all render, and a flow set inside only one of them would leave the
+        # bar unmarked on the others.
+        self._flow = _flow_of(state.action)
         pending = self._pending_notice(state.action)
         await query.answer(pending)
         try:
@@ -716,30 +813,19 @@ class PrivateBotBoundary:
         """
         await self.view.render(query.get_bot(), arguments, retire=retire)
 
-    async def _home_reply(self) -> dict[str, object]:
-        records = await self._records()
-        return _reply_arguments(
-            render_home(
-                launch=self._callback("launch.open", "projects"),
-                resume=(self._callback("resume.open", "projects") if self.conversations else None),
-                sessions=self._callback("sessions.open", "sessions"),
-                add_project=(self._callback("project.open", "areas") if self.creator else None),
-                active=sum(record.state is SessionState.RUNNING for record in records),
-                preserved=sum(record.state is SessionState.PRESERVED for record in records),
-            )
-        )
-
     async def _reply_for(
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
     ) -> dict[str, object]:
         if action in {"nav.home", "nav.refresh"}:
+            self._flow = "sessions"
             # `nav.refresh` no longer has a button. It stays handled because a token outlives
             # the deploy that stopped drawing it: tokens live in SQLite and are valid for the
             # message they were drawn on rather than for a clock, so a Home screen rendered
-            # before the upgrade still carries a live Refresh. Answering it with Home is what
-            # that button now means; dropping the case would make it a dead button instead,
-            # which is the one state the callback store exists to prevent.
-            return await self._home_reply()
+            # before the upgrade still carries a live Refresh. Answering it with the sessions
+            # list is what that button now means; dropping the case would make it a dead button,
+            # which is the one state the callback store exists to prevent. Both now answer
+            # with the sessions list, which is what Home became.
+            return _reply_arguments(await self._sessions_reply())
         if action == "resume.confirm":
             return await self._resume_reply(entity_id, token, message_id)
         if action == "remote.confirm":
@@ -763,6 +849,19 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._sessions_reply())
         if action == "sessions.page":
             return _reply_arguments(await self._sessions_reply(_page_number(entity_id)))
+        if action == "resume.select":
+            # Retired with the review screen, and kept rather than dropped for the reason
+            # `nav.refresh` is kept: tokens live in SQLite and are valid for their message
+            # rather than for a clock (DEC-011), so a conversation list drawn before this
+            # deploy still has rows carrying it. Answering with what changed beats the
+            # generic "no longer available", which reads as though the conversation went.
+            self._flow = "resume"
+            return _reply_arguments(
+                self._message(
+                    "Resuming no longer has a review step — choosing a conversation starts "
+                    "it. Open Resume and choose it again."
+                )
+            )
         if action == "resume.open":
             await self.refresh_catalogue()
             return _reply_arguments(self._resume_projects_reply())
@@ -772,8 +871,6 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._resume_profiles_reply(entity_id))
         if action in {"resume.profile", "resume.page"}:
             return _reply_arguments(await self._resume_catalogue_reply(entity_id))
-        if action == "resume.select":
-            return _reply_arguments(await self._resume_confirm_reply(entity_id))
         if action == "session.detail":
             return _reply_arguments(await self._detail_reply(entity_id, message_id))
         if action == "session.attach":
@@ -825,6 +922,9 @@ class PrivateBotBoundary:
                     f"<b>Session did not become ready</b>\n{escape(record.display.rendered)}\n"
                     "Workspace trust is never approved remotely. Resolve any trust or startup "
                     "check locally, then open Sessions to recheck.",
+                    # Details only. "Sessions" and "Launch another" were the ways on before
+                    # a permanent way on existed, and both now name a destination the bar
+                    # carries on the next row -- "Launch another" beside a *marked* Launch.
                     (
                         (
                             Button(
@@ -832,19 +932,13 @@ class PrivateBotBoundary:
                                 self._callback("session.detail", str(record.session_id)),
                             ),
                         ),
-                        (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                        (Button("Launch another", self._callback("launch.open", "projects")),),
                     ),
                 )
             )
         return _reply_arguments(
             self._message(
                 f"<b>Session created</b>\n{escape(record.display.rendered)}\nState: {record.state}",
-                (
-                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
-                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                    (Button("Launch another", self._callback("launch.open", "projects")),),
-                ),
+                ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
         )
 
@@ -853,6 +947,35 @@ class PrivateBotBoundary:
     ) -> dict[str, object]:
         if self.launcher is None or self.conversations is None:
             return _reply_arguments(self._message("Resuming is unavailable."))
+        # Everything re-derivable is re-derived **before** the claim, which is the ordering
+        # `_launch_reply` records and the ordering this path did not have: claiming first
+        # burns the one-shot on a conversation or a project that has since gone, and leaves
+        # the owner a button that answers "already run" for something that never ran.
+        resolved = await self._resolve_resume(reference_value)
+        if resolved is None or resolved.summary.project_id is None:
+            return _reply_arguments(self._message("That conversation is no longer available."))
+        # The check the review screen used to carry. It moved to the act rather than leaving
+        # with the screen -- a rendered row outlives the catalogue it was drawn from.
+        if not any(
+            project.opaque_id == str(resolved.summary.project_id) for project in self.catalogue
+        ):
+            return _reply_arguments(self._message("The project is no longer available."))
+        # Re-checked at the *act*, not only where the row was drawn. This is the mitigation
+        # `StopController.execute` already applies to every stop -- the rendered row is
+        # re-tested against the shared policy before the command goes out -- and the resume
+        # path did not have it on either surface. It matters more now that the row *is* the
+        # act: there is no second screen between the catalogue read that drew it and the
+        # resume it performs.
+        if not resume_available(resolved.summary):
+            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
+        # The last re-derivation `_launch_reply` did and this did not. A profile can stop
+        # being available between the row being drawn and the row being pressed, and the
+        # rendered row outlives the capability probe that drew it.
+        if not any(
+            profile.profile_id == str(resolved.summary.profile_id) and profile.available
+            for profile in self.profiles
+        ):
+            return _reply_arguments(self._message("That agent is unavailable."))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -860,21 +983,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        resolved = await self._resolve_resume(reference_value)
-        if resolved is None or resolved.summary.project_id is None:
-            return _reply_arguments(self._message("That conversation is no longer available."))
-        # Re-checked at the *act*, not only where the review screen was drawn. This is the
-        # mitigation `StopController.execute` already applies to every stop — the rendered row
-        # is re-tested against the shared policy before the command goes out — and the resume
-        # path did not have it on either surface. `_resume_confirm_reply` checks while building
-        # the screen, which is a different moment: the resolve above is a second, independent
-        # read, so a conversation the policy refuses could be resumed here after passing there.
-        # Found by the Stage 3 gate's adversarial pass, which noted the very shape this fix
-        # was for — the rule written down in some places and not others — reappearing on the
-        # other surface.
-        if not resume_available(resolved.summary):
-            return _reply_arguments(self._message("That conversation cannot be resumed safely."))
-        record = await self.launcher.resume(
+        outcome = await self.launcher.resume(
             ResumeCommand(
                 resolved.summary.project_id,
                 resolved.summary.profile_id,
@@ -882,19 +991,55 @@ class PrivateBotBoundary:
                 token,
             )
         )
-        if record.state is SessionState.FAILED:
+        record = outcome.record
+        if outcome.created and record.state is SessionState.FAILED:
+            # A resume this press really did create, whose pane did not come up. Stage 3's
+            # deliberate decision (`bb23946`, repaired in `4f2cf88`) that FAILED keeps its own
+            # message about resolving trust locally — and the message is about *this press's*
+            # resume, so it is owed the `created` guard that the rest of this method now has.
+            #
+            # It was FAILED-first and unguarded until close-out, which left the same
+            # over-claim the `created` branch below exists to remove, just narrower: pressing
+            # a conversation bound to an *existing* failed session said "Resume did not become
+            # ready" — a sentence about an attempt this press never made — and withheld the
+            # attachment explanation its sibling gives. Half-fixing an over-claim is how the
+            # remaining half stops looking like one.
             return _reply_arguments(
                 self._message(
                     "<b>Resume did not become ready</b>\nOpen Sessions after local attention."
                 )
             )
+        if not outcome.created:
+            # Nothing was started: the conversation was already bound and the service handed
+            # back the existing record. This asks what the service **did**, where it used to
+            # ask what state the record was in — and no question about the state can answer
+            # it, because an already-bound RUNNING session and a resume that has just come up
+            # are indistinguishable. That is how "Session resumed" came to be printed over a
+            # live session this press had not touched, contradicting both the README and step
+            # 12 of the acceptance checklist. The states that used to reach here (ENDED,
+            # PRESERVED, STOP_REQUESTED, ORPHANED) still do, and RUNNING and STARTING now do
+            # too, which is the whole of the repair.
+            return _reply_arguments(
+                self._message(
+                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
+                    f"This conversation is attached to that session, which is now "
+                    f"{state_word(record.state, record.orphan_provenance)}. It becomes "
+                    "resumable again once that session has ended — open it to see what it "
+                    "offers.",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
+                )
+            )
         return _reply_arguments(
             self._message(
                 f"<b>Session resumed</b>\n{escape(record.display.rendered)}\nState: {record.state}",
-                (
-                    (Button("Inspect", self._callback("session.detail", str(record.session_id))),),
-                    (Button("Sessions", self._callback("sessions.open", "sessions")),),
-                ),
+                ((Button("Inspect", self._callback("session.detail", str(record.session_id))),),),
             )
         )
 
@@ -914,7 +1059,11 @@ class PrivateBotBoundary:
             _button_rows(
                 tuple(Button(area, self._callback("project.area", area)) for area in areas)
             )
-            + ((Button("Cancel", self._callback("nav.home", "home")),),),
+            # Cancel returns to the launch list, which is the screen that offered Add
+            # Project. It used to mint `nav.home`; Home was a defensible cancel target while
+            # it was the root, and the sessions list -- which is what that action now answers
+            # -- is the parent of nothing in this flow.
+            + ((Button("Cancel", self._callback("launch.open", "projects")),),),
         )
 
     def _project_review_reply(self, identity: ProjectIdentity) -> RenderedMessage:
@@ -933,7 +1082,7 @@ class PrivateBotBoundary:
                     ),
                 ),
                 (Button("Back", self._callback("project.open", "areas")),),
-                (Button("Cancel", self._callback("nav.home", "home")),),
+                (Button("Cancel", self._callback("launch.open", "projects")),),
             ),
         )
 
@@ -966,7 +1115,6 @@ class PrivateBotBoundary:
         return _reply_arguments(
             self._message(
                 f"<b>Project created</b>\n{escape(str(created.identity))}",
-                ((Button("Launch", self._callback("launch.open", "projects")),),),
             )
         )
 
@@ -991,11 +1139,31 @@ class PrivateBotBoundary:
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
+        # Counted from the records this list is about to page, never from a second read: two
+        # reads can disagree, because a session can end between them.
+        #
+        # The **total** is carried as well as the two states, and that is not decoration.
+        # `_records` filters only ENDED, so a row can be STARTING, STOP_REQUESTED, FAILED or
+        # ORPHANED — none of which is RUNNING or PRESERVED. Home showed the same two numbers
+        # and got away with it by rendering them on a different screen from the rows; putting
+        # them directly above the list is exactly what turns an incomplete count into a
+        # visible contradiction. Four adopted-orphan rows under "0 active · 0 preserved" says
+        # nothing is happening above a row the domain describes as frequently a live agent
+        # this database lost. With the total present the arithmetic is checkable — a reader
+        # can see that some rows are in neither bucket and read each row's own state word to
+        # find out which.
+        counts = (
+            f" · {len(records)} total"
+            f" · {sum(record.state is SessionState.RUNNING for record in records)} active"
+            f" · {sum(record.state is SessionState.PRESERVED for record in records)} preserved"
+        )
         if not records:
             self._sessions_page = 1
+            # No body Launch. It was the way out before a permanent way out existed; the
+            # bar now carries the identical destination on the very next row, and a button
+            # duplicating the one directly beneath it reads as a bug.
             return self._message(
-                f"{self._notice_line(notice)}<b>Sessions</b>\nNothing is running.",
-                ((Button("Launch", self._callback("launch.open", "projects")),),),
+                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running."
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -1021,7 +1189,7 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         return self._message(
-            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>",
+            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>{counts}",
             tuple(buttons),
         )
 
@@ -1042,9 +1210,9 @@ class PrivateBotBoundary:
         page. Opening a row from page 3 and pressing Back used to answer page 1, and the only
         way back to page 3 was Refresh — which is now gone, so this is the whole route.
 
-        `sessions.open` keeps meaning *the top of the list*, which is what Home's Sessions
-        button and `/sessions` should still do. Only the detail, which was opened from a
-        known page, is entitled to return to one.
+        `sessions.open` keeps meaning *the top of the list*, which is what the navigation
+        bar's Sessions button, `/sessions` and `/start` should all do. Only the detail, which
+        was opened from a known page, is entitled to return to one.
         """
         return self._callback("sessions.page", str(self._sessions_page))
 
@@ -1079,20 +1247,15 @@ class PrivateBotBoundary:
                     ),
                 )
             )
-        if remote_control_available(record):
+        # One row per direction the policy still offers -- which is one row once this
+        # session's state has been observed, and both only while it is unknown. Half of the
+        # old pair was always a no-op, on the deepest screen the bot has.
+        for direction in remote_control_directions(record, record.remote_control_state):
             buttons.append(
                 (
                     Button(
-                        "Enable Remote Control",
-                        self._callback("remote.control", f"{session_value}|active"),
-                    ),
-                )
-            )
-            buttons.append(
-                (
-                    Button(
-                        "Disable Remote Control",
-                        self._callback("remote.control", f"{session_value}|inactive"),
+                        REMOTE_CONTROL_LABELS[direction],
+                        self._callback("remote.control", f"{session_value}|{direction.value}"),
                     ),
                 )
             )
@@ -1101,6 +1264,12 @@ class PrivateBotBoundary:
         # the actions that end a session should not look like the ones that read it — a
         # graceful stop is one tap from discarding the pane's output. No state offers more
         # than two stops, so the row stays legible.
+        #
+        # Shape is no longer *only* this: the navigation bar is a second multi-button row on
+        # this screen. It does not collide, because it is three wide where the stops are two
+        # and because a full-width Back sits between them — but the distinction is now
+        # two-wide-versus-three rather than one-row-versus-the-rest, which is a narrower
+        # margin than this comment used to be able to assume.
         stops: list[Button] = []
         for action in available_actions(record.state, record.orphan_provenance):
             token = self.stops.offer(
@@ -1188,6 +1357,11 @@ class PrivateBotBoundary:
         result = await self.launcher.set_remote_control(
             RemoteControlCommand(SessionId.parse(session_value), state, token)
         )
+        # Just the resulting state. Distinguishing "was already active" from "is now active"
+        # is not knowable here: `remote_control` returns the desired state both when it had
+        # to send keys and when it found the pane already there, so a message claiming the
+        # difference would be asserting something this layer cannot see. The port would have
+        # to say whether it acted, which is a wider change than this screen's wording.
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
@@ -1420,20 +1594,34 @@ class PrivateBotBoundary:
     async def _force_confirm_reply(self, token: str, message_id: int) -> RenderedMessage:
         """Name the session and the cost before offering the only irreversible button.
 
-        Cancel comes first and on its own row. Home is not a cancel — it is a way out of
-        the whole screen — and the destructive button should not be the one the thumb is
-        already resting near.
+        The rule is that the destructive button must not be where the thumb already rests,
+        and the **order that satisfies it changed** when the navigation bar arrived. Cancel
+        used to come first, above `Force stop`, because the row below was a lone `Home`
+        nobody pressed — so last-but-one was the safe distance. The bottom row is now the
+        bar, the one row in the bot the owner builds muscle memory for, which made
+        last-but-one the *worst* position on the screen rather than a safe one.
+
+        So `Force stop` is offered first and Cancel sits between it and the bar: the button
+        adjacent to the habitual tap target is the harmless one, and the irreversible one is
+        two rows away from it. That also puts this screen in line with every other
+        confirmation here — resume, Remote Control, create-project all offer the action
+        first and the way out beneath it; force stop was the lone inversion, for a reason
+        that has now expired.
 
         The confirming button is a **new** token carrying a different action, not the one the
         owner just pressed. Re-offering the pressed token cannot work when the screen is
         redrawn in place: the render that draws this screen prunes what the previous keyboard
         left on the message, and the re-offered token is part of exactly that set.
         """
-        state = self.callbacks.resolve(
+        # A re-read, not a re-resolve: `callback` resolved this token for this message before
+        # it dispatched here, and `_release_attachment` and `_abandon_entry` have awaited since.
+        # A notification delivered in that gap rebinds the token, and re-asking the message
+        # question would refuse the confirmation screen for a force stop that is still legal.
+        # The same defect as `StopController.claim`, one window narrower.
+        state = self.callbacks.reread(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
-            message_id=message_id,
         )
         if state is None:
             return self._message("That action is no longer available.")
@@ -1469,8 +1657,8 @@ class PrivateBotBoundary:
             "saved is lost.\n"
             f"{escape(_state_explanation(record.state, record.orphan_provenance))}",
             (
-                (Button("Cancel", self._callback("session.detail", session_value)),),
                 (Button(ACTION_LABELS[FORCE], confirmed),),
+                (Button("Cancel", self._callback("session.detail", session_value)),),
             ),
         )
 
@@ -1669,11 +1857,21 @@ class PrivateBotBoundary:
             )
         if navigation:
             buttons.append(tuple(navigation))
-        buttons.append((Button("Search", self._callback(picker.search, "search")),))
+        # Beside Search, because they answer the same moment: the project you wanted is not
+        # on this screen. Add Project used to live on Home, one level up from the only screen
+        # that can tell you it is missing.
+        finders = [Button("Search", self._callback(picker.search, "search"))]
+        if picker.creates_projects and self.creator is not None:
+            finders.append(Button("Add Project", self._callback("project.open", "areas")))
+        buttons.append(tuple(finders))
+        # No `back`. This screen had exactly one parent when Home was the only way to reach
+        # it; the bar reaches it in one press from anywhere, so a Back pointing at Home now
+        # lands the owner somewhere they were never standing — which is the one thing Back
+        # must not do. `_message`'s contract is "pass it wherever there is a real parent",
+        # and a screen reachable from everywhere has none. The bar is the way out.
         return self._message(
             f"<b>{picker.title} {rendered.page}/{rendered.page_count}</b>\n{picker.instruction}",
             tuple(buttons),
-            back=self._callback("nav.home", "home"),
         )
 
     def _project_page_reply(self, entity_id: str, flow: str = "launch") -> RenderedMessage:
@@ -1755,7 +1953,24 @@ class PrivateBotBoundary:
             (
                 Button(
                     _resume_button_text(summary.description, summary.updated_at),
-                    self._callback("resume.select", str(summary.reference)),
+                    # The act, not a step toward it. Launch stopped asking for a review when
+                    # choosing the agent became the act; choosing a *named conversation* is a
+                    # more specific choice than choosing an agent, so resume was charging an
+                    # extra press for less ambiguity.
+                    #
+                    # An earlier version of this comment claimed DEC-008 made the single
+                    # press safe. It does not, and the error mattered: DEC-008 is about
+                    # *repeats* — `claim_mutation` admits one caller per token, which makes
+                    # the **second** press safe and says nothing about the first, unintended
+                    # one. What the first press costs here is not what it costs on launch:
+                    # `SessionService._resume_locked` binds a conversation to the session it
+                    # creates. Migration 8 is what stops that being *permanent* — the unique
+                    # index is partial on `state <> 'ended'`, so the conversation binds again
+                    # once its session has ended. An unwanted resume therefore costs a
+                    # session to stop, not a conversation forever.
+                    self._callback(
+                        "resume.confirm", str(summary.reference), mutation=True
+                    ),
                 ),
             )
             for summary in result.conversations
@@ -1776,9 +1991,9 @@ class PrivateBotBoundary:
                     self._callback("resume.page", f"{project_id}|{profile_id}|{result.page + 1}"),
                 )
             )
-        # Back belongs in the navigation row with Home, like every other screen, rather
-        # than as a body button — and the empty case needs it most, since it used to offer
-        # nothing but a row restating that there was nothing.
+        # Back belongs in the navigation rows `_message` appends, like every other screen,
+        # rather than as a body button — and the empty case needs it most, since it used to
+        # offer nothing but a row restating that there was nothing.
         back = self._callback("resume.project", project_id)
         if not buttons:
             return self._message(
@@ -1794,33 +2009,6 @@ class PrivateBotBoundary:
             "Select a resumable conversation.",
             tuple(rows),
             back=back,
-        )
-
-    async def _resume_confirm_reply(self, reference_value: str) -> RenderedMessage:
-        resolved = await self._resolve_resume(reference_value)
-        if resolved is None or resolved.summary.project_id is None:
-            return self._message("That conversation is no longer available.")
-        summary = resolved.summary
-        if not resume_available(summary):
-            return self._message("That conversation cannot be resumed safely.")
-        project = next(
-            (item for item in self.catalogue if item.opaque_id == str(summary.project_id)), None
-        )
-        if project is None:
-            return self._message("The project is no longer available.")
-        return self._message(
-            f"<b>Review resume</b>\nProject: {escape(project.name)}\n"
-            f"Agent: {_profile_name(str(summary.profile_id))}\n"
-            f"Last updated: {summary.updated_at:%Y-%m-%d %H:%M UTC}",
-            (
-                (
-                    Button(
-                        "Resume",
-                        self._callback("resume.confirm", reference_value, mutation=True),
-                    ),
-                ),
-                (Button("Cancel", self._callback("nav.home", "home")),),
-            ),
         )
 
     async def _resolve_resume(self, reference_value: str):
@@ -1839,9 +2027,14 @@ class PrivateBotBoundary:
             Button(
                 _profile_name(profile.profile_id),
                 # The mutation is claimed here rather than on a review screen that no longer
-                # exists. DEC-008 is what makes one press safe: a second press of the same
-                # button is dropped by the one-shot claim, never serviced into a second
-                # session, and Sub-plan 1 made that claim durable rather than process-local.
+                # exists. DEC-008 makes the *repeat* safe — a second press of the same button
+                # is dropped by the one-shot claim, never serviced into a second session, and
+                # Sub-plan 1 made that claim durable rather than process-local. It says
+                # nothing about the first, unintended press; what makes that acceptable here
+                # is specific to launch, namely that an unwanted launch creates a disposable
+                # session and costs a stop. The resume path thirty lines below carries the
+                # same correction, because assuming DEC-008 covered the first press is exactly
+                # the error that let a one-press resume ship and become a gate escalation.
                 self._callback(
                     "launch.profile", f"{project_id}|{profile.profile_id}", mutation=True
                 ),
@@ -1861,23 +2054,63 @@ class PrivateBotBoundary:
         *,
         back: str | None = None,
     ) -> RenderedMessage:
-        """Render one screen and close it with the navigation row it is entitled to.
+        """Render one screen and close it with Back, then the fixed navigation bar.
 
-        Home used to be the only way out of every screen, which made returning to the list
-        a session came from cost two taps and a second search for the row. `back` takes the
-        callback of the screen that owns this one; pass it wherever there is a real parent.
+        Every screen ends with the same three destinations in the same position, so a move
+        between flows costs one press from wherever the owner is. Before this the only way
+        out was Home, and reaching Launch from a session meant going *up* to a screen whose
+        entire content was the three buttons this row now carries everywhere — so the
+        dashboard was a waypoint charged for on every cross-flow move.
 
-        There was a third slot here, `refresh`, offered on the two screens whose answer goes
-        stale under the owner — the dashboard counts and the sessions list. Both re-derive
-        their answer on every entry, so it only ever saved a tap, and the one thing it did
-        that no other route did — return to the sessions page it was pressed on — is now what
-        `_sessions_back` gives Back.
+        `back` is the screen that owns this one, and it keeps a row of its own above the bar.
+        Merging the two would be the obvious saving and it is the wrong one: Back means
+        something different on every screen and the bar means the same thing on all of them,
+        which is the whole property that makes a fixed row worth having.
+
+        Telegram has no chrome — no menu, no tab strip — so a keyboard row is the only place
+        a persistent affordance can live, and the bottom is where a thumb already is.
+
+        Three renders do **not** come through here, and so carry no bar. Two are permanent:
+        `callback`'s pending screen, which drops its keyboard so a wait cannot be pressed
+        into a second launch, and `notifications`, which is a message rather than a screen.
+        Both call `render_message` directly; that is the mechanism, not an oversight.
+
+        There was a third for one stage — Home, which rendered its own keyboard through
+        `presenters.render_home` and so answered barless. That screen is gone: its counts
+        live on the sessions list, its Add Project on the launch list, and its three
+        destinations are this row. "Every screen closes with the bar" is now true of the
+        bot rather than only of the screens built here.
+
+        There was a third slot here once, `refresh`, offered on the two screens whose answer
+        goes stale under the owner. Both re-derive their answer on every entry, so it only
+        ever saved a tap, and the one thing it did that no other route did — return to the
+        sessions page it was pressed on — is now what `_sessions_back` gives Back.
         """
-        navigation = []
+        rows: list[tuple[Button, ...]] = []
         if back is not None:
-            navigation.append(Button("Back", back))
-        navigation.append(Button("Home", self._callback("nav.home", "home")))
-        return render_message(text, keyboard + (tuple(navigation),))
+            rows.append((Button("Back", back),))
+        # Resume is absent rather than disabled on a host that wired no conversation
+        # service: Telegram has no disabled state, and a button that answers "unavailable"
+        # is a worse answer than no button.
+        bar = [
+            Button(
+                _tab("Sessions", self._flow == "sessions"),
+                self._callback("sessions.open", "sessions"),
+            ),
+            Button(
+                _tab("Launch", self._flow == "launch"),
+                self._callback("launch.open", "projects"),
+            ),
+        ]
+        if self.conversations is not None:
+            bar.append(
+                Button(
+                    _tab("Resume", self._flow == "resume"),
+                    self._callback("resume.open", "projects"),
+                )
+            )
+        rows.append(tuple(bar))
+        return render_message(text, keyboard + tuple(rows))
 
     def _callback(self, action: str, entity_id: str, *, mutation: bool = False) -> str:
         """Mint a token for a screen that has not been delivered yet.
@@ -1916,6 +2149,7 @@ async def run_private_bot(
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
+    application.add_handler(CommandHandler("resume", boundary.resume_command))
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))
     application.add_handler(CommandHandler("help", boundary.help_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))
@@ -2002,8 +2236,15 @@ def _session_scope(entity_id: str) -> str:
     """The session an entity id is about, for the composite ids some actions carry.
 
     A stop token names `session:profile` and a remote-control token names `session|state`.
-    Everything else is left whole — a project id or `home` has no session in it, and will
-    simply never match one.
+    Everything else is left whole — a project id, or the `home` a pre-upgrade `nav.home` or
+    `nav.refresh` token still carries, has no session in it and will simply never match one.
+
+    *A close-out edit "corrected" this to drop `home`, on the grounds that nothing has minted
+    such an entity id since Stage 2. Minting is not the same as reaching: those tokens are
+    durable in SQLite and outlive the deploy that stopped drawing them — which is the whole
+    of DEC-011 and the reason `_reply_for` keeps the handler — so `home` still arrives here
+    and `test_live_service.py:941` pins exactly that. The example was right; the correction
+    was the thing taken from a premise rather than read off the code.*
     """
     for separator in (":", "|"):
         entity_id = entity_id.split(separator, 1)[0]
@@ -2102,6 +2343,49 @@ def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord
     except ValueError:
         return record
     return replace(record, display=display)
+
+
+_ACTIVE_TAB = "• "
+"""What marks the tab the owner is standing in, prefixed rather than wrapped.
+
+A prefix keeps the label's first characters where the eye already reads them; wrapping the
+name in symbols moves every label one column right and makes the three read as decoration.
+"""
+
+_FLOW_OF_PREFIX = {
+    "sessions": "sessions",
+    "session": "sessions",
+    "remote": "sessions",
+    "launch": "launch",
+    "project": "launch",
+    "resume": "resume",
+}
+"""Which flow an action's screen belongs to, keyed by the part before its dot.
+
+A session's own screens — its detail, its capture, its rename, its Remote Control
+confirmation — are the *sessions* flow, because that is where the owner came from and where
+Back returns them; the marker tracks where they are standing, not which button they last
+pressed. The bare stop actions carry no dot and are mapped beside them for the same reason.
+
+`project` is the **Add Project wizard** and nothing else: `launch.project` and
+`resume.project` partition on their own prefixes and never reach this key. It maps to
+`launch` because that is where the wizard lives — it is entered from the launch project
+list, and the screen you add a project from is the screen that told you it was missing.
+
+*(This paragraph was written one stage early, while the wizard was still entered from Home,
+and said so. Home is gone and the entry point moved with it, so the mapping that was
+"scheduled" is now simply current.)*
+"""
+
+
+def _flow_of(action: str) -> str | None:
+    if action in {GRACEFUL, CLEANUP, FORCE, CONFIRMED_FORCE}:
+        return "sessions"
+    return _FLOW_OF_PREFIX.get(action.partition(".")[0])
+
+
+def _tab(label: str, active: bool) -> str:
+    return f"{_ACTIVE_TAB}{label}" if active else label
 
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:

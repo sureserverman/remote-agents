@@ -108,3 +108,23 @@ def test_the_domain_permits_the_force_the_policy_confines_to_the_adopted_branch(
     assert FORCE in available_actions(SessionState.ORPHANED, OrphanProvenance.ADOPTED)
     for conservative in (None, OrphanProvenance.AMBIGUOUS):
         assert FORCE not in available_actions(SessionState.ORPHANED, conservative)
+
+
+def test_the_resume_identity_index_releases_exactly_the_domain_s_terminal_states() -> None:
+    """Migration 8's predicate is a SQL string; `TERMINAL_STATES` is derived from the
+    transition matrix. Nothing made them agree, and the claim that they cannot drift was only
+    true if something enforced it — so this is that something.
+
+    A new edge out of ENDED, or a new state the matrix offers no way out of, changes
+    `TERMINAL_STATES` and silently leaves the index releasing the wrong set: too narrow traps
+    a conversation forever, too wide lets a second pane start against one that may be live.
+    """
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.domain.state_machine import TERMINAL_STATES
+
+    predicate = next(sql for version, sql in MIGRATIONS if version == 8)
+    released = {state for state in SessionState if f"<> '{state.value}'" in predicate}
+
+    assert released == set(TERMINAL_STATES), (
+        "the index releases a conversation for exactly the states the domain calls terminal"
+    )
