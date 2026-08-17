@@ -104,13 +104,34 @@ class SQLiteCallbackStateStore:
         double-stop this method exists to prevent — DEC-007's "no repeated keypress
         destroys anything" is the decision that binds this surface, and DEC-008 states the
         same principle for the local one.
+
+        **`message_id` is accepted and deliberately not matched on.** Message binding is the
+        *resolution* rule (DEC-011), and `resolve` has already enforced it for this exact
+        token, owner, chat and message before any caller reaches here — all six call sites
+        resolve first. Re-checking it at the claim was a second enforcement of a fact already
+        established, and it was the half that broke: `LiveView.move_to_bottom` `rebind`s the
+        anchor's tokens whenever a notification pushes the screen down, and every action that
+        shows a pending screen waits a Telegram round trip between resolving and claiming. A
+        rebind inside that gap left the claim matching no row, so a launch, stop or resume
+        that never ran answered "That action has already run" — the rebind that exists to keep
+        the keyboard working across the move breaking the one thing that did not survive it.
+
+        Owner and chat stay. They are the half that is about *authorization* rather than about
+        which message is currently on screen, and neither changes under a rebind, so keeping
+        them costs nothing and preserves the defence if a caller ever reaches here without
+        resolving first.
+
+        The parameter is kept in the signature rather than removed: every caller has it, it
+        documents what the claim is *about*, and dropping it would silently change six call
+        sites whose correctness depends on having resolved that message first.
         """
+        del message_id
         with self._connection:
             cursor = self._connection.execute(
                 "UPDATE callback_states SET claimed = 1 "
-                "WHERE token = ? AND owner_id = ? AND chat_id = ? AND message_id = ? "
+                "WHERE token = ? AND owner_id = ? AND chat_id = ? "
                 "AND mutation = 1 AND claimed = 0",
-                (token, owner_id, chat_id, message_id),
+                (token, owner_id, chat_id),
             )
         return cursor.rowcount == 1
 

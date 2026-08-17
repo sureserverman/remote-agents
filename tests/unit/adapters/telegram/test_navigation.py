@@ -928,3 +928,53 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
 
     assert "Not resumed" in str(result["text"])
     assert "Session resumed" not in str(result["text"])
+
+
+@pytest.mark.asyncio
+async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> None:
+    """The race, end to end and in the order it really happens.
+
+    A launch resolves its token, draws the pending screen, and only then claims. If an agent
+    activity notification is delivered inside that gap, `LiveView.move_to_bottom` re-sends the
+    screen below it and rebinds its tokens — and the launch used to answer "That action has
+    already run" for a session it had not started.
+    """
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    launcher = _LaunchingLauncher(_record())
+    boundary = PrivateBotBoundary(
+        OWNER,
+        CHAT,
+        catalogue=(PROJECT,),
+        profiles=(ProfileAvailability("claude", True, None),),
+        launcher=launcher,
+    )
+    launcher.launched: list[object] = []
+
+    async def launch(command):
+        launcher.launched.append(command)
+        return launcher.record
+
+    launcher.launch = launch
+
+    await boundary.launch_command(chat.message_update("/launch"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+
+    # The notification lands exactly where it hurts: after the token resolved, during the
+    # pending render, before the claim.
+    original = boundary.view.render
+    moved: list[int] = []
+
+    async def render_then_a_notification_arrives(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if not moved:
+            moved.append(1)
+            await boundary.view.move_to_bottom(chat.bot)
+        return result
+
+    boundary.view.render = render_then_a_notification_arrives
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Claude")), None)
+
+    assert len(launcher.launched) == 1, "the launch ran"
+    shown = chat.messages[boundary.view.anchor()].text
+    assert "already run" not in shown, shown

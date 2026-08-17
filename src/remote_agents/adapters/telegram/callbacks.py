@@ -88,8 +88,23 @@ class CallbackStateStore:
         return state
 
     def claim_mutation(self, token: str, *, owner_id: int, chat_id: int, message_id: int) -> bool:
-        state = self.resolve(token, owner_id=owner_id, chat_id=chat_id, message_id=message_id)
-        if state is None or not state.mutation or token in self._claimed:
+        """The process-local twin of the SQLite claim, and it must agree about the message.
+
+        `message_id` is accepted and not matched on, for the reason the durable twin gives at
+        length: `resolve` has already enforced message binding, and re-checking it here broke
+        across the `rebind` that `LiveView.move_to_bottom` performs. A twin that kept checking
+        would answer differently from the store the service actually runs on, which is worse
+        than either behaviour on its own.
+        """
+        del message_id
+        state = self._states.get(token)
+        if (
+            state is None
+            or state.owner_id != owner_id
+            or state.chat_id != chat_id
+            or not state.mutation
+            or token in self._claimed
+        ):
             return False
         self._claimed.add(token)
         return True
