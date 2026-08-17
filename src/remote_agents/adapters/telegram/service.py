@@ -971,7 +971,11 @@ class PrivateBotBoundary:
             _button_rows(
                 tuple(Button(area, self._callback("project.area", area)) for area in areas)
             )
-            + ((Button("Cancel", self._callback("nav.home", "home")),),),
+            # Cancel returns to the launch list, which is the screen that offered Add
+            # Project. It used to mint `nav.home`; Home was a defensible cancel target while
+            # it was the root, and the sessions list -- which is what that action now answers
+            # -- is the parent of nothing in this flow.
+            + ((Button("Cancel", self._callback("launch.open", "projects")),),),
         )
 
     def _project_review_reply(self, identity: ProjectIdentity) -> RenderedMessage:
@@ -990,7 +994,7 @@ class PrivateBotBoundary:
                     ),
                 ),
                 (Button("Back", self._callback("project.open", "areas")),),
-                (Button("Cancel", self._callback("nav.home", "home")),),
+                (Button("Cancel", self._callback("launch.open", "projects")),),
             ),
         )
 
@@ -1911,7 +1915,17 @@ class PrivateBotBoundary:
                         self._callback("resume.confirm", reference_value, mutation=True),
                     ),
                 ),
-                (Button("Cancel", self._callback("nav.home", "home")),),
+                # Back to the conversations for this project and agent -- the screen this
+                # one was chosen from -- rather than out of the resume flow entirely.
+                (
+                    Button(
+                        "Cancel",
+                        self._callback(
+                            "resume.page",
+                            f"{summary.project_id}|{summary.profile_id}|1",
+                        ),
+                    ),
+                ),
             ),
         )
 
