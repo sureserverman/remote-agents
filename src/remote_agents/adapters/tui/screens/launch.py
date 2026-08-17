@@ -290,10 +290,25 @@ class ReviewScreen(GatheredSelectionScreen):
         self.render_review()
 
     def render_review(self) -> None:
-        # The project and the agent are both in the breadcrumb. This line carried the label,
-        # which was the one part of the selection the trail could not — and with that step gone
-        # it has Task 2.2's job instead: naming what going through with this actually does.
-        self.set_status("Launch, or go back.")
+        # The project and the agent are both in the breadcrumb, so this line does not repeat
+        # them. It named the label — the one part of the selection the trail could not carry —
+        # and once that step was removed it rendered `Label: none` unconditionally, which is a
+        # line whose whole content is the absence of a step that no longer exists.
+        #
+        # What it says instead is the consequence, because this is the position that commits to
+        # it and the consequence is the largest the surface has: a ready launch **execs away**
+        # (DEC-023), replacing this process with the tmux client, so detaching afterwards
+        # returns the owner to their shell rather than to this app. That was written down in
+        # `adapters/tui/attach.py` and in the README and nowhere the owner could see it.
+        #
+        # "A ready launch", not "launching": a launch that never reaches readiness attaches to
+        # nothing and leaves the command on this same line instead, so the unqualified claim
+        # would be false exactly when the owner most needs the line to be true.
+        #
+        # No severity, per DEC-010 — this is an instruction about what is about to happen, not a
+        # report of a condition, and that entry is explicit that a status carries a severity
+        # only when its words do.
+        self.set_status("A ready launch hands this terminal to the session's pane.")
         self.show_choices((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def choose(self, key: str) -> None:
