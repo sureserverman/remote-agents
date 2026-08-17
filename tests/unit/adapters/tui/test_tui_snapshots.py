@@ -747,6 +747,33 @@ def test_every_state_names_a_live_position() -> None:
     )
 
 
+def test_no_baseline_is_orphaned_and_none_is_missing() -> None:
+    """Every committed `.svg` is one this suite still compares, and every case has its file.
+
+    **The one hole the two exhaustiveness checks above leave.** They tie `_POSITIONS` to the
+    registry and `_STATES` to the registry, so a *case* pointing at nothing fails — but neither
+    looks at the directory. A baseline left on disk after its position or state was deleted
+    simply stops being compared: nothing reads it, nothing fails, and it sits there looking like
+    coverage. That is not hypothetical; this plan deleted two of them (`LABEL`, and later
+    `RESUME_CONFIRM`), and without this check the first would have been noticed only by someone
+    running `ls`.
+
+    Asserted in both directions from one listing, because the two failures read very differently
+    and a reader of the failure needs to know which they have: an extra file is dead weight, a
+    missing one is a case that cannot pass at all.
+    """
+    committed = {path.stem for path in _SNAPSHOTS.glob("*.svg")}
+    expected = set(_POSITIONS) | {case.name for case in _STATES}
+
+    assert committed - expected == set(), (
+        f"these baselines are committed but nothing compares them any more: "
+        f"{sorted(committed - expected)}. Delete them, or restore the case that read them."
+    )
+    assert expected - committed == set(), (
+        f"these cases name a baseline that is not committed: {sorted(expected - committed)}"
+    )
+
+
 async def test_a_missing_baseline_fails_rather_than_being_written() -> None:
     """The suite cannot go green by generating the file it is about to compare against.
 
