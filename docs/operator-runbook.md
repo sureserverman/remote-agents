@@ -45,8 +45,10 @@ Confirm Telegram's discoverable owner shell without printing the credential:
 uv run --locked remote-agents telegram-ui-audit --json | python -m json.tool
 ```
 
-The report must be healthy, with no default/global commands and exactly `/start`, `/launch`,
-`/sessions`, and `/help` in the configured owner's chat scope. The owner chat's menu opens
+The report must be healthy, with no default/global commands and exactly `/launch`,
+`/resume`, `/sessions`, and `/help` in the configured owner's chat scope. `/start` is
+deliberately absent from that list: it stays registered as a handler because Telegram
+requires it, and is not advertised because it lands where `/sessions` lands. The owner chat's menu opens
 commands; the bot description and short description are checked against the reviewed values.
 
 ## Telegram acceptance checklist

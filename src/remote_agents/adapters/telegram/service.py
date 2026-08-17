@@ -430,9 +430,14 @@ class PrivateBotBoundary:
         bot = message.get_bot()
         value = message.text or ""
         if value.casefold() in {"cancel", "back"}:
-            self._flow = "sessions"
+            # Back to the screen the step was opened from, not out of the flow entirely.
+            # The instruction offers these two words to leave "this step" — *this step*, and
+            # a word that walks the owner out of the whole flow is not the word they were
+            # offered. It used to answer with Home, which was defensible while Home was the
+            # root of everything; the sessions list is the root of nothing here.
+            self._flow = _flow_of(entry.action)
             await self._finish_entry(
-                bot, entry, message, _reply_arguments(await self._sessions_reply())
+                bot, entry, message, await self._entry_landing(entry)
             )
             return
         if entry.action in _SEARCH_ACTIONS:
@@ -532,6 +537,23 @@ class PrivateBotBoundary:
     def _entry_key(self) -> tuple[int, int]:
         return (self.owner_user_id, self.owner_chat_id)
 
+    async def _entry_landing(self, entry: _TextEntry) -> dict[str, object]:
+        """Where abandoning a guided step puts the owner: the screen that opened it.
+
+        One place rather than four call sites, because "Cancel" and "Back" arrive by typed
+        text and by button and must agree about where they go.
+        """
+        if entry.action == "session.rename":
+            return _reply_arguments(await self._detail_reply(entry.entity_id))
+        if entry.action == "project.name":
+            # `project.name` is what the *step* is called; `project.area` is the button that
+            # opens it. Abandoning the name returns to the area picker that asked for it.
+            return _reply_arguments(await self._project_areas_reply())
+        flow = _SEARCH_ACTIONS.get(entry.action, "launch")
+        if flow == "resume":
+            return _reply_arguments(self._resume_projects_reply())
+        return _reply_arguments(self._projects_reply(self.catalogue, view_id="all"))
+
     async def _finish_entry(self, bot, entry: _TextEntry, message, arguments) -> None:
         """Draw the answer, then take the question and the answer out of the chat.
 
@@ -625,8 +647,8 @@ class PrivateBotBoundary:
         """Explain the actions this deployment actually offers, and leave a way on.
 
         Help used to answer with two lines of plain text and no keyboard, which made it the
-        one screen in the bot that went nowhere, and it named only two of the four things
-        Home can offer. What is listed here is what this composition was wired with, so a
+        one screen in the bot that went nowhere, and it named two of the four destinations
+        the bot then had. What is listed here is what this composition was wired with, so a
         bot without resume or project creation does not advertise them.
         """
         del context
@@ -1051,11 +1073,21 @@ class PrivateBotBoundary:
         if self.launcher is not None:
             await self.launcher.refresh_readiness()
         records = await self._records()
-        # Counted from the records this list is about to page, never from a second read. Two
-        # reads can disagree — a session can end between them — and a header contradicting
-        # the rows underneath it is worse than no header. These are the numbers Home used to
-        # carry, and they are counts *of sessions*, so this is where they were always about.
+        # Counted from the records this list is about to page, never from a second read: two
+        # reads can disagree, because a session can end between them.
+        #
+        # The **total** is carried as well as the two states, and that is not decoration.
+        # `_records` filters only ENDED, so a row can be STARTING, STOP_REQUESTED, FAILED or
+        # ORPHANED — none of which is RUNNING or PRESERVED. Home showed the same two numbers
+        # and got away with it by rendering them on a different screen from the rows; putting
+        # them directly above the list is exactly what turns an incomplete count into a
+        # visible contradiction. Four adopted-orphan rows under "0 active · 0 preserved" says
+        # nothing is happening above a row the domain describes as frequently a live agent
+        # this database lost. With the total present the arithmetic is checkable — a reader
+        # can see that some rows are in neither bucket and read each row's own state word to
+        # find out which.
         counts = (
+            f" · {len(records)} total"
             f" · {sum(record.state is SessionState.RUNNING for record in records)} active"
             f" · {sum(record.state is SessionState.PRESERVED for record in records)} preserved"
         )
@@ -1112,9 +1144,9 @@ class PrivateBotBoundary:
         page. Opening a row from page 3 and pressing Back used to answer page 1, and the only
         way back to page 3 was Refresh — which is now gone, so this is the whole route.
 
-        `sessions.open` keeps meaning *the top of the list*, which is what Home's Sessions
-        button and `/sessions` should still do. Only the detail, which was opened from a
-        known page, is entitled to return to one.
+        `sessions.open` keeps meaning *the top of the list*, which is what the navigation
+        bar's Sessions button, `/sessions` and `/start` should all do. Only the detail, which
+        was opened from a known page, is entitled to return to one.
         """
         return self._callback("sessions.page", str(self._sessions_page))
 
@@ -1872,9 +1904,9 @@ class PrivateBotBoundary:
                     self._callback("resume.page", f"{project_id}|{profile_id}|{result.page + 1}"),
                 )
             )
-        # Back belongs in the navigation row with Home, like every other screen, rather
-        # than as a body button — and the empty case needs it most, since it used to offer
-        # nothing but a row restating that there was nothing.
+        # Back belongs in the navigation rows `_message` appends, like every other screen,
+        # rather than as a body button — and the empty case needs it most, since it used to
+        # offer nothing but a row restating that there was nothing.
         back = self._callback("resume.project", project_id)
         if not buttons:
             return self._message(

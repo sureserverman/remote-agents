@@ -210,7 +210,8 @@ async def test_a_clean_stop_lands_on_list_naming_what_ended() -> None:
 
     assert rendered.text.startswith("Stopped Demo · Claude · regular · #1\n")
     assert "The session has ended." in rendered.text
-    assert "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running." in rendered.text
+    empty_list = "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
+    assert empty_list in rendered.text
     assert "Back" not in _labels(rendered), "the list is the destination, not a stop on the way"
 
 

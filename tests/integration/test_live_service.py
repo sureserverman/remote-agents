@@ -135,7 +135,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     assert (
         message.replies[0]["text"]
-        == "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running."
+        == "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
     )
     launch = _button(message.replies[0], "Launch")
     callback = _Callback(launch)
@@ -306,7 +306,7 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
 
     assert launch.replies[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
     assert sessions.replies[0]["text"] == (
-        "<b>Sessions</b> · 0 active · 0 preserved\nNothing is running."
+        "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
     )
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.

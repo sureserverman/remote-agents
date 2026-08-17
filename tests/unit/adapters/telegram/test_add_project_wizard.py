@@ -173,7 +173,10 @@ async def test_cancel_and_back_leave_name_entry_without_creating(reply: str) -> 
 
     rendered = await _send(boundary, reply)
 
-    assert "Sessions" in str(rendered["text"])
+    # Back to the area picker that asked for the name, not out of the wizard. The prompt
+    # offers these two words to leave *this step*; a word that leaves the whole flow is not
+    # the word the owner was offered.
+    assert "Add project" in str(rendered["text"])
     assert creator.commands == []
     assert (OWNER, CHAT) not in boundary._awaiting_text
 

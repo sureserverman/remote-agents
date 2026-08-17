@@ -494,7 +494,7 @@ async def test_guided_entry_that_is_refused_re_asks_without_accumulating() -> No
 
 
 @pytest.mark.asyncio
-async def test_guided_entry_cancelled_returns_to_sessions_and_takes_the_input_box_with_it() -> None:
+async def test_guided_entry_cancelled_returns_to_its_picker_and_clears_the_box() -> None:
     chat = FakeChat()
     boundary = _boundary()
     await boundary.start(chat.message_update("/start"), None)
@@ -508,7 +508,8 @@ async def test_guided_entry_cancelled_returns_to_sessions_and_takes_the_input_bo
 
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == []
-    assert chat.messages[anchor].text.startswith("<b>Sessions</b>")
+    # Back to the launch picker the search was opened from, not out of the flow.
+    assert chat.messages[anchor].text.startswith("<b>Projects")
 
 
 @pytest.mark.asyncio

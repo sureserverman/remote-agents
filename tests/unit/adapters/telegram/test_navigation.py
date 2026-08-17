@@ -468,6 +468,28 @@ async def test_the_sessions_counts_are_still_rendered_when_nothing_is_running() 
 
 
 @pytest.mark.asyncio
+async def test_the_sessions_counts_reconcile_with_the_rows_they_sit_above() -> None:
+    """A row can be STARTING, STOP_REQUESTED, FAILED or ORPHANED — in neither named bucket.
+    Home showed the same two numbers and got away with it by being a different screen from
+    the rows; directly above the list, "0 active · 0 preserved" over four rows is a
+    contradiction. The total is what makes the arithmetic checkable."""
+    boundary = _sessions_counts_boundary(
+        [
+            SessionState.ORPHANED,
+            SessionState.FAILED,
+            SessionState.STARTING,
+            SessionState.STOP_REQUESTED,
+        ]
+    )
+
+    rendered = await boundary._sessions_reply()
+
+    assert "4 total" in rendered.text
+    assert "0 active" in rendered.text
+    assert len(rendered.keyboard) - 1 == 4, "one row per session, plus the bar"
+
+
+@pytest.mark.asyncio
 async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> None:
     """One read, not two. A second read could disagree with the rows underneath it, and a
     header that contradicts its own list is worse than no header."""
