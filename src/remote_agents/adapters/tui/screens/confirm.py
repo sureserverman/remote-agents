@@ -292,10 +292,12 @@ class RemoteControlConfirmModal(ConfirmScreen):
 
     Which direction is being confirmed is chosen on the session detail and carried here in
     the question, rather than being a second decision taken inside the confirmation. That is
-    what lets this be the same `ModalScreen[bool]` as the force confirm — and it is also what
-    the bot already does (`telegram/service.py`, `_detail_reply`), where the detail offers
-    "Enable Remote Control" and "Disable Remote Control" as separate buttons and the confirm
-    that follows asks about exactly one of them.
+    what lets this be the same `ModalScreen[bool]` as the force confirm — and it is what the
+    bot does too, from the same shared policy: `remote_control_directions` decides which
+    directions each detail screen offers, and the confirmation that follows asks about
+    exactly one of them. Since that policy reads the last observed state, the usual case is
+    a single row on the detail and this modal confirming it; both rows appear only while
+    nothing has been observed yet.
     """
 
     position = "REMOTE_CONTROL_MODAL"

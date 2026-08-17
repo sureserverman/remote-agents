@@ -48,16 +48,17 @@ _LOG = logging.getLogger(__name__)
 _INSPECT_MAX_LINES = 2000
 _INSPECT_MAX_BYTES = 512 * 1024
 
-#: The two Remote Control directions: the row key, what the row says, and the state that row
-#: asks for. One table rather than a list of rows beside a lookup, so a row cannot come to
-#: exist without a direction behind it — which is the defect the single-row version had, where
-#: the direction was decided a screen later by whichever of two buttons was pressed.
-_REMOTE_CONTROL_ROWS: tuple[tuple[str, str, RemoteControlState], ...] = (
-    ("remote-control-active", "Enable Remote Control", RemoteControlState.ACTIVE),
-    ("remote-control-inactive", "Disable Remote Control", RemoteControlState.INACTIVE),
-)
-_REMOTE_CONTROL_DIRECTIONS = {key: state for key, _label, state in _REMOTE_CONTROL_ROWS}
-_REMOTE_CONTROL_KEYS = {state: key for key, _label, state in _REMOTE_CONTROL_ROWS}
+#: This surface's row key for each Remote Control direction, and nothing else. The table used
+#: to carry the labels too, which made it a second source of truth for strings the shared
+#: `REMOTE_CONTROL_LABELS` now owns — two places to change, one of which the parity contract
+#: would not have caught, since it compares what each surface *renders* rather than what each
+#: surface stores. A row still cannot exist without a direction behind it: the key is derived
+#: from the state rather than sitting beside it.
+_REMOTE_CONTROL_DIRECTIONS = {
+    "remote-control-active": RemoteControlState.ACTIVE,
+    "remote-control-inactive": RemoteControlState.INACTIVE,
+}
+_REMOTE_CONTROL_KEYS = {state: key for key, state in _REMOTE_CONTROL_DIRECTIONS.items()}
 
 
 def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
