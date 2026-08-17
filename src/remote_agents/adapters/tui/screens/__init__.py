@@ -24,7 +24,6 @@ from remote_agents.adapters.tui.screens.confirm import (
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.launch import (
-    LabelScreen,
     ProfilesScreen,
     ProjectsScreen,
     ReviewScreen,
@@ -52,7 +51,6 @@ from remote_agents.adapters.tui.screens.sessions import (
 ALL_SCREENS = (
     ProjectsScreen,
     ProfilesScreen,
-    LabelScreen,
     ReviewScreen,
     AreasScreen,
     NameScreen,
@@ -75,7 +73,6 @@ __all__ = [
     "AreasScreen",
     "ForceConfirmModal",
     "InspectScreen",
-    "LabelScreen",
     "NameScreen",
     "ProfilesScreen",
     "ProjectReviewScreen",

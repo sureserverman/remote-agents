@@ -66,7 +66,7 @@ that having to look at a render is what showed they were broken already.
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
    False` on every input first, which pauses that timer and forces the cursor visible
-   (`_input.py:527`). Three baselines depend on this — `PROJECTS`, `LABEL` and `NAME` — and
+   (`_input.py:527`). Three baselines depend on this — `PROJECTS`, `NAME` and `RENAME` — and
    without it they would pass locally and flake on a loaded machine, which is precisely the
    failure this file exists to prevent rather than reproduce.
 
@@ -130,7 +130,6 @@ _THEME = "textual-dark"
 _POSITIONS = (
     "PROJECTS",
     "PROFILES",
-    "LABEL",
     "REVIEW",
     "AREAS",
     "NAME",
@@ -369,18 +368,17 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     """
     if step == "PROJECTS":
         return None
-    if step in {"PROFILES", "LABEL", "REVIEW"}:
+    if step in {"PROFILES", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
         await pilot.pause()
         if step == "PROFILES":
             return None
+        # Choosing the agent *is* the arrival at the review now; there is no entry to commit
+        # in between, and `ReviewScreen` has no `submit` to call.
         await app.screen.choose("claude")
         await pilot.pause()
-        if step == "REVIEW":
-            app.screen.submit("nightly run")
-            await pilot.pause()
         return None
     if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
         await app.show_areas()

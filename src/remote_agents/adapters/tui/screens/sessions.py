@@ -780,8 +780,9 @@ class RenameScreen(ChoiceScreen):
         `check_action` and by `on_option_list_option_selected`, so it drops a repeated *row*
         selection; nothing on the `Input.Submitted` dispatch path reads it, and `awaiting`
         covers `#choices` rather than the entry. This is the surface's only mutating submit, and
-        it was written without the check both sibling committing entries have
-        (`LabelScreen.submit`, `NameScreen.submit`).
+        it was written without the check its sibling committing entry has
+        (`NameScreen.submit`; the launch flow's label entry had it too, and has since been
+        removed along with the step).
 
         **Both checks below are load-bearing and they cover different windows**, which is the
         division `holding_the_guard` states when it says both are kept — the guard is the

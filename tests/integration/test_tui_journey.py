@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from tui_filter import settle_filter
+from tui_positions import position
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
@@ -82,19 +83,25 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             for character in "brand-new":
                 await pilot.press(character)
             await settle_filter(pilot)
+            # Filter -> rows -> project -> agent, and the agent choice arrives at the review.
+            # One enter fewer than this walk used to need: the label step it committed an empty
+            # value through is gone.
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            app.screen.query_one("#filter").value = "first run"
-            await pilot.press("enter")
-            await pilot.pause()
-            # The project and the agent are the header's trail now; the status line carries
-            # the label, which is the one part of the gathered selection the trail cannot.
-            assert "brand-new" in (app.screen.sub_title or "")
-            assert "first run" in str(app.screen.query_one("#status").content)
+            assert position(app) == "REVIEW"
+            # Both choices are the header's trail. The status line carried the label, which was
+            # the one part of the gathered selection the trail could not; with that gone the
+            # trail carries the whole selection and nothing is asserted here that the header
+            # does not already say.
+            trail = app.screen.sub_title or ""
+            assert "brand-new" in trail
+            assert "claude" in trail, (
+                f"the agent must survive in the trail at the commit point; trail was {trail!r}"
+            )
 
             await pilot.press("up")
             await pilot.press("enter")
@@ -106,7 +113,10 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
         records = list(await store.list())
         assert [record.state for record in records] == [SessionState.RUNNING]
         assert str(records[0].project_id) == created.opaque_id
-        assert records[0].display.custom_label == "first run"
+        # Launched with no name, which is what both surfaces now do. Naming happens afterwards
+        # from the session's own detail -- covered by test_tui_rename.py and, across two store
+        # connections, by test_tui_sessions_journey.py.
+        assert records[0].display.custom_label is None
         assert app.return_value is not None
         assert app.return_value.session_id == str(records[0].session_id)
         assert "attach" in app.return_value.command

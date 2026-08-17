@@ -139,7 +139,6 @@ def _arrangements():
         AreasScreen,
         ForceConfirmModal,
         InspectScreen,
-        LabelScreen,
         NameScreen,
         ProfilesScreen,
         ProjectReviewScreen,
@@ -166,7 +165,6 @@ def _arrangements():
     return {
         ProjectsScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
-        LabelScreen: LabelScreen,
         ReviewScreen: ReviewScreen,
         AreasScreen: AreasScreen,
         NameScreen: lambda: NameScreen("infra"),
@@ -464,7 +462,6 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
 #: green. Verified: deleting the review screens' override passed every case until this list
 #: existed. A literal is the only form that can fail.
 _PROTECTS_WORK = {
-    "LabelScreen",
     "NameScreen",
     "RenameScreen",
     "ReviewScreen",
@@ -475,7 +472,7 @@ _PROTECTS_WORK = {
 def test_exactly_these_positions_protect_work_in_flight() -> None:
     """Which screens have something to lose is a decision, so it is written down.
 
-    Two kinds: the three that gather typed text, and the two review steps that hold a whole
+    Two kinds: the two that gather typed text, and the two review steps that hold a whole
     flow's worth of choices with an empty entry. The second kind is the one a rule written
     against the input widget misses, which is what a stage review found by walking to Review
     with a label committed and pressing Ctrl+S.

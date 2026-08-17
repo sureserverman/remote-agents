@@ -10,6 +10,7 @@ from textual.widgets import Input, OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_feedback import status as _status
 from tui_filter import settle_filter
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import (
     AttachRequest,
@@ -115,12 +116,6 @@ async def _choose(app: RemoteAgentsTui, pilot, key: str) -> None:
     await pilot.pause()
 
 
-async def _submit_label(app: RemoteAgentsTui, pilot, value: str) -> None:
-    """Type a label and press enter, as `LabelScreen` receives it from its own input."""
-    app.screen.submit(value)
-    await pilot.pause()
-
-
 async def test_the_project_list_shows_registered_before_unregistered_with_its_group() -> None:
     app = RemoteAgentsTui(_context())
 
@@ -176,53 +171,53 @@ async def test_an_unavailable_agent_cannot_be_chosen() -> None:
     assert launcher.commands == []
 
 
-async def test_review_names_the_project_agent_and_label_before_any_launch() -> None:
+async def test_choosing_an_agent_reaches_the_review_with_no_step_in_between() -> None:
+    """The launch flow is three positions, not four.
+
+    The label step it loses named a session before there was one to look at, and could never
+    change it afterwards — naming now lives on the session's own detail as Rename, which is
+    the moment the owner actually knows what to call it. The bot dropped its own launch-time
+    label for the same reason and names a session from its menu instead.
+
+    Asserted as the *position*, not as the absence of a screen class: the claim is about what
+    the owner walks through, and a flow that kept the step under another name would pass a
+    test written against the import.
+    """
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        assert position(app) == "PROFILES"
+        await _choose(app, pilot, "claude")
+        step = position(app)
+        keys = _keys(app)
+
+    assert step == "REVIEW", f"choosing an agent landed on {step}"
+    assert keys[:1] == ["launch"], f"the review did not offer Launch first: {keys}"
+
+
+async def test_review_names_the_project_and_the_agent_before_any_launch() -> None:
+    """Both facts, still before anything is created — now carried entirely by the trail.
+
+    This asserted three facts and the third was the label, which the status line held because
+    the breadcrumb could not. With that step gone the trail carries everything the owner chose,
+    and what the status line owes them is what going through with it *does* — asserted by
+    `test_status_region.py`, which owns that sentence.
+    """
     launcher = FakeLauncher()
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "nightly run")
         await pilot.pause()
-        status = _status(app)
         trail = breadcrumb(app)
         keys = _keys(app)
 
-    # Still all three facts, and still before any launch — the project and the agent are the
-    # trail that got the owner here, and the label is the one thing that trail cannot carry.
     assert "infra/existing" in trail
     assert "claude" in trail
-    assert "nightly run" in status
     assert keys[:1] == ["launch"]
-    assert launcher.commands == []
-
-
-@pytest.mark.parametrize("value", ["", "   "])
-async def test_an_empty_label_is_skipped_rather_than_rejected(value: str) -> None:
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, value)
-        await pilot.pause()
-        status = _status(app)
-
-    assert "Label: none" in status
-
-
-async def test_a_label_beyond_the_configured_bound_is_refused() -> None:
-    app = RemoteAgentsTui(_context(max_label_length=10))
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "x" * 11)
-        await pilot.pause()
-        reported = " ".join(announcements(app, severity="warning"))
-
-    assert "up to 10 characters" in reported
+    assert launcher.commands == [], "the review must not have launched anything"
 
 
 async def test_cancel_at_review_returns_to_the_projects_without_launching() -> None:
@@ -232,7 +227,6 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "")
         await _choose(app, pilot, _CANCEL)
         await pilot.pause()
         rows = _rows(app)
@@ -241,56 +235,54 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
     assert rows == ["infra/existing  [Registered]", "dev-area/other-thing  [Unregistered]"]
 
 
-async def test_back_from_review_walks_out_through_the_label_to_the_agent_choice() -> None:
+async def test_back_from_review_returns_to_the_agent_choice() -> None:
     """Back goes to the position it was reached from, one step at a time.
 
-    **This is a deliberate navigation change, not an incidental one, and it removes TWO
-    shortcuts rather than one.** The hand-rolled chain sent Back at Review straight to the
-    agent list, skipping the label — so an owner who mistyped a label could not go back and
-    fix it, only re-pick the agent and retype. It *also* sent Escape at the label straight to
-    the project list, skipping the agent choice, because the label was grouped with the
-    add-project name entry as a text position. On a real stack Back means "the screen I came
-    from", so both jumps become one level each. No affordance is added or removed and every position
-    stays reachable; what changes is that neither shortcut survives.
+    **This test used to assert two pops and now asserts one, because one of the two positions
+    it walked through is gone.** The hand-rolled chain this behaviour replaced had two
+    shortcuts: Back at Review jumped straight past the label to the agent list, and Escape at
+    the label jumped straight past the agent choice to the project list. On a real stack each
+    was one level, and asserting both legs is what kept either from being reinstated.
 
-    Both legs are asserted below — the Review→Label pop, then the Label→Profiles pop — so
-    reinstating either shortcut fails here rather than passing on the destination alone.
+    Removing the label step removes the *second* shortcut's subject entirely — there is no
+    longer a position between Review and the agent list to skip. So the surviving claim is the
+    first leg, and it is now the whole walk: Review pops to the agent list, not past it to the
+    projects. Narrowed rather than deleted, because a Review that unwound two levels is exactly
+    the regression the original shortcut was.
     """
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "")
         assert _keys(app)[:1] == ["launch"], "expected the review before walking back from it"
 
         await _choose(app, pilot, _BACK)
-        assert app.screen.query_one("#filter").has_focus, (
-            "back from the review must restore the label entry, not skip past it"
-        )
-
-        await app.action_back()
         await pilot.pause()
+        step = position(app)
         rows = _rows(app)
 
+    assert step == "PROFILES", f"back from the review landed on {step}, not the agent list"
     assert rows == ["claude", "cursor-agent  (unavailable: executable_missing)"]
 
 
-async def test_confirming_issues_one_launch_carrying_the_chosen_label() -> None:
+async def test_confirming_issues_one_launch_and_it_carries_no_label() -> None:
     launcher = FakeLauncher()
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "nightly")
         await _choose(app, pilot, "launch")
 
     assert len(launcher.commands) == 1
     command = launcher.commands[0]
     assert str(command.project_id) == "opaque-existing"
     assert str(command.profile_id) == "claude"
-    assert command.label == "nightly"
+    # No label, and asserted rather than left unmentioned: this is the field the removed step
+    # used to fill, and both surfaces now launch without one. A session is named afterwards,
+    # from its own detail, which is the only moment the name can also be *changed*.
+    assert command.label is None
     assert command.idempotency_key.startswith("tui-")
 
 
@@ -302,7 +294,6 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
         async with app.run_test() as pilot:
             await _choose(app, pilot, "opaque-existing")
             await _choose(app, pilot, "claude")
-            await _submit_label(app, pilot, "")
             await _choose(app, pilot, "launch")
     keys = [command.idempotency_key for command in launcher.commands]
 
@@ -316,7 +307,6 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "")
         await _choose(app, pilot, "launch")
         await pilot.pause()
         reported = " ".join(announcements(app, severity="error"))
@@ -439,18 +429,21 @@ async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method
     app = RemoteAgentsTui(_context(launcher=launcher))
 
     async with app.run_test() as pilot:
+        # Filter -> rows, then the project. Two enters, because the keyboard starts in the
+        # filter and the first enter is what moves it into the list.
         await pilot.press("enter")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
         assert _keys(app) == ["claude", "cursor-agent"]
 
-        await pilot.press("enter")
-        await pilot.pause()
+        # One enter now, not two: choosing the agent lands on the review directly, where it
+        # used to land on the label entry and need an enter to commit an empty one.
         await pilot.press("enter")
         await pilot.pause()
         assert [key for key in _keys(app)] == ["launch", "\x00back", "\x00cancel"]
 
+        # The review rests on Back, so reaching Launch means moving the cursor on purpose.
         await pilot.press("up")
         await pilot.press("enter")
         await pilot.pause()
@@ -463,20 +456,26 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        assert app.screen.query_one("#filter").has_focus
+        assert app.screen.query_one("#filter").has_focus, "the project filter opens focused"
 
         await pilot.press("enter")
         await pilot.pause()
         choices = app.screen.query_one("#choices")
-        assert choices.has_focus and choices.highlighted == 0
+        assert choices.has_focus and choices.highlighted == 0, (
+            "leaving the filter must hand the keyboard to the rows, resting on the first"
+        )
 
         await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.query_one("#choices").has_focus
+        assert app.screen.query_one("#choices").has_focus, "the agent list takes the keyboard"
 
+        # The walk used to end on the label entry taking the keyboard back. With that step gone
+        # it ends on the review, which is a list -- so the keyboard stays on the rows, and the
+        # claim this test makes is unchanged: every choice list hands the keyboard to its list.
         await pilot.press("enter")
         await pilot.pause()
-        assert app.screen.query_one("#filter").has_focus
+        assert position(app) == "REVIEW"
+        assert app.screen.query_one("#choices").has_focus, "the review takes the keyboard too"
 
         await pilot.press("enter")
         await pilot.pause()
@@ -663,7 +662,6 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "")
         await _choose(app, pilot, "launch")
         await pilot.pause()
         reported = " ".join(announcements(app, severity="error"))
@@ -679,7 +677,6 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "claude")
-        await _submit_label(app, pilot, "")
         await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
@@ -821,80 +818,6 @@ async def test_leaving_the_filter_with_enter_also_applies_a_pending_search() -> 
 
     assert rows == ["dev-area/other-thing  [Unregistered]"]
     assert focused_rows
-
-
-async def test_an_over_long_label_is_rejected_while_it_is_being_typed() -> None:
-    """The bound used to be learned at the enter after the last character, not before it."""
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        entry = app.screen.query_one("#filter", Input)
-        assert entry.has_focus, "expected the label entry"
-
-        entry.value = "x" * (app.services.max_label_length + 1)
-        await pilot.pause()
-
-        rejected = announcements(app, severity="warning")
-        invalid = entry.has_class("-invalid")
-
-    assert invalid, "the entry did not mark itself invalid"
-    assert any("visible label of up to" in message for message in rejected), rejected
-
-
-async def test_the_label_rejection_is_said_once_not_once_per_keystroke() -> None:
-    """Five characters past the bound break one rule; five identical toasts bury the task."""
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        entry = app.screen.query_one("#filter", Input)
-        over = app.services.max_label_length + 1
-        for extra in range(5):
-            entry.value = "x" * (over + extra)
-            await pilot.pause()
-
-        rejected = announcements(app, severity="warning")
-
-    assert len(rejected) == 1, f"expected one rejection for one broken rule, got {rejected}"
-
-
-async def test_a_label_corrected_back_under_the_bound_stops_being_refused() -> None:
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        entry = app.screen.query_one("#filter", Input)
-        entry.value = "x" * (app.services.max_label_length + 1)
-        await pilot.pause()
-        entry.value = "nightly"
-        await pilot.pause()
-
-        invalid = entry.has_class("-invalid")
-
-    assert not invalid, "the entry stayed marked invalid after the value was corrected"
-
-
-async def test_an_empty_label_is_valid_because_the_step_is_optional() -> None:
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "claude")
-        entry = app.screen.query_one("#filter", Input)
-        entry.value = "n"
-        await pilot.pause()
-        entry.value = ""
-        await pilot.pause()
-
-        invalid = entry.has_class("-invalid")
-        rejected = announcements(app, severity="warning")
-
-    assert not invalid, "an empty optional label was refused"
-    assert rejected == [], rejected
 
 
 async def test_an_invalid_project_name_is_rejected_while_it_is_being_typed() -> None:

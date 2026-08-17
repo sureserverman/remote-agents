@@ -62,7 +62,6 @@ from datetime import UTC, datetime
 from test_tui_snapshots import settle
 from textual.widgets import Input, OptionList
 from tui_feedback import status
-from tui_filter import settle_filter
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -339,19 +338,27 @@ async def test_a_read_left_behind_does_not_clobber_a_name_typed_on_the_position_
         await _settled(reading)
 
 
-async def test_a_read_left_behind_does_not_clobber_a_label_typed_two_flows_away() -> None:
-    """The same guarantee across a longer walk, ending on the launch wizard's label.
+async def test_a_read_left_behind_does_not_clobber_a_name_typed_deeper_in_the_same_flow() -> None:
+    """The same guarantee, on the one arrangement where the stale read's own screen is still up.
 
-    A second destination rather than a second assertion on the first, because the two reach
-    `LabelScreen` and `NameScreen` by different routes: this one leaves the sessions list by
-    *popping* it (escape, through `go_back`, which re-reads the project list on the way) and
-    then walks three positions deeper, while the other jumps flows with `switch_flow`. The
-    stale read is left behind by both, and a guard that covered one arrangement of the stack
-    and not the other would be caught here.
+    **This replaces a walk that ended on the launch wizard's label entry, and the replacement is
+    not a like-for-like.** That walk existed as a *second route* to a typed entry: it left the
+    sessions list by **popping** it and then went three positions deeper into the launch flow,
+    where its sibling above jumps flows with `switch_flow` — and the docstring argued that a
+    guard covering one arrangement of the stack and not the other would be caught here. The
+    launch flow no longer has a typed entry to end on, so that exact route cannot be walked.
 
-    The filter is typed and settled deliberately: it is what makes the project row the owner
-    selects the one they were looking at, and `settle_filter` exists because the debounce
-    otherwise decides that by timing.
+    Rerouting rather than deleting, and the choice of destination is deliberate. The pop half of
+    the old route is covered twice over by the two tests below, which are entirely about
+    `go_back`, `on_reveal` and `on_screen_resume`. What the old route uniquely carried was *a
+    typed value surviving a stale read on a position reached by a longer walk*, and that is what
+    this keeps — now by walking **deeper from the very screen whose read is in flight**, into the
+    session detail and then its Rename entry.
+
+    That arrangement is one neither original route reached: `SessionsScreen` is still **on the
+    stack**, two levels down, rather than unwound away by `switch_flow` or popped off by Escape.
+    So `showing` is answering for a screen that is not on top but is very much alive, which is
+    the case its own docstring is most easily read as not covering.
     """
     launcher = _GatedLauncher(records=(_record(_ONE, 1), _record(_TWO, 2)))
     app = RemoteAgentsTui(_context(launcher))
@@ -361,22 +368,17 @@ async def test_a_read_left_behind_does_not_clobber_a_label_typed_two_flows_away(
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause()
             screen, reading = await _a_listing_read_left_in_flight(app, pilot, launcher, gate)
+            assert position(app) == "SESSIONS"
 
-            await pilot.press("escape")
-            await settle(app, pilot)
-            assert position(app) == "PROJECTS"
-            await pilot.press(*"alpha")
-            await settle_filter(pilot)
-            assert _rows(app) == ["opaque-alpha"], "the filter did not narrow to one project"
-            await pilot.press("down", "enter")
-            await settle(app, pilot)
-            assert position(app) == "PROFILES"
             await pilot.press("enter")
             await settle(app, pilot)
-            assert position(app) == "LABEL", "the launch wizard did not reach the label entry"
+            assert position(app) == "SESSION_DETAIL", "the sessions list did not open a detail"
+            await app.screen.choose("rename")
+            await settle(app, pilot)
+            assert position(app) == "RENAME", "the detail did not reach the rename entry"
             await pilot.press(*"nightly-sweep")
             await pilot.pause()
-            assert _entry(app).value == "nightly-sweep", "the label never reached the entry"
+            assert _entry(app).value == "nightly-sweep", "the name never reached the entry"
 
             before = _surface(app)
             assert not reading.done(), (
@@ -384,6 +386,10 @@ async def test_a_read_left_behind_does_not_clobber_a_label_typed_two_flows_away(
                 "land and this test proves nothing"
             )
             assert screen is not app.screen, "the owner never left the sessions list"
+            assert screen in app.screen_stack, (
+                "this test's whole point is that the read's own screen is still on the stack; "
+                "if it has been unwound away the arrangement is the sibling's, not this one's"
+            )
 
             gate.set()
             await asyncio.wait_for(reading, timeout=5)

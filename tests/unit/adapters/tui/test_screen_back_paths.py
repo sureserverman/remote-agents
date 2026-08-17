@@ -34,7 +34,6 @@ from remote_agents.adapters.tui.screens import (
     AreasScreen,
     ForceConfirmModal,
     InspectScreen,
-    LabelScreen,
     NameScreen,
     ProfilesScreen,
     ProjectReviewScreen,
@@ -160,7 +159,6 @@ _RESOLVED = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
 # state it renders is the point of moving the seven navigation fields onto them.
 _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ProfilesScreen: ProfilesScreen,
-    LabelScreen: LabelScreen,
     ReviewScreen: ReviewScreen,
     AreasScreen: AreasScreen,
     NameScreen: lambda: NameScreen("infra"),

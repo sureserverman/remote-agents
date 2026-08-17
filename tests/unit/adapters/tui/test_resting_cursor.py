@@ -180,9 +180,10 @@ async def _drive_to_force_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
     # Through each screen's own handler, so the cursor under test is the one the real
     # navigation leaves behind rather than one a directly-built screen happens to draw.
+    # Two choices, not three: the agent choice lands on the review directly since the launch
+    # flow lost its label step.
     await app.screen.choose("opaque-existing")
     await app.screen.choose("claude")
-    app.screen.submit("nightly run")
 
 
 async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:

@@ -1059,7 +1059,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         ProjectId(project.opaque_id),
                         ProfileId(profile.profile_id),
                         _idempotency_key(),
-                        self.selection.label,
+                        # No label at launch, which is now what both surfaces do. Naming a
+                        # session happens on the session, from the detail's Rename row, at the
+                        # moment the owner can see what they are naming.
+                        None,
                     )
                 )
         except Exception as error:

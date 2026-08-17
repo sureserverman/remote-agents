@@ -226,13 +226,111 @@ async def test_an_empty_entry_leaves_the_name_as_it_is() -> None:
     assert step == "SESSION_DETAIL", "declining to rename returns to the session"
 
 
+# ---------------------------------------------------------------------------------------
+# The typed-time entry machinery, moved here from `test_tui_wizard.py` when the launch flow
+# lost its label step.
+#
+# All four cover shared machinery — `announce_rejection`'s dedup, the `-invalid` class, and
+# `text_entry`'s `valid_empty` — through whichever optional bounded entry the surface happens
+# to have. That was the launch label; it is this. Moved rather than deleted, because the
+# machinery outlived the screen and would otherwise have lost its only coverage.
+#
+# **Two of the four had started passing against nothing**, which is the sharper reason they
+# could not simply be left where they were: their drive reached what is now `REVIEW`, where
+# `hide_entry()` leaves `#filter` in the tree with no validators, so setting a value on it can
+# never be invalid and `assert not invalid` held vacuously. A green suite said the rules were
+# still enforced when nothing was enforcing them.
+# ---------------------------------------------------------------------------------------
+
+
+async def _at_the_entry(app: RemoteAgentsTui, pilot, record: SessionRecord) -> Input:
+    """Drive to the rename entry and hand back the focused input."""
+    await app.show_detail(str(record.session_id))
+    await pilot.pause()
+    await app.screen.choose("rename")
+    await pilot.pause()
+    entry = app.screen.query_one("#filter", Input)
+    assert entry.has_focus, "expected the rename entry to hold the keyboard"
+    return entry
+
+
+async def test_an_over_long_name_is_rejected_while_it_is_being_typed() -> None:
+    """The bound used to be learned at the enter after the last character, not before it."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        entry = await _at_the_entry(app, pilot, record)
+        entry.value = "x" * (app.services.max_label_length + 1)
+        await pilot.pause()
+
+        rejected = announcements(app, severity="warning")
+        invalid = entry.has_class("-invalid")
+
+    assert invalid, "the entry did not mark itself invalid"
+    assert any("visible label of up to" in message for message in rejected), rejected
+
+
+async def test_the_rejection_is_said_once_not_once_per_keystroke() -> None:
+    """Five characters past the bound break one rule; five identical toasts bury the task."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        entry = await _at_the_entry(app, pilot, record)
+        over = app.services.max_label_length + 1
+        for extra in range(5):
+            entry.value = "x" * (over + extra)
+            await pilot.pause()
+
+        rejected = announcements(app, severity="warning")
+
+    assert len(rejected) == 1, f"expected one rejection for one broken rule, got {rejected}"
+
+
+async def test_a_name_corrected_back_under_the_bound_stops_being_refused() -> None:
+    record = _record()
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        entry = await _at_the_entry(app, pilot, record)
+        entry.value = "x" * (app.services.max_label_length + 1)
+        await pilot.pause()
+        entry.value = "nightly"
+        await pilot.pause()
+
+        invalid = entry.has_class("-invalid")
+
+    assert not invalid, "the entry stayed marked invalid after the value was corrected"
+
+
+async def test_an_empty_name_is_valid_because_the_entry_is_optional() -> None:
+    """`valid_empty` is left at its default here, as it was on the label it replaces."""
+    record = _record()
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        entry = await _at_the_entry(app, pilot, record)
+        entry.value = "n"
+        await pilot.pause()
+        entry.value = ""
+        await pilot.pause()
+
+        invalid = entry.has_class("-invalid")
+        rejected = announcements(app, severity="warning")
+
+    assert not invalid, "an empty optional name was refused"
+    assert rejected == [], rejected
+
+
 async def test_a_repeated_enter_renames_once_and_does_not_pop_twice() -> None:
     """Two Enters on the entry are one rename, and they leave the owner on the detail.
 
     **This is the only mutating `Input.Submitted` handler in the surface, and it was written
-    without the guard its two siblings have.** `LabelScreen.submit` and `NameScreen.submit`
-    both check `showing` before acting, so a second Enter arriving after the first has left the
-    screen returns early. This one did not, and its docstring credited the busy guard for
+    without the guard its sibling has.** `NameScreen.submit` checks `showing` before acting,
+    so a second Enter arriving after the first has left the screen returns early. The launch
+    flow's label entry did the same, and was removed with the step it belonged to. This one did
+    not, and its docstring credited the busy guard for
     refusing the repeat — which that guard cannot do here: `tui.busy` is read by
     `check_action` and by `on_option_list_option_selected`, and nothing on the `Input` dispatch
     path consults it. `awaiting()` does not cover the entry either, only `#choices`.
