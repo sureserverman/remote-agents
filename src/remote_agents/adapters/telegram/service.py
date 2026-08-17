@@ -258,6 +258,13 @@ class PrivateBotBoundary:
     the screen currently drawn, and a restart has no screen to describe. A press that
     outlives one falls back to an unmarked bar, which is cosmetic and self-correcting on
     the next render.
+
+    One write outside a render would be a race, and the reason there cannot be one is not
+    local to this class: `run_private_bot` builds the application with
+    `concurrent_updates(False)`, so updates are handled one at a time. That is already
+    load-bearing for token binding — the comment there says so — and this field now rests
+    on it too. A change made for throughput would give two interleaved presses one shared
+    marker, which is the cheap half of what it would break.
     """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
@@ -1896,10 +1903,17 @@ class PrivateBotBoundary:
         Telegram has no chrome — no menu, no tab strip — so a keyboard row is the only place
         a persistent affordance can live, and the bottom is where a thumb already is.
 
-        Two renders deliberately do **not** come through here, and so carry no bar:
+        Three renders do **not** come through here, and so carry no bar. Two are permanent:
         `callback`'s pending screen, which drops its keyboard so a wait cannot be pressed
         into a second launch, and `notifications`, which is a message rather than a screen.
         Both call `render_message` directly; that is the mechanism, not an oversight.
+
+        The third is temporary and is Home. `_home_reply` renders through `presenters.
+        render_home`, which builds its own keyboard, so `/start` and every `nav.home` route
+        still answer with a barless screen. That is not a carve-out anybody wants — it is
+        the screen Stage 2 deletes outright, at which point this exception goes with it.
+        Until then, "every screen closes with the bar" is true of every screen built here
+        and not yet true of the bot.
 
         There was a third slot here once, `refresh`, offered on the two screens whose answer
         goes stale under the owner. Both re-derive their answer on every entry, so it only

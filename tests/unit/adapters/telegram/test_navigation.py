@@ -390,6 +390,24 @@ async def test_the_active_tab_follows_a_screen_deeper_into_its_flow() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_active_tab_is_marked_on_a_resume_flow_screen_too() -> None:
+    """The third flow, which the other two cases cannot cover for it: `_flow_of`'s resume
+    mapping gates a real button label and nothing else asserts it."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
+
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
+
+    # And deeper in: choosing a project stays inside the flow it was chosen from.
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "• Resume"]
+
+
+@pytest.mark.asyncio
 async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow() -> None:
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary()
