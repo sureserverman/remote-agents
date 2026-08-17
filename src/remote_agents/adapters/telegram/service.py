@@ -247,6 +247,18 @@ class PrivateBotBoundary:
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
+    _flow: str | None = None
+    """Which of the bar's three flows the screen being drawn belongs to, or None for neither.
+
+    Read only by `_message`, to mark the tab the owner is standing in. Telegram will not
+    style a pressed button, so without a marker three identical rows on a dozen screens stop
+    saying anything about where you are.
+
+    Process-local render state, like `_sessions_page` and for the same reason: it describes
+    the screen currently drawn, and a restart has no screen to describe. A press that
+    outlives one falls back to an unmarked bar, which is cosmetic and self-correcting on
+    the next render.
+    """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
 
@@ -540,6 +552,7 @@ class PrivateBotBoundary:
     async def launch_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
+            self._flow = "launch"
             await self.refresh_catalogue()
             await self._answer_command(
                 update.effective_message,
@@ -549,6 +562,7 @@ class PrivateBotBoundary:
     async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
+            self._flow = "sessions"
             await self._answer_command(
                 update.effective_message, _reply_arguments(await self._sessions_reply())
             )
@@ -564,6 +578,7 @@ class PrivateBotBoundary:
         del context
         if not self.permits(update) or update.effective_message is None:
             return
+        self._flow = None
         lines = [
             "<b>Remote agents</b>",
             "",
@@ -640,6 +655,10 @@ class PrivateBotBoundary:
             await query.answer("That screen has moved on.")
             await self._render(query, await self._home_reply())
             return
+        # Set once, before any branch below draws: inspect, a text step, the pending screen
+        # and `_reply_for` all render, and a flow set inside only one of them would leave the
+        # bar unmarked on the others.
+        self._flow = _flow_of(state.action)
         pending = self._pending_notice(state.action)
         await query.answer(pending)
         try:
@@ -1894,11 +1913,22 @@ class PrivateBotBoundary:
         # service: Telegram has no disabled state, and a button that answers "unavailable"
         # is a worse answer than no button.
         bar = [
-            Button("Sessions", self._callback("sessions.open", "sessions")),
-            Button("Launch", self._callback("launch.open", "projects")),
+            Button(
+                _tab("Sessions", self._flow == "sessions"),
+                self._callback("sessions.open", "sessions"),
+            ),
+            Button(
+                _tab("Launch", self._flow == "launch"),
+                self._callback("launch.open", "projects"),
+            ),
         ]
         if self.conversations is not None:
-            bar.append(Button("Resume", self._callback("resume.open", "projects")))
+            bar.append(
+                Button(
+                    _tab("Resume", self._flow == "resume"),
+                    self._callback("resume.open", "projects"),
+                )
+            )
         rows.append(tuple(bar))
         return render_message(text, keyboard + tuple(rows))
 
@@ -2125,6 +2155,40 @@ def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord
     except ValueError:
         return record
     return replace(record, display=display)
+
+
+_ACTIVE_TAB = "• "
+"""What marks the tab the owner is standing in, prefixed rather than wrapped.
+
+A prefix keeps the label's first characters where the eye already reads them; wrapping the
+name in symbols moves every label one column right and makes the three read as decoration.
+"""
+
+_FLOW_OF_PREFIX = {
+    "sessions": "sessions",
+    "session": "sessions",
+    "remote": "sessions",
+    "launch": "launch",
+    "project": "launch",
+    "resume": "resume",
+}
+"""Which flow an action's screen belongs to, keyed by the part before its dot.
+
+A session's own screens — its detail, its capture, its rename, its Remote Control
+confirmation — are the *sessions* flow, because that is where the owner came from and where
+Back returns them; the marker tracks where they are standing, not which button they last
+pressed. The bare stop actions carry no dot and are mapped beside them for the same reason.
+"""
+
+
+def _flow_of(action: str) -> str | None:
+    if action in {GRACEFUL, CLEANUP, FORCE, CONFIRMED_FORCE}:
+        return "sessions"
+    return _FLOW_OF_PREFIX.get(action.partition(".")[0])
+
+
+def _tab(label: str, active: bool) -> str:
+    return f"{_ACTIVE_TAB}{label}" if active else label
 
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:

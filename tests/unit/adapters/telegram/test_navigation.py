@@ -115,22 +115,42 @@ def _button(message, label: str) -> str:
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 
-async def _every_screen(chat: FakeChat, boundary: PrivateBotBoundary) -> list[object]:
-    """Drive a screen from each family the bot draws, returning what the owner would see."""
-    seen = []
+async def _every_screen(
+    chat: FakeChat, boundary: PrivateBotBoundary
+) -> list[tuple[str, list[list[str]]]]:
+    """Drive a screen from each family the bot draws, snapshotting each as it is drawn.
+
+    Snapshots rather than message objects: the chat holds **one** bot message that every
+    render mutates in place, so collecting the object four times collects the last screen
+    four times — a test that reads as covering the bot and covers whichever screen happened
+    to be drawn last.
+    """
+    seen: list[tuple[str, list[list[str]]]] = []
+
+    def snapshot(anchor: int) -> None:
+        seen.append((chat.messages[anchor].text, _rows(chat.messages[anchor])))
+
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
-    seen.append(chat.messages[anchor])
+    snapshot(anchor)
 
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
-    seen.append(chat.messages[anchor])
+    snapshot(anchor)
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+    snapshot(anchor)
 
     await boundary.launch_command(chat.message_update("/launch"), None)
-    seen.append(chat.messages[anchor])
+    snapshot(anchor)
 
     await boundary.help_command(chat.message_update("/help"), None)
-    seen.append(chat.messages[anchor])
+    snapshot(anchor)
     return seen
+
+
+def _unmarked(row: list[str]) -> list[str]:
+    """The bar's labels without the active-tab marker, for assertions about its shape."""
+    return [label.removeprefix("• ") for label in row]
 
 
 @pytest.mark.asyncio
@@ -138,9 +158,9 @@ async def test_the_navigation_bar_closes_every_screen_that_carries_a_keyboard() 
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary()
 
-    for screen in await _every_screen(chat, boundary):
-        assert _rows(screen)[-1] == ["Sessions", "Launch", "Resume"], (
-            f"screen {screen.text!r} does not close with the navigation bar"
+    for text, rows in await _every_screen(chat, boundary):
+        assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"], (
+            f"screen {text!r} does not close with the navigation bar"
         )
 
 
@@ -149,8 +169,10 @@ async def test_the_navigation_bar_omits_resume_when_no_conversation_service_is_w
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary(with_resume=False)
 
-    for screen in await _every_screen(chat, boundary):
-        assert _rows(screen)[-1] == ["Sessions", "Launch"]
+    for text, rows in await _every_screen(chat, boundary):
+        assert _unmarked(rows[-1]) == ["Sessions", "Launch"], (
+            f"screen {text!r} offers Resume with no conversation service wired"
+        )
 
 
 @pytest.mark.asyncio
@@ -165,7 +187,7 @@ async def test_the_navigation_bar_keeps_back_on_its_own_row_above_it() -> None:
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
 
     rows = _rows(chat.messages[anchor])
-    assert rows[-1] == ["Sessions", "Launch", "Resume"]
+    assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"]
     assert rows[-2] == ["Back"]
 
 
@@ -174,6 +196,49 @@ async def test_the_navigation_bar_replaced_the_home_button_on_every_screen() -> 
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     boundary = _boundary()
 
-    for screen in await _every_screen(chat, boundary):
-        labels = {label for row in _rows(screen) for label in row}
-        assert "Home" not in labels, f"screen {screen.text!r} still offers Home"
+    for text, rows in await _every_screen(chat, boundary):
+        labels = {label for row in rows for label in row}
+        assert "Home" not in labels, f"screen {text!r} still offers Home"
+
+
+@pytest.mark.asyncio
+async def test_the_active_tab_is_marked_on_a_screen_inside_that_flow() -> None:
+    """Telegram will not style a pressed tab, so three identical rows on a dozen screens
+    stop saying where you are. The marker is the only orienting signal available."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+
+    await boundary.launch_command(chat.message_update("/launch"), None)
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "• Launch", "Resume"]
+
+
+@pytest.mark.asyncio
+async def test_the_active_tab_follows_a_screen_deeper_into_its_flow() -> None:
+    """A session detail is still the sessions flow: the marker tracks where the owner is,
+    not which button they last pressed."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Demo")), None)
+
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Inspect")), None)
+    assert _rows(chat.messages[anchor])[-1] == ["• Sessions", "Launch", "Resume"]
+
+
+@pytest.mark.asyncio
+async def test_the_active_tab_marks_nothing_on_a_screen_that_belongs_to_no_flow() -> None:
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary()
+
+    await boundary.help_command(chat.message_update("/help"), None)
+    anchor = chat.bot_messages[0].message_id
+
+    assert _rows(chat.messages[anchor])[-1] == ["Sessions", "Launch", "Resume"]
