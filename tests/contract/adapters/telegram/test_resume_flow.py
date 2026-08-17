@@ -65,7 +65,7 @@ class Launcher:
         )
 
 
-async def test_resume_picker_is_opaque_paginated_and_requires_one_confirmation() -> None:
+async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press() -> None:
     project = CatalogProject("a" * 24, "opaque-editor", "writing", "Registered")
     summary = ConversationSummary(
         ConversationReference("c-0123456789abcdef"),

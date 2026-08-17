@@ -849,6 +849,19 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._sessions_reply())
         if action == "sessions.page":
             return _reply_arguments(await self._sessions_reply(_page_number(entity_id)))
+        if action == "resume.select":
+            # Retired with the review screen, and kept rather than dropped for the reason
+            # `nav.refresh` is kept: tokens live in SQLite and are valid for their message
+            # rather than for a clock (DEC-011), so a conversation list drawn before this
+            # deploy still has rows carrying it. Answering with what changed beats the
+            # generic "no longer available", which reads as though the conversation went.
+            self._flow = "resume"
+            return _reply_arguments(
+                self._message(
+                    "Resuming no longer has a review step — choosing a conversation starts "
+                    "it. Open Resume and choose it again."
+                )
+            )
         if action == "resume.open":
             await self.refresh_catalogue()
             return _reply_arguments(self._resume_projects_reply())
@@ -955,6 +968,14 @@ class PrivateBotBoundary:
         # resume it performs.
         if not resume_available(resolved.summary):
             return _reply_arguments(self._message("That conversation cannot be resumed safely."))
+        # The last re-derivation `_launch_reply` did and this did not. A profile can stop
+        # being available between the row being drawn and the row being pressed, and the
+        # rendered row outlives the capability probe that drew it.
+        if not any(
+            profile.profile_id == str(resolved.summary.profile_id) and profile.available
+            for profile in self.profiles
+        ):
+            return _reply_arguments(self._message("That agent is unavailable."))
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
@@ -1297,6 +1318,11 @@ class PrivateBotBoundary:
         result = await self.launcher.set_remote_control(
             RemoteControlCommand(SessionId.parse(session_value), state, token)
         )
+        # Just the resulting state. Distinguishing "was already active" from "is now active"
+        # is not knowable here: `remote_control` returns the desired state both when it had
+        # to send keys and when it found the pane already there, so a message claiming the
+        # difference would be asserting something this layer cannot see. The port would have
+        # to say whether it acted, which is a wider change than this screen's wording.
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
