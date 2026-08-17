@@ -92,7 +92,6 @@ class _Launcher:
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
     boundary = PrivateBotBoundary(7, 11, launcher=_Launcher(record))
-    await boundary._home_reply()
     detail = await boundary._detail_reply(str(record.session_id))
     return {
         _LABEL_TO_ACTION[button.text]

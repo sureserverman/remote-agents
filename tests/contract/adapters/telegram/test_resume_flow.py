@@ -84,7 +84,6 @@ async def test_resume_picker_is_opaque_paginated_and_requires_one_confirmation()
         launcher=launcher,
         conversations=ConversationService(Catalogue(resolved)),
     )
-    await boundary._home_reply()
 
     profiles = await boundary._resume_profiles_reply(project.opaque_id)
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
@@ -128,7 +127,6 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
         conversations=ConversationService(Catalogue(resolved)),
     )
 
-    await boundary._home_reply()
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
 
     assert catalogue.keyboard[0][0].text.startswith(

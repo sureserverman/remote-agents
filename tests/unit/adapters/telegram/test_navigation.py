@@ -648,6 +648,43 @@ async def test_no_screen_offers_a_body_button_that_duplicates_the_bar() -> None:
         assert not (set(body) & bar), f"{name} duplicates the bar: {body}"
 
 
+def test_owner_commands_mirror_the_navigation_bar() -> None:
+    """The menu and the bar should name the same places. `/resume` had never been listed at
+    all, and `/start` is unlisted now that it lands where `/sessions` does — it stays
+    *registered* because Telegram requires it of every bot."""
+    from remote_agents.adapters.telegram.service import _OWNER_COMMANDS
+
+    assert [command.command for command in _OWNER_COMMANDS] == [
+        "launch",
+        "resume",
+        "sessions",
+        "help",
+    ]
+
+
+def test_owner_commands_no_longer_have_a_home_to_render() -> None:
+    import remote_agents.adapters.telegram.presenters as presenters
+    import remote_agents.adapters.telegram.service as service
+
+    assert not hasattr(presenters, "render_home")
+    assert not hasattr(service.PrivateBotBoundary, "_home_reply")
+
+
+@pytest.mark.asyncio
+async def test_owner_commands_answer_resume_even_where_it_is_unavailable() -> None:
+    """The menu is set once for the chat and cannot vary per screen the way the bar does,
+    so `/resume` is listed on a composition that wires no conversation service. It answers
+    with a sentence rather than nothing."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    boundary = _boundary(with_resume=False)
+
+    await boundary.resume_command(chat.message_update("/resume"), None)
+
+    shown = chat.messages[chat.bot_messages[0].message_id]
+    assert "Resume is unavailable." in shown.text
+    assert _unmarked(_rows(shown)[-1]) == ["Sessions", "Launch"]
+
+
 @pytest.mark.asyncio
 async def test_the_bar_never_sits_directly_under_an_irreversible_button() -> None:
     """The bar is the one row the owner builds muscle memory for, so it is also the worst

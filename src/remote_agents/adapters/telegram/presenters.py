@@ -87,38 +87,6 @@ def paginate(items: tuple[str, ...], *, requested_page: int, page_size: int) -> 
     return Page(items=tuple(items[start : start + page_size]), index=index, count=count)
 
 
-def render_home(
-    *,
-    launch: str,
-    sessions: str,
-    active: int,
-    preserved: int,
-    resume: str | None = None,
-    add_project: str | None = None,
-) -> RenderedMessage:
-    """Render the fixed root view: the two counts, and the ways out of them.
-
-    The counts move without the owner touching anything — a session can end, or a launch can
-    become ready, while this screen sits on their phone — and this screen used to close with a
-    Refresh that re-read them in place. It no longer does. Every button here re-derives the
-    counts on the way back (`_home_reply` reads the store on every entry), so the button
-    only ever saved the owner a tap, and the transition it existed to surface now arrives on
-    its own through `notifications`.
-
-    It takes its callbacks one at a time rather than a whole `NavigationCallbacks`, which
-    obliged the caller to mint five tokens for a screen that shows two or four. The unrendered
-    ones were still minted, still bound, and real rows against a size-bounded store.
-    """
-
-    return _message(
-        f"<b>Remote agents</b>\nActive: {active} · Preserved: {preserved}\nChoose an action.",
-        ((Button("Launch", launch),),)
-        + (((Button("Resume", resume),),) if resume is not None else ())
-        + ((Button("Sessions", sessions),),)
-        + (((Button("Add Project", add_project),),) if add_project is not None else ()),
-    )
-
-
 def render_empty(subject: str, callbacks: NavigationCallbacks) -> RenderedMessage:
     """Render a concise empty state without carrying application details into callbacks."""
 

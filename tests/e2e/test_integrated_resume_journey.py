@@ -102,7 +102,6 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         capture=terminal.capture,
     )
     try:
-        await boundary._home_reply()
         profiles = await boundary._resume_profiles_reply(project.opaque_id)
         assert profiles.keyboard[0][0].text == "Claude"
         catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")

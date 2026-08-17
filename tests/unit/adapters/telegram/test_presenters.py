@@ -14,7 +14,6 @@ from remote_agents.adapters.telegram.presenters import (
     paginate,
     render_degraded,
     render_empty,
-    render_home,
     render_message,
     render_paginated,
 )
@@ -36,21 +35,6 @@ CALLBACKS = NavigationCallbacks(
     previous="c1_previous",
     next="c1_next",
 )
-
-
-def test_home_navigation_is_stable_and_uses_only_opaque_callbacks() -> None:
-    first = render_home(launch="c1_launch", sessions="c1_sessions", active=2, preserved=1)
-    second = render_home(launch="c1_launch", sessions="c1_sessions", active=2, preserved=1)
-
-    assert first == second
-    assert first.text == "<b>Remote agents</b>\nActive: 2 · Preserved: 1\nChoose an action."
-    assert [(button.text, button.callback_data) for row in first.keyboard for button in row] == [
-        ("Launch", "c1_launch"),
-        ("Sessions", "c1_sessions"),
-    ]
-    # Home's counts do move on their own, but every route back here re-reads them, so the
-    # Refresh that used to close this screen only ever saved a tap.
-    assert "Refresh" not in {button.text for row in first.keyboard for button in row}
 
 
 def test_empty_and_degraded_views_offer_safe_recovery_actions() -> None:

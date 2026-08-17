@@ -61,7 +61,6 @@ async def test_copy_attach_requires_live_matching_project_and_profile_evidence()
             ),
         ),
     )
-    await boundary._home_reply()
 
     detail = await boundary._detail_reply(str(session_id))
     attach = next(
@@ -112,7 +111,6 @@ async def test_a_preserved_pane_is_offered_a_read_only_attach() -> None:
             ),
         ),
     )
-    await boundary._home_reply()
 
     detail = await boundary._detail_reply(str(session_id))
     response = await boundary._attach_reply(str(session_id))
@@ -138,7 +136,6 @@ async def test_copy_attach_is_hidden_when_the_pane_is_not_currently_live() -> No
         datetime.now(UTC),
     )
     boundary = PrivateBotBoundary(7, 11, launcher=Launcher(record, None))
-    await boundary._home_reply()
 
     detail = await boundary._detail_reply(str(session_id))
 

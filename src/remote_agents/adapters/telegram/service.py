@@ -43,7 +43,6 @@ from remote_agents.adapters.telegram.notifications import ActivityNotifier
 from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
-    render_home,
     render_message,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
@@ -105,8 +104,8 @@ _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
 _LOG = logging.getLogger(__name__)
 _OWNER_COMMANDS = (
-    BotCommand("start", "Open the status dashboard"),
     BotCommand("launch", "Launch a curated agent"),
+    BotCommand("resume", "Resume a saved conversation"),
     BotCommand("sessions", "View managed sessions"),
     BotCommand("help", "Show available actions"),
 )
@@ -591,6 +590,29 @@ class PrivateBotBoundary:
                 _reply_arguments(self._projects_reply(self.catalogue, view_id="all")),
             )
 
+    async def resume_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Open the resume project picker, so the menu mirrors the bar rather than half of it.
+
+        Listed unconditionally while the bar's Resume button is conditional, which is a
+        deliberate asymmetry: a keyboard can omit a button, and Telegram's command menu is
+        set once for the chat rather than per screen. A composition with no conversation
+        service answers with the same "Resume is unavailable." the rest of that flow gives,
+        which is a sentence rather than a dead end.
+        """
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            self._flow = "resume"
+            if self.conversations is None:
+                await self._answer_command(
+                    update.effective_message,
+                    _reply_arguments(self._message("Resume is unavailable.")),
+                )
+                return
+            await self.refresh_catalogue()
+            await self._answer_command(
+                update.effective_message, _reply_arguments(self._resume_projects_reply())
+            )
+
     async def sessions_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         del context
         if self.permits(update) and update.effective_message is not None:
@@ -767,19 +789,6 @@ class PrivateBotBoundary:
         left here is telling it which bot to speak through.
         """
         await self.view.render(query.get_bot(), arguments, retire=retire)
-
-    async def _home_reply(self) -> dict[str, object]:
-        records = await self._records()
-        return _reply_arguments(
-            render_home(
-                launch=self._callback("launch.open", "projects"),
-                resume=(self._callback("resume.open", "projects") if self.conversations else None),
-                sessions=self._callback("sessions.open", "sessions"),
-                add_project=(self._callback("project.open", "areas") if self.creator else None),
-                active=sum(record.state is SessionState.RUNNING for record in records),
-                preserved=sum(record.state is SessionState.PRESERVED for record in records),
-            )
-        )
 
     async def _reply_for(
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
@@ -1965,16 +1974,11 @@ class PrivateBotBoundary:
         into a second launch, and `notifications`, which is a message rather than a screen.
         Both call `render_message` directly; that is the mechanism, not an oversight.
 
-        The third is temporary and is Home, stated as a **mechanism rather than a route
-        list** because a route list is what keeps going stale here: every call to
-        `_home_reply` renders through `presenters.render_home`, which builds its own
-        keyboard and never reaches this method, so whatever reaches `_home_reply` gets a
-        barless screen. Two earlier drafts of this paragraph enumerated the callers instead
-        and both undercounted them.
-
-        That is not a carve-out anybody wants — it is the screen Stage 2 deletes outright,
-        and the exception goes with it. Until then, "every screen closes with the bar" is
-        true of every screen built here and not yet true of the bot.
+        There was a third for one stage — Home, which rendered its own keyboard through
+        `presenters.render_home` and so answered barless. That screen is gone: its counts
+        live on the sessions list, its Add Project on the launch list, and its three
+        destinations are this row. "Every screen closes with the bar" is now true of the
+        bot rather than only of the screens built here.
 
         There was a third slot here once, `refresh`, offered on the two screens whose answer
         goes stale under the owner. Both re-derive their answer on every entry, so it only
@@ -2044,6 +2048,7 @@ async def run_private_bot(
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
+    application.add_handler(CommandHandler("resume", boundary.resume_command))
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))
     application.add_handler(CommandHandler("help", boundary.help_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))

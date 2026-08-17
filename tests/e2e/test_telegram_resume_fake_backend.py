@@ -75,7 +75,6 @@ async def test_owner_resume_journey_uses_a_catalogue_reference_not_provider_inpu
         launcher=launcher,
         conversations=ConversationService(FakeCatalogue(resolved)),
     )
-    await boundary._home_reply()
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
     selection = catalogue.keyboard[0][0].callback_data
     boundary.callbacks.bind_pending(11, 1)

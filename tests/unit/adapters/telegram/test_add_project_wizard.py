@@ -96,12 +96,15 @@ async def _send(boundary: PrivateBotBoundary, text: str) -> dict[str, object]:
     return message.replies[-1] if message.replies else {}
 
 
-async def test_home_offers_add_project_only_when_a_creator_is_configured() -> None:
-    with_creator = await _boundary(FakeCreator())._home_reply()
-    without_creator = await _boundary()._home_reply()
+async def test_the_launch_list_offers_add_project_only_when_a_creator_is_configured() -> None:
+    """Home used to carry this. Task 2.2 moved it to the launch picker; the gating claim is
+    unchanged and is pinned on whichever screen offers the button."""
+    with_creator = _boundary(FakeCreator())._projects_reply((), view_id="all")
+    without_creator = _boundary()._projects_reply((), view_id="all")
 
-    assert "Add Project" in _buttons(with_creator)
-    assert "Add Project" not in _buttons(without_creator)
+    labels = lambda rendered: [b.text for row in rendered.keyboard for b in row]  # noqa: E731
+    assert "Add Project" in labels(with_creator)
+    assert "Add Project" not in labels(without_creator)
 
 
 async def test_area_choices_come_from_the_server_not_from_typed_text() -> None:

@@ -18,6 +18,7 @@ from remote_agents.adapters.telegram.service import (
     _BOT_SHORT_DESCRIPTION,
     _OWNER_COMMANDS,
     PrivateBotBoundary,
+    _reply_arguments,
     _sync_owner_metadata,
     audit_bot_metadata,
 )
@@ -918,13 +919,13 @@ async def test_no_screen_offers_refresh_now_that_every_route_re_reads() -> None:
     """
     boundary, _ = _stop_boundary(_record(SessionState.RUNNING, "active", ProjectId("a" * 24)))
 
-    home = await boundary._home_reply()
     sessions = await boundary._sessions_reply()
+    projects = boundary._projects_reply(boundary.catalogue, view_id="all")
 
-    home_labels = {button.text for row in home["reply_markup"].inline_keyboard for button in row}
     sessions_labels = {button.text for row in sessions.keyboard for button in row}
-    assert "Refresh" not in home_labels
+    project_labels = {button.text for row in projects.keyboard for button in row}
     assert "Refresh" not in sessions_labels
+    assert "Refresh" not in project_labels
 
 
 @pytest.mark.asyncio
@@ -1204,7 +1205,8 @@ async def test_a_stop_button_survives_the_render_that_drew_it() -> None:
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, launcher = _stop_boundary(running)
     await boundary.start(_trusted_update(message=_Message()), None)
-    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    rendered = _reply_arguments(await boundary._sessions_reply())
+    sessions = _Callback(_button(rendered, "Sessions"))
     boundary.callbacks.bind_pending(11, sessions.message.message_id)
 
     await boundary.callback(_trusted_update(callback=sessions), None)
@@ -1225,7 +1227,8 @@ async def test_the_force_confirmation_button_survives_the_render_that_drew_it() 
     running = _record(SessionState.RUNNING, "active", ProjectId("a" * 24))
     boundary, launcher = _stop_boundary(running)
     await boundary.start(_trusted_update(message=_Message()), None)
-    sessions = _Callback(_button(await boundary._home_reply(), "Sessions"))
+    rendered = _reply_arguments(await boundary._sessions_reply())
+    sessions = _Callback(_button(rendered, "Sessions"))
     boundary.callbacks.bind_pending(11, sessions.message.message_id)
 
     await boundary.callback(_trusted_update(callback=sessions), None)
