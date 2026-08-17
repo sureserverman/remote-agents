@@ -73,11 +73,12 @@ from remote_agents.application.session_actions import (
     CLEANUP,
     FORCE,
     GRACEFUL,
+    REMOTE_CONTROL_LABELS,
     StopFailure,
     available_actions,
     explain_state,
     notifiable,
-    remote_control_available,
+    remote_control_directions,
     state_word,
     trust_available,
 )
@@ -1186,20 +1187,15 @@ class PrivateBotBoundary:
                     ),
                 )
             )
-        if remote_control_available(record):
+        # One row per direction the policy still offers -- which is one row once this
+        # session's state has been observed, and both only while it is unknown. Half of the
+        # old pair was always a no-op, on the deepest screen the bot has.
+        for direction in remote_control_directions(record, record.remote_control_state):
             buttons.append(
                 (
                     Button(
-                        "Enable Remote Control",
-                        self._callback("remote.control", f"{session_value}|active"),
-                    ),
-                )
-            )
-            buttons.append(
-                (
-                    Button(
-                        "Disable Remote Control",
-                        self._callback("remote.control", f"{session_value}|inactive"),
+                        REMOTE_CONTROL_LABELS[direction],
+                        self._callback("remote.control", f"{session_value}|{direction.value}"),
                     ),
                 )
             )

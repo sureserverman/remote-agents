@@ -55,6 +55,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
+from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 
 _LOG = logging.getLogger(__name__)
@@ -214,6 +215,45 @@ def remote_control_available(record: _RemoteControllable) -> bool:
     offering the toggle; do not treat the service as a backstop for the state half.
     """
     return record.profile_id == ProfileId("claude") and record.state is SessionState.RUNNING
+
+
+def remote_control_directions(
+    record: _RemoteControllable, observed: RemoteControlState | None
+) -> tuple[RemoteControlState, ...]:
+    """Which Remote Control directions a surface should offer, given what was last observed.
+
+    Both surfaces used to render Enable *and* Disable together, because nothing knew which
+    state a pane was in — so half the pair was always a no-op, on the deepest screen either
+    surface has. Now that the observation is stored, the direction is policy rather than
+    presentation, and it lives here beside `remote_control_available` for the reason DEC-007
+    gives: the owner learns one vocabulary and meets it on both surfaces.
+
+    `None` — nobody has toggled this session, the row predates migration 7, or the toggle
+    came back UNKNOWN — offers **both**. That is deliberately the old behaviour: unknown must
+    not hide the action the owner actually needs, and offering one action on a guess is the
+    failure this function exists to avoid rather than to introduce.
+
+    Returns `()` when the toggle is unavailable at all, so a caller can render this without
+    consulting `remote_control_available` first and cannot disagree with it.
+    """
+    if not remote_control_available(record):
+        return ()
+    if observed is RemoteControlState.ACTIVE:
+        return (RemoteControlState.INACTIVE,)
+    if observed is RemoteControlState.INACTIVE:
+        return (RemoteControlState.ACTIVE,)
+    return (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE)
+
+
+REMOTE_CONTROL_LABELS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: "Enable Remote Control",
+    RemoteControlState.INACTIVE: "Disable Remote Control",
+}
+"""What each direction is called on screen, for every surface that offers one.
+
+Beside `ACTION_LABELS` and for the same reason: the bot and the terminal spelled these
+identically by coincidence rather than by construction, and a coincidence is not a contract.
+"""
 
 
 def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
