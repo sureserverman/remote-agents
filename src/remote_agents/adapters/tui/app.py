@@ -553,8 +553,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_quit(self) -> None:
         """Leave — but say what is about to be lost first, and only ask once.
 
-        `ctrl+q` used to discard typed work silently, and it was reproduced: type a
-        label, press it, the app is gone and the label with it. `screens/base.py` deliberately
+        `ctrl+q` used to discard typed work silently, and it was reproduced on the launch
+        wizard's label entry, since removed: type a name, press it, the app is gone and the
+        name with it. The project-name entry reproduces it the same way today.
+        `screens/base.py` deliberately
         left quit out of the set of keys greyed while `work_in_flight`, and that reasoning
         stands — a jump means "go elsewhere in this app" and losing the work is a side effect
         nobody asked for, while quit means "leave". **The fix is a warning, never a refusal.**

@@ -205,7 +205,7 @@ class ProjectsScreen(ChoiceScreen):
             )
             return
         # A fresh selection rather than a patched one: choosing a project restarts the
-        # wizard, so an agent or label left over from an abandoned pass must not survive it.
+        # wizard, so an agent left over from an abandoned pass must not survive it.
         self.tui.selection = replace(LaunchSelection(), project=project)
         await self.advance_to(ProfilesScreen())
 
@@ -281,7 +281,7 @@ class ReviewScreen(ChoiceScreen):
 
     @property
     def crumb(self) -> str:
-        """The agent chosen a screen ago — which this position inherited from the label step.
+        """The agent chosen a screen ago.
 
         **It read "Review", and that became wrong the moment the label step was removed.**
         The label step's own crumb was the profile id, and its docstring recorded exactly why:
@@ -316,14 +316,28 @@ class ReviewScreen(ChoiceScreen):
         # returns the owner to their shell rather than to this app. That was written down in
         # `adapters/tui/attach.py` and in the README and nowhere the owner could see it.
         #
-        # "A ready launch", not "launching": a launch that never reaches readiness attaches to
-        # nothing and leaves the command on this same line instead, so the unqualified claim
-        # would be false exactly when the owner most needs the line to be true.
+        # **"or prints how to reach it" is not hedging; it is the other half of the truth.**
+        # The first version of this line stopped at "hands this terminal to the session's pane"
+        # and reasoned carefully about only one of the ways that can fail to happen — a launch
+        # that never reaches readiness. `attach_to` has two more, both inside *ready*: with
+        # `TMUX` set it refuses to nest and prints the command instead (`attach.py`), and an
+        # `execvp` that raises does the same. Running the surface from inside tmux is a path
+        # `docs/operator-runbook.md` treats as ordinary, so that branch is not exotic. Both a
+        # Tier-2 review and a gate evaluator found the overclaim independently.
+        #
+        # Deliberately *not* branched on `os.environ["TMUX"]` at render time, which would be
+        # more precise and is the obvious alternative: this string is captured in `REVIEW.svg`,
+        # and a status that depends on the environment would make that baseline differ for a
+        # developer who runs the suite inside tmux — the exact class of flake
+        # `test_tui_snapshots.py` pins `TEXTUAL_THEME` and `NO_COLOR` against. One sentence true
+        # in every case beats two that are each true in one and make the net non-deterministic.
         #
         # No severity, per DEC-010 — this is an instruction about what is about to happen, not a
         # report of a condition, and that entry is explicit that a status carries a severity
         # only when its words do.
-        self.set_status("A ready launch hands this terminal to the session's pane.")
+        self.set_status(
+            "A ready launch hands this terminal to the session's pane, or prints how to reach it."
+        )
         self.show_choices((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def choose(self, key: str) -> None:

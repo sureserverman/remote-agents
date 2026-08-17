@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.screen import Screen
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList
 from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -487,6 +487,81 @@ async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> Non
         )
 
 
+async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_deliberate() -> None:
+    """The consequence of the narrowing that its own commit did not discuss, pinned so it is a
+    decision rather than a side effect.
+
+    Dropping `GatheredSelectionScreen` from the launch review disarms two things, not one. The
+    flow-jump greying is the half that was reasoned about; `ctrl+q`'s arm-then-warn cycle reads
+    the *same* `work_in_flight` property, so it went quiet here too and nothing said so. A
+    Tier-2 review found the omission and was right to: undiscussed is undiscussed even when the
+    outcome is correct.
+
+    It **is** correct, and for the reason the whole narrowing rests on. DEC-027's warning exists
+    for work the owner cannot get back — its own text is about "the owner's own unsaved text".
+    The launch review holds two list selections and nothing typed, so quitting costs two
+    re-picks from lists that are still there next launch. Warning about that would train the
+    owner to dismiss the warning, which is what makes the one guarding a typed project name
+    worth less.
+
+    The control case is asserted alongside, because a test that only showed the absence could
+    pass just as well if the warning had broken everywhere: the project review, which holds a
+    typed name, still warns first and still leaves on the second press.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW"
+        assert not app.screen.work_in_flight, "the review is still protecting work"
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        warned = [note.message for note in app._notifications]
+
+    assert warned == [], f"quit warned where there is nothing to lose: {warned}"
+    assert not app.is_running, "quit did not leave on the first press"
+
+
+async def test_quit_still_warns_first_where_a_typed_name_is_at_risk() -> None:
+    """The control for the test above: the flow that still has work still gets the warning.
+
+    Asserted in the same file and next to it on purpose. The claim being made is not "quit no
+    longer warns" but "quit warns exactly where something is at risk", and only the pair can
+    say that. DEC-027's shape is checked to the end — the second press always leaves, so this
+    is a warning and never a refusal.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.show_areas()
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        assert app.screen.position == "NAME"
+        app.screen.query_one("#filter", Input).focus()
+        await pilot.press(*"orbit")
+        await pilot.pause()
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        warned = [note.message for note in app._notifications]
+        still_running = app.is_running
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+
+    assert warned, "a typed project name was discarded with no warning at all"
+    assert "orbit" in warned[0], f"the warning did not name what was at risk: {warned}"
+    assert still_running, (
+        "the first press left rather than warning — that is a discard, not a warning"
+    )
+    assert not app.is_running, "the second press did not leave, which would make it a refusal"
+
+
 #: The positions that protect work, named rather than derived. `_WORK_SCREENS` is computed from
 #: the code, so a screen that stopped protecting its work would drop out of that parametrization
 #: and take its own coverage with it — the tests would shrink to fit the regression and stay
@@ -579,6 +654,19 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
         assert "opaque-existing" in keys, (
             f"the project must still be there to re-pick from; the list offered {keys}"
         )
+
+        # And the leg a Tier-2 review asked for: walk the recovery to its end rather than
+        # stopping at "the list is still there". `ProjectsScreen.choose` builds a *fresh*
+        # `LaunchSelection` rather than patching the old one, so nothing from the abandoned pass
+        # can survive into the new review — provable from the source, and now demonstrated.
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW", "the recovery did not reach a fresh review"
+        assert app.selection.project is not None
+        assert app.selection.profile is not None
+        assert app.selection.profile.profile_id == "claude"
 
 
 async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:
