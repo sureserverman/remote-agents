@@ -916,28 +916,6 @@ class PrivateBotBoundary:
         )
         if record is None:
             return _reply_arguments(self._message("Session launch requested."))
-        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
-            # `SessionService._resume_locked` returns the *existing* record for a conversation
-            # already bound to one, whatever state it is in, rather than starting anything. So
-            # a conversation whose earlier session has since stopped answered "Session
-            # resumed … State: ended" over a session that had not moved. Say what actually
-            # happened instead.
-            return _reply_arguments(
-                self._message(
-                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
-                    f"This conversation is already attached to that session, which is now "
-                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
-                    "again is not something this tool can do.",
-                    (
-                        (
-                            Button(
-                                "Details",
-                                self._callback("session.detail", str(record.session_id)),
-                            ),
-                        ),
-                    ),
-                )
-            )
         if record.state is SessionState.FAILED:
             return _reply_arguments(
                 self._message(
@@ -1039,6 +1017,30 @@ class PrivateBotBoundary:
             return _reply_arguments(
                 self._message(
                     "<b>Resume did not become ready</b>\nOpen Sessions after local attention."
+                )
+            )
+        if record.state not in {SessionState.STARTING, SessionState.RUNNING}:
+            # Checked *after* FAILED, which is a session that really was created and did
+            # not come up -- it keeps its own message about resolving trust locally.
+            # `SessionService._resume_locked` returns the *existing* record for a conversation
+            # already bound to one, whatever state it is in, rather than starting anything. So
+            # a conversation whose earlier session has since stopped answered "Session
+            # resumed … State: ended" over a session that had not moved. Say what actually
+            # happened instead.
+            return _reply_arguments(
+                self._message(
+                    f"<b>Not resumed</b>\n{escape(record.display.rendered)}\n"
+                    f"This conversation is already attached to that session, which is now "
+                    f"{state_word(record.state, record.orphan_provenance)}. Resuming it "
+                    "again is not something this tool can do.",
+                    (
+                        (
+                            Button(
+                                "Details",
+                                self._callback("session.detail", str(record.session_id)),
+                            ),
+                        ),
+                    ),
                 )
             )
         return _reply_arguments(
