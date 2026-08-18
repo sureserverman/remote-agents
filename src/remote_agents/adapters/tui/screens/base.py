@@ -322,10 +322,10 @@ class ChoiceScreen(Screen[None]):
         gathered result from the review step one screen later. The thing worth protecting was
         never the widget's contents; it is work the owner cannot get back by pressing escape.
 
-        The example used to be the launch wizard's label, which is a better illustration than
-        the one that replaced it and no longer exists: that flow's review holds two list
-        selections now, re-pickable in two keystrokes, so it stopped protecting anything and
-        `ReviewScreen` stopped overriding this.
+        The example used to be the launch wizard's label, which illustrated it better than what
+        replaced it — but the label step itself is gone. That flow's review holds two list
+        selections now, re-pickable in two keystrokes, so it protects nothing and `ReviewScreen`
+        stopped overriding this. The class is still there; only the override left.
 
         So a screen that holds gathered state says so by overriding this, and the default
         answers for the ordinary case: an entry that is shown, non-empty, and a commitment. The

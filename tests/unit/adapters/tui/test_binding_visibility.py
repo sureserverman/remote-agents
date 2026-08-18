@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 import pytest
 from textual.screen import Screen
 from textual.widgets import Input, OptionList
+from tui_feedback import announcements
 from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -520,7 +521,7 @@ async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_d
 
         await pilot.press("ctrl+q")
         await pilot.pause()
-        warned = [note.message for note in app._notifications]
+        warned = announcements(app)
 
     assert warned == [], f"quit warned where there is nothing to lose: {warned}"
     assert not app.is_running, "quit did not leave on the first press"
@@ -548,7 +549,7 @@ async def test_quit_still_warns_first_where_a_typed_name_is_at_risk() -> None:
 
         await pilot.press("ctrl+q")
         await pilot.pause()
-        warned = [note.message for note in app._notifications]
+        warned = announcements(app)
         still_running = app.is_running
 
         await pilot.press("ctrl+q")
