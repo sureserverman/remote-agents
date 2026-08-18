@@ -589,9 +589,12 @@ uv run --locked remote-agents tui
    inspectable, and stoppable exactly like one the bot started. Launch one from Telegram and
    confirm it is equally a managed session for the terminal's store; neither surface owns a
    session the other cannot manage.
-6. Run `remote-agents tui` from inside a tmux client and launch. The launch must still happen, but
-   the attach must be refused rather than nested, printing the command that reaches the new
-   session. Nothing is launched twice.
+6. Run `remote-agents tui` from inside a tmux client **that is not the project's own server**
+   (any socket other than `-L remote-agents`) and launch. The launch must still happen, but the
+   attach must be refused rather than nested, printing the command that reaches the new session.
+   Nothing is launched twice. Hosted by a client on the project's own server, the surface
+   instead switches that client to the new session and stays alive — that path is exercised by
+   the console acceptance steps, not this one.
 6b. Open a session's detail from Ctrl+S, choose Rename, type a name and press enter. Confirm
     the detail comes back naming it and the sessions list agrees, and that an empty entry
     leaves the existing name alone rather than clearing it. This is the capability the local

@@ -102,6 +102,10 @@ class LeasedConnection:
         # invariant is one edit away from silently breaking, and a second coroutine
         # joining a stranger's transaction is worse than the long-lived connection this
         # class replaced. A violation fails loudly instead of corrupting a write.
+        # Known limit: the key is the asyncio task, so two loop-less OS threads both read
+        # as owner None and the guard is blind to them. No store call runs on a
+        # `thread=True` worker today (verified across `in_thread` callers); moving one
+        # there means adding a real lock here first.
         if self._owner is not _current_task():
             raise RuntimeError("a leased transaction belongs to the task that opened it")
 

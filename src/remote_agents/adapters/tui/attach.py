@@ -66,6 +66,13 @@ def attach_to(
         return 0
     values = os.environ if environment is None else environment
     mode = hosting_mode(values)
+    # The CONSOLE branch below is defense in depth, not a production route: under console
+    # hosting the composition wires `open_in_console` unconditionally (bootstrap
+    # `local_context`), so the app opens by switching and never exits with a request — an
+    # AttachRequest can only arrive here from the other two hostings, or if that wiring
+    # invariant is ever broken. If it fires, the exec'd one-shot switch still moves the
+    # client; what it costs is this process, which is why the invariant lives where the
+    # capability is wired rather than being re-checked here.
     if mode is HostingMode.FOREIGN:
         report(
             "Already inside another tmux. Detach first, or reach the session with:\n"

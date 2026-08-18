@@ -111,6 +111,27 @@ async def test_the_app_opens_in_console_and_stays_alive_when_the_capability_is_w
     assert app.return_value is None
 
 
+async def test_the_surface_refuses_input_while_the_console_switch_is_in_flight() -> None:
+    """The console route succeeds without leaving, so `_leave`'s permanent latch never
+    fires — the busy guard must hold across the switch's await, or the queued second
+    Enter of DEC-008's double-enter defect would issue a second real launch."""
+    import asyncio
+
+    gate = asyncio.Event()
+
+    async def opener(session_id: str) -> None:
+        await gate.wait()
+
+    app = RemoteAgentsTui(_context(open_in_console=opener))
+    async with app.run_test() as pilot:
+        pending = asyncio.create_task(app._open_or_leave(_SESSION))
+        await pilot.pause()
+        assert app.busy is True, "input must be refused while the switch is in flight"
+        gate.set()
+        await pending
+        assert app.busy is False
+
+
 async def test_the_app_exits_with_an_attach_request_when_no_capability_is_wired() -> None:
     app = RemoteAgentsTui(_context())
     async with app.run_test() as pilot:

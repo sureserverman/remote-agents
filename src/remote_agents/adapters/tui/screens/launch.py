@@ -311,10 +311,12 @@ class ReviewScreen(ChoiceScreen):
         # line whose whole content is the absence of a step that no longer exists.
         #
         # What it says instead is the consequence, because this is the position that commits to
-        # it and the consequence is the largest the surface has: a ready launch **execs away**
-        # (DEC-023), replacing this process with the tmux client, so detaching afterwards
-        # returns the owner to their shell rather than to this app. That was written down in
-        # `adapters/tui/attach.py` and in the README and nowhere the owner could see it.
+        # it and the consequence is the largest the surface has: from a bare shell a ready
+        # launch execs away, replacing this process with the tmux client; hosted by a client
+        # on the project's own server it switches that client instead and this app stays. The
+        # status line below covers both — "hands this terminal to the session's pane" is what
+        # each route does — and the routing itself lives in `adapters/tui/attach.py` and the
+        # README's attach paragraph.
         #
         # **"or prints how to reach it" is not hedging; it is the other half of the truth.**
         # The first version of this line stopped at "hands this terminal to the session's pane"

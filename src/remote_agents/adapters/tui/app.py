@@ -306,12 +306,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if opener is None:
             self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
             return
+        # Re-arm the guard for the switch's own await. Both callers clear `_busy` in their
+        # `finally` just before calling here, and on the exec route `_leave`'s permanent
+        # latch covers the gap — but this route succeeds *without* leaving, so without this
+        # the queued second Enter `_leave`'s docstring describes (DEC-008's defect) would
+        # find an open guard mid-switch and issue a second real launch. There is no yield
+        # between the caller's clear and this set, so the window never opens.
+        self._busy = True
         try:
             await opener(session_id)
         except Exception as error:
             _LOG.exception("switching the client to the session failed")
             self.announce(f"The session is running but could not be opened: {error}")
             return
+        finally:
+            self._busy = False
         self.return_to_projects()
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
