@@ -210,15 +210,21 @@ accepts; a free-form area is never accepted. The name is typed and validated bef
 created, and Review names the area and the name before the mutation. After a create the catalogue
 is re-read, so the new project is selectable without leaving the app.
 
-After a ready launch this process is replaced by the attach command for the session it just
-started, `tmux -L remote-agents attach-session -t ra-<session>:`, and the store connection is
-closed first, so the attached terminal holds no database handle. The project ships no tmux
-configuration and sets no prefix, so detaching uses tmux's own binding: `Ctrl-b d` on a stock
-tmux, or the same `d` under whatever prefix this host's `~/.tmux.conf` sets. Detaching leaves the
-session running and managed; it stays listed, inspectable, and stoppable from either surface.
-Started from inside an existing tmux client, the launch still happens but the attach is refused
-rather than nested, and the command to reach the new session is printed instead. An exec that
-cannot happen prints the same command and exits non-zero, so a started session is never lost.
+After a ready launch, where the surface goes depends on where it is hosted. From a bare shell
+this process is replaced by the attach command for the session it just started,
+`tmux -L remote-agents attach-session -t ra-<session>:`, exactly as before. Run inside a client
+on the project's own tmux server, the surface instead switches that client to the new session
+and stays alive, because a client already on the server is not nesting when it reaches a
+session — it is switching. Either way the store is never held open across your work: the
+surface's database connection exists only for the duration of a single store operation, so
+however long it stays up beside running sessions, the terminal you type into holds no standing
+database handle. The project ships no tmux configuration and sets no prefix, so detaching uses
+tmux's own binding: `Ctrl-b d` on a stock tmux, or the same `d` under whatever prefix this
+host's `~/.tmux.conf` sets. Detaching leaves the session running and managed; it stays listed,
+inspectable, and stoppable from either surface. Started from inside somebody else's tmux
+client, the launch still happens but the attach is refused rather than nested, and the command
+to reach the new session is printed instead. An exec that cannot happen prints the same command
+and exits non-zero, so a started session is never lost.
 
 Ctrl+S lists the managed sessions. The list is the shared store's rather than this process's, so a
 session the bot launched, or one a previous run of this app started, is there too; each row names
