@@ -515,6 +515,10 @@ class LocalRuntime:
 
     terminal: TmuxTerminal
     profiles: tuple[ProfileAvailability, ...]
+    # The gateway the terminal wraps, carried separately so the composition root can wire
+    # console capabilities (client switching) without widening the terminal port for a
+    # concern that is presentation, not lifecycle.
+    gateway: TmuxGateway
 
 
 def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
@@ -558,15 +562,18 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
             resume_profile_factories[result.profile_id] = _resume_profile_factory(
                 definition, executable, allowed_environment
             )
+    gateway = TmuxGateway(
+        "remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory
+    )
     terminal = TmuxTerminal(
-        TmuxGateway("remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory),
+        gateway,
         project_paths,
         {},
         startup_timeout=20,
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles)
+    return LocalRuntime(terminal, profiles, gateway)
 
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
@@ -654,11 +661,21 @@ def local_context(config, connection, paths: ProductionPaths):
     The terminal's own modules are imported here rather than at module scope, so the
     service never loads the terminal library and a failure in it cannot reach serve.
     """
+    from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
     from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     runtime = _local_runtime(config, paths, projects.paths)
+
+    open_in_console = None
+    if hosting_mode(os.environ) is HostingMode.CONSOLE:
+        # Hosted by a client on our own server: opening a session switches that client and
+        # the surface stays alive. Everywhere else the field stays None and the surface
+        # keeps the exec-attach contract untouched.
+        async def open_in_console(session_id: str) -> None:
+            await runtime.gateway.switch_client_to_session(SessionId.parse(session_id))
+
     return TuiContext(
         launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
         creator=_project_creator(config),
@@ -684,6 +701,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # the bot also uses -- no configuration key sources them today.
         capture=runtime.terminal.capture,
         conversations=_conversation_service(projects.paths),
+        open_in_console=open_in_console,
     )
 
 

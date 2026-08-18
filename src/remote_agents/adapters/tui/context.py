@@ -47,6 +47,11 @@ class TuiContext:
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
     conversations: ConversationService | None = None
+    # The console capability, same widening pattern as the two above: when the composition
+    # root determines the surface is hosted by a client on our own tmux server, opening a
+    # session means switching that client — awaited here — and the surface stays alive.
+    # A host wiring nothing keeps the exec-attach contract exactly as it was.
+    open_in_console: Callable[[str], Awaitable[None]] | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

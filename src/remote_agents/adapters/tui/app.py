@@ -292,6 +292,28 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._leaving = True
         self.exit(request)
 
+    async def _open_or_leave(self, session_id: str) -> None:
+        """Open one ready session by the route the composition wired, in one place.
+
+        `launch` and `issue_resume` both end here so they cannot each invent their own
+        answer to "does opening a session end the surface". Without the console capability
+        this is exactly the old contract: exit with an `AttachRequest` and let `attach_to`
+        exec. With it, the client is switched to the session and the surface stays alive —
+        returned to its resting screen, so the jump-home key finds it at rest rather than
+        mid-flow.
+        """
+        opener = self._services.open_in_console
+        if opener is None:
+            self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+            return
+        try:
+            await opener(session_id)
+        except Exception as error:
+            _LOG.exception("switching the client to the session failed")
+            self.announce(f"The session is running but could not be opened: {error}")
+            return
+        self.return_to_projects()
+
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.
 
@@ -725,8 +747,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 "The command below reaches it."
             )
             return
-        session_id = str(record.session_id)
-        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        await self._open_or_leave(str(record.session_id))
 
     # The mutating path ------------------------------------------------------------
     #
@@ -1093,8 +1114,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     "session will run alongside it."
                 ),
             )
-        session_id = str(record.session_id)
-        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        await self._open_or_leave(str(record.session_id))
         return None
 
 

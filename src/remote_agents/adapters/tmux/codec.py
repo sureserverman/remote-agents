@@ -152,6 +152,16 @@ def switch_client_args(session_id: SessionId) -> tuple[str, ...]:
     return ("switch-client", "-t", exact_session_target(f"ra-{session_id}"))
 
 
+def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
+    """Return the full production argv that switches the current client to one session.
+
+    The full form exists for the same reason `attach_argv` does: the one non-adapter caller
+    (`adapters/tui/attach.py`, on the already-inside-our-server path) must not assemble a
+    `tmux` invocation of its own — every tmux argv in the tree is codec-built (DEC-001).
+    """
+    return ("tmux", "-L", "remote-agents", *switch_client_args(session_id))
+
+
 def switch_client_console_args() -> tuple[str, ...]:
     """Return the argv suffix that moves the attached client back to the console."""
     return ("switch-client", "-t", console_target())
