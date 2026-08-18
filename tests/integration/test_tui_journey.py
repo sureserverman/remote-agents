@@ -83,9 +83,10 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             for character in "brand-new":
                 await pilot.press(character)
             await settle_filter(pilot)
-            # Filter -> rows -> project -> agent, and the agent choice arrives at the review.
-            # One enter fewer than this walk used to need: the label step it committed an empty
-            # value through is gone.
+            # Filter -> rows -> project -> chooser (resting on Launch) -> agent, and the
+            # agent choice arrives at the review.
+            await pilot.press("enter")
+            await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")

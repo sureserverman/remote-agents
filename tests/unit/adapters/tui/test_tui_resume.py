@@ -175,7 +175,7 @@ async def test_a_context_without_conversations_offers_no_resume() -> None:
         await pilot.pause()
         step = position(app)
 
-    assert step == "PROJECTS"
+    assert step == "DASHBOARD"
 
 
 async def test_only_resume_capable_profiles_are_offered() -> None:
@@ -410,7 +410,7 @@ async def test_back_out_of_the_resume_flow_stops_at_every_position() -> None:
 
         await app.action_back()
         await pilot.pause()
-        assert position(app) == "PROJECTS"
+        assert position(app) == "DASHBOARD"
 
     assert launcher.resumed == [], "walking back out must resume nothing"
 

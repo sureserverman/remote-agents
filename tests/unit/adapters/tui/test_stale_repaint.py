@@ -274,7 +274,7 @@ async def test_a_keyed_refresh_holds_the_pump_so_nothing_can_navigate_out_from_u
             gate.set()
             await asyncio.wait_for(asyncio.gather(refreshing, leaving), timeout=10)
             await settle(app, pilot)
-            assert position(app) == "PROJECTS", (
+            assert position(app) == "DASHBOARD", (
                 "the escape never took effect at all, so the assertion above passed because "
                 "the key was dropped rather than because the surface was holding its pump"
             )

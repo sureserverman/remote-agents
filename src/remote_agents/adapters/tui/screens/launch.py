@@ -222,12 +222,21 @@ class ProfilesScreen(ChoiceScreen):
 
     @property
     def crumb(self) -> str:
-        """The project this wizard is launching into, which is what the owner just chose.
+        """The project this wizard is launching into — unless the trail already names it.
 
-        A property rather than a class attribute because the trail has to name the *choice*,
-        not the step: "Projects › Agent" would tell the owner nothing they did not already
-        know from the rows in front of them.
+        The chooser now stands between the project list and this screen, and its crumb is
+        the project; repeating it here would make the trail say the same thing twice in a
+        row, which is the exact defect the label step's crumb was once removed for. So this
+        yields the project only when nothing beneath it already did — which today means the
+        legacy path where this screen is pushed without a chooser (tests, and any future
+        direct entry).
         """
+        from remote_agents.adapters.tui.screens.dashboard import ProjectChooserScreen
+
+        stack = self.app.screen_stack
+        index = stack.index(self) if self in stack else -1
+        if index >= 1 and isinstance(stack[index - 1], ProjectChooserScreen):
+            return ""
         project = self.tui.selection.project
         return f"{project.area}/{project.name}" if project is not None else "Agent"
 

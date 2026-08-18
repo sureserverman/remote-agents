@@ -145,6 +145,7 @@ async def test_the_agent_list_names_every_curated_profile_with_its_blocking_reas
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await pilot.pause()
         rows = _rows(app)
 
@@ -157,6 +158,7 @@ async def test_an_unavailable_agent_cannot_be_chosen() -> None:
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "cursor-agent")
         await pilot.pause()
         reported = " ".join(announcements(app, severity="warning"))
@@ -187,6 +189,7 @@ async def test_choosing_an_agent_reaches_the_review_with_no_step_in_between() ->
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         assert position(app) == "PROFILES"
         await _choose(app, pilot, "claude")
         step = position(app)
@@ -209,6 +212,7 @@ async def test_review_names_the_project_and_the_agent_before_any_launch() -> Non
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await pilot.pause()
         trail = breadcrumb(app)
@@ -226,6 +230,7 @@ async def test_cancel_at_review_returns_to_the_projects_without_launching() -> N
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await _choose(app, pilot, _CANCEL)
         await pilot.pause()
@@ -254,6 +259,7 @@ async def test_back_from_review_returns_to_the_agent_choice() -> None:
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         assert _keys(app)[:1] == ["launch"], "expected the review before walking back from it"
 
@@ -272,6 +278,7 @@ async def test_confirming_issues_one_launch_and_it_carries_no_label() -> None:
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await _choose(app, pilot, "launch")
 
@@ -293,6 +300,7 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
         app = RemoteAgentsTui(_context(launcher=launcher))
         async with app.run_test() as pilot:
             await _choose(app, pilot, "opaque-existing")
+            await _choose(app, pilot, "launch")
             await _choose(app, pilot, "claude")
             await _choose(app, pilot, "launch")
     keys = [command.idempotency_key for command in launcher.commands]
@@ -306,6 +314,7 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await _choose(app, pilot, "launch")
         await pilot.pause()
@@ -435,6 +444,11 @@ async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
+        # The chooser sits between the project and the agents now; its cursor rests on
+        # Launch, so one more enter walks through it.
+        assert _keys(app)[:1] == ["launch"]
+        await pilot.press("enter")
+        await pilot.pause()
         assert _keys(app) == ["claude", "cursor-agent"]
 
         # One enter now, not two: choosing the agent lands on the review directly, where it
@@ -464,6 +478,10 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
         assert choices.has_focus and choices.highlighted == 0, (
             "leaving the filter must hand the keyboard to the rows, resting on the first"
         )
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.query_one("#choices").has_focus, "the chooser takes the keyboard"
 
         await pilot.press("enter")
         await pilot.pause()
@@ -625,8 +643,12 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
         assert app.screen.query_one("#choices").has_focus, "expected the keyboard on the rows"
 
         await _choose(app, pilot, "opaque-other")
+        await _choose(app, pilot, "launch")
         assert _rows(app) == ["claude", "cursor-agent  (unavailable: executable_missing)"]
 
+        # Two positions between the rows and home now: the agent list and the chooser.
+        await app.action_back()
+        await pilot.pause()
         await app.action_back()
         await pilot.pause()
 
@@ -661,6 +683,7 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await _choose(app, pilot, "launch")
         await pilot.pause()
@@ -676,6 +699,7 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
         await _choose(app, pilot, "launch")
         await pilot.pause()

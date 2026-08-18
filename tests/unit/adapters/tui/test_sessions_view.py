@@ -13,7 +13,7 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
-from remote_agents.adapters.tui.screens import ProjectsScreen
+from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -108,10 +108,12 @@ async def test_sessions_refreshes_readiness_before_listing() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        before = launcher.refreshed  # the dashboard's own mount reload is the baseline
         await app.action_sessions()
         await pilot.pause()
 
-    assert launcher.refreshed == 1
+    assert launcher.refreshed == before + 1
 
 
 async def test_each_row_names_the_project_state_and_age() -> None:
@@ -182,7 +184,7 @@ async def test_a_store_error_reports_itself_and_leaves_the_wizard_reachable() ->
         step = position(app)
 
     assert any("could not be read" in message for message in reported), reported
-    assert step == "PROJECTS"
+    assert step == "DASHBOARD"
 
 
 async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None:
@@ -190,13 +192,15 @@ async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        before = launcher.refreshed  # the dashboard's own mount reload is the baseline
         app._busy = True
         await app.action_sessions()
         await pilot.pause()
         step = position(app)
 
-    assert step == "PROJECTS"
-    assert launcher.refreshed == 0
+    assert step == "DASHBOARD"
+    assert launcher.refreshed == before
 
 
 @dataclass(slots=True)
@@ -252,7 +256,7 @@ async def test_a_store_error_rendering_attach_is_reported_not_raised() -> None:
     is a better exercise of the same guarantee rather than a workaround for the move.
     """
     record = _record()
-    launcher = _FlakyListing((record,), fail_after=2)
+    launcher = _FlakyListing((record,), fail_after=3)  # +1: the dashboard's own mount read
     app = RemoteAgentsTui(_context(launcher))  # type: ignore[arg-type]
 
     async with app.run_test() as pilot:
@@ -556,7 +560,7 @@ async def test_the_background_read_does_not_draw_onto_its_own_corpse() -> None:
         await reading
         still_alive = app.screen.position
 
-    assert still_alive == "PROJECTS"
+    assert still_alive == "DASHBOARD"
 
 
 async def test_a_tick_landing_mid_refresh_does_not_start_a_second_read() -> None:
