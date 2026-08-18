@@ -117,7 +117,7 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
 
     report = __import__("json").loads(capsys.readouterr().out)
     assert report["healthy"] is True
-    assert set(report["components"]) == {"core", "store", "tmux", "telegram", "service", "profiles"}
+    assert set(report["components"]) == {"core", "store", "tmux", "tmux_console", "telegram", "service", "profiles"}
     # A green report says the config was compared, rather than leaving the operator to infer
     # it from the absence of a complaint.
     assert report["config"]["readable"] is True
