@@ -14,6 +14,7 @@ from remote_agents.adapters.tmux.codec import (
     console_target,
     display_message_args,
     exact_session_target,
+    is_console_view,
     link_window_args,
     list_console_windows_args,
     parse_console_window,
@@ -135,13 +136,26 @@ class TmuxGateway:
             raise
         managed: list[ManagedPane] = []
         orphans: list[OrphanEvidence] = []
+        seen: set[SessionId] = set()
         for line in output.splitlines():
             if not line:
                 continue
+            # The console's view of the server is presentation, never evidence: its own
+            # dashboard pane and its re-listing of every linked window are dropped before
+            # decoding, so expected console noise cannot pollute the orphan quarantine.
+            if is_console_view(line):
+                continue
             try:
-                managed.append(parse_pane(line))
+                pane = parse_pane(line)
             except ValueError as error:
                 orphans.append(OrphanEvidence(line, str(error)))
+                continue
+            # One observation per session identity, however often the server lists it —
+            # reconciliation keys evidence by session, and a duplicate would double-count.
+            if pane.session_id in seen:
+                continue
+            seen.add(pane.session_id)
+            managed.append(pane)
         return TmuxInventory(tuple(managed), tuple(orphans))
 
     async def mutate(self, operation: str, session_name: str) -> str:

@@ -185,6 +185,16 @@ def parse_console_window(line: str) -> tuple[int, SessionId | None]:
     return (index, SessionId.parse(raw_session))
 
 
+def is_console_view(line: str) -> bool:
+    """Say whether one list-panes line is the console's view rather than evidence.
+
+    The console reports its own dashboard pane and re-reports every linked window under its
+    own name (tmux 3.4, verified). Both describe presentation, not sessions: the linked
+    duplicate's pane is already listed — with its options intact — under its home session.
+    """
+    return line.split(_DELIMITER, 1)[0] == CONSOLE_SESSION_NAME
+
+
 def parse_pane(line: str) -> ManagedPane:
     """Decode one managed tmux pane or refuse ambiguous and untrusted metadata."""
     fields = line.rstrip("\n").split(_DELIMITER)
