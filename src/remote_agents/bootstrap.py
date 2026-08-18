@@ -674,9 +674,12 @@ def local_context(config, connection, paths: ProductionPaths):
         # Hosted by a client on our own server: opening a session focuses its console tab
         # (the composer falls back to a direct client switch), tabs are reconciled on
         # every sessions reload, and the surface stays alive. Everywhere else both fields
-        # stay None and the surface keeps the exec-attach contract untouched. The console
-        # is ensured before the app starts, so a host whose tmux cannot host it degrades
-        # here, once, rather than mid-surface.
+        # stay None and the surface keeps the exec-attach contract untouched. ensure()
+        # runs before the app starts so the common failure is met here first and logged;
+        # the capabilities are then wired regardless — deliberately, because under console
+        # hosting an exec-attach would cost the dashboard its own process (attach.py), so
+        # a degraded console keeps retrying quietly per pass rather than re-routing opens
+        # through exec.
         from remote_agents.application.console import ConsoleComposer
 
         composer = ConsoleComposer(
@@ -684,7 +687,14 @@ def local_context(config, connection, paths: ProductionPaths):
             (sys.executable, "-m", "remote_agents", "tui"),
             paths.home,
         )
-        asyncio.run(composer.ensure())
+        if not asyncio.run(composer.ensure()):
+            # Wiring continues regardless (see above), but the operator hears about it
+            # here once, at the surface's front door, not only in per-pass debug logs.
+            print(
+                "The console could not be prepared; sessions open by direct switch and "
+                "no tab bar will appear. See the log, or run: remote-agents doctor",
+                file=sys.stderr,
+            )
 
         async def open_in_console(session_id: str) -> None:
             await composer.open(SessionId.parse(session_id))

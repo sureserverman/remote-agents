@@ -1050,12 +1050,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Order is whatever the store returns; nothing here sorts, and the row's age column
         is what tells the owner how old a session is.
 
-        Console-hosted, this is also where tabs track reality: every path that changes a
-        session ends in a sessions reload (stops refresh the list, opens link their own
-        tab), so syncing here — after the fresh read, before rendering — is the one choke
-        point that keeps tabs equal to live sessions without a second schedule. The sync
-        degrades to nothing on failure by its own contract; a broken console never costs
-        this list.
+        Console-hosted, this is also where tabs track reality. Opens link their own tab,
+        and everything else catches up when the sessions list is next loaded — its reveal,
+        Ctrl+R, or the 10s auto-refresh. That is a stated latency, not an accident: a stop
+        issued from the detail screen leaves its tab standing until the list is next
+        shown, because this method is deliberately the only sync schedule there is. The
+        sync degrades to nothing on failure by its own contract; a broken console never
+        costs this list.
         """
         await self._services.launcher.refresh_readiness()
         records = await self.read_sessions()

@@ -9,11 +9,12 @@ gateway satisfies this protocol structurally.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from remote_agents.domain.models import SessionId
 
 
+@runtime_checkable
 class ConsolePort(Protocol):
     """Window-level operations on the one console session."""
 
