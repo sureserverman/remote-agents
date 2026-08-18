@@ -119,6 +119,23 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
           AND state <> 'ended';
         """,
     ),
+    # Observations, never delivery state: the Telegram notifier's queue, rate windows, and
+    # standing messages stay in memory by decision (DEC-026) — this table is the local
+    # feed's durable source. Append-only; INTEGER PRIMARY KEY is the read order, because
+    # insertion order is the one clock every writer shares.
+    (
+        9,
+        """
+        CREATE TABLE agent_activity (
+            activity_id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            detail TEXT,
+            confidence TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+        );
+        """,
+    ),
 )
 
 
