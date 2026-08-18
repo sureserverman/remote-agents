@@ -23,9 +23,9 @@ from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
 )
+from remote_agents.adapters.tui.screens.dashboard import DashboardScreen
 from remote_agents.adapters.tui.screens.launch import (
     ProfilesScreen,
-    ProjectsScreen,
     ReviewScreen,
 )
 from remote_agents.adapters.tui.screens.project import (
@@ -48,7 +48,7 @@ from remote_agents.adapters.tui.screens.sessions import (
 #: Every screen the owner can reach — all fifteen positions, one class each. Nothing is
 #: repainted in place any more, so this registry is the whole surface.
 ALL_SCREENS = (
-    ProjectsScreen,
+    DashboardScreen,
     ProfilesScreen,
     ReviewScreen,
     AreasScreen,
@@ -72,9 +72,9 @@ __all__ = [
     "ForceConfirmModal",
     "InspectScreen",
     "NameScreen",
+    "DashboardScreen",
     "ProfilesScreen",
     "ProjectReviewScreen",
-    "ProjectsScreen",
     "RemoteControlConfirmModal",
     "RenameScreen",
     "ResumeConversationsScreen",

@@ -30,13 +30,14 @@ from remote_agents.adapters.tui.model import (
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
-    ProjectsScreen,
+    DashboardScreen,
     ResumeProjectsScreen,
     SessionDetailScreen,
     SessionsScreen,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
+from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -228,8 +229,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         `pop_screen` raises `ScreenStackError` on the last screen, so making the resting
         position the *default* screen is what turns "a back path must never empty the stack"
         from a rule every screen has to observe into something the stack cannot do.
+
+        The dashboard subclasses the projects picker, so `return_to_projects`'s isinstance
+        check and every flow that unwinds to "the projects position" land here unchanged.
         """
-        return ProjectsScreen()
+        return DashboardScreen()
 
     # Shared state screens read ---------------------------------------------------
 
