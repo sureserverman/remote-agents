@@ -193,6 +193,20 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task
     return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
 
 
+async def _drive_to_the_conversation_list(app: RemoteAgentsTui) -> None:
+    """The resume flow's commit position, which is the list itself now.
+
+    It used to be a confirmation standing after this screen, and this file had an entry for it
+    with the same "abort under the cursor" shape as the two destructive confirms. Removing that
+    screen made choosing a row here the act, and took the entry with it — so for a while the
+    resume flow's commit point rested on the mutating row and nothing in this file noticed. A
+    gate evaluator caught it by pressing enter twice from the agent list.
+    """
+    await app.action_resume()
+    await app.screen.choose("opaque-existing")
+    await app.screen.choose("claude")
+
+
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     await app.show_areas()
     await app.screen.choose("infra")
@@ -231,6 +245,11 @@ _RESTING = (
         id="remote-control-confirm",
     ),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
+    # The resume flow's commit position. Restored after the confirmation it used to sit on was
+    # removed: the rows here lead nowhere else now, so the cursor must not rest on one.
+    pytest.param(
+        _drive_to_the_conversation_list, "Back", "RESUME_CONVERSATIONS", id="resume-conversations"
+    ),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
     # Not a confirmation, and the only entry here that is not: this position offers reads and
     # stops side by side with no separator, so which row the cursor rests on is what decides

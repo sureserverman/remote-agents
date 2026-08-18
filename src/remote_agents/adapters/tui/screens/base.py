@@ -38,7 +38,7 @@ _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
 #:
 #: A sentinel rather than `None`, because the two answers have to be distinguishable: `None`
 #: means *this screen has not been asked yet*, which is what `test_empty_states.py` fails a
-#: newly added screen on. Left as a plain `None` default, a seventeenth screen would inherit
+#: newly added screen on. Left as a plain `None` default, a sixteenth screen would inherit
 #: silence and the exhaustiveness check would pass over it.
 NEVER_EMPTY = "\x00never-empty"
 

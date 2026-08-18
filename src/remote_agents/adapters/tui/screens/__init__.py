@@ -45,7 +45,7 @@ from remote_agents.adapters.tui.screens.sessions import (
     SessionsScreen,
 )
 
-#: Every screen the owner can reach — all sixteen positions, one class each. Nothing is
+#: Every screen the owner can reach — all fifteen positions, one class each. Nothing is
 #: repainted in place any more, so this registry is the whole surface.
 ALL_SCREENS = (
     ProjectsScreen,

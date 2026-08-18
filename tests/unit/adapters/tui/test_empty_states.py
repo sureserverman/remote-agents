@@ -4,7 +4,7 @@ Two different checks live here and they are not interchangeable.
 
 The first is **exhaustive over the surface**: every navigable `ChoiceScreen` must declare an
 `empty_state`, either a sentence or `NEVER_EMPTY`. It is parametrized over `ALL_SCREENS`
-rather than over a list of the four screens someone thought of, so a seventeenth screen added
+rather than over a list of the four screens someone thought of, so a sixteenth screen added
 next month fails here until its author answers the question. That is the property the plan's
 gate asks for — "a fifth added later without an empty state fails here" — and a hand-written
 list of four could not have it.

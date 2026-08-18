@@ -311,7 +311,9 @@ class ResumeConversationsScreen(ChoiceScreen):
             if resume_available(item)
         ]
         if not offered:
-            self.set_status("There are no saved conversations for that agent and project.")
+            # Worded exactly as the substituted row beside it. The two said the same thing in
+            # two wordings ("this agent" against "that agent"), which reads as two facts.
+            self.set_status("No saved conversations for this agent and project.")
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
         entries = list(offered)
@@ -320,8 +322,23 @@ class ResumeConversationsScreen(ChoiceScreen):
         if page.page < page.page_count:
             entries.append((_NEXT, "Next page"))
         entries.append((_BACK, "Back"))
-        self.set_status(f"Choose a conversation. Page {page.page} of {page.page_count}.")
-        self.show_choices(tuple(entries))
+        self.set_status(
+            f"Choose a conversation — starting one hands this terminal to its pane, or prints "
+            f"how to reach it. Page {page.page} of {page.page_count}."
+        )
+        # **The cursor rests on Back, and this position had no need of that until now.** The
+        # rows here used to lead to a confirmation, so row 0 was a navigation and a repeated
+        # enter cost nothing; choosing a row *is* the resume now, which makes this a commit
+        # position and puts it under DEC-007's mitigation that no repeated keypress destroys
+        # anything. Two enters from the agent list — one to arrive, one still queued — would
+        # otherwise start a session and exec this terminal away.
+        #
+        # The deleted confirmation carried this property and `test_resting_cursor.py` pinned
+        # it there; removing the screen dropped both, which a gate evaluator caught by driving
+        # `pilot.press("enter", "enter")`. The cost is one arrow key on every deliberate
+        # resume, which is the same trade the launch review makes by resting on Back rather
+        # than on Launch.
+        self.show_choices(tuple(entries), highlight=len(entries) - 1)
 
     async def choose(self, key: str) -> None:
         conversations = self.services.conversations

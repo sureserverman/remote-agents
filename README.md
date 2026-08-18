@@ -107,8 +107,9 @@ identify, terminate, or adopt arbitrary local agent processes. Only provider-cat
 conversations can be resumed into a new managed tmux pane. Choosing a conversation resumes it
 on that press: the bot reviews neither a launch nor a resume, so nothing stands between the
 choice and the session, and a second press of the same button is dropped rather than serviced
-into a second session. The local terminal surface deliberately keeps its resume review, and
-that difference between the two surfaces is intended rather than an omission. A conversation
+into a second session. The local terminal surface behaves the same way — it kept a resume
+review for a while, and dropping it is what brought the two surfaces back into line. A
+conversation
 is attached to the session it starts and cannot be resumed again until that session has
 **ended** — not merely stopped, so a preserved, failed, orphaned or stopping session still
 holds it. Pressing it before then reports what it is attached to and what became of it, rather

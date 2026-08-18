@@ -1,6 +1,6 @@
 """The footer lists the keys that do something here, and nothing else.
 
-Six app-level bindings were shown on all sixteen positions regardless of whether they applied.
+Six app-level bindings were shown on every position regardless of whether they applied.
 Three of them already had early returns that made them inert in places — escape at the resting
 position, Refresh where there is nothing to re-read, Resume on a host that wired no
 conversation service — so the footer was advertising keys that did nothing, on exactly the
@@ -306,7 +306,7 @@ def test_no_screen_inherits_the_permissive_default(screen_type: type[Screen]) ->
 
     The stage gate sweeps for this too. It is here as well because the gate's form asks only
     whether the method differs from `DOMNode`'s — which one definition on `ChoiceScreen`
-    satisfies for all sixteen at once. That is the right *implementation* (one rule set, per
+    satisfies for all fifteen at once. That is the right *implementation* (one rule set, per
     screen data) and the wrong *check*, so the checks above are the ones that would catch a
     screen answering wrongly; this one only catches a screen answering not at all.
     """

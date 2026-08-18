@@ -148,7 +148,7 @@ _POSITIONS = (
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered")
 # Fixed rather than minted per run, which `SessionId.new()` did until the state axis below
-# needed it. Sixteen position baselines never rendered the raw id — `SessionDetailScreen`
+# needed it. Fifteen position baselines never rendered the raw id — `SessionDetailScreen`
 # overwrites the breadcrumb with the record's display identity as soon as it reads one — but
 # the SESSION_DETAIL_MISSING state has no record to read, so the bare id stays in the header
 # and a freshly minted UUID would write a different SVG on every run.

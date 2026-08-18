@@ -186,7 +186,7 @@ async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
 #: testing that some text exists. Caught by the Stage 3 gate's Tier-2 re-review.
 SAYING_SURFACES = (
     ("telegram", _telegram_said, "this agent has no resumable conversation for this project."),
-    ("tui", _tui_said, "there are no saved conversations for that agent and project."),
+    ("tui", _tui_said, "no saved conversations for this agent and project."),
 )
 
 

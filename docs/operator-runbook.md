@@ -558,7 +558,7 @@ generated deliberately and looked at once. Five things are pinned to keep the ca
 reproducible — three environment dependencies (the terminal size, the theme, and colour via
 `NO_COLOR` / `FORCE_COLOR`) and two wall-clock ones (the age column and the input cursor's
 blink timer, the two that would flake on a merely busy machine). The count matters when you
-are diagnosing a failure: an unpinned theme or colour setting fails *all sixteen* baselines at
+are diagnosing a failure: an unpinned theme or colour setting fails *all thirty* baselines at
 once, so a mass failure points at the environment rather than at your change. See the test
 module's docstring for the full rationale rather than duplicating it
 here; it is the copy that sits next to the code and will be updated with it.
@@ -592,6 +592,14 @@ uv run --locked remote-agents tui
 6. Run `remote-agents tui` from inside a tmux client and launch. The launch must still happen, but
    the attach must be refused rather than nested, printing the command that reaches the new
    session. Nothing is launched twice.
+6b. Open a session's detail from Ctrl+S, choose Rename, type a name and press enter. Confirm
+    the detail comes back naming it and the sessions list agrees, and that an empty entry
+    leaves the existing name alone rather than clearing it. This is the capability the local
+    surface gained when the launch-time label step was removed; naming happens here now.
+6c. Press Ctrl+O, choose a project and an agent, and confirm the conversation list is the last
+    position before anything starts — there is no confirmation step, matching Telegram. Confirm
+    the cursor rests on Back rather than on a conversation, so a repeated enter starts nothing,
+    and that choosing a conversation deliberately hands this terminal to the resumed pane.
 7. Press Ctrl+N, confirm the offered areas are the eligible existing directories under the
    configured `dev_root`, enter a rejected name such as `New Thing` and confirm nothing is
    created, then create a valid one and confirm it becomes selectable without leaving the app.

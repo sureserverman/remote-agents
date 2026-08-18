@@ -16,17 +16,26 @@ different externally-influenced strings reach it, and all three were being mangl
 
 Those three sources reach **three separate sinks**, and that is the part worth remembering.
 
-**One of those three sinks has since lost its source, and saying so is the point of this
-paragraph.** `#status` received the conversation description the moment a conversation was
-selected — on the confirmation step that stood between the list and the resume. That step was
-removed when the local surface stopped confirming a resume the bot does not confirm, and with
-it went the last string reaching `#status` that this app did not author: what is left there is
-app-written sentences, with every interpolated exception and provider reason routed to a toast
-instead. The driven test that covered it is therefore gone rather than rewritten, because the
-path it drove does not exist. What still guards the sink is `markup=False` on the widget and
-`test_no_markup_parsing_widget_is_constructed_without_the_flag` below, which sweeps for a
-markup-parsing widget built without it — so a future screen that writes un-authored text there
-inherits the protection rather than having to rediscover it.
+**One of those three sinks lost the source this file used to drive it through, and an earlier
+version of this paragraph drew the wrong conclusion from that.** `#status` received the
+conversation description the moment a conversation was selected, on the confirmation step that
+stood between the list and the resume; that step was removed when the local surface stopped
+confirming a resume the bot does not confirm. The paragraph then claimed the sink had lost its
+*last* un-authored source and that "every interpolated exception and provider reason [is] routed
+to a toast instead" — a repo-wide invariant that is one grep away from false. A Tier-2 review
+found it, and the sweep behind it found more than the review did:
+
+    grep -rn 'set_status(f"' src/remote_agents/adapters/tui/
+
+`app.py`'s `answer_trust` writes an exception's own text there, the inspect screen writes the
+owner's typed search query, and the project review writes the owner's typed project name. The
+sink is very much still live for text this app did not author.
+
+So the driven test is **retargeted rather than deleted**: it now reaches `#status` through the
+exception path, which is un-authored in the strongest sense — a string from another layer
+entirely. The resume-specific route it used to take is gone, but the property it protects is
+not, and deleting it would have left the sink covered only by `markup=False` and the structural
+sweep below while the docstring claimed there was nothing left to cover.
 Fixing the row `Label` looked like a class fix and was not: review then found `#status` — which
 receives the description the moment a conversation is selected, and the custom label via
 `record.display.rendered` — and `#output`, which renders the session's raw captured pane
@@ -106,9 +115,24 @@ def _record(custom_label: str | None = None) -> SessionRecord:
 @dataclass(slots=True)
 class _Launcher:
     record: SessionRecord = field(default_factory=_record)
+    #: When set, `answer_trust` raises with this text. The one live path that still writes a
+    #: string this app did not author into `#status`, and so the one that can drive the sink.
+    trust_error: str | None = None
 
     async def refresh_readiness(self):
         return (self.record,)
+
+    async def trust_state(self, _session_id):
+        from remote_agents.domain.trust import TrustState
+
+        return TrustState.AWAITING
+
+    async def answer_trust(self, _command):
+        if self.trust_error is not None:
+            raise RuntimeError(self.trust_error)
+        from remote_agents.domain.trust import TrustState
+
+        return TrustState.UNKNOWN
 
     async def list_sessions(self):
         return (self.record,)
@@ -146,10 +170,14 @@ class _Conversations:
 
 
 def _context(
-    *, project: CatalogProject, record: SessionRecord | None = None, description: str = "plain"
+    *,
+    project: CatalogProject,
+    record: SessionRecord | None = None,
+    description: str = "plain",
+    trust_error: str | None = None,
 ) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(record=record or _record()),  # type: ignore[arg-type]
+        launcher=_Launcher(record=record or _record(), trust_error=trust_error),  # type: ignore[arg-type]
         creator=object(),  # type: ignore[arg-type]
         profiles=(ProfileChoice("claude", True),),
         refresh_catalogue=lambda: (project,),
@@ -198,6 +226,37 @@ async def test_a_conversation_description_containing_markup_is_shown_literally()
         assert _MARKUP_DESCRIPTION in screen, (
             f"the description {_MARKUP_DESCRIPTION!r} was consumed as markup; screen was {screen!r}"
         )
+
+
+async def test_the_status_line_shows_a_markup_bearing_failure_literally() -> None:
+    """The rows were only one sink. `#status` receives text this app did not author too.
+
+    **Retargeted, not deleted.** This used to drive the conversation description into `#status`
+    by selecting a conversation — a path that ran through a confirmation step which no longer
+    exists. The sink does still take un-authored text, so the test follows it to a route that
+    survives: `RemoteAgentsTui.answer_trust` writes an exception's own `str()` straight to
+    `set_status`, which is un-authored in the strongest sense available here — the string comes
+    from another layer entirely and can contain anything.
+
+    An unbalanced `[` there raises `MarkupError` in a widget that parses markup, which is the
+    same defect this file closed at the rows and would have reopened at a sink nobody was
+    driving any more.
+    """
+    project = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+    app = RemoteAgentsTui(_context(project=project, trust_error=_MARKUP_DESCRIPTION))
+    async with app.run_test(size=(200, 30)) as pilot:
+        await pilot.pause()
+        await app.show_sessions()
+        await pilot.pause()
+        await app.show_detail(str(_record().session_id))
+        await pilot.pause()
+        await app.screen.answer_trust()
+        await pilot.pause()
+        screen = _rendered(app)
+
+    assert _MARKUP_DESCRIPTION in screen, (
+        f"the status line consumed {_MARKUP_DESCRIPTION!r} as markup; screen was {screen!r}"
+    )
 
 
 async def test_the_header_shows_a_markup_bearing_session_label_literally() -> None:
