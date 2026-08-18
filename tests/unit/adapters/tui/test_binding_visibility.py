@@ -1,6 +1,6 @@
 """The footer lists the keys that do something here, and nothing else.
 
-Six app-level bindings were shown on all sixteen positions regardless of whether they applied.
+Six app-level bindings were shown on every position regardless of whether they applied.
 Three of them already had early returns that made them inert in places — escape at the resting
 position, Refresh where there is nothing to re-read, Resume on a host that wired no
 conversation service — so the footer was advertising keys that did nothing, on exactly the
@@ -20,7 +20,8 @@ from datetime import UTC, datetime
 
 import pytest
 from textual.screen import Screen
-from textual.widgets import OptionList
+from textual.widgets import Input, OptionList
+from tui_feedback import announcements
 from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -139,13 +140,12 @@ def _arrangements():
         AreasScreen,
         ForceConfirmModal,
         InspectScreen,
-        LabelScreen,
         NameScreen,
         ProfilesScreen,
         ProjectReviewScreen,
         ProjectsScreen,
         RemoteControlConfirmModal,
-        ResumeConfirmScreen,
+        RenameScreen,
         ResumeConversationsScreen,
         ResumeProfilesScreen,
         ResumeProjectsScreen,
@@ -161,22 +161,20 @@ def _arrangements():
         ),
     )
     page = ConversationCataloguePage((_summary(),), 1, 1)
-    resolved = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
     return {
         ProjectsScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
-        LabelScreen: LabelScreen,
         ReviewScreen: ReviewScreen,
         AreasScreen: AreasScreen,
         NameScreen: lambda: NameScreen("infra"),
         ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
         SessionsScreen: SessionsScreen,
         SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
+        RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
         InspectScreen: lambda: InspectScreen("some output"),
         ResumeProjectsScreen: ResumeProjectsScreen,
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
         ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", page),
-        ResumeConfirmScreen: lambda: ResumeConfirmScreen(_PROJECT, "claude", resolved),
         ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
         RemoteControlConfirmModal: lambda: RemoteControlConfirmModal.for_change(
             _record(), RemoteControlState.ACTIVE
@@ -308,7 +306,7 @@ def test_no_screen_inherits_the_permissive_default(screen_type: type[Screen]) ->
 
     The stage gate sweeps for this too. It is here as well because the gate's form asks only
     whether the method differs from `DOMNode`'s — which one definition on `ChoiceScreen`
-    satisfies for all sixteen at once. That is the right *implementation* (one rule set, per
+    satisfies for all fifteen at once. That is the right *implementation* (one rule set, per
     screen data) and the wrong *check*, so the checks above are the ones that would catch a
     screen answering wrongly; this one only catches a screen answering not at all.
     """
@@ -456,12 +454,122 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
         )
 
 
+@pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
+async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> None:
+    """The launch review stopped protecting work, because its work stopped being unrecoverable.
+
+    It held a gathered selection *plus a typed label*, and the label was the part escape could
+    not give back — the label entry cleared itself on the way in, so walking back lost it. With
+    that step gone the review holds two list selections, and escape lands on the agent
+    list with both lists still there: re-picking is two keystrokes, which is the same reasoning
+    that exempts the project filter above.
+
+    The project review is deliberately *not* exempted with it, and the difference is the test of
+    whether this is a principled narrowing or a convenient one: that screen holds a typed project
+    name, `NameScreen.populate` clears it too, and so it keeps the protection this one loses.
+    `_PROTECTS_WORK` below is what pins the pair.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW", f"the walk landed on {app.screen.position}"
+
+        active = app.screen.active_bindings
+        assert binding in active, f"{binding} is not offered on the review at all"
+        assert active[binding].enabled, (
+            f"{binding} is greyed on the review, which now holds nothing escape cannot give back"
+        )
+
+
+async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_deliberate() -> None:
+    """The consequence of the narrowing that its own commit did not discuss, pinned so it is a
+    decision rather than a side effect.
+
+    Dropping `GatheredSelectionScreen` from the launch review disarms two things, not one. The
+    flow-jump greying is the half that was reasoned about; `ctrl+q`'s arm-then-warn cycle reads
+    the *same* `work_in_flight` property, so it went quiet here too and nothing said so. A
+    Tier-2 review found the omission and was right to: undiscussed is undiscussed even when the
+    outcome is correct.
+
+    It **is** correct, and for the reason the whole narrowing rests on. DEC-027's warning exists
+    for work the owner cannot get back — its own text is about "the owner's own unsaved text".
+    The launch review holds two list selections and nothing typed, so quitting costs two
+    re-picks from lists that are still there next launch. Warning about that would train the
+    owner to dismiss the warning, which is what makes the one guarding a typed project name
+    worth less.
+
+    The control case is asserted alongside, because a test that only showed the absence could
+    pass just as well if the warning had broken everywhere: the project review, which holds a
+    typed name, still warns first and still leaves on the second press.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW"
+        assert not app.screen.work_in_flight, "the review is still protecting work"
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        warned = announcements(app)
+
+    assert warned == [], f"quit warned where there is nothing to lose: {warned}"
+    assert not app.is_running, "quit did not leave on the first press"
+
+
+async def test_quit_still_warns_first_where_a_typed_name_is_at_risk() -> None:
+    """The control for the test above: the flow that still has work still gets the warning.
+
+    Asserted in the same file and next to it on purpose. The claim being made is not "quit no
+    longer warns" but "quit warns exactly where something is at risk", and only the pair can
+    say that. DEC-027's shape is checked to the end — the second press always leaves, so this
+    is a warning and never a refusal.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.show_areas()
+        await pilot.pause()
+        await app.screen.choose("infra")
+        await pilot.pause()
+        assert app.screen.position == "NAME"
+        app.screen.query_one("#filter", Input).focus()
+        await pilot.press(*"orbit")
+        await pilot.pause()
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        warned = announcements(app)
+        still_running = app.is_running
+
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+
+    assert warned, "a typed project name was discarded with no warning at all"
+    assert "orbit" in warned[0], f"the warning did not name what was at risk: {warned}"
+    assert still_running, (
+        "the first press left rather than warning — that is a discard, not a warning"
+    )
+    assert not app.is_running, "the second press did not leave, which would make it a refusal"
+
+
 #: The positions that protect work, named rather than derived. `_WORK_SCREENS` is computed from
 #: the code, so a screen that stopped protecting its work would drop out of that parametrization
 #: and take its own coverage with it — the tests would shrink to fit the regression and stay
 #: green. Verified: deleting the review screens' override passed every case until this list
 #: existed. A literal is the only form that can fail.
-_PROTECTS_WORK = {"LabelScreen", "NameScreen", "ReviewScreen", "ProjectReviewScreen"}
+_PROTECTS_WORK = {
+    "NameScreen",
+    "RenameScreen",
+    "ProjectReviewScreen",
+}
 
 
 def test_exactly_these_positions_protect_work_in_flight() -> None:
@@ -471,6 +579,13 @@ def test_exactly_these_positions_protect_work_in_flight() -> None:
     flow's worth of choices with an empty entry. The second kind is the one a rule written
     against the input widget misses, which is what a stage review found by walking to Review
     with a label committed and pressing Ctrl+S.
+
+    `RenameScreen` joined the first kind rather than being argued out of it. It was written
+    declaring no commitment, on the reasoning that its `submit` mutates outright instead of
+    carrying the value into a further step — true, and not what the flag turns on:
+    `test_every_screen_that_commits_typed_text_declares_it` pins `entry_is_a_commitment ==
+    hasattr(screen, "submit")`, and a name being typed is discardable by a global key exactly
+    as a project name is.
     """
     # `"work_in_flight" in vars(screen)` was the original predicate and stopped seeing two of
     # these when the launch and project reviews were given a shared `GatheredSelectionScreen`
@@ -492,13 +607,24 @@ def test_exactly_these_positions_protect_work_in_flight() -> None:
     assert actual == _PROTECTS_WORK
 
 
-async def test_the_gathered_launch_survives_a_flow_jump_at_the_review_step() -> None:
-    """The journey the review reproduced, driven end to end rather than asserted on a flag.
+async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselections() -> None:
+    """The inverse of what this asserted, recorded as a deliberate change rather than deleted.
 
-    Project, then agent, then a label committed with enter — at which point the entry is empty
-    and the first version of this rule considered nothing to be in flight. Ctrl+S there
-    unwound the stack to the sessions list and the next project choice replaced the selection
-    outright, so three screens of the owner's choices were gone with no way back to them.
+    **Its premise was the label, and the label is gone.** It read: project, then agent, then a
+    label committed with enter — "at which point the entry is empty and the first version of
+    this rule considered nothing to be in flight". Ctrl+S there unwound the stack and the next
+    project choice replaced the selection outright, so three screens of choices went with no way
+    back to them. The protection was bought for the typed label sitting invisibly behind an
+    empty entry.
+
+    With that step removed the review holds two list selections and nothing typed, so the jump
+    is allowed and this test records what it costs: the owner lands on the sessions list, and
+    getting back to a launch means re-picking a project and an agent — two selections from two
+    lists that are both still there. That is the same trade the project filter has always made.
+
+    Asserted rather than assumed, because it *is* a loss, just a small and recoverable one. If a
+    future step puts typed work back into this flow, this test is where the argument has to be
+    reopened.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
@@ -507,19 +633,38 @@ async def test_the_gathered_launch_survives_a_flow_jump_at_the_review_step() -> 
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        app.screen.submit("nightly run")
-        await pilot.pause()
         assert app.screen.position == "REVIEW"
-        assert app.selection.label == "nightly run"
-        depth = len(app.screen_stack)
+        assert app.selection.project is not None and app.selection.profile is not None
 
         await pilot.press("ctrl+s")
         await pilot.pause()
 
-        assert app.screen.position == "REVIEW", "a flow jump discarded the gathered launch"
-        assert len(app.screen_stack) == depth
-        assert app.selection.label == "nightly run"
-        assert app.selection.project is not None and app.selection.profile is not None
+        assert app.screen.position == "SESSIONS", (
+            "the jump was refused at the review, which is the protection this step no longer "
+            "has anything to protect"
+        )
+        # The way back, and the whole reason the loss is acceptable: the resting position is one
+        # escape away and both lists are intact.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.position == "PROJECTS"
+        keys = [option.id for option in app.screen.query_one("#choices", OptionList).options]
+        assert "opaque-existing" in keys, (
+            f"the project must still be there to re-pick from; the list offered {keys}"
+        )
+
+        # And the leg a Tier-2 review asked for: walk the recovery to its end rather than
+        # stopping at "the list is still there". `ProjectsScreen.choose` builds a *fresh*
+        # `LaunchSelection` rather than patching the old one, so nothing from the abandoned pass
+        # can survive into the new review — provable from the source, and now demonstrated.
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+        assert app.screen.position == "REVIEW", "the recovery did not reach a fresh review"
+        assert app.selection.project is not None
+        assert app.selection.profile is not None
+        assert app.selection.profile.profile_id == "claude"
 
 
 async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:

@@ -28,19 +28,17 @@ import logging
 
 from remote_agents.adapters.tui.model import (
     _BACK,
-    _CANCEL,
     _NEXT,
     _PREVIOUS,
     conversation_row,
 )
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
     ProfileResumeCapability,
-    ResolvedConversation,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
 
@@ -313,7 +311,9 @@ class ResumeConversationsScreen(ChoiceScreen):
             if resume_available(item)
         ]
         if not offered:
-            self.set_status("There are no saved conversations for that agent and project.")
+            # Worded exactly as the substituted row beside it. The two said the same thing in
+            # two wordings ("this agent" against "that agent"), which reads as two facts.
+            self.set_status("No saved conversations for this agent and project.")
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
         entries = list(offered)
@@ -322,8 +322,35 @@ class ResumeConversationsScreen(ChoiceScreen):
         if page.page < page.page_count:
             entries.append((_NEXT, "Next page"))
         entries.append((_BACK, "Back"))
-        self.set_status(f"Choose a conversation. Page {page.page} of {page.page_count}.")
-        self.show_choices(tuple(entries))
+        self.set_status(
+            f"Choose a conversation — starting one hands this terminal to its pane, or prints "
+            f"how to reach it. Page {page.page} of {page.page_count}."
+        )
+        # **The cursor rests on Back, and this position had no need of that until now.** The
+        # rows here used to lead to a confirmation, so row 0 was a navigation and a repeated
+        # enter cost nothing; choosing a row *is* the resume now, which makes this a commit
+        # position and puts it under DEC-007's mitigation that no repeated keypress destroys
+        # anything. Two enters from the agent list — one to arrive, one still queued — would
+        # otherwise start a session and exec this terminal away.
+        #
+        # The deleted confirmation carried this property and `test_resting_cursor.py` pinned
+        # it there; removing the screen dropped both, which a gate evaluator caught by driving
+        # `pilot.press("enter", "enter")`.
+        #
+        # **The rule this applies is not "review screens rest on Back"** — that is the weaker
+        # reading and it invites over-application. DEC-007's mitigation is that no repeated
+        # keypress commits at a *commit position*, and this list became one when the
+        # confirmation went. Whether its rows are data or actions does not enter into it.
+        #
+        # **The cost is one key, and that depends on an upstream default worth naming.** Down
+        # from the resting row reaches the first conversation because Textual's
+        # `OptionList.action_cursor_down` goes through `find_next_enabled`, which *wraps* — so
+        # it is one key whether the page holds one conversation or twelve plus paging rows.
+        # `find_next_enabled_no_wrap` ships beside it; were the widget ever to use that, the
+        # first conversation would be a full page-length away and nothing would fail. Pinned by
+        # `test_resting_cursor.py::test_one_key_from_the_resting_row_reaches_the_first_conversation`
+        # so the assumption is checked rather than inherited.
+        self.show_choices(tuple(entries), highlight=len(entries) - 1)
 
     async def choose(self, key: str) -> None:
         conversations = self.services.conversations
@@ -360,13 +387,23 @@ class ResumeConversationsScreen(ChoiceScreen):
             if resolved is None:
                 self.announce("That conversation is no longer available.", severity="warning")
                 return
-            # Inside the guard, not after it, for the reason `ResumeProjectsScreen.choose`
-            # gives: `push_screen` yields while the new screen mounts, so releasing first
-            # leaves a window in which one of this app's bindings pops the screen being
-            # mounted and the resolved conversation is discarded with no error at all.
-            # `ChoiceScreen.advance_to` records what this narrows and what it does not —
-            # Textual's own `ctrl+p` is a priority binding and gets through regardless.
-            await self.advance_to(ResumeConfirmScreen(self.project, self.profile, resolved))
+            # **The one substantive check the removed confirmation carried**, kept at the act
+            # rather than lost with the screen. What it catches is a `resolve_for_resume` that
+            # disagrees with the `catalogue` listing: the two are independent reads of the
+            # provider and only the first was ever filtered. What it never caught was staleness
+            # while the owner deliberated — `resolved` was a frozen snapshot, so a pure function
+            # of it could not see anything move — and with the deliberation step gone that
+            # window no longer exists to cover.
+            if not resume_available(resolved.summary):
+                self.announce("That conversation can no longer be resumed.", severity="warning")
+                return
+        # **Issued outside the guard, deliberately.** `issue_resume` takes `_busy` itself and
+        # clears it in its own `finally`, so calling it inside this block would have the inner
+        # clear release a guard the outer block still believes it holds — leaving the tail of
+        # the resume (the FAILED branch, the exit) running unguarded while reading as guarded.
+        # Nothing can interleave in the gap: leaving the `async with` runs no await, and
+        # `issue_resume` sets `_busy` synchronously before its first one.
+        await self.tui.issue_resume(self, self.project, self.profile, resolved)
 
     async def turn_page(self, step: int) -> None:
         wanted = max(1, min(self.page.page + step, self.page.page_count))
@@ -376,71 +413,6 @@ class ResumeConversationsScreen(ChoiceScreen):
             return
         self.page = page
         self.render_page()
-
-
-class ResumeConfirmScreen(ChoiceScreen):
-    """The last position before a session is started, resting on Cancel.
-
-    The abort entry is first, so it is what the cursor rests on and what a stray enter
-    activates — the same mitigation every other confirmation in this surface carries.
-    """
-
-    #: Resume, Back and Cancel are written here.
-    empty_state = NEVER_EMPTY
-
-    position = "RESUME_CONFIRM"
-    #: "Confirm", not the conversation. Everywhere else in this surface the breadcrumb is
-    #: where the subject goes, and this is the one position where it must not be: the header
-    #: elides a long trail (`HeaderTitle` is `text-overflow: ellipsis`) and it also carries the
-    #: whole trail before it, so the description — echoed from the agent's own output, and so
-    #: the value here most likely to be long — is what gets cut. The status line takes it
-    #: because it is the wider region and wraps to two rows.
-    #:
-    #: **Wider, not unbounded**, and the second gate pass was right to say the first version of
-    #: this comment implied otherwise. A description near its 120-character bound still elides
-    #: here at a narrow terminal. That is a smaller cut in a better place, not a guarantee; the
-    #: honest fix if it matters is a position that can wrap freely, which is the output pane.
-    crumb = "Confirm"
-
-    def __init__(
-        self, project: CatalogProject, profile: str, resolved: ResolvedConversation
-    ) -> None:
-        super().__init__()
-        self.project = project
-        self.profile = profile
-        self.resolved = resolved
-
-    async def populate(self) -> None:
-        self.hide_entry()
-        self.set_status(
-            f"Start a new session continuing: {conversation_row(self.resolved.summary)}"
-        )
-        self.show_choices(((_CANCEL, "Cancel"), ("resume-confirm", "Resume it")))
-
-    async def choose(self, key: str) -> None:
-        if key != "resume-confirm":
-            await self.tui.go_back()
-            return
-        # Re-asked at the act rather than trusted from the row that got the owner here. What it
-        # catches is a `resolve_for_resume` that disagrees with the `catalogue` listing — the
-        # two are independent reads of the provider, and only the first was ever filtered.
-        #
-        # **It does not catch staleness while the owner deliberates on this screen**, and an
-        # earlier version of this comment claimed it did, by analogy to `RemoteAgentsTui.stop`.
-        # That analogy is wrong: `stop` genuinely re-reads the record (`current_record`), while
-        # `self.resolved` is a frozen snapshot taken when this screen was pushed, so a pure
-        # function of it cannot see anything move. Covering that window would mean re-resolving
-        # here, which is DEC-024's shape one hop further and is not what centralizing the
-        # rule was for.
-        #
-        # The same claim also said the bot had always had this check. It had not — it checked
-        # while *rendering* the review screen and then resumed unchecked, which the Stage 3
-        # gate's adversarial pass found and which is now fixed in `_resume_reply`.
-        if not resume_available(self.resolved.summary):
-            self.announce("That conversation can no longer be resumed.", severity="warning")
-            await self.tui.go_back()
-            return
-        await self.tui.issue_resume(self, self.project, self.profile, self.resolved)
 
 
 async def fetch_page(

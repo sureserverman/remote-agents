@@ -40,6 +40,7 @@ from textual.widgets._header import HeaderTitle as _HeaderTitle
 from textual.widgets._toast import Toast as _Toast
 from tui_feedback import announcements, breadcrumb
 from tui_feedback import status as _status
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -139,11 +140,10 @@ def _context(**overrides: object) -> TuiContext:
 
 
 async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
+    """Two choices, not three: the agent choice is the arrival at the review."""
     await app.screen.choose("opaque-existing")
     await pilot.pause()
     await app.screen.choose("claude")
-    await pilot.pause()
-    app.screen.submit("")
     await pilot.pause()
 
 
@@ -407,26 +407,36 @@ async def test_the_trail_grows_as_the_owner_walks_into_a_flow() -> None:
         await app.screen.choose("claude")
         await pilot.pause()
         trail.append(breadcrumb(app))
-        app.screen.submit("")
-        await pilot.pause()
-        trail.append(breadcrumb(app))
 
+    # Three positions, and the last of them is the review. It used to be four, and the
+    # fourth read `… › claude › Review` because the label step sat between the agent and the
+    # commit point and carried the agent into the trail itself.
+    #
+    # With that step gone the review names the agent, which is the same convention applied one
+    # position earlier: a crumb names the choice that led here. So the *word* "Review" leaves
+    # the trail and the *agent* stays in it — which is the half that matters, since a commit
+    # point that does not say which agent it is about to launch is the defect the label step's
+    # own docstring recorded being fixed for.
     assert trail == [
         "Projects",
         "Projects › infra/existing",
         "Projects › infra/existing › claude",
-        "Projects › infra/existing › claude › Review",
     ]
 
 
 async def test_the_longest_trail_still_fits_the_header_at_the_committed_width() -> None:
     """A trail long enough to be elided is a trail that stops naming what it was drawn for.
 
-    The resume flow is the deepest in this surface — five crumbs at the confirmation — and it
-    is the one where the elision would cost most, since `ResumeConfirmScreen` gives its
-    *subject* to the status line specifically because the header cannot be trusted to show it
-    whole. What the header is still relied on for there is the agent, and this is what pins
-    that it survives.
+    The resume flow is the deepest in this surface, and it is the one where the elision would
+    cost most: its conversation descriptions are echoed from an agent's own output and so are
+    the longest values any position here carries, which is why they go to the status line
+    rather than into the trail. What the header is relied on for is the agent, and this is what
+    pins that it survives.
+
+    It was a crumb deeper still, at a confirmation that stood after the conversation list; that
+    step is gone, so the trail this measures is one shorter than when the measurement was
+    taken. Kept rather than re-tuned: a bound that still holds with a shorter trail is a bound
+    that holds, and loosening it to match would only make the check weaker.
 
     Measured against `HeaderTitle`'s own rendered width at 100 columns — the width the
     snapshot baselines are committed at — rather than against a guessed character budget, so
@@ -443,15 +453,15 @@ async def test_the_longest_trail_still_fits_the_header_at_the_committed_width() 
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        await app.screen.choose(str(_REFERENCE))
-        await pilot.pause()
+        # Stop here: this is the deepest position the flow has now, and choosing a row on it
+        # issues the resume rather than walking one step further.
         trail = breadcrumb(app)
         drawn = app.screen.query_one(_HeaderTitle).render_line(0).text
 
-    assert trail == "Projects › Resume › infra/existing › claude › Confirm"
+    assert trail == "Projects › Resume › infra/existing › claude"
     assert "…" not in drawn, f"the header elided the trail at 100 columns: {drawn!r}"
     assert "claude" in drawn, (
-        "the agent fell out of the header, and the confirmation names it nowhere else"
+        "the agent fell out of the header, and the conversation list names it nowhere else"
     )
 
 
@@ -553,7 +563,7 @@ async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() ->
     A gate evaluator pointed this out and it is exactly right: `$foreground` on `#status` is
     already the default, `$surface` on the output pane equals the screen's own background,
     `$text-muted` reaches only a disabled row no baseline renders, and `$error`/`$warning`
-    reach only a severity no baseline sets. So the sixteen SVGs — this repo's only assertion
+    reach only a severity no baseline sets. So the committed SVGs — this repo's only assertion
     about what the owner *sees* — are silent about the whole change.
 
     This is that assertion. It resolves the rendered colour under two themes and requires
@@ -590,6 +600,55 @@ async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() ->
         f"the error colour is theme-independent, so it is a literal, not a token: {seen}"
     )
     assert neutral_rgb != seen["textual-dark"], "a neutral status renders in the error colour"
+
+
+async def test_the_review_status_names_the_terminal_handover_it_is_about_to_do() -> None:
+    """The surface's most irreversible act, said on the screen that commits to it.
+
+    A ready launch **execs away** (DEC-023): `attach_to` replaces this process with the tmux
+    client, so detaching later returns the owner to their shell rather than to this app. That is
+    a bigger consequence than anything else the surface does, and until now it was documented in
+    `adapters/tui/attach.py`'s docstring and in the README and stated nowhere the owner could
+    see it.
+
+    The line it replaces read `Label: none. Launch, or go back.` — which, once the label step
+    was removed, rendered the absence of a step that no longer existed. Its own comment said the
+    label was the one part of the selection the breadcrumb could not carry; with the label gone
+    the trail carries the whole selection, and this region is free to say what the act does.
+
+    **Informational, not a severity** (DEC-010): this is an instruction about what is about to
+    happen, not a report of a condition, and that decision is explicit that a severity is
+    carried only when the words carry it. The neutral-colour half is asserted below for that
+    reason — a warning-coloured instruction is the exact defect DEC-010 was written against.
+    """
+    from textual.widgets import Static
+
+    app = RemoteAgentsTui(_context())
+
+    async with app.run_test() as pilot:
+        await _walk_to_review(app, pilot)
+        assert position(app) == "REVIEW", f"the walk landed on {position(app)}"
+        said = _status(app)
+        region = app.screen.query_one("#status", Static)
+        review_rgb = (region.styles.color.r, region.styles.color.g, region.styles.color.b)
+
+        # The same region, on the same screen, carrying a real condition. Read second so the
+        # comparison is between two renders of one widget rather than between two screens.
+        app.screen.set_status("The managed sessions could not be read.", severity="error")
+        await pilot.pause()
+        error = region.styles.color
+        error_rgb = (error.r, error.g, error.b)
+
+    lowered = said.casefold()
+    assert "terminal" in lowered and "pane" in lowered, (
+        f"the review must say what going through with it does to this terminal; it said {said!r}"
+    )
+    assert "label" not in lowered, (
+        f"the review still mentions the label step that no longer exists: {said!r}"
+    )
+    assert review_rgb != error_rgb, (
+        "an instruction is rendering in the severity colour, which is what DEC-010 forbids"
+    )
 
 
 async def test_a_failed_read_still_says_what_failed_after_its_toast_has_gone() -> None:

@@ -145,6 +145,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # here the owner has to *copy*, and a terminal can only copy what is drawn — so a cut one is
     # not a shortened command, it is no command, on the path where a session did not come up and
     # it is the only handle left on a pane that may still be live. Two rows hold it at 60.
+    #
+    # **It is no longer the longest, and the margin is narrower than the paragraph above
+    # implies.** The conversation list's status — which names the terminal handover as well as
+    # the page — is 109 characters, measured. Two rows hold 116 at 60 columns, so it still fits
+    # with about seven characters of slack and clips at roughly 50. The design point stands; what
+    # changed is that the worked example is no longer the worst case, and a future line longer
+    # than this one has less room than the 93-character figure suggests.
     #: Shown in the header, with each screen's breadcrumb as the sub-title beside it. Set
     #: rather than left to default: `App.title` falls back to the class name, so the header
     #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.
@@ -553,8 +560,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def action_quit(self) -> None:
         """Leave — but say what is about to be lost first, and only ask once.
 
-        `ctrl+q` used to discard typed work silently, and it was reproduced: type a
-        label, press it, the app is gone and the label with it. `screens/base.py` deliberately
+        `ctrl+q` used to discard typed work silently, and it was reproduced on the launch
+        wizard's label entry, since removed: type a name, press it, the app is gone and the
+        name with it. The project-name entry reproduces it the same way today.
+        `screens/base.py` deliberately
         left quit out of the set of keys greyed while `work_in_flight`, and that reasoning
         stands — a jump means "go elsewhere in this app" and losing the work is a side effect
         nobody asked for, while quit means "leave". **The fix is a warning, never a refusal.**
@@ -1059,7 +1068,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                         ProjectId(project.opaque_id),
                         ProfileId(profile.profile_id),
                         _idempotency_key(),
-                        self.selection.label,
+                        # No label at launch, which is now what both surfaces do. Naming a
+                        # session happens on the session, from the detail's Rename row, at the
+                        # moment the owner can see what they are naming.
+                        None,
                     )
                 )
         except Exception as error:

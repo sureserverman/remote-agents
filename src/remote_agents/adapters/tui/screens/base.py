@@ -38,7 +38,7 @@ _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
 #:
 #: A sentinel rather than `None`, because the two answers have to be distinguishable: `None`
 #: means *this screen has not been asked yet*, which is what `test_empty_states.py` fails a
-#: newly added screen on. Left as a plain `None` default, a seventeenth screen would inherit
+#: newly added screen on. Left as a plain `None` default, a sixteenth screen would inherit
 #: silence and the exhaustiveness check would pass over it.
 NEVER_EMPTY = "\x00never-empty"
 
@@ -269,19 +269,21 @@ class ChoiceScreen(Screen[None]):
         surface works would be worse than one that is briefly optimistic.
 
         **The one rule here that mirrors no early return is the work-in-flight one, and it is
-        deliberate.** The three flow jumps unwind the stack, so pressing one while a label is
-        half-typed — or while a whole selection is gathered and waiting at the review step —
-        discards it with no warning and no way back. The action has no early return for that
+        deliberate.** The three flow jumps unwind the stack, so pressing one while a name is
+        half-typed — or while the add-project review holds one already committed — discards it
+        with no warning and no way back. The action has no early return for that
         because the action never knew. This is the rule that had to be invented rather than
         mirrored, and it is the only one answering `None`: the key stays drawn and greyed rather
         than vanishing, because a footer entry that disappears as the owner types would be a
         second surprise on top of the first.
 
         **Quit is deliberately not in that set, and saying so is the point.** `ctrl+q` discards
-        in-flight work exactly as the three jumps do, and a stage review reproduced it: type a
-        label, press it, the app is gone and the label with it. It is left enabled because the
-        two keys mean different things to the person pressing them. The jumps mean "go somewhere
-        else in this app", and losing the work is a side effect nobody asked for; quit means
+        in-flight work exactly as the three jumps do, and a stage review reproduced it on the launch
+        wizard's label entry, since removed: type a name, press it, the app is gone and the name
+        with it. The same is reproducible today on the project-name entry. It is left enabled
+        because the two keys mean different things to the person pressing them. The jumps mean
+        "go somewhere else in this app", and losing the work is a side effect nobody asked for;
+        quit means
         "leave", and an app that refuses to close until an entry is cleared is a worse answer
         than the one it replaces.
 
@@ -315,11 +317,15 @@ class ChoiceScreen(Screen[None]):
         """Whether leaving this position would discard something the owner built.
 
         Not "is there text in the box" — that was the first version of this, and a stage review
-        found what it missed. A label typed on `LABEL` is protected while it is being typed and
-        then *committed*, at which point the box is empty and the same three keys throw away the
-        whole gathered selection from the review step one screen later. The thing worth
-        protecting was never the widget's contents; it is work the owner cannot get back by
-        pressing escape.
+        found what it missed. A project name is protected while it is being typed and then
+        *committed*, at which point the box is empty and the same three keys throw away the
+        gathered result from the review step one screen later. The thing worth protecting was
+        never the widget's contents; it is work the owner cannot get back by pressing escape.
+
+        The example used to be the launch wizard's label, which illustrated it better than what
+        replaced it — but the label step itself is gone. That flow's review holds two list
+        selections now, re-pickable in two keystrokes, so it protects nothing and `ReviewScreen`
+        stopped overriding this. The class is still there; only the override left.
 
         So a screen that holds gathered state says so by overriding this, and the default
         answers for the ordinary case: an entry that is shown, non-empty, and a commitment. The
@@ -468,8 +474,9 @@ class ChoiceScreen(Screen[None]):
         **`doing` is required rather than optional, and that is the whole of the second
         half.** The first version covered the rows and left the status line alone, on the
         argument that it stayed readable underneath. A review pointed out what it was left
-        saying: `ReviewScreen`'s own line reads "Label: none. Launch, or go back." — an
-        instruction to press a button that is at that moment covered and refusing input. A
+        saying: `ReviewScreen`'s own line — "Label: none. Launch, or go back." at the time, and
+        a sentence about the terminal handover now — is an instruction about a button that is at
+        that moment covered and refusing input. A
         line that was true a moment ago and is false now is worse than the spinner alone,
         because the owner has no reason to doubt it. So the flow names what it is doing, and
         the previous line is put back on the way out, before the caller writes its own result
@@ -972,10 +979,14 @@ class ChoiceScreen(Screen[None]):
             # would make this the *only* route to Back, which is a narrower guarantee than
             # the one being added.
             #
-            # Only `_BACK`. `_CANCEL` is *not* uniform — every screen that renders it means
-            # "unwind to the project list" except `ResumeConfirmScreen`, where Cancel means
-            # go back one step — so hoisting it here would quietly change a confirmation's
-            # answer. It stays with the screens that know what they mean by it.
+            # Only `_BACK`. `_CANCEL` is left with the screens that render it, and the reason
+            # is now weaker than it was: it used to have a genuine exception — the resume
+            # confirmation meant "go back one step" by it where every other screen means
+            # "unwind to the project list" — and that screen has since been removed, so the
+            # surviving `_CANCEL` rows do agree. Hoisting it is therefore *possible* and is
+            # deliberately not done here: it would be a second behaviour change riding along
+            # with a removal, and the screens that render it are still the ones that know what
+            # they mean by it.
             await self.tui.go_back()
             return
         await self.choose(key)

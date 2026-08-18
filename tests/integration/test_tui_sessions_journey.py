@@ -112,6 +112,76 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
         terminal_connection.close()
 
 
+async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
+    database: Path,
+) -> None:
+    """Renaming is a *write*, so the cross-connection claim has to be made in that direction.
+
+    Every other assertion in this file reads what the service wrote. This is the only one that
+    writes from the terminal and reads back through the service's own connection, which is what
+    makes it a claim about the shared store rather than about one `SessionService` instance
+    agreeing with itself — the store holds no cache, so a rename that never reached disk would
+    still be visible to the connection that issued it.
+
+    Driven through the screen's own `submit`, not `SessionService.rename`: the assertion is
+    about what the surface does with a typed name, and calling the service directly would prove
+    the store works and leave the entry untested.
+    """
+    service_connection = open_database(database)
+    terminal_connection = open_database(database)
+    try:
+        terminal = FakeTerminal()
+        service = SessionService(SQLiteSessionStore(service_connection), terminal)
+        launched = await service.launch(
+            LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
+        )
+        assert launched.display.custom_label is None, "the fixture must start with no name"
+
+        context = TuiContext(
+            launcher=SessionService(SQLiteSessionStore(terminal_connection), terminal),
+            creator=object(),  # type: ignore[arg-type]
+            profiles=(ProfileChoice("claude", True),),
+            refresh_catalogue=lambda: (_PROJECT,),
+            attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
+            catalogue=(_PROJECT,),
+        )
+        app = RemoteAgentsTui(context)
+
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert position(app) == "SESSION_DETAIL"
+
+            await app.screen.choose("rename")
+            await pilot.pause()
+            assert position(app) == "RENAME"
+            await app.screen.submit("nightly")
+            await pilot.pause()
+
+            # Back on the detail, which re-read the session for itself on the way back.
+            assert position(app) == "SESSION_DETAIL"
+            trail = _breadcrumb(app)
+
+            # And the list behind it, which is a second read of the same write through the
+            # same connection — the name has to reach the row the owner picks from, not only
+            # the screen that set it.
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            listed = _rows(app)
+
+        assert "nightly" in trail, f"the detail came back naming {trail!r}"
+        assert any("nightly" in row for row in listed), f"the list showed {listed}"
+        # The other writer's connection, which has never seen the terminal's.
+        reread = await service.list_sessions()
+        named = next(item for item in reread if item.session_id == launched.session_id)
+        assert named.display.custom_label == "nightly"
+    finally:
+        service_connection.close()
+        terminal_connection.close()
+
+
 async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
     database: Path,
 ) -> None:

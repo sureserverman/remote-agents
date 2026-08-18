@@ -180,9 +180,10 @@ async def _drive_to_force_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
 async def _drive_to_review(app: RemoteAgentsTui) -> None:
     # Through each screen's own handler, so the cursor under test is the one the real
     # navigation leaves behind rather than one a directly-built screen happens to draw.
+    # Two choices, not three: the agent choice lands on the review directly since the launch
+    # flow lost its label step.
     await app.screen.choose("opaque-existing")
     await app.screen.choose("claude")
-    app.screen.submit("nightly run")
 
 
 async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
@@ -192,17 +193,42 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task
     return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
 
 
-async def _drive_to_resume_confirm(app: RemoteAgentsTui) -> None:
+async def _drive_to_the_conversation_list(app: RemoteAgentsTui) -> None:
+    """The resume flow's commit position, which is the list itself now.
+
+    It used to be a confirmation standing after this screen, and this file had an entry for it
+    with the same "abort under the cursor" shape as the two destructive confirms. Removing that
+    screen made choosing a row here the act, and took the entry with it — so for a while the
+    resume flow's commit point rested on the mutating row and nothing in this file noticed. A
+    gate evaluator caught it by pressing enter twice from the agent list.
+    """
     await app.action_resume()
     await app.screen.choose("opaque-existing")
     await app.screen.choose("claude")
-    await app.screen.choose(str(_REFERENCE))
 
 
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     await app.show_areas()
     await app.screen.choose("infra")
     app.screen.submit("new-project")
+
+
+async def _drive_to_session_detail(app: RemoteAgentsTui) -> None:
+    """The detail itself, which this file never listed while it grew mutating rows.
+
+    The two modal drives above pass straight through this position to reach their
+    confirmations, so it has been *traversed* by this file since the day it was written and
+    never *asserted*. Its resting row was pinned only by the committed SVG baselines — real
+    coverage, and the argument this file's own prose makes for why a painted-highlight
+    assertion is worth keeping, but the baselines are a net for rendering rather than a
+    statement about which row an enter activates.
+
+    Added when a gate evaluator noticed that the detail now rests one Down away from an
+    unconfirmed Clean up on a PRESERVED session: the cursor resting on a read is the whole
+    reason a stray enter there is harmless, and nothing in this file said so.
+    """
+    await app.show_sessions()
+    await app.show_detail(str(_SESSION_ID))
 
 
 # Each entry is a position whose resting row must be the one that mutates nothing.
@@ -218,12 +244,17 @@ _RESTING = (
         "REMOTE_CONTROL_MODAL",
         id="remote-control-confirm",
     ),
-    # The resume flow's commit point. Same "abort under the cursor" shape as the two
-    # destructive confirms, and it held only because Cancel happens to be listed first with
-    # the default highlight — nothing pinned it until this entry.
-    pytest.param(_drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
+    # The resume flow's commit position. Restored after the confirmation it used to sit on was
+    # removed: the rows here lead nowhere else now, so the cursor must not rest on one.
+    pytest.param(
+        _drive_to_the_conversation_list, "Back", "RESUME_CONVERSATIONS", id="resume-conversations"
+    ),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
+    # Not a confirmation, and the only entry here that is not: this position offers reads and
+    # stops side by side with no separator, so which row the cursor rests on is what decides
+    # whether a repeated enter reads a session or ends one.
+    pytest.param(_drive_to_session_detail, "Copy attach", "SESSION_DETAIL", id="session-detail"),
 )
 
 
@@ -339,3 +370,36 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         await pilot.pause()
         marked_current, _ = _highlighted(app)
         assert marked_current == "two", "the guard must not block the newest fill"
+
+
+async def test_one_key_from_the_resting_row_reaches_the_first_conversation() -> None:
+    """The resting cursor is only affordable because Down wraps, so that is pinned too.
+
+    Resting the conversation list on Back is safe, and it is *cheap* only because Textual's
+    `OptionList.action_cursor_down` routes through `find_next_enabled`, which wraps from the
+    last row to the first — so one Down reaches conversation 1 whether the page holds one row
+    or twelve plus paging rows. `find_next_enabled_no_wrap` ships beside it.
+
+    Without this, a future widget change turns "one key" into "a page-length of keys" and every
+    other test still passes: the safety property this file asserts would hold while the
+    affordance that made it acceptable had quietly gone.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _drive_to_the_conversation_list(app)
+        await settle(app, pilot)
+        assert position(app) == "RESUME_CONVERSATIONS"
+
+        marked, rows = _highlighted(app)
+        assert marked == "Back", f"the fixture did not start on the resting row; rows were {rows}"
+
+        await pilot.press("down")
+        await pilot.pause()
+        landed, rows = _highlighted(app)
+
+    assert landed == rows[0], (
+        f"one Down from the resting row landed on {landed!r}, not the first conversation "
+        f"{rows[0]!r} — the cursor no longer wraps, so reaching a conversation now costs a "
+        f"keypress per row and resting on Back has become expensive"
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 
 import pytest
 from textual.widgets import OptionList
@@ -39,12 +40,30 @@ _SECRET_PATH = "/home/user/.claude/projects/opaque/abc123def456.jsonl"
 _PROVIDER_ID = "abc123def456"
 
 
-def _summary(index: int, profile: str = "claude") -> ConversationSummary:
+class _FutureConversationState(StrEnum):
+    """A second conversation state, which the domain does not have yet.
+
+    Borrowed from `tests/contract/test_resume_offer_parity.py`, which explains it at length:
+    `ConversationState` is a `StrEnum` with one member, so there is no non-resumable value to
+    hand a surface, and Python refuses to *extend* a populated enum — hence a sibling rather
+    than a subclass. Being a `StrEnum` too, its member satisfies the same `str` contract
+    `ConversationSummary.state` is carried as, while `is ConversationState.RESUMABLE` is false
+    for it. That is what makes the refusal path reachable at all.
+    """
+
+    ARCHIVED = "archived"
+
+
+def _summary(
+    index: int,
+    profile: str = "claude",
+    state: ConversationState | _FutureConversationState = ConversationState.RESUMABLE,
+) -> ConversationSummary:
     return ConversationSummary(
         ConversationReference(f"c-{'0' * 14}{index:02d}"),
         ProfileId(profile),
         ProjectId("opaque-existing"),
-        ConversationState.RESUMABLE,
+        state,
         datetime.now(UTC),
         description=f"conversation {index}",
     )
@@ -221,7 +240,21 @@ async def test_no_provider_id_or_path_is_ever_rendered() -> None:
             assert fragment not in rendered
 
 
-async def test_resume_requires_a_confirm_step_and_issues_a_tui_key() -> None:
+async def test_choosing_a_conversation_starts_the_resume_with_no_step_in_between() -> None:
+    """Three positions, and the third is the act.
+
+    **This asserted the opposite until now, and the change is DEC-018's rule applied rather
+    than a preference.** That entry decides confirmations by "applied to both surfaces or
+    neither", because DEC-007's rendered-row parity is what makes a second surface safe to hold
+    destructive power — and the bot retired its own resume review step, answering a press on it
+    with "Resuming no longer has a review step — choosing a conversation starts it." A
+    confirmation on this surface alone was exactly the one-surface-only case that rule forbids.
+
+    Resuming is also not destructive: it starts a session, and the session it starts can be
+    stopped. DEC-018's other half is the friction argument — a confirmation on a routine action
+    trains the owner to dismiss confirmations, which makes the ones guarding force stop and
+    Remote Control worth less.
+    """
     conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
     launcher = _Launcher()
     app = RemoteAgentsTui(_context(conversations, launcher))
@@ -233,21 +266,32 @@ async def test_resume_requires_a_confirm_step_and_issues_a_tui_key() -> None:
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
+        assert position(app) == "RESUME_CONVERSATIONS"
+
         await app.screen.choose(str(_summary(1).reference))
         await pilot.pause()
-        assert position(app) == "RESUME_CONFIRM"
-        assert launcher.resumed == [], "the selection alone must not resume"
 
-        await app.screen.choose("resume-confirm")
-        await pilot.pause()
-
-    assert len(launcher.resumed) == 1
+    assert len(launcher.resumed) == 1, (
+        f"choosing a conversation must start it; the launcher saw {launcher.resumed}"
+    )
     assert launcher.resumed[0].idempotency_key.startswith("tui-")
     assert launcher.resumed[0].profile_id == ProfileId("claude")
 
 
-async def test_aborting_the_confirm_resumes_nothing() -> None:
-    conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
+async def test_a_conversation_that_resolves_but_cannot_be_resumed_starts_nothing() -> None:
+    """The one substantive check the confirmation carried, kept at the act rather than lost.
+
+    The removed screen re-asked `resume_available` before issuing, and its comment is precise
+    about what that catches: a `resolve_for_resume` that disagrees with the `catalogue` listing,
+    since the two are independent reads of the provider and only the first was ever filtered. It
+    is equally precise about what it does *not* catch — staleness while the owner deliberates —
+    because `resolved` is a frozen snapshot, so a pure function of it cannot see anything move.
+
+    Removing the screen removes the deliberation window entirely, so the half that was never
+    covered stops existing; the half that was covered has to survive, and this is it.
+    """
+    unresumable = _summary(1, state=_FutureConversationState.ARCHIVED)  # type: ignore[arg-type]
+    conversations = _Conversations({1: (unresumable,)}, caps=_capable("claude"))
     launcher = _Launcher()
     app = RemoteAgentsTui(_context(conversations, launcher))
 
@@ -258,12 +302,14 @@ async def test_aborting_the_confirm_resumes_nothing() -> None:
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        await app.screen.choose(str(_summary(1).reference))
+        await app.screen.choose(str(unresumable.reference))
         await pilot.pause()
-        await app.screen.choose("\x00cancel")
-        await pilot.pause()
+        warned = " ".join(announcements(app, severity="warning"))
+        step = position(app)
 
-    assert launcher.resumed == []
+    assert launcher.resumed == [], "an unresumable conversation was started anyway"
+    assert "no longer be resumed" in warned or "not valid" in warned, warned
+    assert step == "RESUME_CONVERSATIONS", "a refusal must leave the owner on the list"
 
 
 async def test_a_ready_resume_ends_in_the_same_attach_handoff_as_a_launch() -> None:
@@ -279,8 +325,6 @@ async def test_a_ready_resume_ends_in_the_same_attach_handoff_as_a_launch() -> N
         await app.screen.choose("claude")
         await pilot.pause()
         await app.screen.choose(str(_summary(1).reference))
-        await pilot.pause()
-        await app.screen.choose("resume-confirm")
         await pilot.pause()
 
     assert isinstance(app.return_value, AttachRequest)
@@ -331,14 +375,15 @@ async def test_a_forged_reference_is_refused(forged: str) -> None:
 async def test_back_out_of_the_resume_flow_stops_at_every_position() -> None:
     """Back walks the resume flow out one position at a time, and Cancel agrees with it.
 
-    **Two deliberate navigation changes, matching the pairs Tasks 2.1 and 2.2 removed.**
+    **One deliberate navigation change survives here; the other left with its screen.**
     Escape at the agent choice used to jump straight to the project list, skipping the resume
-    project choice. And the confirm's Cancel row used to restart the entire flow while Escape
-    from that same position went back exactly one — so the two rows disagreed about what
-    leaving meant. On a real stack both are one level, which is what makes them agree.
+    project choice — that is the leg still asserted below. The second was the confirm's Cancel
+    row restarting the whole flow while Escape from the same position went back exactly one, so
+    the two rows disagreed about what leaving meant; with the confirmation gone there are no
+    two rows left to disagree, and the walk is one position shorter.
 
-    Asserted as the whole walk, so reinstating either shortcut fails here rather than passing
-    on a single destination.
+    Asserted as the whole walk, so reinstating the surviving shortcut fails here rather than
+    passing on a single destination.
     """
     conversations = _Conversations({1: (_summary(1),)}, caps=_capable("claude"))
     launcher = _Launcher()
@@ -351,16 +396,7 @@ async def test_back_out_of_the_resume_flow_stops_at_every_position() -> None:
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        await app.screen.choose(str(_summary(1).reference))
-        await pilot.pause()
-        assert position(app) == "RESUME_CONFIRM"
-
-        # Cancel, not Escape: the row is the half that used to restart the flow.
-        await app.screen.choose("\x00cancel")
-        await pilot.pause()
-        assert position(app) == "RESUME_CONVERSATIONS", (
-            "Cancel at the confirm must go back one position, as Escape always did"
-        )
+        assert position(app) == "RESUME_CONVERSATIONS"
 
         await app.action_back()
         await pilot.pause()
@@ -467,30 +503,32 @@ async def test_the_navigation_guard_is_held_until_the_next_screen_is_pushed() ->
     )
 
 
-async def test_the_navigation_guard_spans_the_conversation_resolve_and_its_push() -> None:
+async def test_the_navigation_guard_still_spans_the_conversation_resolve() -> None:
     """The third fetch of the resume flow is held like its two siblings (DEC-024).
 
-    `ResumeConversationsScreen.choose` resolves a reference and pushes the confirmation, and
-    it was the one of the three fetches not under the guard. Nothing chose that: the two
-    siblings were guarded when the flow was hand-rolled, this one was extracted afterwards
-    and did not inherit it. An unexplained exception is how the next reader concludes the
-    guard is optional, which is the whole of DEC-024's reasoning.
+    **The property survives the confirmation's removal; the way it was asserted does not.**
+    This used to record the stack depth at each guard flip and require the release to happen
+    *deeper* than the take — a precise way of saying "the confirmation was already pushed", so
+    a `finally` narrowed back to the resolve alone failed deterministically rather than racily.
+    With no screen pushed there is no depth change left to observe, and keeping that shape
+    would have been a test passing on its own vacuity.
 
-    Asserted with the same shape the sibling case above uses — the stack depth recorded at
-    each flip, rather than a race — for the same reason: a race reproduces it only sometimes,
-    while "was the confirmation already pushed when the guard was released" is the property
-    itself and fails deterministically if the `finally` is ever narrowed back to the resolve.
+    What replaces it asks the property directly instead of inferring it from the stack: the
+    fake records whether the guard was held *at the moment `resolve_for_resume` was called*.
+    That is what DEC-024 actually says, it cannot be satisfied by accident, and it fails the
+    moment the `async with` is narrowed to exclude the fetch.
     """
-    flips: list[tuple[bool, int]] = []
+    held_during_resolve: list[bool] = []
 
-    class _Watching(RemoteAgentsTui):
-        def set_busy(self, busy: bool) -> None:
-            flips.append((busy, len(self.screen_stack)))
-            super().set_busy(busy)
+    class _WatchingConversations(_Conversations):
+        async def resolve_for_resume(self, reference: ConversationReference):
+            held_during_resolve.append(app.busy)
+            return await super().resolve_for_resume(reference)
 
     summary = _summary(1)
-    conversations = _Conversations({1: (summary,)}, caps=_capable("claude"))
-    app = _Watching(_context(conversations, _Launcher()))
+    conversations = _WatchingConversations({1: (summary,)}, caps=_capable("claude"))
+    launcher = _Launcher()
+    app = RemoteAgentsTui(_context(conversations, launcher))
 
     async with app.run_test() as pilot:
         await app.action_resume()
@@ -500,22 +538,18 @@ async def test_the_navigation_guard_spans_the_conversation_resolve_and_its_push(
         await app.screen.choose("claude")
         await pilot.pause()
         assert position(app) == "RESUME_CONVERSATIONS", "the flow did not reach the page"
-        flips.clear()
 
         await app.screen.choose(str(summary.reference))
         await pilot.pause()
 
-        assert position(app) == "RESUME_CONFIRM", "choosing a conversation must advance"
-
-    assert flips, "resolving a chosen conversation must take the navigation guard"
-    taken, depth_when_taken = flips[0]
-    released, depth_when_released = flips[-1]
-    assert taken is True and released is False
-    assert depth_when_released > depth_when_taken, (
-        "the guard was released at stack depth "
-        f"{depth_when_released}, the same depth it was taken at — the confirmation had not "
-        "been pushed yet, so a global binding firing here would discard the resolved "
-        "conversation with no error at all"
+    assert held_during_resolve == [True], (
+        "resolve_for_resume ran outside the navigation guard, which is exactly the exception "
+        "DEC-024 removed: a second entry point arriving mid-resolve would reset the chosen "
+        "project and the selection would silently do nothing"
+    )
+    assert len(launcher.resumed) == 1, (
+        "the resume was never issued, so the guard assertion above proves nothing about the "
+        "path that matters"
     )
 
 

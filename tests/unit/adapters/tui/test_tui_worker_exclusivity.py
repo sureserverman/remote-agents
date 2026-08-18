@@ -52,11 +52,12 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
-from remote_agents.adapters.tui.screens import ResumeConfirmScreen
+from remote_agents.adapters.tui.screens import ResumeConversationsScreen
 from remote_agents.application.project_admin import CreatedProject
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
+    ConversationCataloguePage,
     ConversationReference,
     ConversationState,
     ConversationSummary,
@@ -173,9 +174,31 @@ class _SlowCreator:
         return CreatedProject(ProjectIdentity(command.area, command.name), None)  # type: ignore[arg-type]
 
 
-def _context(launcher: _SlowLauncher, creator: _SlowCreator | None = None) -> TuiContext:
+class _ResolvingConversations:
+    """Resolves whatever reference it is handed, instantly.
+
+    Needed because the resume act moved onto the conversation list: the confirmation this test
+    used to push already held its `ResolvedConversation`, so no service was reached. The resolve
+    is deliberately *not* slow — what this test measures is two selections racing the launcher,
+    and a slow resolve would move the contention somewhere else.
+    """
+
+    def __init__(self, summary: ConversationSummary) -> None:
+        self._summary = summary
+
+    async def resolve_for_resume(self, reference: ConversationReference) -> ResolvedConversation:
+        assert reference == self._summary.reference
+        return ResolvedConversation(self._summary, ProviderConversationId("abc123"))
+
+
+def _context(
+    launcher: _SlowLauncher,
+    creator: _SlowCreator | None = None,
+    conversations: object | None = None,
+) -> TuiContext:
     return TuiContext(
         launcher=launcher,  # type: ignore[arg-type]
+        conversations=conversations,  # type: ignore[arg-type]
         creator=creator or _SlowCreator(),  # type: ignore[arg-type]
         profiles=(ProfileChoice("claude", True),),
         refresh_catalogue=lambda: (_PROJECT,),
@@ -305,7 +328,6 @@ async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> N
         await pilot.pause()
         await app.screen.choose("opaque-existing")
         await app.screen.choose("claude")
-        app.screen.submit("")
         await pilot.pause()
         first = asyncio.create_task(_select(app, "launch"))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
@@ -662,23 +684,23 @@ async def test_a_concurrent_second_resume_is_refused_by_the_handler_guard() -> N
         description="a saved conversation",
     )
     launcher = _SlowLauncher()
-    app = RemoteAgentsTui(_context(launcher))
+    app = RemoteAgentsTui(_context(launcher, conversations=_ResolvingConversations(summary)))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        # The confirm is a screen of its own now, carrying the project, agent and resolved
-        # conversation it was built with — so this pushes the real thing rather than setting
-        # four fields on the app and painting the rows by hand. The selection handler
-        # dispatches on whatever screen is on top, which is exactly what is under test.
+        # The resume act lives on the conversation list now — the confirmation that used to
+        # stand after it is gone, so choosing a row *is* the command. Pushed with the real page
+        # rather than walked to: the catalogue and its paging are not what is under test, and
+        # the selection handler dispatches on whatever screen is on top, which is.
         await app.push_screen(
-            ResumeConfirmScreen(
-                _PROJECT, "claude", ResolvedConversation(summary, ProviderConversationId("abc123"))
+            ResumeConversationsScreen(
+                _PROJECT, "claude", ConversationCataloguePage((summary,), 1, 1)
             )
         )
         await settle(app, pilot)
 
-        first = asyncio.create_task(_select(app, "resume-confirm"))
+        first = asyncio.create_task(_select(app, str(summary.reference)))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
-        second = asyncio.create_task(_select(app, "resume-confirm"))
+        second = asyncio.create_task(_select(app, str(summary.reference)))
         await asyncio.sleep(0)
         launcher.release.set()
         await asyncio.gather(first, second)

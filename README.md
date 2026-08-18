@@ -107,8 +107,9 @@ identify, terminate, or adopt arbitrary local agent processes. Only provider-cat
 conversations can be resumed into a new managed tmux pane. Choosing a conversation resumes it
 on that press: the bot reviews neither a launch nor a resume, so nothing stands between the
 choice and the session, and a second press of the same button is dropped rather than serviced
-into a second session. The local terminal surface deliberately keeps its resume review, and
-that difference between the two surfaces is intended rather than an omission. A conversation
+into a second session. The local terminal surface behaves the same way — it kept a resume
+review for a while, and dropping it is what brought the two surfaces back into line. A
+conversation
 is attached to the session it starts and cannot be resumed again until that session has
 **ended** — not merely stopped, so a preserved, failed, orphaned or stopping session still
 holds it. Pressing it before then reports what it is attached to and what became of it, rather
@@ -157,37 +158,41 @@ uv run --locked remote-agents tui
 
 `remote-agents tui` carries the same session actions the bot carries, driven from this host instead
 of from Telegram, and one the bot has no way to offer: it hands this terminal to a session's tmux
-pane. The traffic is not all one way — the bot can rename a running session and the local surface
-cannot, though it can name one at launch, which the bot no longer does. It reads the same private configuration the service reads, defaulting to
+pane. Naming works the same way on both now: a session is named after it exists, from its own
+detail, and neither surface asks for a name at launch. It reads the same private configuration the service reads, defaulting to
 `~/.config/remote-agents/config.toml`, and it opens the same SQLite store, refusing a
 `database_path` outside the private state directory exactly as `serve` does. It drives that store
 itself, so none of what follows needs Telegram credentials or a running user service: launch,
-resume, the session list, inspect, Copy Attach, all three stops, and Claude Remote Control are
-available with the service stopped.
+resume, the session list, inspect, Copy Attach, rename, all three stops, and Claude Remote
+Control are available with the service stopped.
 
 The wizard opens on the project list with the filter focused and reports how many projects are
 available. Type to narrow the list one character at a time, press enter to move into it, then use
 the arrows and enter to choose; registered projects are listed before unregistered ones and each
 row names its group. The agent list names every curated profile and shows the blocking reason
-beside one that cannot be launched here; choosing that one is refused rather than attempted. A
-label is optional, bounded by the configured `max_label_length`, and an empty entry skips it.
-Review names the project, agent, and label before anything is created, and it opens with Back
-highlighted rather than Launch, so a stray enter mutates nothing; Back restores the agent choice
-and Cancel returns to the project list. Escape is Back, Ctrl+R re-reads whatever the screen
+beside one that cannot be launched here; choosing that one is refused rather than attempted.
+Choosing an agent goes straight to Review — three positions from start to launch, with no name
+asked for on the way. Review carries the project and the agent in its breadcrumb and says what
+going through with it does: a ready launch hands this terminal to the session's pane, or prints
+how to reach it. It opens with Back highlighted rather than Launch, so a stray enter mutates
+nothing; Back restores the agent choice and Cancel returns to the project list. Escape is
+Back, Ctrl+R re-reads whatever the screen
 you are on shows without leaving it, Ctrl+N adds a project, Ctrl+S opens the managed sessions,
 Ctrl+O resumes a saved conversation, and Ctrl+Q quits.
 
 The footer lists only the keys that do something where you are. Refresh appears only where
 something can be re-read, Back is absent at the project list because there is nowhere behind
 it, and Resume is absent entirely on a host that wired no conversation service. While a flow
-holds work you would lose — a label or a project name being typed, or a review step holding
-everything gathered so far — the three keys that leave the flow are greyed rather than
-hidden, so a keystroke meant for somewhere else does not discard it. Ctrl+Q is deliberately
+holds work you would lose — a project name or a session name being typed, or the add-project
+review holding one already committed — the three keys that leave the flow are greyed rather
+than hidden, so a keystroke meant for somewhere else does not discard it. The launch review is
+deliberately not among them: it holds two list choices and nothing typed, so re-picking costs
+two keystrokes and greying the keys would be friction with nothing behind it. Ctrl+Q is deliberately
 not among them: quit means leave, and an app that refuses to close until an entry is cleared
 would be the worse answer. It does take unsaved work with it.
 
 The surface has three places to say something and each one says a different kind of thing. The
-header carries a breadcrumb — `Projects › infra/existing › claude › Review` — which is where
+header carries a breadcrumb — `Projects › infra/existing › claude` — which is where
 you are and what you chose to get there. Below it is a single line of status: what to do here,
 or the result you still need, such as the attach command for a session that did not come up.
 It is exactly one line high, so the list beneath it never moves as a message changes. Anything
@@ -258,8 +263,9 @@ whose provider reports itself resume-capable on this host; capability comes from
 asks each provider, never from a version allowlist. Then it pages that agent's conversations for
 that project, ten at a time. A row carries safe metadata only; the provider ID and the transcript
 stay server-side exactly as they do in Telegram, and what the row holds is an opaque reference the
-server resolves, so a stale one resolves to nothing rather than to a path. The confirmation opens
-with Cancel under the cursor, so a stray enter starts nothing. A ready resume hands this terminal
+server resolves, so a stale one resolves to nothing rather than to a path. Choosing a
+conversation starts it — there is no confirmation step, matching the bot, which retired its own.
+A ready resume hands this terminal
 to the new session's pane exactly as a launch does; one that never reaches readiness prints the
 command that reaches the pane instead. Resume is Ctrl+O rather than Ctrl+E because the text input
 already binds Ctrl+E to end-of-line.

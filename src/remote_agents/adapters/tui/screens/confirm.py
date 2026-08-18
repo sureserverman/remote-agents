@@ -333,10 +333,12 @@ class RemoteControlConfirmModal(ConfirmScreen):
 #: guarantees fails here rather than shipping.
 #:
 #: **Not every confirmation in the surface, and the name invites that reading.** What belongs
-#: here is a confirmation standing in front of something *destructive*. `ResumeConfirmScreen`
-#: is a confirmation and is deliberately absent: resume creates a session rather than ending
-#: one, so none of the guarantees this registry carries are the ones it needs. The two stops
-#: that are not here — graceful and cleanup — are absent for a different reason, recorded in
-#: the Stage 3 handoff: neither surface confirms them, and adding a confirmation on one side
-#: only would break the parity DEC-007's first mitigation exists to hold.
+#: here is a confirmation standing in front of something *destructive*. The resume flow used to
+#: carry one and was deliberately absent from this registry — resume creates a session rather
+#: than ending one, so none of the guarantees here were the ones it needed — and that reasoning
+#: is what eventually removed the screen rather than merely excluding it (DEC-018: a
+#: confirmation is applied to both surfaces or neither, and the bot had none). The two stops
+#: that are not here — graceful and cleanup — are absent for the same rule, recorded in the
+#: Stage 3 handoff: neither surface confirms them, and confirming on one side only would break
+#: the parity DEC-007's first mitigation exists to hold.
 ALL_CONFIRMS = (ForceConfirmModal, RemoteControlConfirmModal)

@@ -30,18 +30,16 @@ _EMPTY = "\x00empty"
 
 @dataclass(frozen=True, slots=True)
 class LaunchSelection:
-    """What the wizard has gathered so far, and nothing the surface has not been given."""
+    """What the wizard has gathered so far, and nothing the surface has not been given.
+
+    Two fields, and it had a third: `label`, set by a launch-time step that no longer exists.
+    A `review()` method went with it — three lines of gathered summary that no caller in `src/`
+    or `tests/` ever read, because the breadcrumb took over naming the project and the agent
+    and the one part it could not carry was the label.
+    """
 
     project: CatalogProject | None = None
     profile: ProfileChoice | None = None
-    label: str | None = None
-
-    def review(self) -> str:
-        project = self.project.name if self.project else "?"
-        area = self.project.area if self.project else "?"
-        profile = self.profile.profile_id if self.profile else "?"
-        label = self.label or "none"
-        return f"Project: {area}/{project}\nAgent: {profile}\nLabel: {label}"
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,8 +8,8 @@ other flow left behind.
 **Two back-path shortcuts are deliberately gone**, the same pair the launch wizard lost in
 Task 2.1 and for the same reason. Escape at the name entry used to jump straight to the
 project list, skipping the area choice, because the name entry was grouped with the launch
-label as a text position; Back at the review used to jump straight to the area list,
-skipping the name. On a real stack each is
+wizard's label entry (since removed) as a text position; Back at the review used to jump
+straight to the area list, skipping the name. On a real stack each is
 one level, so the owner who mistypes a name can now correct it instead of restarting the
 flow. No affordance changes and every position stays reachable — the depth does.
 `test_back_out_of_the_add_project_flow_stops_at_every_position` is that behaviour.

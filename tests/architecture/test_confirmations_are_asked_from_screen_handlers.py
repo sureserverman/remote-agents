@@ -98,7 +98,7 @@ def _reaching_from(
     **Keyed by bare name but never collapsing definitions**, which is the bug the Stage 2
     gate's Tier-2 pass found in the first version of this file. That version stored one body
     per name in a dict and overwrote on collision — and this codebase deliberately shares
-    method names across screens by convention, so **twelve** definitions of `choose`, fifteen
+    method names across screens by convention, so **eleven** definitions of `choose`, fourteen
     of `populate` and seven of `refresh_contents` collapsed to one apiece. Only the
     last-processed body was ever examined.
 

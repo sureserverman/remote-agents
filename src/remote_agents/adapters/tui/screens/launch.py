@@ -1,15 +1,20 @@
-"""The launch wizard: pick a project, pick an agent, name the run, review it, go.
+"""The launch wizard: pick a project, pick an agent, review it, go.
 
-Four screens replacing four wizard positions. Each owns the rows it renders and what a row
+Three screens replacing three wizard positions. Each owns the rows it renders and what a row
 means when it is chosen, so the position an event belongs to is decided by which screen is
 on top of the stack rather than by an `if` chain re-reading a field.
 
-**Two back-path shortcuts are deliberately gone**, and this is where the pair that
-`project.py` and `resume.py` both refer back to was removed. Back at the review used to jump
-straight to the agent list, skipping the label, so a mistyped label could not be corrected
-without re-picking the agent; and Escape at the label used to jump straight to the project
-list, skipping the agent choice. On a real stack each is one level.
-`test_back_from_review_walks_out_through_the_label_to_the_agent_choice` is that behaviour.
+**It was four, and the step it lost was the optional label.** A name chosen before the launch
+is chosen before there is anything to look at, and nothing could change it afterwards — so the
+surface asked for a name at the one moment the owner knew least, and then never asked again.
+Naming a session now lives on the session, as the detail's Rename row, which is also where the
+bot has always done it; `telegram/service.py` records the same decision for the same reason.
+`label_or_error` and `LabelWithinBound` outlived the step and belong to that entry now.
+
+**One back-path shortcut is deliberately gone**, and this is where the pair that `project.py`
+and `resume.py` both refer back to was removed. Back at the review used to jump straight to the
+agent list; on a real stack it is one level. Its sibling — Escape at the label jumping past the
+agent choice to the project list — left with the label screen itself rather than being fixed.
 """
 
 from __future__ import annotations
@@ -20,13 +25,11 @@ from textual import events
 from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
-from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection, label_or_error
+from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
-    GatheredSelectionScreen,
 )
-from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.project_catalog import search_catalogue
 
 #: How long the filter waits for the typing to stop before it re-searches the catalogue.
@@ -202,7 +205,7 @@ class ProjectsScreen(ChoiceScreen):
             )
             return
         # A fresh selection rather than a patched one: choosing a project restarts the
-        # wizard, so an agent or label left over from an abandoned pass must not survive it.
+        # wizard, so an agent left over from an abandoned pass must not survive it.
         self.tui.selection = replace(LaunchSelection(), project=project)
         await self.advance_to(ProfilesScreen())
 
@@ -249,94 +252,92 @@ class ProfilesScreen(ChoiceScreen):
             self.announce(f"That agent cannot be launched here: {reason}", severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
-        await self.advance_to(LabelScreen())
+        await self.advance_to(ReviewScreen())
 
 
-class LabelScreen(ChoiceScreen):
-    """One optional free-text label, bounded by the configured length."""
+class ReviewScreen(ChoiceScreen):
+    """The last position before a launch is issued, resting on Back rather than Launch.
 
-    #: a text entry, not a list.
-    empty_state = NEVER_EMPTY
+    **It was a `GatheredSelectionScreen` and no longer needs to be, because the work it was
+    protecting was the label.** That base class exists for a review position holding "a whole
+    flow's worth of choices... one keystroke from being discarded with no way back to them", and
+    the load-bearing half of that is *no way back*: this screen held the gathered selection plus
+    a typed label, and walking back cleared the entry on the way in, so the label was genuinely
+    unrecoverable. What is left is two list selections, and escape lands on the agent list with
+    both lists still standing — two keystrokes to re-pick, which is the same reasoning that has
+    always exempted the project filter from the flow-jump protection.
 
-    position = "LABEL"
-    status = "Enter an optional label, then press enter. Leave empty to skip."
-    filter_placeholder = "Optional label"
-    # Typed here and committed by `submit`; leaving discards it.
-    entry_is_a_commitment = True
-
-    @property
-    def crumb(self) -> str:
-        """The agent chosen a screen ago.
-
-        The convention across all three flows: a crumb names *the choice that led here* when
-        there was one, and the step's own name when there was not. So the agent list is called
-        after the project, this is called after the agent, and the review — reached by an entry
-        that may legitimately be empty — is called "Review". Named "Label" first, which read
-        fine and lost the agent from the trail entirely, since no later position carried it.
-        """
-        profile = self.tui.selection.profile
-        return profile.profile_id if profile is not None else "Label"
-
-    async def populate(self) -> None:
-        # `valid_empty` left at its default: an empty label is the documented way to skip this
-        # step, so the entry must not open refusing the value it is about to be given.
-        self.text_entry(
-            "Optional label",
-            validators=[LabelWithinBound(self.services.max_label_length)],
-        )
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Say the bound is broken at the keystroke that broke it, not at the enter after it."""
-        event.stop()
-        self.announce_rejection(event.validation_result)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        event.stop()
-        self.submit(event.value)
-
-    def submit(self, value: str) -> None:
-        # Still validated here, and deliberately not replaced by the entry's own result: this
-        # is the call that *produces the normalized label*, and a submit that trusted a
-        # validation performed on an earlier keystroke would be trusting a value it did not
-        # read. The typed-time check tells the owner sooner; it does not become the gate.
-        try:
-            label = label_or_error(value, self.services.max_label_length)
-        except ValueError as error:
-            # A toast rather than the status line, which here still holds the instruction the
-            # owner is in the middle of following. Overwriting it with the rejection left them
-            # being told what was wrong and no longer what to do about it.
-            self.announce(str(error), severity="warning")
-            return
-        self.tui.selection = replace(self.tui.selection, label=label)
-        if not self.showing:
-            return
-        # Not awaited, unlike its siblings, because `on_input_submitted` is synchronous —
-        # Textual mounts the pushed screen on the next pump cycle either way, and awaiting
-        # only decides whether *this* caller waits for the mount. Nothing here touches the new
-        # screen's widgets afterwards, so there is nothing to wait for. The `showing` check
-        # above is `advance_to`'s guard inlined, since that one is a coroutine and this is not.
-        self.app.push_screen(ReviewScreen())
-
-
-class ReviewScreen(GatheredSelectionScreen):
-    """The last position before a launch is issued, resting on Back rather than Launch."""
+    `ProjectReviewScreen` keeps the base class, and that asymmetry is the point rather than an
+    oversight: it holds a *typed* project name that `NameScreen.populate` also clears, so its
+    work is still work escape cannot give back. `GatheredSelectionScreen` therefore has one
+    subclass, which is one more than none — the class stays because the screen that needs it
+    needs it, not because two screens once shared it.
+    """
 
     #: Launch, Back and Cancel are written here.
     empty_state = NEVER_EMPTY
 
     position = "REVIEW"
-    crumb = "Review"
+
+    @property
+    def crumb(self) -> str:
+        """The agent chosen a screen ago.
+
+        **It read "Review", and that became wrong the moment the label step was removed.**
+        The label step's own crumb was the profile id, and its docstring recorded exactly why:
+        named for its own step instead, "it read fine and lost the agent from the trail
+        entirely, since no later position carried it." Review was that later position. So
+        deleting the step reintroduced the defect its predecessor had already been fixed for,
+        and the trail at the commit point read `Projects › infra/existing › Review` — the
+        project, and no sign of which agent was about to be launched into it.
+
+        Naming the agent here is also what the convention already asked for: a crumb names *the
+        choice that led here* when there was one, and the step's own name when there was not.
+        There was not, when the label sat in between; there is now. What the position *is* goes
+        to the status line under the same region split — the trail carries what the owner chose,
+        the status carries what going through with it does.
+        """
+        profile = self.tui.selection.profile
+        return profile.profile_id if profile is not None else "Review"
 
     async def populate(self) -> None:
         self.hide_entry()
         self.render_review()
 
     def render_review(self) -> None:
-        # The project and the agent are in the breadcrumb, so this line carries the one part
-        # of the selection the trail cannot: the label. `review()` is still what the wizard
-        # gathered, in three lines, and it has no home in a one-line region — the header and
-        # this line together say the same thing.
-        self.set_status(f"Label: {self.tui.selection.label or 'none'}. Launch, or go back.")
+        # The project and the agent are both in the breadcrumb, so this line does not repeat
+        # them. It named the label — the one part of the selection the trail could not carry —
+        # and once that step was removed it rendered `Label: none` unconditionally, which is a
+        # line whose whole content is the absence of a step that no longer exists.
+        #
+        # What it says instead is the consequence, because this is the position that commits to
+        # it and the consequence is the largest the surface has: a ready launch **execs away**
+        # (DEC-023), replacing this process with the tmux client, so detaching afterwards
+        # returns the owner to their shell rather than to this app. That was written down in
+        # `adapters/tui/attach.py` and in the README and nowhere the owner could see it.
+        #
+        # **"or prints how to reach it" is not hedging; it is the other half of the truth.**
+        # The first version of this line stopped at "hands this terminal to the session's pane"
+        # and reasoned carefully about only one of the ways that can fail to happen — a launch
+        # that never reaches readiness. `attach_to` has two more, both inside *ready*: with
+        # `TMUX` set it refuses to nest and prints the command instead (`attach.py`), and an
+        # `execvp` that raises does the same. Running the surface from inside tmux is a path
+        # `docs/operator-runbook.md` treats as ordinary, so that branch is not exotic. Both a
+        # Tier-2 review and a gate evaluator found the overclaim independently.
+        #
+        # Deliberately *not* branched on `os.environ["TMUX"]` at render time, which would be
+        # more precise and is the obvious alternative: this string is captured in `REVIEW.svg`,
+        # and a status that depends on the environment would make that baseline differ for a
+        # developer who runs the suite inside tmux — the exact class of flake
+        # `test_tui_snapshots.py` pins `TEXTUAL_THEME` and `NO_COLOR` against. One sentence true
+        # in every case beats two that are each true in one and make the net non-deterministic.
+        #
+        # No severity, per DEC-010 — this is an instruction about what is about to happen, not a
+        # report of a condition, and that entry is explicit that a status carries a severity
+        # only when its words do.
+        self.set_status(
+            "A ready launch hands this terminal to the session's pane, or prints how to reach it."
+        )
         self.show_choices((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
 
     async def choose(self, key: str) -> None:

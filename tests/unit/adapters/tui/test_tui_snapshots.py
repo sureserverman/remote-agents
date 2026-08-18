@@ -24,11 +24,11 @@ flake on a machine that is merely configured differently:
    dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
 2. **The theme** (`_THEME`). `TEXTUAL_THEME` is read into `constants.DEFAULT_THEME` at import
    time, so a developer who exports it renders every colour differently. Unpinned,
-   `TEXTUAL_THEME=textual-light` fails all 28 at once — and the documented remedy for a mass
+   `TEXTUAL_THEME=textual-light` fails all 30 at once — and the documented remedy for a mass
    failure is to regenerate, which would silently replace the whole net with one person's
    theme.
 3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
-   that variable alone also fails all 28.
+   that variable alone also fails all 30.
 4. **The age column.** `application.relative_time.age()` renders `datetime.now(UTC) -
    created_at`, so every fixture record is stamped at capture time to render a stable
    `0m ago`. That stamping is also why the sub-plan-4 humanization — minutes, then hours,
@@ -47,10 +47,10 @@ rendered colour under two themes that genuinely differ and requires them to diff
 hex literal cannot satisfy.
 
 The two gaps that stood beside it are what the state axis below closed, and they are the
-reason BL-010 was worth paying for. **Severity is now captured:** measured across all 28
+reason BL-010 was worth paying for. **Severity is now captured:** measured across all 30
 committed baselines, four render an error status at `#b93c5b` (`AREAS_UNREADABLE`,
 `SESSIONS_STORE_FAILURE`, `RESUME_PROFILES_UNAVAILABLE`, `RESUME_PROFILES_UNLISTABLE`),
-twenty-two render the informational default (`#e0e0e0`) and the two modals dim theirs
+twenty-four render the informational default (`#e0e0e0`) and the two modals dim theirs
 (`#646464`) — so deleting the `-error` rule now moves four files, where before it moved none.
 `$warning` still reaches no status row in any capture, because the only warning-severity
 feedback on these paths is a toast and `run_test` leaves notifications disabled. **And the
@@ -66,7 +66,7 @@ that having to look at a render is what showed they were broken already.
    (`textual/widgets/_input.py:723`), so a capture taken more than half a second after
    focus renders the cursor in the opposite state. `_assert_snapshot` sets `cursor_blink =
    False` on every input first, which pauses that timer and forces the cursor visible
-   (`_input.py:527`). Three baselines depend on this — `PROJECTS`, `LABEL` and `NAME` — and
+   (`_input.py:527`). Three baselines depend on this — `PROJECTS`, `NAME` and `RENAME` — and
    without it they would pass locally and flake on a loaded machine, which is precisely the
    failure this file exists to prevent rather than reproduce.
 
@@ -117,12 +117,12 @@ _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
 _SIZE = (100, 30)
 # Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
-# `NO_COLOR` in the environment re-renders every colour in the document, failing all 28
+# `NO_COLOR` in the environment re-renders every colour in the document, failing all 30
 # baselines at once and inviting a regeneration that would bake one person's terminal
 # configuration into the net.
 _THEME = "textual-dark"
 
-# The sixteen positions, by the name each screen declares and each baseline is committed
+# The fifteen positions, by the name each screen declares and each baseline is committed
 # under. A literal tuple rather than a derived one on purpose: deriving it from `ALL_SCREENS`
 # would make the suite agree with the code by construction, so a position that lost its
 # baseline would stop being compared instead of failing. `test_every_position_has_a_baseline`
@@ -130,26 +130,25 @@ _THEME = "textual-dark"
 _POSITIONS = (
     "PROJECTS",
     "PROFILES",
-    "LABEL",
     "REVIEW",
     "AREAS",
     "NAME",
     "PROJECT_REVIEW",
     "SESSIONS",
     "SESSION_DETAIL",
+    "RENAME",
     "FORCE_MODAL",
     "REMOTE_CONTROL_MODAL",
     "INSPECT",
     "RESUME_PROJECTS",
     "RESUME_PROFILES",
     "RESUME_CONVERSATIONS",
-    "RESUME_CONFIRM",
 )
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _OTHER = CatalogProject("opaque-other", "other-thing", "dev-area", "Unregistered")
 # Fixed rather than minted per run, which `SessionId.new()` did until the state axis below
-# needed it. Sixteen position baselines never rendered the raw id — `SessionDetailScreen`
+# needed it. Fifteen position baselines never rendered the raw id — `SessionDetailScreen`
 # overwrites the breadcrumb with the record's display identity as soon as it reads one — but
 # the SESSION_DETAIL_MISSING state has no record to read, so the bare id stays in the header
 # and a freshly minted UUID would write a different SVG on every run.
@@ -206,7 +205,7 @@ def _record(
 
 
 # The one reference `_Conversations.catalogue` renders and `resolve_for_resume` resolves.
-# Shared so the two fakes cannot drift apart, and so driving RESUME_CONFIRM does not have to
+# Shared so the two fakes cannot drift apart, and so driving the resume flow does not have to
 # build a throwaway summary just to read a constant off it.
 _REFERENCE = ConversationReference("c-" + "0" * 14 + "01")
 
@@ -225,7 +224,7 @@ def _summary() -> ConversationSummary:
 @dataclass(slots=True)
 class _Launcher:
     record: SessionRecord = field(default_factory=_record)
-    # Three knobs the state axis needs, each defaulting to the happy path so the sixteen
+    # Three knobs the state axis needs, each defaulting to the happy path so the fifteen
     # position baselines are still driven by the launcher they have always been driven by.
     # `records=()` empties the list; `list_error` makes the store read raise, which is the
     # one and only trigger for `report_store_failure`.
@@ -297,7 +296,7 @@ def _context(
 
     The four overrides exist for the state axis, and each one defaults to the collaborator
     the position axis has always used — so a state case says exactly which collaborator it
-    bends and nothing else, and the sixteen position baselines cannot move because a state
+    bends and nothing else, and the fifteen position baselines cannot move because a state
     case needed a different fake.
     """
     launcher = _Launcher(record=_record(state)) if launcher is None else launcher
@@ -368,18 +367,17 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     """
     if step == "PROJECTS":
         return None
-    if step in {"PROFILES", "LABEL", "REVIEW"}:
+    if step in {"PROFILES", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
         await pilot.pause()
         if step == "PROFILES":
             return None
+        # Choosing the agent *is* the arrival at the review now; there is no entry to commit
+        # in between, and `ReviewScreen` has no `submit` to call.
         await app.screen.choose("claude")
         await pilot.pause()
-        if step == "REVIEW":
-            app.screen.submit("nightly run")
-            await pilot.pause()
         return None
     if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
         await app.show_areas()
@@ -393,9 +391,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     if step == "SESSIONS":
         await app.show_sessions()
         return None
-    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_MODAL", "INSPECT"}:
+    if step in {"SESSION_DETAIL", "FORCE_MODAL", "REMOTE_CONTROL_MODAL", "INSPECT", "RENAME"}:
         await app.show_sessions()
         await app.show_detail(str(_SESSION_ID))
+        if step == "RENAME":
+            # Through the detail's own handler, so the baseline captures the entry the Rename
+            # row actually opens rather than a screen the test pushed itself.
+            await app.screen.show_rename()
+            return None
         if step == "FORCE_MODAL":
             # Handed back rather than awaited: a modal suspends the caller that asked until
             # it is answered, and answering it is exactly what would take the screen being
@@ -406,7 +409,9 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         elif step == "INSPECT":
             await app.screen.show_inspect()
         return None
-    # The four resume positions, each one step further into the same flow.
+    # The three resume positions, each one step further into the same flow. It was four: the
+    # confirmation that stood after the conversation list is gone, and choosing a row there is
+    # now the act rather than a step toward it — so this driver must stop at the list.
     await app.action_resume()
     if step == "RESUME_PROJECTS":
         return None
@@ -414,9 +419,6 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     if step == "RESUME_PROFILES":
         return None
     await app.screen.choose("claude")
-    if step == "RESUME_CONVERSATIONS":
-        return None
-    await app.screen.choose(str(_REFERENCE))
     return None
 
 
@@ -427,14 +429,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
 # `test_every_position_has_a_baseline` calls deliberate — a name outliving its screen has to
 # fail. The renders below are not screens: the empty list, the unreadable store, the refused
 # capture, a detail rendered for a state whose action rows differ. Every one of them shares a
-# position with a baseline already committed under that name — all twelve, across the five
+# position with a baseline already committed under that name — all fifteen, across the five
 # positions SESSIONS, SESSION_DETAIL, INSPECT, AREAS and RESUME_PROFILES — so adding them to
 # `_POSITIONS` would break that equality instead of closing a gap. Hence a second axis, with
 # `test_every_state_names_a_live_position` as its own tie back to the registry.
 #
-# What these ten cannot show, stated because a green run here otherwise reads as more than
+# What these fifteen cannot show, stated because a green run here otherwise reads as more than
 # it is: `run_test` leaves notifications disabled, so no toast reaches `export_screenshot`.
-# Three of the ten put their explanation partly in a toast (the store failure, the
+# Three of the fifteen put their explanation partly in a toast (the store failure, the
 # unreadable root, the attach hand-off), and what is baselined is the part the owner sees on
 # the screen itself — the status line, its severity, and the rows that survive. The toast
 # text is asserted by `announcements()` in the sibling behaviour tests, and that division is
@@ -740,6 +742,33 @@ def test_every_state_names_a_live_position() -> None:
     assert not set(names) & set(_POSITIONS), (
         f"a state is named for a position, and would overwrite its baseline: "
         f"{set(names) & set(_POSITIONS)}"
+    )
+
+
+def test_no_baseline_is_orphaned_and_none_is_missing() -> None:
+    """Every committed `.svg` is one this suite still compares, and every case has its file.
+
+    **The one hole the two exhaustiveness checks above leave.** They tie `_POSITIONS` to the
+    registry and `_STATES` to the registry, so a *case* pointing at nothing fails — but neither
+    looks at the directory. A baseline left on disk after its position or state was deleted
+    simply stops being compared: nothing reads it, nothing fails, and it sits there looking like
+    coverage. That is not hypothetical; this plan deleted two of them — the launch wizard's
+    label entry and the resume confirmation — and without this check the first would have been
+    noticed only by someone running `ls`.
+
+    Asserted in both directions from one listing, because the two failures read very differently
+    and a reader of the failure needs to know which they have: an extra file is dead weight, a
+    missing one is a case that cannot pass at all.
+    """
+    committed = {path.stem for path in _SNAPSHOTS.glob("*.svg")}
+    expected = set(_POSITIONS) | {case.name for case in _STATES}
+
+    assert committed - expected == set(), (
+        f"these baselines are committed but nothing compares them any more: "
+        f"{sorted(committed - expected)}. Delete them, or restore the case that read them."
+    )
+    assert expected - committed == set(), (
+        f"these cases name a baseline that is not committed: {sorted(expected - committed)}"
     )
 
 
