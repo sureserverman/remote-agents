@@ -143,7 +143,6 @@ _POSITIONS = (
     "RESUME_PROJECTS",
     "RESUME_PROFILES",
     "RESUME_CONVERSATIONS",
-    "RESUME_CONFIRM",
 )
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
@@ -206,7 +205,7 @@ def _record(
 
 
 # The one reference `_Conversations.catalogue` renders and `resolve_for_resume` resolves.
-# Shared so the two fakes cannot drift apart, and so driving RESUME_CONFIRM does not have to
+# Shared so the two fakes cannot drift apart, and so driving the resume flow does not have to
 # build a throwaway summary just to read a constant off it.
 _REFERENCE = ConversationReference("c-" + "0" * 14 + "01")
 
@@ -410,7 +409,9 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         elif step == "INSPECT":
             await app.screen.show_inspect()
         return None
-    # The four resume positions, each one step further into the same flow.
+    # The three resume positions, each one step further into the same flow. It was four: the
+    # confirmation that stood after the conversation list is gone, and choosing a row there is
+    # now the act rather than a step toward it — so this driver must stop at the list.
     await app.action_resume()
     if step == "RESUME_PROJECTS":
         return None
@@ -418,9 +419,6 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     if step == "RESUME_PROFILES":
         return None
     await app.screen.choose("claude")
-    if step == "RESUME_CONVERSATIONS":
-        return None
-    await app.screen.choose(str(_REFERENCE))
     return None
 
 
@@ -754,9 +752,9 @@ def test_no_baseline_is_orphaned_and_none_is_missing() -> None:
     registry and `_STATES` to the registry, so a *case* pointing at nothing fails — but neither
     looks at the directory. A baseline left on disk after its position or state was deleted
     simply stops being compared: nothing reads it, nothing fails, and it sits there looking like
-    coverage. That is not hypothetical; this plan deleted two of them (`LABEL`, and later
-    `RESUME_CONFIRM`), and without this check the first would have been noticed only by someone
-    running `ls`.
+    coverage. That is not hypothetical; this plan deleted two of them — the launch wizard's
+    label entry and the resume confirmation — and without this check the first would have been
+    noticed only by someone running `ls`.
 
     Asserted in both directions from one listing, because the two failures read very differently
     and a reader of the failure needs to know which they have: an extra file is dead weight, a

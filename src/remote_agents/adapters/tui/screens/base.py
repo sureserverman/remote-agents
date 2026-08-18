@@ -979,10 +979,14 @@ class ChoiceScreen(Screen[None]):
             # would make this the *only* route to Back, which is a narrower guarantee than
             # the one being added.
             #
-            # Only `_BACK`. `_CANCEL` is *not* uniform — every screen that renders it means
-            # "unwind to the project list" except `ResumeConfirmScreen`, where Cancel means
-            # go back one step — so hoisting it here would quietly change a confirmation's
-            # answer. It stays with the screens that know what they mean by it.
+            # Only `_BACK`. `_CANCEL` is left with the screens that render it, and the reason
+            # is now weaker than it was: it used to have a genuine exception — the resume
+            # confirmation meant "go back one step" by it where every other screen means
+            # "unwind to the project list" — and that screen has since been removed, so the
+            # surviving `_CANCEL` rows do agree. Hoisting it is therefore *possible* and is
+            # deliberately not done here: it would be a second behaviour change riding along
+            # with a removal, and the screens that render it are still the ones that know what
+            # they mean by it.
             await self.tui.go_back()
             return
         await self.choose(key)

@@ -15,6 +15,18 @@ different externally-influenced strings reach it, and all three were being mangl
   put a clickable link into the owner's terminal.
 
 Those three sources reach **three separate sinks**, and that is the part worth remembering.
+
+**One of those three sinks has since lost its source, and saying so is the point of this
+paragraph.** `#status` received the conversation description the moment a conversation was
+selected — on the confirmation step that stood between the list and the resume. That step was
+removed when the local surface stopped confirming a resume the bot does not confirm, and with
+it went the last string reaching `#status` that this app did not author: what is left there is
+app-written sentences, with every interpolated exception and provider reason routed to a toast
+instead. The driven test that covered it is therefore gone rather than rewritten, because the
+path it drove does not exist. What still guards the sink is `markup=False` on the widget and
+`test_no_markup_parsing_widget_is_constructed_without_the_flag` below, which sweeps for a
+markup-parsing widget built without it — so a future screen that writes un-authored text there
+inherits the protection rather than having to rediscover it.
 Fixing the row `Label` looked like a class fix and was not: review then found `#status` — which
 receives the description the moment a conversation is selected, and the custom label via
 `record.display.rendered` — and `#output`, which renders the session's raw captured pane
@@ -185,28 +197,6 @@ async def test_a_conversation_description_containing_markup_is_shown_literally()
         screen = _rendered(app)
         assert _MARKUP_DESCRIPTION in screen, (
             f"the description {_MARKUP_DESCRIPTION!r} was consumed as markup; screen was {screen!r}"
-        )
-
-
-async def test_the_status_line_shows_a_markup_bearing_description_literally() -> None:
-    """The rows were only one sink. The status line receives the same description.
-
-    Fixing `_fill` alone left this open: selecting a conversation writes its description
-    straight into `#status`, before any confirmation, and an unbalanced bracket raised
-    `MarkupError` there exactly as it did in the list.
-    """
-    project = CatalogProject("opaque-existing", "existing", "infra", "Registered")
-    app = RemoteAgentsTui(_context(project=project, description=_MARKUP_DESCRIPTION))
-    async with app.run_test(size=(200, 30)) as pilot:
-        await pilot.pause()
-        await app.action_resume()
-        await app.screen.choose("opaque-existing")
-        await app.screen.choose("claude")
-        await app.screen.choose(str(_REFERENCE))
-        await pilot.pause()
-        screen = _rendered(app)
-        assert _MARKUP_DESCRIPTION in screen, (
-            f"the status line consumed {_MARKUP_DESCRIPTION!r} as markup; screen was {screen!r}"
         )
 
 

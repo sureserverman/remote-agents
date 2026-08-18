@@ -291,11 +291,12 @@ async def _probe_resume(app, launcher, pilot) -> None:
     await pilot.pause()
     await _choose(app, pilot, "opaque-existing")
     await _choose(app, pilot, "claude")
+    # Choosing the conversation *is* the resume: the confirmation that used to stand between
+    # them is gone, matching the bot, which retired its own review step for the same reason.
     await _choose(app, pilot, _REFERENCE)
-    await _settle_position(app, pilot, "RESUME_CONFIRM")
-    assert launcher.issued == [], "resume must not fire on the selection alone"
-    await _choose(app, pilot, "resume-confirm")
-    assert any(isinstance(item, ResumeCommand) for item in launcher.issued)
+    assert any(isinstance(item, ResumeCommand) for item in launcher.issued), (
+        f"choosing a conversation must issue the resume; the launcher saw {launcher.issued}"
+    )
     assert app.return_value is not None, "a ready resume must hand back an attach request"
 
 

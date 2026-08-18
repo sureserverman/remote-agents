@@ -214,14 +214,13 @@ async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
     await pilot.pause()
 
 
-async def _walk_to_resume_confirm(app: RemoteAgentsTui, pilot) -> None:
+async def _walk_to_the_conversation_list(app: RemoteAgentsTui, pilot) -> None:
+    """Stop on the list: choosing a row there is the resume, not a step toward it."""
     await app.action_resume()
     await pilot.pause()
     await app.screen.choose("opaque-existing")
     await pilot.pause()
     await app.screen.choose("claude")
-    await pilot.pause()
-    await app.screen.choose(str(_REFERENCE))
     await pilot.pause()
 
 
@@ -238,7 +237,7 @@ async def _walk_to_new_project_review(app: RemoteAgentsTui, pilot) -> None:
 # it the rest of the way; `walk` leaves the surface on the position the command is issued from.
 _FLOWS = {
     "launch": (_walk_to_review, "launch"),
-    "resume": (_walk_to_resume_confirm, "resume-confirm"),
+    "resume": (_walk_to_the_conversation_list, str(_REFERENCE)),
     "project-create": (_walk_to_new_project_review, "create"),
     "stop": (None, "graceful"),
     "remote-control": (None, "remote-control-active"),

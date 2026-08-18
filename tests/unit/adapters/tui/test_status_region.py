@@ -427,11 +427,16 @@ async def test_the_trail_grows_as_the_owner_walks_into_a_flow() -> None:
 async def test_the_longest_trail_still_fits_the_header_at_the_committed_width() -> None:
     """A trail long enough to be elided is a trail that stops naming what it was drawn for.
 
-    The resume flow is the deepest in this surface — five crumbs at the confirmation — and it
-    is the one where the elision would cost most, since `ResumeConfirmScreen` gives its
-    *subject* to the status line specifically because the header cannot be trusted to show it
-    whole. What the header is still relied on for there is the agent, and this is what pins
-    that it survives.
+    The resume flow is the deepest in this surface, and it is the one where the elision would
+    cost most: its conversation descriptions are echoed from an agent's own output and so are
+    the longest values any position here carries, which is why they go to the status line
+    rather than into the trail. What the header is relied on for is the agent, and this is what
+    pins that it survives.
+
+    It was a crumb deeper still, at a confirmation that stood after the conversation list; that
+    step is gone, so the trail this measures is one shorter than when the measurement was
+    taken. Kept rather than re-tuned: a bound that still holds with a shorter trail is a bound
+    that holds, and loosening it to match would only make the check weaker.
 
     Measured against `HeaderTitle`'s own rendered width at 100 columns — the width the
     snapshot baselines are committed at — rather than against a guessed character budget, so
@@ -448,15 +453,15 @@ async def test_the_longest_trail_still_fits_the_header_at_the_committed_width() 
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
-        await app.screen.choose(str(_REFERENCE))
-        await pilot.pause()
+        # Stop here: this is the deepest position the flow has now, and choosing a row on it
+        # issues the resume rather than walking one step further.
         trail = breadcrumb(app)
         drawn = app.screen.query_one(_HeaderTitle).render_line(0).text
 
-    assert trail == "Projects › Resume › infra/existing › claude › Confirm"
+    assert trail == "Projects › Resume › infra/existing › claude"
     assert "…" not in drawn, f"the header elided the trail at 100 columns: {drawn!r}"
     assert "claude" in drawn, (
-        "the agent fell out of the header, and the confirmation names it nowhere else"
+        "the agent fell out of the header, and the conversation list names it nowhere else"
     )
 
 

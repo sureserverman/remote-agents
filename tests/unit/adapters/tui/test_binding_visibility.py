@@ -146,7 +146,6 @@ def _arrangements():
         ProjectsScreen,
         RemoteControlConfirmModal,
         RenameScreen,
-        ResumeConfirmScreen,
         ResumeConversationsScreen,
         ResumeProfilesScreen,
         ResumeProjectsScreen,
@@ -162,7 +161,6 @@ def _arrangements():
         ),
     )
     page = ConversationCataloguePage((_summary(),), 1, 1)
-    resolved = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
     return {
         ProjectsScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
@@ -177,7 +175,6 @@ def _arrangements():
         ResumeProjectsScreen: ResumeProjectsScreen,
         ResumeProfilesScreen: lambda: ResumeProfilesScreen(_PROJECT, capable),
         ResumeConversationsScreen: lambda: ResumeConversationsScreen(_PROJECT, "claude", page),
-        ResumeConfirmScreen: lambda: ResumeConfirmScreen(_PROJECT, "claude", resolved),
         ForceConfirmModal: lambda: ForceConfirmModal.for_record(_record()),
         RemoteControlConfirmModal: lambda: RemoteControlConfirmModal.for_change(
             _record(), RemoteControlState.ACTIVE

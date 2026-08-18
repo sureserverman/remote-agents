@@ -51,10 +51,11 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
-from remote_agents.adapters.tui.screens import ResumeConfirmScreen
+from remote_agents.adapters.tui.screens import ResumeConversationsScreen
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
+    ConversationCataloguePage,
     ConversationReference,
     ConversationState,
     ConversationSummary,
@@ -115,6 +116,34 @@ def _conversation() -> ResolvedConversation:
     return ResolvedConversation(summary, ProviderConversationId("abc123"))
 
 
+class _Resolving:
+    """The one conversation-service method the resume act needs, and nothing else.
+
+    The confirmation this file used to push already *held* its `ResolvedConversation`, so the
+    context needed no conversation service at all. Choosing on the list resolves first, so the
+    service is now part of reaching the act — wired here rather than in `_context`'s defaults
+    because only the two resume tests need it.
+    """
+
+    async def resolve_for_resume(self, reference: ConversationReference) -> ResolvedConversation:
+        resolved = _conversation()
+        assert reference == resolved.summary.reference, (
+            f"the screen resolved {reference}, which is not the row it was given"
+        )
+        return resolved
+
+
+def _conversation_page() -> ConversationCataloguePage:
+    """One page holding exactly the conversation `_conversation()` resolves to.
+
+    The resume act used to live on a confirmation this file pushed directly; it lives on the
+    conversation list now, so reaching it means standing on a real page. Built from the same
+    summary the resolve answers with, so the row the test selects and the command it produces
+    describe one conversation rather than two that happen to look alike.
+    """
+    return ConversationCataloguePage((_conversation().summary,), 1, 1)
+
+
 @dataclass(slots=True)
 class _RecordingLauncher:
     """Records every command and answers at once.
@@ -158,8 +187,9 @@ class _UnusedCreator:
         raise AssertionError("no queued-delivery flow in this file creates a project")
 
 
-def _context(launcher: _RecordingLauncher) -> TuiContext:
+def _context(launcher: _RecordingLauncher, *, conversations: object | None = None) -> TuiContext:
     return TuiContext(
+        conversations=conversations,  # type: ignore[arg-type]
         launcher=launcher,  # type: ignore[arg-type]
         creator=_UnusedCreator(),  # type: ignore[arg-type]
         profiles=_PROFILES,
@@ -287,29 +317,32 @@ async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
     assert reported == [], reported
 
 
-async def test_two_queued_enters_on_the_resume_confirm_start_exactly_one_session() -> None:
+async def test_two_queued_enters_on_a_conversation_start_exactly_one_session() -> None:
     """BL-015's resume half, which fails for the same structural reason as the launch.
 
-    `issue_resume` clears `_busy` in a `finally` before `self.exit(...)` and
-    `ResumeConfirmScreen.choose` stays where it is, so the second queued selection lands on the
-    confirmation with its `resume-confirm` row still rendered and the guard already open.
-    Observed: `['resume', 'resume']` — two sessions continuing the same conversation, which is
-    worse than two launches: both panes then write to one provider conversation.
+    `issue_resume` clears `_busy` in a `finally` before `self.exit(...)` and the screen that
+    called it stays where it is, so the second queued selection lands on a list with the same
+    conversation row still rendered and the guard already open. Observed: `['resume',
+    'resume']` — two sessions continuing the same conversation, which is worse than two
+    launches: both panes then write to one provider conversation.
 
-    The screen is pushed directly with the real project, agent and `ResolvedConversation` it
-    carries, rather than walked to through the conversation catalogue. The list and its paging
-    are not what is under test, and the confirmation is constructed exactly as
-    `ResumeConversationsScreen.choose` constructs it.
+    **The screen this stands on changed and the defect did not.** It used to be the resume
+    confirmation, pushed directly with its resolved conversation; that step is gone and
+    choosing a row on the conversation list is now the act itself, so this pushes the list
+    instead. Pushed rather than walked to, for the same reason as before: the catalogue and its
+    paging are not what is under test.
     """
     launcher = _RecordingLauncher()
-    app = RemoteAgentsTui(_context(launcher))
+    app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app.push_screen(ResumeConfirmScreen(_PROJECT, "claude", _conversation()))
+        await app.push_screen(
+            ResumeConversationsScreen(_PROJECT, "claude", _conversation_page())
+        )
         await settle(app, pilot)
-        assert position(app) == "RESUME_CONFIRM", f"the push landed on {position(app)}"
+        assert position(app) == "RESUME_CONVERSATIONS", f"the push landed on {position(app)}"
 
-        _queue_two(app, "resume-confirm")
+        _queue_two(app, str(_conversation().summary.reference))
         await pilot.pause()
         await pilot.pause()
         reported = announcements(app, severity="error")
@@ -341,9 +374,12 @@ async def test_quit_during_the_leaving_window_keeps_the_attach_request() -> None
     session the owner just started is left running with no handle offered. Silent, on the
     success path, with the work already done.
 
-    Both flows are driven because they arm differently: `ReviewScreen.work_in_flight` is
-    hardcoded `True`, so the launch case needs a second press to reach the clobber, while
-    `ResumeConfirmScreen` holds no entry and is unarmed, so one press did it.
+    Both flows are driven because they used to arm differently: `ReviewScreen.work_in_flight`
+    was hardcoded `True`, so the launch case needed a second press to reach the clobber, while
+    the resume screen holds no entry and is unarmed, so one press did it. `ReviewScreen` has
+    since stopped protecting work too, so the two now arm the same way — the second press below
+    is harmless either way and is kept because the clobber is what is under test, not the
+    number of presses it takes to reach it.
     """
     launcher = _RecordingLauncher()
     app = RemoteAgentsTui(_context(launcher))
@@ -369,19 +405,22 @@ async def test_quit_during_the_leaving_window_keeps_the_attach_request() -> None
 
 
 async def test_quit_during_the_leaving_window_keeps_the_resumed_attach_request() -> None:
-    """The resume half, which needed only one press because its screen holds no entry.
+    """The resume half, which needs only one press because its screen holds no entry.
 
-    `ResumeConfirmScreen` neither sets `entry_is_a_commitment` nor overrides
-    `work_in_flight`, so the quit warning never armed and the very first `ctrl+q` went
-    straight through to `App.action_quit`.
+    `ResumeConversationsScreen` neither sets `entry_is_a_commitment` nor overrides
+    `work_in_flight`, so the quit warning never arms and the very first `ctrl+q` goes straight
+    through to `App.action_quit`. That was true of the resume confirmation this replaces, for
+    the same reason and with the same consequence.
     """
     launcher = _RecordingLauncher()
-    app = RemoteAgentsTui(_context(launcher))
+    app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app.push_screen(ResumeConfirmScreen(_PROJECT, "claude", _conversation()))
+        await app.push_screen(
+            ResumeConversationsScreen(_PROJECT, "claude", _conversation_page())
+        )
         await settle(app, pilot)
-        await app.screen.choose("resume-confirm")
+        await app.screen.choose(str(_conversation().summary.reference))
         assert app._leaving, "the resume did not reach `_leave`"
         resumed = app.return_value
         assert isinstance(resumed, AttachRequest), (

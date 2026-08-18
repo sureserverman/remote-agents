@@ -34,7 +34,6 @@ from remote_agents.adapters.tui.screens.project import (
     ProjectReviewScreen,
 )
 from remote_agents.adapters.tui.screens.resume import (
-    ResumeConfirmScreen,
     ResumeConversationsScreen,
     ResumeProfilesScreen,
     ResumeProjectsScreen,
@@ -62,7 +61,6 @@ ALL_SCREENS = (
     ResumeProjectsScreen,
     ResumeProfilesScreen,
     ResumeConversationsScreen,
-    ResumeConfirmScreen,
     ForceConfirmModal,
     RemoteControlConfirmModal,
 )
@@ -79,7 +77,6 @@ __all__ = [
     "ProjectsScreen",
     "RemoteControlConfirmModal",
     "RenameScreen",
-    "ResumeConfirmScreen",
     "ResumeConversationsScreen",
     "ResumeProfilesScreen",
     "ResumeProjectsScreen",

@@ -193,13 +193,6 @@ async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task
     return asyncio.create_task(app.screen.confirm_remote_control(RemoteControlState.ACTIVE))
 
 
-async def _drive_to_resume_confirm(app: RemoteAgentsTui) -> None:
-    await app.action_resume()
-    await app.screen.choose("opaque-existing")
-    await app.screen.choose("claude")
-    await app.screen.choose(str(_REFERENCE))
-
-
 async def _drive_to_project_review(app: RemoteAgentsTui) -> None:
     await app.show_areas()
     await app.screen.choose("infra")
@@ -237,10 +230,6 @@ _RESTING = (
         "REMOTE_CONTROL_MODAL",
         id="remote-control-confirm",
     ),
-    # The resume flow's commit point. Same "abort under the cursor" shape as the two
-    # destructive confirms, and it held only because Cancel happens to be listed first with
-    # the default highlight — nothing pinned it until this entry.
-    pytest.param(_drive_to_resume_confirm, "Cancel", "RESUME_CONFIRM", id="resume-confirm"),
     pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
     pytest.param(_drive_to_project_review, "Back", "PROJECT_REVIEW", id="project-review"),
     # Not a confirmation, and the only entry here that is not: this position offers reads and
