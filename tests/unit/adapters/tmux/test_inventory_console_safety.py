@@ -72,3 +72,32 @@ async def test_one_session_yields_one_observation_however_often_it_is_listed() -
     )
     assert len(result.managed) == 1
     assert result.managed[0].session_id == _SESSION
+    assert result.orphans == ()
+
+
+async def test_an_impostor_name_carrying_the_delimiter_is_quarantined_not_dropped() -> None:
+    """tmux 3.4 accepts `|` inside a session name (verified 2026-08-18). A stray session
+    named `ra-console|x` mis-splits into an eleven-field line whose first field reads
+    `ra-console`; the field-count check keeps it out of the console drop, so it lands in
+    the orphan quarantine exactly where a stray session's line always went."""
+    impostor = "|".join(("ra-console|x", "$9", "%9", "300", "0", "", "", "", "", ""))
+    result = await inventory_of(managed_line(_SESSION), impostor)
+    assert [pane.session_id for pane in result.managed] == [_SESSION]
+    assert len(result.orphans) == 1
+    assert result.orphans[0].raw == impostor
+
+
+async def test_duplicate_evidence_that_disagrees_on_liveness_is_quarantined() -> None:
+    """Every session this service launches is single-window, so two valid lines for one
+    identity that disagree on liveness mean someone grew a window by hand. First listed
+    wins the observation; the disagreeing line becomes visible orphan evidence rather
+    than being resolved silently in either direction."""
+    live_line = managed_line(_SESSION)
+    fields = live_line.split("|")
+    fields[4] = "1"  # pane_dead: the second window's pane has died
+    dead = "|".join(fields)
+    result = await inventory_of(live_line, dead)
+    assert len(result.managed) == 1
+    assert result.managed[0].live is True
+    assert len(result.orphans) == 1
+    assert result.orphans[0].reason == "duplicate session evidence disagrees"

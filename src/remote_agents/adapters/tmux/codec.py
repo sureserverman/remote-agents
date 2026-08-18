@@ -157,10 +157,16 @@ def switch_client_console_args() -> tuple[str, ...]:
 
 
 def display_message_args(text: str) -> tuple[str, ...]:
-    """Return the argv suffix that flashes one line on the status bar and nothing more."""
+    """Return the argv suffix that flashes one line on the status bar and nothing more.
+
+    `-l` is load-bearing, not cosmetic: without it tmux format-expands the message, and
+    FORMATS includes `#(shell-command)`, which tmux executes and substitutes — a status
+    flash carrying session- or agent-derived text would be an arbitrary-command sink.
+    With `-l` the text is printed unchanged (verified against tmux 3.4, 2026-08-18).
+    """
     if not text or "\n" in text:
         raise ValueError("a status flash is exactly one non-empty line")
-    return ("display-message", text)
+    return ("display-message", "-l", text)
 
 
 def list_console_windows_args() -> tuple[str, ...]:
@@ -191,8 +197,17 @@ def is_console_view(line: str) -> bool:
     The console reports its own dashboard pane and re-reports every linked window under its
     own name (tmux 3.4, verified). Both describe presentation, not sessions: the linked
     duplicate's pane is already listed — with its options intact — under its home session.
+
+    tmux 3.4 accepts `|` inside a session name (verified 2026-08-18), and the pane format
+    uses `|` as its delimiter, so a stray session named e.g. `ra-console|x` would mis-split
+    into a line whose *first field* reads `ra-console`. The field-count check is what keeps
+    such an impostor out of this drop: its embedded delimiter inflates the split past the
+    format's ten fields, so it falls through to `parse_pane` and is quarantined as orphan
+    evidence — exactly where a stray session's line always went. Only a line that is
+    field-for-field a console view is dropped.
     """
-    return line.split(_DELIMITER, 1)[0] == CONSOLE_SESSION_NAME
+    fields = line.rstrip("\n").split(_DELIMITER)
+    return len(fields) == 10 and fields[0] == CONSOLE_SESSION_NAME
 
 
 def parse_pane(line: str) -> ManagedPane:

@@ -144,16 +144,45 @@ async def test_focus_and_switch_operations_use_generated_targets_only() -> None:
         (*_BASE, "select-window", "-t", "ra-console:0"),
         (*_BASE, "switch-client", "-t", _EXACT),
         (*_BASE, "switch-client", "-t", "ra-console:"),
-        (*_BASE, "display-message", "agent finished: opaque-editor"),
+        (*_BASE, "display-message", "-l", "agent finished: opaque-editor"),
     ]
 
 
 async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_key() -> None:
     runner = RecordingRunner()
     await gateway(runner).install_console_binding("F12")
+    await gateway(runner).install_console_binding("C-a")
     assert runner.calls == [
-        (*_BASE, "bind-key", "-n", "F12", "select-window", "-t", "ra-console:0")
+        (*_BASE, "bind-key", "-n", "F12", "select-window", "-t", "ra-console:0"),
+        (*_BASE, "bind-key", "-n", "C-a", "select-window", "-t", "ra-console:0"),
     ]
-    for key in ("", "two words", "a;b", "$(rm)", "péché"):
+    for key in ("", "two words", "a;b", "$(rm)", "péché", "C-", "C-;"):
         with pytest.raises(ValueError):
             await gateway(runner).install_console_binding(key)
+
+
+async def test_a_gone_target_is_typed_for_every_single_target_console_operation() -> None:
+    """The race capture()/mutate() were built for — the object vanishing between the
+    caller's decision and the call landing — gets the same TerminalTargetMissing typing
+    on every new single-target operation, so existing handlers catch it uniformly."""
+    from remote_agents.ports.terminal import TerminalTargetMissing
+
+    gone = RuntimeError("can't find session: whatever")
+    with pytest.raises(TerminalTargetMissing):
+        await gateway(RecordingRunner(error=gone)).unlink_console_window(2)
+    with pytest.raises(TerminalTargetMissing):
+        await gateway(RecordingRunner(error=gone)).link_session_window(_SESSION)
+    with pytest.raises(TerminalTargetMissing):
+        await gateway(RecordingRunner(error=gone)).switch_client_to_session(_SESSION)
+    with pytest.raises(TerminalTargetMissing):
+        await gateway(RecordingRunner(error=gone)).select_console_window(1)
+
+
+async def test_a_broken_tmux_is_never_misread_as_an_absent_console() -> None:
+    """The unmatched-error branch: anything that is not an absent server or target keeps
+    its type and propagates — the failure mode the inventory docstring warns about."""
+    broken = RuntimeError("server exited unexpectedly")
+    with pytest.raises(RuntimeError, match="server exited unexpectedly"):
+        await gateway(RecordingRunner(error=broken)).console_exists()
+    with pytest.raises(RuntimeError, match="server exited unexpectedly"):
+        await gateway(RecordingRunner(error=broken)).console_windows()

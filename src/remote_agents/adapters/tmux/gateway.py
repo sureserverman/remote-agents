@@ -61,7 +61,9 @@ def _validate_binding_key(key: str) -> str:
             body = body.removeprefix(modifier)
             break
     if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
-        raise ValueError("console binding key must be a plain or F-key name")
+        raise ValueError(
+            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
+        )
     return key
 
 
@@ -136,7 +138,6 @@ class TmuxGateway:
             raise
         managed: list[ManagedPane] = []
         orphans: list[OrphanEvidence] = []
-        seen: set[SessionId] = set()
         for line in output.splitlines():
             if not line:
                 continue
@@ -150,11 +151,17 @@ class TmuxGateway:
             except ValueError as error:
                 orphans.append(OrphanEvidence(line, str(error)))
                 continue
-            # One observation per session identity, however often the server lists it —
-            # reconciliation keys evidence by session, and a duplicate would double-count.
-            if pane.session_id in seen:
+            # One observation per session identity — reconciliation keys evidence by
+            # session. Every session this service launches is single-window, so a second
+            # valid line for a known identity is either a repeat listing (dropped, first
+            # wins) or a hand-grown extra window whose liveness *disagrees* with the first
+            # — and a disagreement is ambiguous evidence, quarantined where a reader can
+            # see it, never silently resolved in either direction.
+            earlier = next((p for p in managed if p.session_id == pane.session_id), None)
+            if earlier is not None:
+                if (pane.live, pane.preserved) != (earlier.live, earlier.preserved):
+                    orphans.append(OrphanEvidence(line, "duplicate session evidence disagrees"))
                 continue
-            seen.add(pane.session_id)
             managed.append(pane)
         return TmuxInventory(tuple(managed), tuple(orphans))
 
@@ -267,8 +274,11 @@ class TmuxGateway:
         appends at the console's next free index (tmux 3.4, verified). Order matters only in
         that an unmarked linked window would be a tab `console_windows` cannot attribute.
         """
-        await self._runner.run(*self._base_argv(), *window_session_mark_args(session_id))
-        await self._runner.run(*self._base_argv(), *link_window_args(session_id))
+        try:
+            await self._runner.run(*self._base_argv(), *window_session_mark_args(session_id))
+            await self._runner.run(*self._base_argv(), *link_window_args(session_id))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
 
     async def unlink_console_window(self, window_index: int) -> None:
         """Remove one console tab; the codec refuses index 0 so the dashboard cannot go."""
@@ -292,11 +302,17 @@ class TmuxGateway:
 
     async def select_console_window(self, window_index: int) -> None:
         """Focus one console window by index, 0 being the dashboard."""
-        await self._runner.run(*self._base_argv(), *select_window_args(window_index))
+        try:
+            await self._runner.run(*self._base_argv(), *select_window_args(window_index))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-console:{window_index}") from error
 
     async def switch_client_to_session(self, session_id: SessionId) -> None:
         """Move the attached client to one exact managed session."""
-        await self._runner.run(*self._base_argv(), *switch_client_args(session_id))
+        try:
+            await self._runner.run(*self._base_argv(), *switch_client_args(session_id))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
 
     async def switch_client_to_console(self) -> None:
         """Move the attached client back to the console session."""
@@ -313,9 +329,7 @@ class TmuxGateway:
             "bind-key",
             "-n",
             _validate_binding_key(key),
-            "select-window",
-            "-t",
-            "ra-console:0",
+            *select_window_args(0),
         )
 
     def _base_argv(self) -> tuple[str, str, str]:

@@ -85,10 +85,14 @@ def test_switch_client_targets_are_generated_never_free_text() -> None:
     assert switch_client_console_args() == ("switch-client", "-t", "ra-console:")
 
 
-def test_display_message_carries_one_status_line() -> None:
-    assert display_message_args("agent finished: opaque-editor") == (
+def test_display_message_carries_one_status_line_literally() -> None:
+    """`-l` pins literal rendering: without it tmux format-expands the message, and
+    `#(shell-command)` in FORMATS executes — so the flag is the difference between a
+    status flash and an arbitrary-command sink (verified against tmux 3.4, 2026-08-18)."""
+    assert display_message_args("agent finished: #(id)") == (
         "display-message",
-        "agent finished: opaque-editor",
+        "-l",
+        "agent finished: #(id)",
     )
     with pytest.raises(ValueError):
         display_message_args("")
