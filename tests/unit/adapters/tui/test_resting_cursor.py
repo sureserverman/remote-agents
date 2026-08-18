@@ -404,3 +404,27 @@ async def test_one_key_from_the_resting_row_reaches_the_first_conversation() -> 
         f"{rows[0]!r} — the cursor no longer wraps, so reaching a conversation now costs a "
         f"keypress per row and resting on Back has become expensive"
     )
+
+
+async def test_the_dashboard_sessions_pane_rests_its_cursor_and_answers_bare_keys() -> None:
+    """The pane advertises "enter opens, d for detail"; both must work with no prior
+    arrow press, purely from real keys — a pane with no resting cursor makes them silent
+    no-ops, which a test that sets `highlighted` by hand can never see. Found by the
+    Stage 4 Tier-2 review with a live Pilot repro."""
+    from remote_agents.adapters.tui.screens.dashboard import DashboardScreen
+    from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen
+
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, DashboardScreen)
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        assert pane.highlighted is not None, "the pane must rest its cursor on first fill"
+
+        pane.focus()
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, SessionDetailScreen), (
+            "d with no prior arrow press must open the detail"
+        )

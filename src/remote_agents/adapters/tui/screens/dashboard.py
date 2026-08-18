@@ -9,6 +9,12 @@ notifications feed pane (a placeholder until the durable activity feed lands).
 
 The two lists share the base class's one row-selection handler; session rows carry a
 namespaced key (`session:<id>`) so `choose` can route without a second dispatch chain.
+
+DEC-009 note: the sessions pane's and feed pane's empty states are declared and tested
+here, in this module's own tests — not by `test_empty_states.py`'s exhaustiveness sweep,
+which walks `ChoiceScreen.empty_state` across the registry and therefore covers only the
+dashboard's *projects* list. The sweep is exhaustive over positions, not over this
+screen's auxiliary panes.
 """
 
 from __future__ import annotations
@@ -147,6 +153,12 @@ class DashboardScreen(ProjectsScreen):
     def on_screen_resume(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.resume()
+        # Resuming is also the moment the pane is most likely stale: the flow that just
+        # popped may have launched or stopped a session, and the return path lands here
+        # without passing the reveal hook. Waiting out the timer left the owner reading
+        # "No sessions are running." for up to ten seconds beside a console tab that
+        # already existed — measured live by the Stage 4 gate evaluator.
+        self.call_later(self._reload_sessions_pane)
 
     async def _auto_reload_sessions(self) -> None:
         if not self.showing or self.tui.busy or self._reloading_sessions:
@@ -187,6 +199,11 @@ class DashboardScreen(ProjectsScreen):
                     id=f"{_SESSION_KEY_PREFIX}{record.session_id}",
                 )
             )
+        # The cursor always rests somewhere (DEC-007's discipline, as show_choices keeps
+        # it for every #choices list): on the row it held if that row survived the
+        # rebuild, else on the first row — a pane advertising "enter opens" with no
+        # highlighted row makes both keys silent no-ops until an arrow press.
+        pane.highlighted = 0
         if held_id is not None:
             for index in range(pane.option_count):
                 if pane.get_option_at_index(index).id == held_id:
