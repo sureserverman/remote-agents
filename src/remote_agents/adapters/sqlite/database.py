@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
@@ -9,6 +10,14 @@ from pathlib import Path
 
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations, current_version
 from remote_agents.ports.private_directory import open_private_directory
+
+
+def _current_task() -> object | None:
+    """The running task if an event loop is up, else None — sync callers own themselves."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
 
 
 class _EagerCursor:
@@ -46,42 +55,55 @@ class LeasedConnection:
     def __init__(self, opener: Callable[[], sqlite3.Connection]) -> None:
         self._opener = opener
         self._held: sqlite3.Connection | None = None
-        self._depth = 0
+        self._owner: object | None = None
 
     def execute(self, sql: str, parameters: Sequence = ()) -> object:
         if self._held is not None:
+            self._require_owner()
             return self._held.execute(sql, parameters)
         connection = self._opener()
         try:
             rows = connection.execute(sql, parameters).fetchall()
+            # A no-op for the bare reads that dominate this path; it exists so a bare
+            # write can never be lost to autocommit limbo when the connection closes.
             connection.commit()
             return _EagerCursor(rows)
         finally:
             connection.close()
 
     def __enter__(self) -> LeasedConnection:
-        if self._held is None:
-            self._held = self._opener()
-        self._depth += 1
+        # sqlite3 has no nested transactions, so pretending to support nesting would let
+        # an inner exit commit work the outer block still believes it can roll back.
+        # Failing loud is the honest answer; the store never nests (pinned by test).
+        if self._held is not None:
+            raise RuntimeError("leased transactions do not nest")
+        self._held = self._opener()
+        self._owner = _current_task()
         self._held.__enter__()
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
         held = self._held
         assert held is not None, "transaction exit without a held connection"
-        self._depth -= 1
+        self._require_owner()
+        self._held = None
+        self._owner = None
         try:
             return bool(held.__exit__(exc_type, exc, traceback))
         finally:
-            if self._depth == 0:
-                self._held = None
-                held.close()
+            held.close()
 
     def close(self) -> None:
-        """Release anything held; safe at rest, so both compositions may call it."""
-        if self._held is not None and self._depth == 0:
-            self._held.close()
-            self._held = None
+        """Release at rest; both compositions call this in a `finally`."""
+        assert self._held is None, "close() during an open leased transaction"
+
+    def _require_owner(self) -> None:
+        # Safe today because no store method awaits inside a `with` block — but that
+        # invariant is one edit away from silently breaking, and a second coroutine
+        # joining a stranger's transaction is worse than the long-lived connection this
+        # class replaced. A violation fails loudly instead of corrupting a write.
+        if self._owner is not _current_task():
+            raise RuntimeError("a leased transaction belongs to the task that opened it")
 
 
 def leased_connection(path: Path, *, busy_timeout_ms: int = 1_000) -> LeasedConnection:

@@ -162,3 +162,45 @@ async def test_close_is_a_safe_no_op_with_nothing_held(database: Path) -> None:
     lease = LeasedConnection(opener)
     lease.close()
     assert opener.open_now == 0
+
+
+async def test_nested_transactions_fail_loud_instead_of_committing_early(
+    database: Path,
+) -> None:
+    """sqlite3 has no nested transactions: an inner exit would commit work the outer block
+    still believes it can roll back. The store never nests; anyone who starts must hear it."""
+    opener = TrackingOpener(database)
+    lease = LeasedConnection(opener)
+    with lease:
+        with pytest.raises(RuntimeError, match="do not nest"):
+            with lease:
+                pass
+    assert opener.open_now == 0
+
+
+async def test_a_transaction_belongs_to_the_task_that_opened_it(database: Path) -> None:
+    """No store method awaits inside a `with` block today — this pins what happens the day
+    one does: a second coroutine reaching the lease mid-transaction fails loudly instead of
+    silently joining (or closing) a stranger's transaction."""
+    import asyncio
+
+    lease = LeasedConnection(TrackingOpener(database))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def holder() -> None:
+        with lease:
+            lease.execute(
+                "INSERT INTO idempotency_claims(key, created_at) VALUES (?, ?)",
+                ("held", datetime.now(UTC).isoformat()),
+            )
+            started.set()
+            await release.wait()  # the hazard: yielding mid-transaction
+
+    async def intruder() -> None:
+        await started.wait()
+        with pytest.raises(RuntimeError, match="belongs to the task"):
+            lease.execute("SELECT 1")
+        release.set()
+
+    await asyncio.gather(holder(), intruder())
