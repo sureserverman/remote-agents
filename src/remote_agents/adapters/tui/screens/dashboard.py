@@ -67,6 +67,7 @@ class DashboardScreen(ProjectsScreen):
         super().__init__()
         self._sessions_timer: Timer | None = None
         self._reloading_sessions = False
+        self._resumed_before = False
 
     def compose(self) -> ComposeResult:
         """The base body, re-arranged: same ids, so every inherited method still lands.
@@ -153,6 +154,12 @@ class DashboardScreen(ProjectsScreen):
     def on_screen_resume(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.resume()
+        # The first resume is the screen's own activation at mount, where populate() has
+        # just made (or is about to make) the first fill; scheduling another read there
+        # doubled every startup — measured by the flaky-store test's read budget.
+        if not self._resumed_before:
+            self._resumed_before = True
+            return
         # Resuming is also the moment the pane is most likely stale: the flow that just
         # popped may have launched or stopped a session, and the return path lands here
         # without passing the reveal hook. Waiting out the timer left the owner reading
