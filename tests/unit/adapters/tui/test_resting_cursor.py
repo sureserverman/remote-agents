@@ -183,6 +183,7 @@ async def _drive_to_review(app: RemoteAgentsTui) -> None:
     # Two choices, not three: the agent choice lands on the review directly since the launch
     # flow lost its label step.
     await app.screen.choose("opaque-existing")
+    await app.screen.choose("launch")
     await app.screen.choose("claude")
 
 

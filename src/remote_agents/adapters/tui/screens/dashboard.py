@@ -17,6 +17,7 @@ import logging
 from dataclasses import replace
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
@@ -40,6 +41,13 @@ class DashboardScreen(ProjectsScreen):
     """Three panes, one resting position; everything the projects picker was, plus sight."""
 
     position = "DASHBOARD"
+
+    BINDINGS = [
+        # Hidden from the footer: the bar is shared with every inherited binding and the
+        # key only means something while the sessions pane holds a highlighted row — the
+        # sessions pane's border title advertises it instead, where it is true.
+        Binding("d", "session_detail", "Session detail", show=False),
+    ]
 
     DEFAULT_CSS = """
     DashboardScreen #dashboard-panes { height: 1fr; }
@@ -70,7 +78,7 @@ class DashboardScreen(ProjectsScreen):
                     yield OptionList(id="choices", markup=False)
                 with Vertical(id="dashboard-right"):
                     sessions = OptionList(id="sessions-pane", markup=False)
-                    sessions.border_title = "Sessions"
+                    sessions.border_title = "Sessions — enter opens, d for detail"
                     yield sessions
                     feed = Static("No notifications yet.", id="feed-pane", markup=False)
                     feed.border_title = "Notifications"
@@ -82,12 +90,18 @@ class DashboardScreen(ProjectsScreen):
         yield Footer()
 
     async def choose(self, key: str) -> None:
-        """A project row opens the chooser; the launch wizard starts one screen later.
+        """A project row opens the chooser; a session row opens the session itself.
 
         The chooser is navigation, not a wizard step (DEC-033): the selection is not yet
         touched here, because only Launch commits to a fresh one — backing out of the
-        chooser must leave nothing behind.
+        chooser must leave nothing behind. A session row routes through the app's one
+        open seam, so hosting decides what opening means — a console tab, or the exec
+        handoff — and this screen never has to know. Opening is not a stop: the resting
+        cursor discipline (DEC-007) is untouched because no row here mutates anything.
         """
+        if key.startswith(_SESSION_KEY_PREFIX):
+            await self.tui._open_or_leave(key.removeprefix(_SESSION_KEY_PREFIX))
+            return
         project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
         if project is None:
             self.announce(
@@ -95,6 +109,22 @@ class DashboardScreen(ProjectsScreen):
             )
             return
         await self.advance_to(ProjectChooserScreen(project))
+
+    async def action_session_detail(self) -> None:
+        """`d` on the highlighted session row opens today's detail screen unchanged.
+
+        Every stop, inspect, rename, and Remote Control affordance lives there, so the
+        dashboard narrows nothing DEC-007's full control plane promised — opening is the
+        fast path, the detail is one key away.
+        """
+        pane = self.query_one("#sessions-pane", OptionList)
+        index = pane.highlighted
+        if index is None or pane.option_count <= index:
+            return
+        key = pane.get_option_at_index(index).id
+        if key is None or not key.startswith(_SESSION_KEY_PREFIX):
+            return
+        await self.tui.show_detail(key.removeprefix(_SESSION_KEY_PREFIX))
 
     async def populate(self) -> None:
         await super().populate()

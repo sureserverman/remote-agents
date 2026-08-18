@@ -135,3 +135,36 @@ async def test_a_pushed_flow_returns_to_the_dashboard_on_escape() -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, DashboardScreen)
+
+
+async def test_open_session_from_the_pane_routes_through_the_one_seam() -> None:
+    """Enter on a session row goes through `_open_or_leave`, so hosting decides what
+    opening means; with the console capability wired the surface stays alive."""
+    opened: list[str] = []
+
+    async def opener(session_id: str) -> None:
+        opened.append(session_id)
+
+    from dataclasses import replace
+
+    app = RemoteAgentsTui(replace(_context((_record(),)), open_in_console=opener))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.screen.choose(f"session:{_SESSION}")
+        await pilot.pause()
+        assert opened == [str(_SESSION)]
+        assert app.is_running
+
+
+async def test_open_session_detail_is_one_key_away() -> None:
+    from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen
+
+    app = RemoteAgentsTui(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        pane.highlighted = 0
+        pane.focus()
+        await pilot.press("d")
+        await pilot.pause()
+        assert isinstance(app.screen, SessionDetailScreen)
