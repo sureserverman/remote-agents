@@ -577,9 +577,10 @@ uv run --locked remote-agents tui
    enter to move into the list, and choose a project with the arrows and enter.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
-3. Skip the label with an empty enter, and confirm Review names the project, agent, and label with
-   Back highlighted rather than Launch. Cancel returns to the project list with no mutation; Back
-   restores the agent choice.
+3. Confirm choosing the agent lands on Review directly — there is no label step — and that its
+   breadcrumb names the project and the agent while its status line says a ready launch hands
+   this terminal to the session's pane. Back is highlighted rather than Launch. Cancel returns
+   to the project list with no mutation; Back restores the agent choice.
 4. Launch, and confirm this terminal is replaced by the attach and the pane holds the chosen
    agent. Detach with tmux's own binding — `Ctrl-b d` on a stock tmux, or `d` under whatever
    prefix `~/.tmux.conf` sets on this host, since this project ships no tmux configuration and

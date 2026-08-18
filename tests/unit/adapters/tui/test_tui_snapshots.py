@@ -24,11 +24,11 @@ flake on a machine that is merely configured differently:
    dependency, not a clock one: unpinned, every baseline would encode whoever last ran it.
 2. **The theme** (`_THEME`). `TEXTUAL_THEME` is read into `constants.DEFAULT_THEME` at import
    time, so a developer who exports it renders every colour differently. Unpinned,
-   `TEXTUAL_THEME=textual-light` fails all 28 at once — and the documented remedy for a mass
+   `TEXTUAL_THEME=textual-light` fails all 30 at once — and the documented remedy for a mass
    failure is to regenerate, which would silently replace the whole net with one person's
    theme.
 3. **Colour output.** Rich honours `NO_COLOR` when `export_screenshot` builds its console, so
-   that variable alone also fails all 28.
+   that variable alone also fails all 30.
 4. **The age column.** `application.relative_time.age()` renders `datetime.now(UTC) -
    created_at`, so every fixture record is stamped at capture time to render a stable
    `0m ago`. That stamping is also why the sub-plan-4 humanization — minutes, then hours,
@@ -47,10 +47,10 @@ rendered colour under two themes that genuinely differ and requires them to diff
 hex literal cannot satisfy.
 
 The two gaps that stood beside it are what the state axis below closed, and they are the
-reason BL-010 was worth paying for. **Severity is now captured:** measured across all 28
+reason BL-010 was worth paying for. **Severity is now captured:** measured across all 30
 committed baselines, four render an error status at `#b93c5b` (`AREAS_UNREADABLE`,
 `SESSIONS_STORE_FAILURE`, `RESUME_PROFILES_UNAVAILABLE`, `RESUME_PROFILES_UNLISTABLE`),
-twenty-two render the informational default (`#e0e0e0`) and the two modals dim theirs
+twenty-four render the informational default (`#e0e0e0`) and the two modals dim theirs
 (`#646464`) — so deleting the `-error` rule now moves four files, where before it moved none.
 `$warning` still reaches no status row in any capture, because the only warning-severity
 feedback on these paths is a toast and `run_test` leaves notifications disabled. **And the
@@ -117,12 +117,12 @@ _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
 # file, so an unpinned size would make every baseline depend on whoever last ran it.
 _SIZE = (100, 30)
 # Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
-# `NO_COLOR` in the environment re-renders every colour in the document, failing all 28
+# `NO_COLOR` in the environment re-renders every colour in the document, failing all 30
 # baselines at once and inviting a regeneration that would bake one person's terminal
 # configuration into the net.
 _THEME = "textual-dark"
 
-# The sixteen positions, by the name each screen declares and each baseline is committed
+# The fifteen positions, by the name each screen declares and each baseline is committed
 # under. A literal tuple rather than a derived one on purpose: deriving it from `ALL_SCREENS`
 # would make the suite agree with the code by construction, so a position that lost its
 # baseline would stop being compared instead of failing. `test_every_position_has_a_baseline`
@@ -224,7 +224,7 @@ def _summary() -> ConversationSummary:
 @dataclass(slots=True)
 class _Launcher:
     record: SessionRecord = field(default_factory=_record)
-    # Three knobs the state axis needs, each defaulting to the happy path so the sixteen
+    # Three knobs the state axis needs, each defaulting to the happy path so the fifteen
     # position baselines are still driven by the launcher they have always been driven by.
     # `records=()` empties the list; `list_error` makes the store read raise, which is the
     # one and only trigger for `report_store_failure`.
@@ -296,7 +296,7 @@ def _context(
 
     The four overrides exist for the state axis, and each one defaults to the collaborator
     the position axis has always used — so a state case says exactly which collaborator it
-    bends and nothing else, and the sixteen position baselines cannot move because a state
+    bends and nothing else, and the fifteen position baselines cannot move because a state
     case needed a different fake.
     """
     launcher = _Launcher(record=_record(state)) if launcher is None else launcher
@@ -429,14 +429,14 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
 # `test_every_position_has_a_baseline` calls deliberate — a name outliving its screen has to
 # fail. The renders below are not screens: the empty list, the unreadable store, the refused
 # capture, a detail rendered for a state whose action rows differ. Every one of them shares a
-# position with a baseline already committed under that name — all twelve, across the five
+# position with a baseline already committed under that name — all fifteen, across the five
 # positions SESSIONS, SESSION_DETAIL, INSPECT, AREAS and RESUME_PROFILES — so adding them to
 # `_POSITIONS` would break that equality instead of closing a gap. Hence a second axis, with
 # `test_every_state_names_a_live_position` as its own tie back to the registry.
 #
-# What these ten cannot show, stated because a green run here otherwise reads as more than
+# What these fifteen cannot show, stated because a green run here otherwise reads as more than
 # it is: `run_test` leaves notifications disabled, so no toast reaches `export_screenshot`.
-# Three of the ten put their explanation partly in a toast (the store failure, the
+# Three of the fifteen put their explanation partly in a toast (the store failure, the
 # unreadable root, the attach hand-off), and what is baselined is the part the owner sees on
 # the screen itself — the status line, its severity, and the rows that survive. The toast
 # text is asserted by `announcements()` in the sibling behaviour tests, and that division is
