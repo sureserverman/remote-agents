@@ -316,7 +316,10 @@ class TmuxGateway:
 
     async def switch_client_to_console(self) -> None:
         """Move the attached client back to the console session."""
-        await self._runner.run(*self._base_argv(), *switch_client_console_args())
+        try:
+            await self._runner.run(*self._base_argv(), *switch_client_console_args())
+        except RuntimeError as error:
+            raise _target_missing_or(error, "ra-console") from error
 
     async def display_message(self, text: str) -> None:
         """Flash one line on the status bar of whatever window the client is on."""

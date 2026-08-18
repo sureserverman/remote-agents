@@ -14,11 +14,12 @@ _SCHEMA_VERSION = "1"
 # address the console as a managed session by construction rather than by discipline.
 CONSOLE_SESSION_NAME = "ra-console"
 
-# Window-index-to-owning-session mapping for the console. `@remote_agents_window_session` is
-# set *window-scoped* on the source (see `window_session_mark_args`) because a linked window
-# is one shared object: a window option travels with it into the console's listing, while the
+# Window-index-to-owning-session mapping for the console. The mark below is set
+# *window-scoped* on the source (see `window_session_mark_args`) because a linked window is
+# one shared object: a window option travels with it into the console's listing, while the
 # managed session's session-scoped options do not (verified against tmux 3.4, 2026-08-18).
-CONSOLE_WINDOW_FORMAT = _DELIMITER.join(("#{window_index}", "#{@remote_agents_window_session}"))
+WINDOW_SESSION_OPTION = "@remote_agents_window_session"
+CONSOLE_WINDOW_FORMAT = _DELIMITER.join(("#{window_index}", f"#{{{WINDOW_SESSION_OPTION}}}"))
 PANE_FORMAT = _DELIMITER.join(
     (
         "#{session_name}",
@@ -127,7 +128,7 @@ def window_session_mark_args(session_id: SessionId) -> tuple[str, ...]:
         "-w",
         "-t",
         exact_session_target(f"ra-{session_id}"),
-        "@remote_agents_window_session",
+        WINDOW_SESSION_OPTION,
         str(session_id),
     )
 
@@ -162,11 +163,14 @@ def display_message_args(text: str) -> tuple[str, ...]:
     `-l` is load-bearing, not cosmetic: without it tmux format-expands the message, and
     FORMATS includes `#(shell-command)`, which tmux executes and substitutes — a status
     flash carrying session- or agent-derived text would be an arbitrary-command sink.
-    With `-l` the text is printed unchanged (verified against tmux 3.4, 2026-08-18).
+    With `-l` the text is printed unchanged, and `--` fences the text from the option
+    parser — a message beginning with `-` is otherwise consumed as a flag (`-a` dumps the
+    format table, `-c…` silently misroutes the flash). Both verified against tmux 3.4,
+    2026-08-18, and pinned by the feature probe's contract test.
     """
     if not text or "\n" in text:
         raise ValueError("a status flash is exactly one non-empty line")
-    return ("display-message", "-l", text)
+    return ("display-message", "-l", "--", text)
 
 
 def list_console_windows_args() -> tuple[str, ...]:
@@ -198,16 +202,19 @@ def is_console_view(line: str) -> bool:
     own name (tmux 3.4, verified). Both describe presentation, not sessions: the linked
     duplicate's pane is already listed — with its options intact — under its home session.
 
-    tmux 3.4 accepts `|` inside a session name (verified 2026-08-18), and the pane format
-    uses `|` as its delimiter, so a stray session named e.g. `ra-console|x` would mis-split
-    into a line whose *first field* reads `ra-console`. The field-count check is what keeps
-    such an impostor out of this drop: its embedded delimiter inflates the split past the
-    format's ten fields, so it falls through to `parse_pane` and is quarantined as orphan
-    evidence — exactly where a stray session's line always went. Only a line that is
-    field-for-field a console view is dropped.
+    tmux 3.4 accepts `|` inside a session name (verified 2026-08-18, pinned by the feature
+    probe's contract test), and the pane format uses `|` as its delimiter, so a stray
+    session named e.g. `ra-console|x` would mis-split into a line whose *first field* reads
+    `ra-console`. The field-count check keeps such an impostor out of this drop: its
+    embedded delimiter inflates the split past the format's ten fields, so it falls through
+    to `parse_pane` and is quarantined as orphan evidence — exactly where a stray session's
+    line always went. The empty-schema check closes the remaining shape: a genuine console
+    view always carries blank option fields (session options do not travel), so a ten-field
+    line named `ra-console` that *does* carry a schema tag is somebody's fabrication, and
+    it too falls through to be quarantined rather than dropped.
     """
     fields = line.rstrip("\n").split(_DELIMITER)
-    return len(fields) == 10 and fields[0] == CONSOLE_SESSION_NAME
+    return len(fields) == 10 and fields[0] == CONSOLE_SESSION_NAME and fields[6] == ""
 
 
 def parse_pane(line: str) -> ManagedPane:

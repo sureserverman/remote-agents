@@ -97,7 +97,6 @@ def test_production_doctor_keeps_agents_available_when_version_reporting_fails()
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
-        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=profiles,
@@ -113,12 +112,35 @@ def test_production_doctor_keeps_agents_available_when_version_reporting_fails()
     assert report["profiles"][1]["id"] == "codex"
 
 
+def test_console_capability_is_reported_and_never_moves_the_verdict() -> None:
+    """Nothing live depends on the console yet, so an incapable tmux is named to the
+    operator without failing an otherwise healthy deploy — the stage that makes the
+    console load-bearing is the one entitled to promote this into `components`."""
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("claude"), True, "claude 1.2.3", "AVAILABLE", None),
+        ),
+        registered_projects=1,
+        discovered_projects=1,
+        catalogue_projects=1,
+        tmux_console_ready=False,
+    )
+
+    assert report["healthy"] is True
+    assert report["console"] == {"window_linkable": False}
+    assert "tmux_console" not in report["components"]
+
+
 def test_production_doctor_blocks_a_missing_agent_executable() -> None:
     report = production_doctor(
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
-        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=(
@@ -150,7 +172,6 @@ def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() ->
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
-        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=(ProfileCompatibility(ProfileId("codex"), True, None, "AVAILABLE", None),),

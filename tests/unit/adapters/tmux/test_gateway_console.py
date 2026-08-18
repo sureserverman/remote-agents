@@ -144,7 +144,7 @@ async def test_focus_and_switch_operations_use_generated_targets_only() -> None:
         (*_BASE, "select-window", "-t", "ra-console:0"),
         (*_BASE, "switch-client", "-t", _EXACT),
         (*_BASE, "switch-client", "-t", "ra-console:"),
-        (*_BASE, "display-message", "-l", "agent finished: opaque-editor"),
+        (*_BASE, "display-message", "-l", "--", "agent finished: opaque-editor"),
     ]
 
 
@@ -176,6 +176,8 @@ async def test_a_gone_target_is_typed_for_every_single_target_console_operation(
         await gateway(RecordingRunner(error=gone)).switch_client_to_session(_SESSION)
     with pytest.raises(TerminalTargetMissing):
         await gateway(RecordingRunner(error=gone)).select_console_window(1)
+    with pytest.raises(TerminalTargetMissing):
+        await gateway(RecordingRunner(error=gone)).switch_client_to_console()
 
 
 async def test_a_broken_tmux_is_never_misread_as_an_absent_console() -> None:

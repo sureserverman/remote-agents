@@ -92,8 +92,12 @@ def test_display_message_carries_one_status_line_literally() -> None:
     assert display_message_args("agent finished: #(id)") == (
         "display-message",
         "-l",
+        "--",
         "agent finished: #(id)",
     )
+    # `--` fences the one caller-controlled string from the option parser: a message
+    # beginning with `-` must arrive as text, never be consumed as a display-message flag.
+    assert display_message_args("-a looks like a flag")[-2:] == ("--", "-a looks like a flag")
     with pytest.raises(ValueError):
         display_message_args("")
     with pytest.raises(ValueError):

@@ -87,6 +87,20 @@ async def test_an_impostor_name_carrying_the_delimiter_is_quarantined_not_droppe
     assert result.orphans[0].raw == impostor
 
 
+async def test_a_schema_tagged_line_named_ra_console_is_quarantined_not_dropped() -> None:
+    """A genuine console view always carries blank option fields — session options do not
+    travel into the console's listing. A ten-field line named `ra-console` that *does*
+    carry a schema tag is a fabrication, and it must fall through to parse_pane's
+    quarantine rather than vanish into the console drop."""
+    fabricated = "|".join(
+        ("ra-console", "$9", "%9", "300", "0", "", "1", str(_SESSION), "proj", "claude")
+    )
+    result = await inventory_of(managed_line(_SESSION), fabricated)
+    assert [pane.session_id for pane in result.managed] == [_SESSION]
+    assert len(result.orphans) == 1
+    assert result.orphans[0].raw == fabricated
+
+
 async def test_duplicate_evidence_that_disagrees_on_liveness_is_quarantined() -> None:
     """Every session this service launches is single-window, so two valid lines for one
     identity that disagree on liveness mean someone grew a window by hand. First listed

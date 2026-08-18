@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from remote_agents.adapters.tmux.codec import exact_session_target
+from remote_agents.adapters.tmux.codec import (
+    CONSOLE_WINDOW_FORMAT,
+    WINDOW_SESSION_OPTION,
+    exact_session_target,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +62,7 @@ def _window_linkable(base: tuple[str, ...], target: str, working_directory: Path
     """
     try:
         _run(*base, "new-session", "-d", "-s", "probe-console", "-c", str(working_directory))
-        _run(*base, "set-option", "-w", "-t", target, "@remote_agents_window_session", "probe")
+        _run(*base, "set-option", "-w", "-t", target, WINDOW_SESSION_OPTION, "probe")
         _run(*base, "link-window", "-s", target, "-t", "probe-console:")
         mapping = _run(
             *base,
@@ -66,7 +70,7 @@ def _window_linkable(base: tuple[str, ...], target: str, working_directory: Path
             "-t",
             "probe-console:",
             "-F",
-            "#{window_index}|#{@remote_agents_window_session}",
+            CONSOLE_WINDOW_FORMAT,
         )
         linked = [
             line.split("|", 1)[0]
