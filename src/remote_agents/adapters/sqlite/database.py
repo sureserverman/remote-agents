@@ -4,11 +4,103 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations, current_version
 from remote_agents.ports.private_directory import open_private_directory
+
+
+class _EagerCursor:
+    """Rows fetched before their connection closed, answering the store's cursor calls."""
+
+    def __init__(self, rows: Sequence[tuple]) -> None:
+        self._rows = list(rows)
+
+    def fetchone(self) -> tuple | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple]:
+        return list(self._rows)
+
+
+class LeasedConnection:
+    """A `sqlite3.Connection` stand-in that holds no handle between operations.
+
+    This is the stated position on the question DEC-023 recorded as unanswered: the local
+    surface is long-lived beside attached sessions, and the guarantee the README makes is
+    kept by construction — a real connection exists only inside a single bare `execute`
+    or a single `with lease:` transaction block, and is closed before either returns.
+
+    The surface it implements is exactly what `SQLiteSessionStore` uses and nothing more:
+    `execute(...)` returning something answering `fetchone`/`fetchall`, the context-manager
+    transaction protocol, and `close()`. A bare `execute` outside a transaction commits
+    before its connection closes, so no write is ever lost to autocommit limbo; inside a
+    `with` block every `execute` shares the one held connection, and `__exit__` delegates
+    commit-or-rollback to sqlite3's own protocol before closing it.
+
+    The serve composition never sees this class — it keeps its one long-lived connection,
+    and the store cannot tell which composition it is running under.
+    """
+
+    def __init__(self, opener: Callable[[], sqlite3.Connection]) -> None:
+        self._opener = opener
+        self._held: sqlite3.Connection | None = None
+        self._depth = 0
+
+    def execute(self, sql: str, parameters: Sequence = ()) -> object:
+        if self._held is not None:
+            return self._held.execute(sql, parameters)
+        connection = self._opener()
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+            connection.commit()
+            return _EagerCursor(rows)
+        finally:
+            connection.close()
+
+    def __enter__(self) -> LeasedConnection:
+        if self._held is None:
+            self._held = self._opener()
+        self._depth += 1
+        self._held.__enter__()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        held = self._held
+        assert held is not None, "transaction exit without a held connection"
+        self._depth -= 1
+        try:
+            return bool(held.__exit__(exc_type, exc, traceback))
+        finally:
+            if self._depth == 0:
+                self._held = None
+                held.close()
+
+    def close(self) -> None:
+        """Release anything held; safe at rest, so both compositions may call it."""
+        if self._held is not None and self._depth == 0:
+            self._held.close()
+            self._held = None
+
+
+def leased_connection(path: Path, *, busy_timeout_ms: int = 1_000) -> LeasedConnection:
+    """Return a per-operation lease over an already-migrated private database.
+
+    Migrations and the pre-migration backup are `open_database`'s job, run once at
+    composition time; each leased open only re-applies the connection pragmas. The
+    private-directory guard runs here once — the path cannot change between opens.
+    """
+    if open_private_directory(path.parent) is None:
+        raise ValueError("database directory cannot traverse a symlink")
+
+    def opener() -> sqlite3.Connection:
+        connection = sqlite3.connect(path, timeout=busy_timeout_ms / 1_000)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        return connection
+
+    return LeasedConnection(opener)
 
 
 def open_database(

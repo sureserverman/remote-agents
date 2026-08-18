@@ -38,6 +38,7 @@ from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackSta
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
+    leased_connection,
     open_database,
     restore_database,
 )
@@ -463,7 +464,16 @@ def main(
             print(error, file=sys.stderr)
             return 1
         paths.ensure_directories()
-        connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        # Migrations and the pre-migration backup run once, on a real connection that is
+        # closed before the surface starts; the surface itself works over a per-operation
+        # lease and holds no database handle between operations. This is the stated answer
+        # to the question DEC-023 recorded as open (superseding it — recorded at the
+        # console-surface plan's close-out): the surface may now be long-lived beside
+        # attached sessions, and what keeps DEC-005's two-writer story simple is no longer
+        # "the terminal exec'd away", it is that the terminal's handle exists only inside a
+        # single store operation. The README states the reworded guarantee.
+        paths.open_database(open_database, migrations=MIGRATIONS).close()
+        connection = leased_connection(config.database_path)
         request = None
         try:
             request = run_local_terminal(local_context(config, connection, paths))
@@ -477,17 +487,6 @@ def main(
             return 1
         finally:
             connection.close()
-        # Closed above, exec'd below, and that order is the guarantee (DEC-023). The alternative
-        # was Textual's `App.suspend()`, which would have kept this process — and therefore this
-        # connection — alive underneath the attached tmux client, buying a detach that returns the
-        # owner to the session list instead of to the shell. It was declined: a suspended surface
-        # holds the SQLite handle for the whole attached session, which breaks what
-        # README.md:173-175 states outright ("the attached terminal holds no database handle") and
-        # changes the two-writer story DEC-005 accepted, where the bot and this terminal share the
-        # store and the terminal simply lets go while the owner is attached. Declining costs a UX
-        # nicety — a re-entry is a fresh launch; adopting costs a documented guarantee, and the
-        # guarantee is load-bearing in a way the nicety is not. DEC-005 stands unamended; DEC-023
-        # declines to override it and records no supersede.
         return attach_to(request)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
