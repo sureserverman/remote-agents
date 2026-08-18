@@ -416,6 +416,7 @@ def main(
             core_ready=registry.error is None,
             database_ready=database_is_ready(config.database_path),
             tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+            tmux_console_ready=_console_features_available(paths.home),
             telegram_ready=_telegram_credentials_are_private(paths),
             service_ready=_command_succeeds(
                 ("systemctl", "--user", "is-active", "--quiet", "remote-agents.service")
@@ -718,6 +719,22 @@ def _resolve_profile_executable(executable: str, home: Path) -> Path | None:
             return candidate
     resolved = shutil.which(executable)
     return Path(resolved) if resolved is not None else None
+
+
+def _console_features_available(working_directory: Path) -> bool:
+    """Probe, on a disposable socket, whether this host's tmux can host the console.
+
+    `doctor` is the one command an operator runs before trusting a deploy, so the console's
+    window contract is proved here — by the same round trip the console will actually make —
+    rather than discovered as a mid-composition failure the first time the surface starts.
+    Any failure is a plain no: the probe is diagnosis, never a gate that can crash `doctor`.
+    """
+    from remote_agents.adapters.tmux.feature_probe import probe_features
+
+    try:
+        return probe_features(working_directory).window_linkable
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return False
 
 
 def _command_succeeds(argv: tuple[str, ...]) -> bool:

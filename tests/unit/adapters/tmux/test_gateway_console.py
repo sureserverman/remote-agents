@@ -116,7 +116,14 @@ async def test_console_windows_decodes_the_pinned_mapping() -> None:
     runner = RecordingRunner(output=f"0|\n1|{_SESSION}\n")
     assert await gateway(runner).console_windows() == ((0, None), (1, _SESSION))
     assert runner.calls == [
-        (*_BASE, "list-windows", "-t", "ra-console:", "-F", "#{window_index}|#{@remote_agents_window_session}")
+        (
+            *_BASE,
+            "list-windows",
+            "-t",
+            "ra-console:",
+            "-F",
+            "#{window_index}|#{@remote_agents_window_session}",
+        )
     ]
 
 

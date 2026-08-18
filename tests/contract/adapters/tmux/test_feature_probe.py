@@ -13,3 +13,4 @@ def test_feature_probe_uses_a_disposable_socket_and_exact_target(tmp_path: Path)
     assert result.exact_target.endswith(":")
     assert result.user_option == "1"
     assert result.capture_is_text is True
+    assert result.window_linkable is True

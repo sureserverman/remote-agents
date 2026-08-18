@@ -97,6 +97,7 @@ def test_production_doctor_keeps_agents_available_when_version_reporting_fails()
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
+        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=profiles,
@@ -117,6 +118,7 @@ def test_production_doctor_blocks_a_missing_agent_executable() -> None:
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
+        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=(
@@ -148,6 +150,7 @@ def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() ->
         core_ready=True,
         database_ready=True,
         tmux_ready=True,
+        tmux_console_ready=True,
         telegram_ready=True,
         service_ready=True,
         profiles=(ProfileCompatibility(ProfileId("codex"), True, None, "AVAILABLE", None),),
