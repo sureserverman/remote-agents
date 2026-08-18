@@ -335,9 +335,21 @@ class ResumeConversationsScreen(ChoiceScreen):
         #
         # The deleted confirmation carried this property and `test_resting_cursor.py` pinned
         # it there; removing the screen dropped both, which a gate evaluator caught by driving
-        # `pilot.press("enter", "enter")`. The cost is one arrow key on every deliberate
-        # resume, which is the same trade the launch review makes by resting on Back rather
-        # than on Launch.
+        # `pilot.press("enter", "enter")`.
+        #
+        # **The rule this applies is not "review screens rest on Back"** — that is the weaker
+        # reading and it invites over-application. DEC-007's mitigation is that no repeated
+        # keypress commits at a *commit position*, and this list became one when the
+        # confirmation went. Whether its rows are data or actions does not enter into it.
+        #
+        # **The cost is one key, and that depends on an upstream default worth naming.** Down
+        # from the resting row reaches the first conversation because Textual's
+        # `OptionList.action_cursor_down` goes through `find_next_enabled`, which *wraps* — so
+        # it is one key whether the page holds one conversation or twelve plus paging rows.
+        # `find_next_enabled_no_wrap` ships beside it; were the widget ever to use that, the
+        # first conversation would be a full page-length away and nothing would fail. Pinned by
+        # `test_resting_cursor.py::test_one_key_from_the_resting_row_reaches_the_first_conversation`
+        # so the assumption is checked rather than inherited.
         self.show_choices(tuple(entries), highlight=len(entries) - 1)
 
     async def choose(self, key: str) -> None:

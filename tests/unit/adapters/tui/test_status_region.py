@@ -563,7 +563,7 @@ async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() ->
     A gate evaluator pointed this out and it is exactly right: `$foreground` on `#status` is
     already the default, `$surface` on the output pane equals the screen's own background,
     `$text-muted` reaches only a disabled row no baseline renders, and `$error`/`$warning`
-    reach only a severity no baseline sets. So the sixteen SVGs — this repo's only assertion
+    reach only a severity no baseline sets. So the committed SVGs — this repo's only assertion
     about what the owner *sees* — are silent about the whole change.
 
     This is that assertion. It resolves the rendered colour under two themes and requires

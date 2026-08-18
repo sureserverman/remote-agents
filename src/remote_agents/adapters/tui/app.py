@@ -145,6 +145,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # here the owner has to *copy*, and a terminal can only copy what is drawn — so a cut one is
     # not a shortened command, it is no command, on the path where a session did not come up and
     # it is the only handle left on a pane that may still be live. Two rows hold it at 60.
+    #
+    # **It is no longer the longest, and the margin is narrower than the paragraph above
+    # implies.** The conversation list's status — which names the terminal handover as well as
+    # the page — is 109 characters, measured. Two rows hold 116 at 60 columns, so it still fits
+    # with about seven characters of slack and clips at roughly 50. The design point stands; what
+    # changed is that the worked example is no longer the worst case, and a future line longer
+    # than this one has less room than the 93-character figure suggests.
     #: Shown in the header, with each screen's breadcrumb as the sub-title beside it. Set
     #: rather than left to default: `App.title` falls back to the class name, so the header
     #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.

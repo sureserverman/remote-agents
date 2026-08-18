@@ -370,3 +370,36 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         await pilot.pause()
         marked_current, _ = _highlighted(app)
         assert marked_current == "two", "the guard must not block the newest fill"
+
+
+async def test_one_key_from_the_resting_row_reaches_the_first_conversation() -> None:
+    """The resting cursor is only affordable because Down wraps, so that is pinned too.
+
+    Resting the conversation list on Back is safe, and it is *cheap* only because Textual's
+    `OptionList.action_cursor_down` routes through `find_next_enabled`, which wraps from the
+    last row to the first — so one Down reaches conversation 1 whether the page holds one row
+    or twelve plus paging rows. `find_next_enabled_no_wrap` ships beside it.
+
+    Without this, a future widget change turns "one key" into "a page-length of keys" and every
+    other test still passes: the safety property this file asserts would hold while the
+    affordance that made it acceptable had quietly gone.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _drive_to_the_conversation_list(app)
+        await settle(app, pilot)
+        assert position(app) == "RESUME_CONVERSATIONS"
+
+        marked, rows = _highlighted(app)
+        assert marked == "Back", f"the fixture did not start on the resting row; rows were {rows}"
+
+        await pilot.press("down")
+        await pilot.pause()
+        landed, rows = _highlighted(app)
+
+    assert landed == rows[0], (
+        f"one Down from the resting row landed on {landed!r}, not the first conversation "
+        f"{rows[0]!r} — the cursor no longer wraps, so reaching a conversation now costs a "
+        f"keypress per row and resting on Back has become expensive"
+    )
