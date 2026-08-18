@@ -104,11 +104,13 @@ be spelled around in a comment is a term nobody adds to a call site by accident.
 _MAXIMUM_LINES_PER_MESSAGE = 5
 """How many of a session's observations one message will spell out.
 
-A backstop, not the mechanism: the rate limit collapses a burst of one kind and
-`grouped_for_delivery` folds exact repeats, so a group this large has genuinely said this many
-different things. Not necessarily *in one pass*, which an earlier version of this note claimed --
-a group deferred past the per-pass ceiling, or held through a refusal, accumulates across as many
-passes as it waits, and that is the case most likely to reach the cap at all.
+A backstop, and since `grouped_for_delivery` collapses a session's news on the *kind* it is out
+of ordinary reach: there are fewer kinds than lines here, so a real group no longer overflows it
+at all. Kept rather than deleted because the fold below is what a kind being added would need,
+and because the two defects that fold answers -- a `needs_answer` dropped silently, and a kind
+stamped as told to an owner who never saw it -- are properties of folding rather than of the
+number. `tests/unit/adapters/telegram/test_notifications.py` drives the cap down to two to keep
+exercising it.
 
 What this may not do is drop the rest silently -- a message that looks like a complete account of
 a session and is not is worse than one that says how much it left out, which is why the count
@@ -312,9 +314,11 @@ class _Standing:
     then asked a question" with "asked a question", silently deleting agent output that the
     drain has already removed from disk.
 
-    `token` is the callback the message's button carries. A replacement moves it onto the new
-    message with `rebind` rather than minting a fresh one, so a session reporting all day adds
-    one row to a size-bounded store instead of one per report -- the same reason
+    `token` is the callback the message's button carries. An amendment leaves both it and
+    `message_id` exactly where they are -- the message never moved -- while a replacement moves
+    the token onto the new message with `rebind` rather than minting a fresh one, so a session
+    reporting all day adds one row to a size-bounded store instead of one per report -- the
+    same reason
     `LiveView.move_to_bottom` rebinds rather than re-mints.
     """
 
@@ -404,13 +408,25 @@ def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGr
     below -- which changes which observation that is -- would be quietly re-deciding an order
     the queue had already settled.
 
-    **Within a session, identical `(kind, detail)` observations collapse to the newest.** A
-    `Stop` hook fires per turn rather than per task, so an agent working through one long
-    instruction reports "finished" repeatedly and every report is true; the pane watch has the
-    same shape, since `QUIET` carries no agent text at all and two quiet spells in one pass are
-    indistinguishable here. What does not collapse is two `completed` observations carrying
-    *different* text: those are two different things the agent said, and folding them on the
-    kind alone would delete one of them silently. The pair is the identity, never the kind.
+    **Within a session, a kind collapses to its newest observation.** A `Stop` hook fires per
+    turn rather than per task, so an agent working through one long instruction reports
+    "finished" repeatedly and every report is true; the pane watch has the same shape, since
+    `QUIET` carries no agent text at all and two quiet spells in one pass are indistinguishable
+    here.
+
+    **The kind is the identity, and the detail is not part of it (DEC-034).** This is the
+    owner's correction to the shape this had, and the reason is what a notification is *for*:
+    it tells them a session has stopped and wants them. Five "the agent has finished its work" lines
+    carrying five different last replies do not tell them that five times over -- they tell
+    them once, and then bury the sentence that matters under four stale copies of itself.
+    Keyed on `(kind, detail)` those five were five distinct things and every one was rendered,
+    which is how one session's message came to be a wall of the same sentence.
+
+    What is given up is real and was weighed: the older text of a kind is dropped rather than
+    shown, so a `completed` report whose reply the owner never read is gone. The session
+    itself is the authoritative record of what an agent said (DEC-013), the message is the
+    alert -- and the newest report of a kind is the one that describes the state the session
+    is actually in now.
 
     **What survives is then ordered by `observed_at`.** After the collapse rather than before,
     and the order matters: a survivor carries the newest stamp of its duplicates, so a sentence
@@ -418,16 +434,16 @@ def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGr
     first and collapsed after, it would print above it -- a timeline running backwards inside a
     single message, which reads as the service having confused two sessions.
 
-    Ties fall back to the collapse order, which is first appearance of each `(kind, detail)`
-    pair; the sort is stable and this relies on that. Two observations sharing an instant carry
+    Ties fall back to the collapse order, which is first appearance of each kind; the sort is
+    stable and this relies on that. Two observations sharing an instant carry
     no fact about which came first, so what is worth guaranteeing is not the true order but a
     repeatable one: the same input has to produce the same bundle on a retry, because a message
     that reshuffles itself between one send and the next reads as fresh news.
     """
-    collapsed: dict[str, dict[tuple[ActivityKind, str | None], AgentActivity]] = {}
+    collapsed: dict[str, dict[ActivityKind, AgentActivity]] = {}
     for activity in activities:
         seen = collapsed.setdefault(activity.session_id, {})
-        key = (activity.kind, activity.detail)
+        key = activity.kind
         held = seen.get(key)
         if held is None or activity.observed_at > held.observed_at:
             # Assignment to an existing key keeps its position, so replacing a duplicate does
@@ -449,8 +465,8 @@ def _merged(
     """Fold new observations into what a standing message already says.
 
     Delegated to `grouped_for_delivery` rather than re-implemented, because the two rules that
-    matter here are its rules: identical `(kind, detail)` pairs collapse to the newest, and
-    what survives is ordered by `observed_at`. A second copy of them would drift, and the
+    matter here are its rules: a kind collapses to its newest observation, and what survives is
+    ordered by `observed_at`. A second copy of them would drift, and the
     drift would be invisible -- a message whose lines are subtly out of order reads as the
     service having confused two sessions, which is exactly what that function's docstring is
     about.
@@ -503,6 +519,25 @@ def _told(
     this is not the narrowing `_record_sent` warns against.
     """
     return tuple(activity.kind for activity in shown if activity in arrived)
+
+
+def _unheard(
+    standing: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
+) -> tuple[ActivityKind, ...]:
+    """The kinds a re-render would put in front of the owner that its message does not carry.
+
+    The question is not "has anything changed" -- a fresher `completed` carrying a different
+    last reply changes the text and is still the same news -- but "is the owner being told
+    something they have not been alerted to". Non-empty is what earns a message that arrives;
+    empty is what a silent amendment is for.
+
+    Keyed on the kind because the kind is what the sentence says, and the sentence is what the
+    alert is: `completed` means the session stopped and wants them, and it means that exactly
+    once until it stops meaning it. Comparing the observations themselves instead would make
+    every repeat an alert again, which is the shape the owner asked to be rid of.
+    """
+    known = {activity.kind for activity in standing}
+    return tuple(activity.kind for activity in shown if activity.kind not in known)
 
 
 def _unsaid(
@@ -609,13 +644,14 @@ class ActivityNotifier:
         # as one message, or the grouping has bought the owner nothing.
         held: list[AgentActivity] = []
         sent = 0
+        arrived_at_the_bottom = False
         refused = False
         for group in grouped_for_delivery(self._pending):
             if refused or sent >= _MAXIMUM_SENDS_PER_PASS:
                 held.extend(group.activities)
                 continue
             try:
-                delivered, unsaid = await self._send(group)
+                delivered, alerted, unsaid = await self._send(group)
             except Exception:
                 # Held whole, and the pass stops. The record is already off disk -- the drain
                 # deletes before it returns (DEC-013 cost 3) and DEC-026 keeps this queue in
@@ -627,6 +663,7 @@ class ActivityNotifier:
                 refused = True
                 continue
             sent += int(delivered)
+            arrived_at_the_bottom = arrived_at_the_bottom or alerted
             # What the message could not spell out is owed, not spent.
             held.extend(unsaid)
         self._sent_this_pass = sent > 0
@@ -634,10 +671,15 @@ class ActivityNotifier:
         # one thing said twice, and re-holding both would resurrect a duplicate the next pass
         # has already been told to fold.
         self._pending = deque(held)
-        if sent:
+        if arrived_at_the_bottom:
             # Once per pass, not once per message: the menu only has to end up below the last
             # notification, and moving it five times to get there would delete and re-send the
             # owner's screen five times.
+            #
+            # And only when something actually *arrived* at the bottom. A pass that merely
+            # amended standing messages moved nothing below the menu, and moving it anyway
+            # would delete and re-send the owner's screen -- a message arriving on their phone,
+            # which is the whole cost the silent amendment was chosen to avoid.
             try:
                 await self._view.move_to_bottom(self._bot)
             except Exception:
@@ -749,6 +791,18 @@ class ActivityNotifier:
         255 notifications where the taper intends 12. Sending the whole group closes both: what
         was observed rides along, and what was observed is what `_record_sent` is told about.
 
+        **A repeat is written into the message the owner already has; only news they have not
+        been alerted to is allowed to arrive (DEC-034).** This is the second correction the
+        owner asked for, and it is about the phone rather than the chat. Replacing a standing
+        message keeps the chat at one message per session -- the whole of the previous fix, and it
+        worked -- but every replacement is a `sendMessage`, so an agent finishing a turn every
+        few minutes still buzzed the phone every few minutes and left the owner watching one
+        message jump to the bottom of the chat over and over. `_unheard` is the test: a kind the
+        standing message does not already carry has never been put in front of them and earns a
+        message that arrives, while a fresher `completed` behind a `completed` is the same news
+        in newer words and is amended in silently. The first alert is as fast as it ever was;
+        what is taken away is the second and later copies of it.
+
         **It closes them and does not restore the taper**, which is worth stating here because
         the numbers above invite the opposite reading. `_forget_expired_limits` prunes an entry
         at `_window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
@@ -760,15 +814,14 @@ class ActivityNotifier:
         """
         moment = self._now()
         standing = self._standing.get(group.session_id)
-        # The window gates **every** send, a replacement included, and that is the whole
-        # difference between this delivery shape and editing in place. An edit is silent, so
-        # withholding one would only make the message stale; a replacement is a `sendMessage`
-        # and lands on the owner's phone exactly like a first notification does. Measured with
-        # the gate lifted for standing messages: an agent finishing a turn every five minutes
-        # produced 96 notifications overnight -- one message in the chat, and the buzzing the
-        # taper exists to stop.
+        # The window gates **every** delivery, an amendment included. It reads as too strict
+        # for one that is silent -- withholding an edit only makes a message stale -- and the
+        # cost it is really bounding is not the buzz: it is a Bot API call per session per
+        # pass, on the same chat rate limit `_MAXIMUM_SENDS_PER_PASS` exists for, spent to
+        # rewrite a sentence with a slightly newer one. The message the owner is looking at
+        # already says the session stopped, which is what it is for.
         if not any(self._due(activity, moment) for activity in group.activities):
-            return False, ()
+            return False, False, ()
         display = await self._display(group.session_id)
         if display is None:
             # Two refusals arrive as one `None`, and this module is deliberately unable to
@@ -779,7 +832,7 @@ class ActivityNotifier:
             # (`service._display_for`), because a notifier that branched on session state
             # would be a driver adapter making lifecycle policy (DEC-001).
             _LOG.info("dropping an activity this service will not speak about")
-            return False, ()
+            return False, False, ()
 
         if standing is not None:
             carried = _merged(standing.activities, group.activities)
@@ -789,9 +842,41 @@ class ActivityNotifier:
                 # either: the observations are already on the owner's screen, so they are
                 # finished business rather than a debt. This is the collapse the rate limit
                 # used to perform, now performed by comparing against what was actually said.
-                return False, ()
+                return False, False, ()
             updated = _for_update(group.session_id, carried, group.activities)
             shown = shown_in_message(updated)
+            if not _unheard(standing.activities, shown):
+                # Nothing here the owner has not already been alerted to, so this is the same
+                # news in newer words: written into the message they have rather than sent as
+                # one more. An amendment that answers False is not a failed delivery to retry
+                # -- the message has been deleted, or has passed the 48 hours Telegram lets a
+                # bot edit for -- so the session stops standing and the fresh send below takes
+                # it, carrying the whole story rather than only what arrived this pass.
+                # Rendered whole, keyboard included, because `editMessageText` replaces a
+                # message's markup with whatever it is given -- and given none, it takes the
+                # keyboard away. Sending only the text would have left the owner an amended
+                # notification with no way to open the session it is about, which is most of
+                # what the message is for and would have degraded on the *second* report
+                # rather than the first.
+                amended = render_activity(
+                    updated, display=display, open_session=standing.token
+                )
+                if await self._view.amend_apart(
+                    self._bot,
+                    standing.message_id,
+                    {
+                        "text": amended.text,
+                        "parse_mode": ParseMode.HTML,
+                        "reply_markup": _markup(amended.keyboard),
+                    },
+                ):
+                    self._standing[group.session_id] = _Standing(
+                        standing.message_id, shown, standing.token
+                    )
+                    self._record_sent(group.session_id, _told(group.activities, shown), moment)
+                    return True, False, _unsaid(group.activities, shown)
+                self._standing.pop(group.session_id, None)
+                return await self._send_afresh(updated, group, display=display, moment=moment)
             replacement = await self._replace(standing, updated, display=display)
             if replacement is not None:
                 message_id, token = replacement
@@ -810,18 +895,36 @@ class ActivityNotifier:
                 # This narrows to what the session actually said this pass, which is the
                 # question the taper was always asking.
                 self._record_sent(group.session_id, _told(group.activities, shown), moment)
-                return True, _unsaid(group.activities, shown)
+                return True, True, _unsaid(group.activities, shown)
             # The replacement could not be given a working button, which is the one outcome
             # worth starting over for: `_replace` has already put the message in the chat, so
             # falling through would leave two. Forgetting instead means the *next* pass sends
             # a fresh one, and the buttonless message is superseded then rather than now.
             self._standing.pop(group.session_id, None)
-            return True, _unsaid(group.activities, shown)
+            return True, True, _unsaid(group.activities, shown)
 
+        return await self._send_afresh(group, group, display=display, moment=moment)
+
+    async def _send_afresh(
+        self,
+        outgoing: SessionGroup,
+        group: SessionGroup,
+        *,
+        display: str,
+        moment: datetime,
+    ) -> tuple[bool, bool, tuple[AgentActivity, ...]]:
+        """Start a session's message over, saying `outgoing` and owing against `group`.
+
+        Two groups because the two questions differ once a message can be amended. `outgoing`
+        is what the new message says -- the whole story when a standing message has been lost,
+        so nothing the owner never read is silently dropped on the way to a fresh one -- while
+        `group` is what this pass actually heard, which is what the rate limit is asked about
+        and what is still owed if a line did not fit.
+        """
         message_id = await self._view.send_apart(
             self._bot,
             {
-                "text": activity_text(group, display=display),
+                "text": activity_text(outgoing, display=display),
                 "parse_mode": ParseMode.HTML,
             },
         )
@@ -832,9 +935,9 @@ class ActivityNotifier:
         # N earlier" has not been told to anyone, and stamping it would both silence it and
         # suppress its next report. What it does cover is a kind that was rendered without
         # being due -- that one has now been said, and is a repeat from here on.
-        shown = shown_in_message(group)
+        shown = shown_in_message(outgoing)
         self._record_sent(group.session_id, (a.kind for a in shown), moment)
-        token = await self._mint(group, message_id, display=display)
+        token = await self._mint(outgoing, message_id, display=display)
         if token is not None:
             # Recorded only once the button exists, because a standing message is one this
             # object will later *replace*, and a replacement carries this token onto the new
@@ -842,7 +945,7 @@ class ActivityNotifier:
             # message after it, where a message not remembered is merely superseded by the next
             # piece of news -- degraded once instead of degraded for good.
             self._standing[group.session_id] = _Standing(message_id, shown, token)
-        return True, _unsaid(group.activities, shown)
+        return True, True, _unsaid(group.activities, shown)
 
     async def _replace(
         self, standing: _Standing, group: SessionGroup, *, display: str
@@ -855,10 +958,11 @@ class ActivityNotifier:
         the message they already had rather than nothing, and a raise is the right answer to
         one: `deliver` holds the group and the next pass tries again.
 
-        A replacement rather than an edit because an edit is silent and stays where it was
-        sent. This costs a notification per update and a message that keeps arriving at the
-        bottom of the chat, which is the trade the owner asked for: the session still occupies
-        exactly one message, and the one it occupies is the newest thing in the chat.
+        A replacement rather than an amendment because an amendment is silent and stays where
+        it was sent, and this path is only reached for news the owner has not been alerted to
+        (`_unheard`). That is where the trade now sits: the session occupies exactly one
+        message either way, and it is re-sent to the bottom of the chat only when there is
+        something in it worth interrupting them for. A repeat never gets here.
 
         Answers `None` when the new message could not be given a working button. That is not
         the same as a failed send -- the message is in the chat and says the right thing -- so

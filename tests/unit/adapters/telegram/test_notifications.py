@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from telegram.error import TelegramError
 
+from remote_agents.adapters.telegram import notifications
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.notifications import (
     OPEN_SESSION_LABEL,
@@ -242,7 +243,7 @@ def test_a_callback_that_is_not_an_opaque_token_is_refused() -> None:
 
 
 class _RecordingView:
-    """The `LiveView` surface a notifier actually uses: one send, addressed to a chat."""
+    """The `LiveView` surface a notifier actually uses: send, amend and discard, one chat."""
 
     chat_id = 11
 
@@ -250,14 +251,29 @@ class _RecordingView:
         self.sent: list[dict[str, object]] = []
         self.ids: list[int] = []
         self.deleted: list[int] = []
+        self.amended: list[tuple[int, dict[str, object]]] = []
+        #: Every text this chat was made to show, in the order it was written, by whichever
+        #: route wrote it. What the owner is looking at is the last of these.
+        self.written: list[dict[str, object]] = []
         self.refuse_delete = False
+        self.refuse_amend = False
         self._next_id = 900
 
     async def send_apart(self, _bot: object, arguments: dict[str, object]) -> int:
         self.sent.append(arguments)
+        self.written.append(arguments)
         self._next_id += 1
         self.ids.append(self._next_id)
         return self._next_id
+
+    async def amend_apart(
+        self, _bot: object, message_id: int, arguments: dict[str, object]
+    ) -> bool:
+        if self.refuse_amend:
+            return False
+        self.amended.append((message_id, arguments))
+        self.written.append(arguments)
+        return True
 
     async def discard(self, _bot: object, message_id: int) -> bool:
         if self.refuse_delete:
@@ -303,32 +319,39 @@ def _notifier(clock: _Clock, *, rate_limit_seconds: float = 120.0, callbacks=Non
 
 
 def _showing(view: _RecordingView) -> str:
-    """What the session's message says right now -- which is always the newest one sent."""
-    return str(view.sent[-1]["text"])
+    """What the session's message says right now.
+
+    The newest text written to the chat by either route, since a repeat is amended into the
+    message the owner already has rather than sent as a new one -- so reading `sent` alone
+    would report the text as it stood before the last few reports.
+    """
+    return str(view.written[-1]["text"])
 
 
 def _messages(view: _RecordingView) -> int:
     """How many of this session's messages are *in the chat*, not how many were ever sent.
 
-    The distinction is the whole delivery shape. Every update sends a message and deletes the
-    one it replaces, so the sends climb with each report while the chat holds exactly one --
-    and it is the second number the owner experiences.
+    The distinction is the whole delivery shape. An update the owner has not been alerted to
+    sends a message and deletes the one it replaces, so the sends climb while the chat holds
+    exactly one -- and it is the second number the owner experiences. A repeat does not even
+    do that: it is amended into the message they already have and `sent` does not move.
     """
     return len(view.sent) - len(view.deleted)
 
 
-async def test_later_news_replaces_the_session_s_message_instead_of_joining_it() -> None:
-    """What a second report owes the owner is the news, not a second place to read it.
+async def test_a_later_report_of_the_same_kind_never_reaches_the_owner_s_phone_again() -> None:
+    """What a second `completed` owes the owner is nothing at all: they have already been told.
 
-    The rate limit used to answer this: suppress the repeat, and once the window passed, send
-    the later report as a message of its own. The shape that produced is the one the owner
-    reported — three messages about one session, an hour of scrolling between the first and
-    the last — and no window setting fixes it, because two turns an hour apart are outside
-    any window worth having.
+    Two shapes were tried before this one and each fixed half of it. The rate limit suppressed
+    the repeat and then, once the window passed, sent the later report as a message of its own
+    -- three messages about one session, an hour of scrolling between the first and the last.
+    Replacing the session's message fixed the chat and not the phone: every replacement is a
+    `sendMessage`, so the owner was still buzzed per turn and still watched one message jump
+    to the bottom over and over.
 
-    The replacement is sent and the old message deleted, rather than the old message being
-    edited: an edit is silent and stays where it was, and news the owner is not told about is
-    most of the value gone.
+    The rule the owner asked for is the one pinned here. `completed` says the session stopped
+    and wants them, it says that exactly once, and a fresher copy of it is written into the
+    message they have -- silently, where it is.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
@@ -346,9 +369,70 @@ async def test_later_news_replaces_the_session_s_message_instead_of_joining_it()
     assert await notifier.deliver([later]) == 1
 
     assert _messages(view) == 1, "the session still occupies one message"
+    assert len(view.sent) == 1, "and nothing arrived on the owner's phone a second time"
+    assert [message_id for message_id, _ in view.amended] == [view.ids[0]], (
+        "the amendment must land on the message the owner already has"
+    )
+    assert view.amended[-1][1]["reply_markup"] is not None, (
+        "an edit that carries no markup takes the Open session button away"
+    )
     showing = _showing(view)
-    assert "wrote the parser" in showing, "the earlier report was not thrown away"
     assert "ran the suite" in showing
+    assert "wrote the parser" not in showing, "just the last of them, not a pile of them"
+
+
+async def test_news_of_a_kind_the_owner_has_not_been_told_arrives_as_a_message() -> None:
+    """The silence is for repeats. A sentence the message does not carry is worth a buzz.
+
+    `needs_answer` behind a `completed` is the case the whole distinction exists for: the
+    session has gone from stopped to blocked on the owner, which is the one thing this service
+    knows that they cannot see. Amending it in would leave that sitting silently in a message
+    they have already read and scrolled past.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    session = _activity(ActivityKind.COMPLETED).session_id
+
+    first = _for(session, ActivityKind.COMPLETED, "done", clock.moment)
+    assert await notifier.deliver([first]) == 1
+    clock.advance(121)
+    assert (
+        await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "May I?", clock.moment)])
+        == 1
+    )
+
+    assert len(view.sent) == 2, "a kind the owner has not seen has to arrive, not be amended"
+    assert _messages(view) == 1, "and it still costs the chat only one message"
+    showing = _showing(view)
+    assert "May I?" in showing
+    assert "done" in showing, "the message it replaced carried news it must not drop"
+
+
+async def test_a_pass_that_only_amends_does_not_re_send_the_owner_s_menu() -> None:
+    """`move_to_bottom` deletes and re-sends the live view, which is itself a message arriving.
+
+    So a pass that put nothing new below the menu must not move it. Left ungated, the silence
+    would have been undone one layer out: the notification stays quiet and the menu buzzes in
+    its place, once per pass, for as long as the session keeps reporting.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    moved: list[object] = []
+
+    async def move_to_bottom(bot: object) -> int | None:
+        moved.append(bot)
+        return None
+
+    view.move_to_bottom = move_to_bottom
+    session = _activity(ActivityKind.COMPLETED).session_id
+
+    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "one", clock.moment)])
+    assert len(moved) == 1, "a first notification does arrive below the menu"
+
+    clock.advance(121)
+    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)])
+
+    assert len(moved) == 1, "an amendment moved the menu, and moving it is a message"
 
 
 async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() -> None:
@@ -504,6 +588,9 @@ async def test_the_replacement_carries_the_button_rather_than_minting_a_second()
     `rebind` is the same answer `LiveView.move_to_bottom` gives when it re-sends the menu, and
     for the same two reasons: the store is bounded by size and evicts oldest-first, and a
     keyboard that stopped resolving across the move would be a dead button.
+
+    Driven with a *second kind*, because that is what a replacement is now: a repeat is
+    amended into the message it belongs to and never moves anything to rebind.
     """
     clock = _Clock()
     store = CallbackStateStore()
@@ -513,7 +600,7 @@ async def test_the_replacement_carries_the_button_rather_than_minting_a_second()
     await notifier.deliver([_for(session, ActivityKind.COMPLETED, "one", clock.moment)])
     after_first = store.active_count()
     clock.advance(121)
-    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)])
+    await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "two", clock.moment)])
 
     assert store.active_count() == after_first, "a replacement minted a second token"
     store.bind_pending(11, view.ids[-1])
@@ -544,7 +631,11 @@ async def test_a_refused_send_leaves_the_message_the_owner_already_had() -> None
 
     view.send_apart = refuse
     clock.advance(121)
-    assert await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)]) == 0
+    # A second kind, because only news the owner has not been alerted to is *sent* at all.
+    assert (
+        await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "two", clock.moment)])
+        == 0
+    )
 
     assert _messages(view) == 1, "a failed send took away the message the owner had"
     assert view.deleted == [], "nothing may be deleted before its replacement lands"
@@ -718,8 +809,14 @@ def test_the_same_thing_said_twice_collapses_to_the_copy_carrying_the_newer_mome
     )
 
 
-def test_the_same_kind_carrying_different_agent_text_is_two_things_the_agent_said() -> None:
-    """Collapsing on the kind alone would delete one of them and say nothing about it."""
+def test_the_same_kind_said_twice_is_one_sentence_carrying_the_newer_words() -> None:
+    """The owner's rule: just the last of them.
+
+    Keyed on `(kind, detail)` these were two distinct things and both were rendered, which is
+    how one session's message became a wall of "the agent has finished its work" with five
+    different last replies hanging off it. The sentence is what the notification says, and it
+    says the session stopped and wants them -- once, in whatever words are current.
+    """
     groups = grouped_for_delivery(
         [
             _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=1),
@@ -728,10 +825,7 @@ def test_the_same_kind_carrying_different_agent_text_is_two_things_the_agent_sai
     )
 
     assert len(groups) == 1
-    assert [activity.detail for activity in groups[0].activities] == [
-        "Ran the suite.",
-        "Pushed the branch.",
-    ]
+    assert [activity.detail for activity in groups[0].activities] == ["Pushed the branch."]
 
 
 def test_two_quiet_reports_collapse_even_though_neither_carries_any_agent_text() -> None:
@@ -1180,18 +1274,24 @@ async def test_a_suppressed_kind_does_not_have_its_own_backoff_reset_by_its_supp
     )
 
 
-async def test_an_observation_is_never_deleted_from_a_message_that_is_going_out() -> None:
+async def test_a_kind_the_window_is_holding_is_never_deleted_from_a_message_going_out() -> None:
     """Anything still queued has by construction never been sent, so dropping it loses it.
 
     The window exists to stop *messages*, and a second line inside one the owner is already
     receiving costs them nothing. Filtering the group by window meant a message went out with
     one line used and four spare while something the agent had said was discarded.
+
+    `completed` here is inside its window and `needs_answer` is not, so the message goes out
+    for the second and must carry the first. What it carries of `completed` is the newer
+    wording, which is the collapse working rather than a line going missing -- the older words
+    are superseded, not withheld.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
 
-    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "wrote the parser", 
-                                 clock.moment)])
+    await notifier.deliver(
+        [_for(SESSION_A, ActivityKind.COMPLETED, "wrote the parser", clock.moment)]
+    )
     clock.advance(10)
     await notifier.deliver(
         [
@@ -1202,8 +1302,7 @@ async def test_an_observation_is_never_deleted_from_a_message_that_is_going_out(
 
     latest = _showing(view)
     assert "May I push?" in latest
-    assert "and then ran the suite" in latest, "a distinct, never-sent line was deleted"
-    assert "wrote the parser" in latest, "and the line it was amending is still there"
+    assert "and then ran the suite" in latest, "a suppressed kind was deleted rather than carried"
     assert _messages(view) == 1
     assert notifier.pending_count() == 0
 
@@ -1232,7 +1331,9 @@ async def test_a_full_queue_costs_the_session_that_filled_it_not_the_quiet_ones(
     )
 
 
-async def test_an_observation_the_message_could_not_hold_is_owed_not_spent() -> None:
+async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The line cap must not become a second way to lose the highest-value signal.
 
     Both gate readers found this independently. `activity_text` spells out the newest five
@@ -1242,21 +1343,25 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent() -> 
     dropped -- a successfully sent group is not re-queued. The agent is waiting, nobody is told,
     and the stamp suppresses the next report of it too.
 
-    Reachable exactly where `_MAXIMUM_LINES_PER_MESSAGE`'s docstring says the cap is reachable
-    at all: a backlogged drain of 200 records over 20 sessions leaves ten per session.
+    The cap is driven down to two for this, because collapsing a session's news on the kind
+    put it out of ordinary reach: there are fewer kinds than lines, so a real group no longer
+    overflows. It is kept, and kept tested, as the backstop for a kind being added -- the two
+    defects above are properties of the fold, not of the number, and they would come back with
+    it.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
+    monkeypatch.setattr(notifications, "_MAXIMUM_LINES_PER_MESSAGE", 2)
     waiting = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
     clock.advance(1)
     newer = [
+        _for(SESSION_A, ActivityKind.COMPLETED, "turn 4", clock.moment),
         _for(
             SESSION_A,
-            ActivityKind.COMPLETED,
-            f"turn {index}",
-            clock.moment + timedelta(seconds=index),
-        )
-        for index in range(5)
+            ActivityKind.LIMIT_REACHED,
+            "out of budget",
+            clock.moment + timedelta(seconds=1),
+        ),
     ]
 
     assert await notifier.deliver([waiting, *newer]) == 1

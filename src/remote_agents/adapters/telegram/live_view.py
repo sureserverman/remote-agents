@@ -248,6 +248,39 @@ class LiveView:
         message = await bot.send_message(chat_id=self._chat_id, **arguments)
         return int(message.message_id)
 
+    async def amend_apart(self, bot, message_id: int, arguments: dict[str, object]) -> bool:
+        """Rewrite a message sent apart from the live view, leaving it where it is.
+
+        The silent counterpart to `send_apart`, and silence is the whole point of it. A
+        notification that re-sends itself arrives on the owner's phone again; one amended in
+        place does not, so this is what a repeat of news the owner has already been alerted
+        to is allowed to cost them.
+
+        Answers whether the message now says this. `False` means Telegram will not write to
+        that message any more -- it has been deleted, or it has passed the 48 hours
+        `editMessageText` is documented for -- which is not a failure to retry but a message
+        the caller must stop treating as standing. An edit that changed nothing is `True`:
+        the message already says it, which is the wanted state and is exactly what the caller
+        asked for. Every other `BadRequest` still propagates, because an unclosed entity or
+        an oversized keyboard is a fault in what we built rather than a fact about the chat.
+
+        It binds no tokens, for `send_apart`'s reason: the keyboard here was minted against
+        this message id already, and `bind_pending` would hand it the live view's instead.
+        """
+        try:
+            await bot.edit_message_text(
+                chat_id=self._chat_id, message_id=message_id, **arguments
+            )
+        except BadRequest as error:
+            if _UNMODIFIED in str(error):
+                _LOG.debug("message %d already says this", message_id)
+                return True
+            if _is_uneditable(error):
+                _LOG.info("message %d can no longer be edited", message_id)
+                return False
+            raise
+        return True
+
     async def send_document_apart(self, bot, **arguments: object) -> int:
         """Send a captured file beside the live view, and answer its id.
 

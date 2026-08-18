@@ -1268,12 +1268,14 @@ async def test_a_notification_moves_the_menu_below_it_so_it_stays_reachable() ->
 
 @pytest.mark.asyncio
 async def test_the_menu_stays_at_the_bottom_as_one_session_keeps_reporting() -> None:
-    """Three reports, one message, and the menu still the last thing in the chat.
+    """Three reports, one message, one buzz, and the menu still the last thing in the chat.
 
     The count is the change the owner asked for: three turns used to be three messages, each
     one pushing the menu further up and each still offering a button for the same session.
     The menu's position is the property that has to survive it -- and it survives for a
-    different reason now, since only the first report creates a message to be pushed past.
+    different reason now, since only the first report creates a message at all. The two after
+    it are written into that one where it sits, so the message id never moves, nothing arrives
+    on the owner's phone again, and the menu is never re-sent to get back below it.
     """
     record = _a_running_session()
     boundary, _ = _renameable(record)
@@ -1302,7 +1304,15 @@ async def test_the_menu_stays_at_the_bottom_as_one_session_keeps_reporting() -> 
         message for message in chat.bot_messages if message.message_id != boundary.view.anchor()
     )
     assert "run 2" in notification.text, "the newest report is on it"
-    assert "run 0" in notification.text, "and it did not replace what came before"
+    assert "run 0" not in notification.text, "just the last of them, not a pile of them"
+    assert notification.text.count("finished its work") == 1, (
+        "one sentence, however many turns said it"
+    )
+    assert any(
+        button.text == "Open session"
+        for row in notification.reply_markup.inline_keyboard
+        for button in row
+    ), "an amendment that drops the keyboard leaves nothing to press"
 
 
 @pytest.mark.asyncio
