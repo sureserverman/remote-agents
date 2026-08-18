@@ -14,6 +14,7 @@ namespaced key (`session:<id>`) so `choose` can route without a second dispatch 
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -21,8 +22,11 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from remote_agents.adapters.tui.model import session_row
-from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
+from remote_agents.application.project_catalog import CatalogProject
 
 _LOG = logging.getLogger(__name__)
 
@@ -76,6 +80,21 @@ class DashboardScreen(ProjectsScreen):
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
         yield Footer()
+
+    async def choose(self, key: str) -> None:
+        """A project row opens the chooser; the launch wizard starts one screen later.
+
+        The chooser is navigation, not a wizard step (DEC-033): the selection is not yet
+        touched here, because only Launch commits to a fresh one — backing out of the
+        chooser must leave nothing behind.
+        """
+        project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
+        if project is None:
+            self.announce(
+                "That project is no longer available. Refresh and try again.", severity="warning"
+            )
+            return
+        await self.advance_to(ProjectChooserScreen(project))
 
     async def populate(self) -> None:
         await super().populate()
@@ -143,3 +162,48 @@ class DashboardScreen(ProjectsScreen):
                 if pane.get_option_at_index(index).id == held_id:
                     pane.highlighted = index
                     break
+
+
+class ProjectChooserScreen(ChoiceScreen):
+    """Launch new, or reopen saved — one question per project, then the existing flows.
+
+    Navigation over flows both surfaces already have, never a new wizard step (DEC-033):
+    Launch restarts the launch wizard with a fresh selection exactly as the projects
+    picker always did, and Resume enters the same guarded capability fetch the resume
+    flow's own project picker uses. A host with no conversations service never shows
+    Resume at all — a dead-end entry is worse than an absent one (DEC-009's spirit).
+    """
+
+    #: Launch is always offered, so this position cannot be empty by construction.
+    empty_state = NEVER_EMPTY
+    position = "PROJECT_CHOOSER"
+    status = "Launch a new session, or reopen a saved conversation."
+
+    def __init__(self, project: CatalogProject) -> None:
+        super().__init__()
+        self.project = project
+
+    @property
+    def crumb(self) -> str:
+        """The project just chosen — the one fact the trail cannot already carry."""
+        return f"{self.project.area}/{self.project.name}"
+
+    async def populate(self) -> None:
+        self.hide_entry()
+        entries: tuple[tuple[str, str], ...] = (("launch", "Launch a new session"),)
+        if self.services.conversations is not None:
+            entries = (*entries, ("resume", "Resume a conversation"))
+        self.show_choices((*entries, (_BACK, "Back")))
+
+    async def choose(self, key: str) -> None:
+        if key == _BACK:
+            await self.tui.go_back()
+            return
+        if key == "launch":
+            # A fresh selection rather than a patched one, exactly as the projects picker
+            # committed it: an agent left from an abandoned pass must not survive.
+            self.tui.selection = replace(LaunchSelection(), project=self.project)
+            await self.advance_to(ProfilesScreen())
+            return
+        if key == "resume":
+            await advance_to_resume_profiles(self, self.project)

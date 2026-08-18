@@ -72,6 +72,7 @@ def _context(records: tuple[SessionRecord, ...] = ()) -> TuiContext:
         profiles=(ProfileChoice("claude", True),),
         refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        catalogue=(_PROJECT,),
     )
 
 
@@ -88,7 +89,8 @@ async def test_three_panes_render_and_the_session_appears_in_its_pane() -> None:
         projects = screen.query_one("#choices", OptionList)
         sessions = screen.query_one("#sessions-pane", OptionList)
         feed = screen.query_one("#feed-pane", Static)
-        assert projects.option_count >= 1
+        assert projects.option_count == 1
+        assert projects.get_option_at_index(0).id == "opaque-existing"
         assert sessions.option_count == 1
         assert feed.display is True
 
