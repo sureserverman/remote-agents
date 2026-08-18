@@ -76,6 +76,7 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "capture_redactions",
         "conversations",
         "open_in_console",
+        "console_sync",
     }
     assert set(TuiContext.__dataclass_fields__) == expected
 

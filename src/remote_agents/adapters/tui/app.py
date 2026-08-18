@@ -1049,9 +1049,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         Order is whatever the store returns; nothing here sorts, and the row's age column
         is what tells the owner how old a session is.
+
+        Console-hosted, this is also where tabs track reality: every path that changes a
+        session ends in a sessions reload (stops refresh the list, opens link their own
+        tab), so syncing here — after the fresh read, before rendering — is the one choke
+        point that keeps tabs equal to live sessions without a second schedule. The sync
+        degrades to nothing on failure by its own contract; a broken console never costs
+        this list.
         """
         await self._services.launcher.refresh_readiness()
-        return await self.read_sessions()
+        records = await self.read_sessions()
+        if self._services.console_sync is not None:
+            await self._services.console_sync(records)
+        return records
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""

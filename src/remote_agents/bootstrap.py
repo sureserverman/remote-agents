@@ -669,12 +669,27 @@ def local_context(config, connection, paths: ProductionPaths):
     runtime = _local_runtime(config, paths, projects.paths)
 
     open_in_console = None
+    console_sync = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
-        # Hosted by a client on our own server: opening a session switches that client and
-        # the surface stays alive. Everywhere else the field stays None and the surface
-        # keeps the exec-attach contract untouched.
+        # Hosted by a client on our own server: opening a session focuses its console tab
+        # (the composer falls back to a direct client switch), tabs are reconciled on
+        # every sessions reload, and the surface stays alive. Everywhere else both fields
+        # stay None and the surface keeps the exec-attach contract untouched. The console
+        # is ensured before the app starts, so a host whose tmux cannot host it degrades
+        # here, once, rather than mid-surface.
+        from remote_agents.application.console import ConsoleComposer
+
+        composer = ConsoleComposer(
+            runtime.gateway,
+            (sys.executable, "-m", "remote_agents", "tui"),
+            paths.home,
+        )
+        asyncio.run(composer.ensure())
+
         async def open_in_console(session_id: str) -> None:
-            await runtime.gateway.switch_client_to_session(SessionId.parse(session_id))
+            await composer.open(SessionId.parse(session_id))
+
+        console_sync = composer.sync
 
     return TuiContext(
         launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
@@ -702,6 +717,7 @@ def local_context(config, connection, paths: ProductionPaths):
         capture=runtime.terminal.capture,
         conversations=_conversation_service(projects.paths),
         open_in_console=open_in_console,
+        console_sync=console_sync,
     )
 
 
