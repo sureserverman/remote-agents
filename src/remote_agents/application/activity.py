@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from uuid import uuid4
 
 from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import (
@@ -155,7 +156,12 @@ def _clear_abandoned_temporaries(activity_directory: Path) -> None:
     """
     horizon = time.time() - _ABANDONED_TEMPORARY_SECONDS
     try:
-        pending = list(activity_directory.glob(".pending-*.tmp"))
+        pending = [
+            *activity_directory.glob(".pending-*.tmp"),
+            # A drain's claim, orphaned by a crash between the rename and the read — the
+            # same age rule applies: at most one record lost, never one delivered twice.
+            *activity_directory.glob(".claim-*.tmp"),
+        ]
     except OSError:
         return
     for path in pending:
@@ -202,7 +208,21 @@ def _read_one(path: Path) -> AgentActivity | None:
     which is the right way round for a message saying an agent is waiting -- and a record that
     could not be deleted is dropped rather than returned, because delivering it would repeat
     "your agent is waiting" on every pass for as long as the spool stays unwritable.
+
+    **The claim comes before everything.** Rename is atomic within one filesystem, so of any
+    number of drains racing over this record exactly one owns it; the losers meet an OSError
+    and skip, which is how two passes -- a second service instance, an operator's manual run,
+    any future second drainer -- can never turn one observation into two notifications or two
+    feed rows. The claim's name is invisible to the drain glob, and one orphaned by a crash
+    is swept by `_clear_abandoned_temporaries` on the same age rule as a pending temporary:
+    at most one record lost, never one delivered twice.
     """
+    claimed = path.with_name(f".claim-{uuid4().hex}.tmp")
+    try:
+        path.rename(claimed)
+    except OSError:
+        return None
+    path = claimed
     try:
         with path.open("rb") as handle:
             # One byte past the limit, so "too large" is decided without the file ever being

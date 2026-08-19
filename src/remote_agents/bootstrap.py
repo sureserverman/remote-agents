@@ -34,6 +34,7 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import (
@@ -171,6 +172,15 @@ class ServiceComposition:
     a pane for and everything to deliver.
     """
 
+    activity_store: SQLiteActivityStore | None = None
+    """Where every observation becomes durable before delivery, or None to skip recording.
+
+    The local feed's source (migration 9), never a delivery ledger — DEC-026's in-memory
+    notifier state is unchanged. Recorded *before* `deliver` so the feed shows what was
+    observed even when Telegram refuses the send; a failed append costs the feed one row
+    and never costs the phone its notification.
+    """
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -272,6 +282,12 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
+    if composition.activity_store is not None:
+        for activity in activities:
+            try:
+                await composition.activity_store.append(activity)
+            except Exception:
+                _LOG.exception("recording an activity observation failed; delivery continues")
     try:
         await composition.boundary.notifier.deliver(activities)
     except Exception:
@@ -623,6 +639,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
         paths.activity_directory,
+        SQLiteActivityStore(connection),
     )
 
 

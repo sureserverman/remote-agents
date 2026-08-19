@@ -1929,3 +1929,38 @@ async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> 
     text = str(bot.sends[0]["text"])
     assert text.count("finished its work") == 1, "four identical reports are one line"
     assert "•" not in text, "one surviving observation renders in the ungrouped shape"
+
+
+async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path) -> None:
+    """The feed's table records what was observed even when Telegram refuses the send.
+
+    Recorded before deliver, deliberately: a failed append costs the feed one row and never
+    costs the phone its notification, and a refused send never un-records the observation —
+    the two consumers of one observation are independent (DEC-026 stays a statement about
+    the notifier's own in-memory state, not about this table).
+    """
+    from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+    from remote_agents.adapters.sqlite.database import open_database
+
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id))
+    connection = open_database(tmp_path / "state.sqlite3")
+    store = SQLiteActivityStore(connection)
+    try:
+        composition = ServiceComposition(
+            boundary,
+            _SilentTerminal(),
+            _SilentReconciler(),
+            activity_directory=spool,
+            activity_store=store,
+        )
+        await _watch_quiet_once(composition)
+
+        recent = await store.recent(limit=10)
+        assert len(recent) == 1
+        assert recent[0].session_id == str(record.session_id)
+        assert len(bot.sends) == 1
+    finally:
+        connection.close()
