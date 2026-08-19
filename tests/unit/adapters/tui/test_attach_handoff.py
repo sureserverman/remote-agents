@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.adapters.tui.attach import attach_to
 
@@ -31,7 +32,13 @@ def test_a_ready_launch_execs_exactly_the_attach_argument_vector() -> None:
     exec_argv = Recorder()
     reported: list[str] = []
 
-    status = attach_to(_request(), environment={}, exec_argv=exec_argv, report=reported.append)
+    status = attach_to(
+        _request(),
+        switch_argv=switch_client_argv,
+        environment={},
+        exec_argv=exec_argv,
+        report=reported.append,
+    )
 
     assert status == 0
     assert exec_argv.calls == [("tmux", _ARGV)]
@@ -41,7 +48,13 @@ def test_a_ready_launch_execs_exactly_the_attach_argument_vector() -> None:
 def test_nothing_is_exec_ed_when_the_owner_quit_without_launching() -> None:
     exec_argv = Recorder()
 
-    status = attach_to(None, environment={}, exec_argv=exec_argv, report=lambda _: None)
+    status = attach_to(
+        None,
+        switch_argv=switch_client_argv,
+        environment={},
+        exec_argv=exec_argv,
+        report=lambda _: None,
+    )
 
     assert status == 0
     assert exec_argv.calls == []
@@ -54,6 +67,7 @@ def test_an_existing_tmux_client_is_told_how_to_switch_rather_than_nested() -> N
 
     status = attach_to(
         _request(),
+        switch_argv=switch_client_argv,
         environment={"TMUX": "/tmp/tmux-1000/default,123,0"},
         exec_argv=exec_argv,
         report=reported.append,
@@ -69,7 +83,13 @@ def test_an_exec_that_cannot_run_leaves_the_owner_a_command() -> None:
     exec_argv = Recorder(error=OSError("tmux is not on PATH"))
     reported: list[str] = []
 
-    status = attach_to(_request(), environment={}, exec_argv=exec_argv, report=reported.append)
+    status = attach_to(
+        _request(),
+        switch_argv=switch_client_argv,
+        environment={},
+        exec_argv=exec_argv,
+        report=reported.append,
+    )
 
     assert status == 1
     assert "Could not attach automatically" in reported[0]

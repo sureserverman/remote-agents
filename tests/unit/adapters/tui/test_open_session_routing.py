@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.attach import HostingMode, attach_to, hosting_mode
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -65,7 +66,12 @@ def test_hosting_mode_reads_the_tmux_socket_not_just_its_presence() -> None:
 def test_bare_shell_execs_the_attach_command_unchanged() -> None:
     calls: list[tuple[str, tuple[str, ...]]] = []
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
-    code = attach_to(request, environment={}, exec_argv=lambda p, a: calls.append((p, a)))
+    code = attach_to(
+        request,
+        switch_argv=switch_client_argv,
+        environment={},
+        exec_argv=lambda p, a: calls.append((p, a)),
+    )
     assert code == 0
     assert calls == [("tmux", request.argv)]
 
@@ -73,7 +79,12 @@ def test_bare_shell_execs_the_attach_command_unchanged() -> None:
 def test_our_own_client_switches_instead_of_nesting() -> None:
     calls: list[tuple[str, tuple[str, ...]]] = []
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
-    code = attach_to(request, environment=_OURS, exec_argv=lambda p, a: calls.append((p, a)))
+    code = attach_to(
+        request,
+        switch_argv=switch_client_argv,
+        environment=_OURS,
+        exec_argv=lambda p, a: calls.append((p, a)),
+    )
     assert code == 0
     assert calls == [
         (
@@ -88,6 +99,7 @@ def test_a_foreign_client_is_still_refused_with_the_command_printed() -> None:
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
     code = attach_to(
         request,
+        switch_argv=switch_client_argv,
         environment=_FOREIGN,
         exec_argv=lambda p, a: pytest.fail("a foreign client must never exec"),
         report=reported.append,

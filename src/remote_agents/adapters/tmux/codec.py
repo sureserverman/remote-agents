@@ -27,7 +27,32 @@ CONSOLE_SESSION_NAME = "ra-console"
 # one shared object: a window option travels with it into the console's listing, while the
 # managed session's session-scoped options do not (verified against tmux 3.4, 2026-08-18).
 WINDOW_SESSION_OPTION = "@remote_agents_window_session"
+
+# The four identity option names, spelled **once each** and referenced everywhere else in this
+# module. They are written by `pane_mark_args` and read back by two format strings, and those
+# three uses only agree because they are generated from one place — so the name itself is a
+# constant rather than a literal repeated per use. Pinned by
+# `tests/architecture/test_the_mark_vocabulary_has_one_home.py`, which counts occurrences: it
+# caught `ARRANGEMENT_FORMAT` re-spelling two of them, which is the drift it exists for.
+_SCHEMA_OPTION = "@remote_agents_schema"
+_ID_OPTION = "@remote_agents_id"
+_PROJECT_OPTION = "@remote_agents_project_id"
+_PROFILE_OPTION = "@remote_agents_profile"
 CONSOLE_WINDOW_FORMAT = _DELIMITER.join(("#{window_index}", f"#{{{WINDOW_SESSION_OPTION}}}"))
+# Who is where, in one listing: the read the swap composer derives its whole answer from.
+# Deliberately separate from PANE_FORMAT, which is lifecycle evidence and drops the console's
+# own view — the arrangement needs exactly what that drops (a console pane is half of every
+# exchange) and needs position, which lifecycle never cares about.
+ARRANGEMENT_FORMAT = _DELIMITER.join(
+    (
+        "#{session_name}",
+        "#{window_index}",
+        "#{pane_index}",
+        "#{pane_id}",
+        f"#{{{_SCHEMA_OPTION}}}",
+        f"#{{{_ID_OPTION}}}",
+    )
+)
 PANE_FORMAT = _DELIMITER.join(
     (
         "#{session_name}",
@@ -36,10 +61,10 @@ PANE_FORMAT = _DELIMITER.join(
         "#{pane_pid}",
         "#{pane_dead}",
         "#{pane_dead_status}",
-        "#{@remote_agents_schema}",
-        "#{@remote_agents_id}",
-        "#{@remote_agents_project_id}",
-        "#{@remote_agents_profile}",
+        f"#{{{_SCHEMA_OPTION}}}",
+        f"#{{{_ID_OPTION}}}",
+        f"#{{{_PROJECT_OPTION}}}",
+        f"#{{{_PROFILE_OPTION}}}",
     )
 )
 
@@ -152,10 +177,10 @@ def pane_mark_args(
     return tuple(
         ("set-option", "-p", "-t", target, option, value)
         for option, value in (
-            ("@remote_agents_schema", _PANE_SCHEMA_VERSION),
-            ("@remote_agents_id", str(session_id)),
-            ("@remote_agents_project_id", str(project_id)),
-            ("@remote_agents_profile", str(profile_id)),
+            (_SCHEMA_OPTION, _PANE_SCHEMA_VERSION),
+            (_ID_OPTION, str(session_id)),
+            (_PROJECT_OPTION, str(project_id)),
+            (_PROFILE_OPTION, str(profile_id)),
         )
     )
 
@@ -326,6 +351,60 @@ def parse_console_window(line: str) -> tuple[int, SessionId | None]:
     if not raw_session:
         return (index, None)
     return (index, SessionId.parse(raw_session))
+
+
+def list_arrangement_args() -> tuple[str, ...]:
+    """Return the argv suffix that lists every pane on the server with its position.
+
+    Server-wide rather than console-scoped, and that is the point: an exchange leaves one
+    pane in the console and its partner parked in a managed session's own window, so a read
+    that saw only the console could say what is displayed and never where the displaced pane
+    went. One listing answers both, and no session target appears in it — the composer never
+    names `ra-<uuid>:` to ask about a session's window, it filters a listing it already has.
+    """
+    return ("list-panes", "-a", "-F", ARRANGEMENT_FORMAT)
+
+
+def parse_arrangement(line: str) -> tuple[SessionId | None, bool, int, int, str, SessionId | None]:
+    """Decode one arrangement line into (host, on console, window, position, pane, identity).
+
+    Two decodings, and keeping them apart is the whole job. **Host** comes from the session
+    name the pane is *listed under* — the console, a managed session, or neither — and says
+    where the pane is being shown. **Identity** comes from the pane's own schema-2 mark and
+    says whose it is. Under the swap model those disagree exactly when something is displaced,
+    which is the state the composer exists to read.
+
+    A schema-1 mark is never returned as identity. tmux resolves `#{@option}` by falling back
+    pane -> session, so every pane in a legacy session's window reports that session's id
+    whether or not it is the agent; treating that as identity would make the surface parked in
+    such a window look like the agent itself. What it does say — which session's window this
+    pane sits in — is what `host` already answers.
+
+    Refuses rather than guesses. A session name containing the format delimiter inflates the
+    split past six fields (tmux 3.4 accepts `|` in a session name — Claim 3), and an
+    unparseable position is not a position; both raise, and the gateway drops the line.
+    """
+    fields = line.rstrip("\n").split(_DELIMITER)
+    if len(fields) != 6:
+        raise ValueError("arrangement format has missing fields")
+    name, raw_window, raw_pane_index, pane_id, schema, raw_id = fields
+    try:
+        window_index, pane_index = int(raw_window), int(raw_pane_index)
+    except ValueError as error:
+        raise ValueError("arrangement position is invalid") from error
+    if window_index < 0 or pane_index < 0:
+        raise ValueError("arrangement position is invalid")
+    if not pane_id:
+        raise ValueError("arrangement format has missing fields")
+    on_console = name == CONSOLE_SESSION_NAME
+    host: SessionId | None = None
+    if not on_console and name.startswith("ra-"):
+        try:
+            host = SessionId.parse(name.removeprefix("ra-"))
+        except ValueError:
+            host = None
+    identity = SessionId.parse(raw_id) if schema == _PANE_SCHEMA_VERSION and raw_id else None
+    return host, on_console, window_index, pane_index, pane_id, identity
 
 
 def is_console_view(line: str) -> bool:

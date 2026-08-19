@@ -52,3 +52,4 @@ def test_the_read_only_form_adds_r_and_changes_nothing_else() -> None:
         f"the read-only form must differ from the live one by -r alone, but it is {read_only}"
     )
     assert attach_command(session_id, read_only=True) == " ".join(read_only)
+

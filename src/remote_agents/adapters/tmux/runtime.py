@@ -18,13 +18,17 @@ from remote_agents.adapters.tmux.remote_control import (
     classify_remote_control_capture,
 )
 from remote_agents.adapters.tmux.trust import TRUST_KEYS, classify_trust_capture
-from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.private_directory import open_private_directory
-from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
+from remote_agents.ports.terminal import (
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    TerminalObservation,
+    TerminalTargetMissing,
+)
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1

@@ -14,57 +14,19 @@ act on the agent afterwards.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 
 import pytest
+from live_probe import MARKER, probe_profile, process_gone
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway
-from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
+from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
-_MARKER = "PANE-ADDRESSING-LIVE"
+_MARKER = MARKER
 _PROFILE = ProfileId("probe")
 _PROJECT = ProjectId("qualification")
-
-
-def probe_profile() -> LaunchProfile:
-    """A stand-in agent: prints a readiness banner, then waits to be stopped.
-
-    No curated profile is needed to prove addressing, and using one would make the test
-    depend on an agent binary being installed. `C-c` is a real graceful sequence here —
-    tmux gives the pane a pty, so the key reaches the foreground process group.
-    """
-    shell = "/bin/sh"
-    return LaunchProfile(
-        executable=shell,
-        argv=(shell, "-c", f"echo {_MARKER}; sleep 300"),
-        environment={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
-        readiness_marker=_MARKER,
-        graceful_keys=("C-c",),
-    )
-
-
-async def process_gone(pid: str, *, within: float = 10.0) -> bool:
-    """Whether a pid has stopped running, polled — and a zombie counts as stopped.
-
-    The pane reporting `pane_dead` is tmux noticing the exit; the process leaving the table
-    is its parent reaping it, and those are not the same instant. A bare `/proc/<pid>` check
-    raced the second one. A zombie is an exited process by every meaning this test cares
-    about, so it is read from the status rather than from the directory's existence.
-    """
-    deadline = asyncio.get_running_loop().time() + within
-    status = Path(f"/proc/{pid}/stat")
-    while asyncio.get_running_loop().time() < deadline:
-        try:
-            state = status.read_text().rsplit(")", 1)[1].split()[0]
-        except (OSError, IndexError):
-            return True
-        if state == "Z":
-            return True
-        await asyncio.sleep(0.1)
-    return False
 
 
 async def displace(runner: AsyncTmuxRunner, base: tuple[str, ...], session_id: SessionId) -> str:

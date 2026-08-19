@@ -157,6 +157,7 @@ def test_the_codec_builders_naming_a_session_are_enumerated_too() -> None:
     That is a gap, not an exemption — so it is listed with what it is waiting on rather than
     left outside the enumeration, where it would look like nobody had considered it.
     """
+
     found = _codec_builders_naming_a_session()
 
     assert found == set(_CODEC_MAY_NAME_A_SESSION), (

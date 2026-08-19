@@ -18,7 +18,6 @@ import os
 from collections.abc import Callable, Mapping
 from enum import Enum
 
-from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.domain.models import SessionId
 
@@ -51,6 +50,7 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
 def attach_to(
     request: AttachRequest | None,
     *,
+    switch_argv: Callable[[SessionId], tuple[str, ...]],
     environment: Mapping[str, str] | None = None,
     exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
     report: Callable[[str], None] = print,
@@ -61,6 +61,14 @@ def attach_to(
     exec the codec-built `switch-client` — the client moves, nothing nests. Foreign tmux:
     refused, command printed, session never lost. An exec that cannot happen prints the
     same command and exits non-zero.
+
+    `switch_argv` is **injected rather than imported**, and required rather than defaulted.
+    This module used to import the tmux codec directly, which is a driving adapter reaching
+    across into another adapter family — forbidden by ARCH-02, and undetected because
+    nothing ran the checker against `src/`. The composition root is the one place allowed to
+    know both sides, so it supplies the builder; the argv is still codec-built, which is what
+    DEC-001 actually requires. No default, because a default would have to be that same
+    import wearing a keyword.
     """
     if request is None:
         return 0
@@ -80,7 +88,7 @@ def attach_to(
         )
         return 0
     argv = (
-        switch_client_argv(SessionId.parse(request.session_id))
+        switch_argv(SessionId.parse(request.session_id))
         if mode is HostingMode.CONSOLE
         else request.argv
     )

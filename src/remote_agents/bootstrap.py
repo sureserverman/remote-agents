@@ -51,7 +51,7 @@ from remote_agents.adapters.telegram.service import (
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
-from remote_agents.adapters.tmux.codec import attach_argv
+from remote_agents.adapters.tmux.codec import attach_argv, switch_client_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import (
     build_launch_profile,
@@ -503,7 +503,7 @@ def main(
             return 1
         finally:
             connection.close()
-        return attach_to(request)
+        return attach_to(request, switch_argv=switch_client_argv)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)

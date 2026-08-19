@@ -14,7 +14,8 @@ test rather than passing an unrun check. It is the same move `test_the_bar_has_o
 made for DEC-032's carve-outs, for the same reason.
 
 The **counts** matter, not only the module: `codec.py` naming a fifth option, or naming one of
-these a second time in a second builder, is exactly the drift this guards.
+these a second time in a second builder, is exactly the drift this guards — and it caught one,
+which is why each name is now a module constant spelled once rather than a literal per use.
 """
 
 from __future__ import annotations
@@ -33,17 +34,21 @@ _IDENTITY_OPTIONS = (
 
 #: `module path -> {option: occurrences}`, as the tree is allowed to look.
 #:
-#: `codec.py` holds the format string that reads all four and the builder that writes all four,
-#: so each name appears exactly twice. `feature_probe.py` is the deliberate exception and is
+#: `codec.py` spells each name **once**, as a module constant that its two format strings and
+#: its one builder all reference. It used to spell each twice — once in the format, once in the
+#: builder — and this test caught the third: a second format string, added for the swap
+#: composer's arrangement read, re-spelling two of the four. Two literals in one module drift
+#: exactly as two in different modules do, so the repair was to name them rather than to widen
+#: the count. `feature_probe.py` is the deliberate exception and is
 #: not part of the vocabulary at all: it writes `@remote_agents_schema` on a *throwaway* socket
 #: to answer "does this tmux support user options", never on a managed session, and it is
 #: pinned here so that exception stays visible rather than becoming a hole.
 _EXPECTED = {
     "adapters/tmux/codec.py": {
-        "@remote_agents_schema": 2,
-        "@remote_agents_id": 2,
-        "@remote_agents_project_id": 2,
-        "@remote_agents_profile": 2,
+        "@remote_agents_schema": 1,
+        "@remote_agents_id": 1,
+        "@remote_agents_project_id": 1,
+        "@remote_agents_profile": 1,
     },
     "adapters/tmux/feature_probe.py": {"@remote_agents_schema": 2},
 }

@@ -220,9 +220,7 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         run("new-session", "-d", "-s", "swap-console", "-c", str(tmp_path))
         run("split-window", "-d", "-t", "swap-console:", "-c", str(tmp_path))
         run("new-session", "-d", "-s", "swap-agent", "-c", str(tmp_path))
-        slot, right = run(
-            "list-panes", "-t", "swap-console:", "-F", "#{pane_id}"
-        ).split()
+        slot, right = run("list-panes", "-t", "swap-console:", "-F", "#{pane_id}").split()
         moved = run("list-panes", "-t", "swap-agent:", "-F", "#{pane_id}").strip()
         run("select-pane", "-t", right)
 
@@ -249,9 +247,7 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         run("new-session", "-d", "-s", "bare-console", "-c", str(tmp_path))
         run("split-window", "-d", "-t", "bare-console:", "-c", str(tmp_path))
         run("new-session", "-d", "-s", "bare-agent", "-c", str(tmp_path))
-        bare_slot, bare_right = run(
-            "list-panes", "-t", "bare-console:", "-F", "#{pane_id}"
-        ).split()
+        bare_slot, bare_right = run("list-panes", "-t", "bare-console:", "-F", "#{pane_id}").split()
         bare_moved = run("list-panes", "-t", "bare-agent:", "-F", "#{pane_id}").strip()
         run("select-pane", "-t", bare_right)
 

@@ -57,6 +57,7 @@ from typing import Protocol
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.ports.terminal import GRACEFUL_TIMEOUT, OWNERSHIP_LOST, UNKNOWN_SESSION
 
 _LOG = logging.getLogger(__name__)
 
@@ -296,9 +297,10 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     return record.profile_id in TRUST_ANSWERABLE and observed is TrustState.AWAITING
 
 
-UNKNOWN_SESSION = "unknown_session"
-GRACEFUL_TIMEOUT = "graceful_timeout"
-OWNERSHIP_LOST = "ownership_lost"
+# Re-exported, not redefined: the vocabulary lives on `ports.terminal` beside the `detail`
+# field it populates, so a terminal adapter can name what it observed without importing the
+# application. Every existing importer keeps working through this name.
+__all__ = ["GRACEFUL_TIMEOUT", "OWNERSHIP_LOST", "UNKNOWN_SESSION"]
 
 
 @dataclass(frozen=True, slots=True)

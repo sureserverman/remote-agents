@@ -19,8 +19,10 @@ from remote_agents.adapters.tmux.codec import (
     exact_session_target,
     is_console_view,
     link_window_args,
+    list_arrangement_args,
     list_console_windows_args,
     pane_mark_args,
+    parse_arrangement,
     parse_console_window,
     parse_pane,
     select_window_args,
@@ -31,6 +33,7 @@ from remote_agents.adapters.tmux.codec import (
     window_session_mark_args,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.ports.console import HostedPane
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -347,6 +350,44 @@ class TmuxGateway:
             if index < len(keys) - 1:
                 await asyncio.sleep(0.15)
 
+    async def pane_arrangement(self) -> tuple[HostedPane, ...]:
+        """Every pane on the server, with where it is shown and whose it is.
+
+        One listing answers both halves of the swap model's only question. An exchange leaves
+        the agent's pane hosted by the console and the pane it displaced parked in that
+        agent's own window, so a caller needs the panes it does *not* own as much as the ones
+        it does — which is why this is `list-panes -a` and not a console-scoped read, and why
+        it deliberately keeps the console's own view that `inventory` drops as noise.
+
+        Presentation, never evidence. `inventory` is what reconciliation reads: it decodes
+        identity, dedups per session, and quarantines anything ambiguous (DEC-020). This one
+        reports position and hosting with no policy at all, and a line it cannot decode is
+        dropped rather than quarantined — a malformed line here costs the composer one pane it
+        will not move, where in `inventory` it would be a session whose state nobody could
+        explain. An absent server is an empty arrangement for the same reason `console_windows`
+        answers that way: there is nothing being shown.
+        """
+        try:
+            output = await self._runner.run(*self._base_argv(), *list_arrangement_args())
+        except RuntimeError as error:
+            # Absent *server* only. Every other reader here also allows the absent-*target*
+            # signatures, because every other reader names one — and this one does not:
+            # `list-panes -a` asks about the server, so "can't find session" is not an answer
+            # it can get. Copying the wider check across would have added a branch no test
+            # could reach, which reads as caution and is really an untested path.
+            if _reports_absent_server(str(error)):
+                return ()
+            raise
+        arrangement: list[HostedPane] = []
+        for line in output.splitlines():
+            if not line:
+                continue
+            try:
+                arrangement.append(HostedPane(*parse_arrangement(line)))
+            except ValueError:
+                continue
+        return tuple(arrangement)
+
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.
 
@@ -365,9 +406,7 @@ class TmuxGateway:
         console-specific.
         """
         try:
-            await self._runner.run(
-                *self._base_argv(), *swap_pane_args(source_pane, target_pane)
-            )
+            await self._runner.run(*self._base_argv(), *swap_pane_args(source_pane, target_pane))
         except RuntimeError as error:
             raise _target_missing_or(error, f"{source_pane} <-> {target_pane}") from error
 
