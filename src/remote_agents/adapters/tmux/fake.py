@@ -95,8 +95,10 @@ class FakeTerminal:
         """End the fake process while retaining its inspectable session.
 
         **Ownership is carried through the transition, not dropped at it.** A preserved pane
-        keeps its `@remote_agents_*` session options in the real runtime — verified against
-        tmux 3.4: a dead pane still answers `parse_pane` with its project and profile — so a
+        keeps its `@remote_agents_*` marks in the real runtime — verified against tmux 3.4
+        and pinned as Claim 6 in `tests/contract/adapters/tmux/test_feature_probe.py`: a pane
+        whose process is killed under `remain-on-exit` reports `pane_dead=1` and still answers
+        with its own pane-scoped options, so `parse_pane` still gets project and profile — so a
         fake that blanked them modelled a terminal the real one is not. It mattered from the
         moment PRESERVED became attachable (DEC-021): `SessionService.copy_attach` compares
         those two fields against the record, so a preserved observation with neither made the

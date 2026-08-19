@@ -18,6 +18,7 @@ from remote_agents.adapters.tmux.codec import (
     is_console_view,
     link_window_args,
     list_console_windows_args,
+    pane_mark_args,
     parse_console_window,
     parse_pane,
     select_window_args,
@@ -226,13 +227,11 @@ class TmuxGateway:
         await self._runner.run(
             *self._base_argv(), "set-option", "-t", target, "remain-on-exit", "on"
         )
-        for option, value in (
-            ("@remote_agents_schema", "1"),
-            ("@remote_agents_id", str(session_id)),
-            ("@remote_agents_project_id", str(project_id)),
-            ("@remote_agents_profile", str(profile_id)),
-        ):
-            await self._runner.run(*self._base_argv(), "set-option", "-t", target, option, value)
+        # Identity is stamped on the pane and nowhere else, so it travels with the agent and
+        # leaves nothing behind for a later occupant of this window to inherit. The option
+        # names live in the codec with the builder; this method knows only that it marks.
+        for mark in pane_mark_args(session_id, project_id, profile_id):
+            await self._runner.run(*self._base_argv(), *mark)
 
     async def console_exists(self) -> bool:
         """Ask whether the console session is present; an absent server is a plain no."""

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _EXACT = "ra-01234567-89ab-cdef-0123-456789abcdef:"
@@ -204,3 +204,43 @@ async def test_the_active_window_probe_parses_and_degrades_per_branch() -> None:
         await gateway(
             RecordingRunner(error=RuntimeError("server exited unexpectedly"))
         ).console_active_window()
+
+
+async def test_launch_stamps_identity_on_the_pane_and_leaves_the_session_bare(
+    tmp_path: Path,
+) -> None:
+    """Every identity option `-p`, and not one of them at session scope.
+
+    The absence is the load-bearing half. tmux resolves `#{@option}` by falling back
+    pane → session, so a session-scoped twin keeps answering with the agent's identity
+    after the agent's pane has moved out — and whatever pane takes its place inherits it.
+    Probed on tmux 3.4 (2026-08-19) and pinned live in
+    `tests/contract/adapters/tmux/test_feature_probe.py`.
+    """
+    runner = RecordingRunner()
+    await gateway(runner).launch(_SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
+
+    identity = (
+        "@remote_agents_schema",
+        "@remote_agents_id",
+        "@remote_agents_project_id",
+        "@remote_agents_profile",
+    )
+    marks = [call for call in runner.calls if any(option in call for option in identity)]
+    assert [call[3:] for call in marks] == [
+        ("set-option", "-p", "-t", _EXACT, "@remote_agents_schema", "2"),
+        ("set-option", "-p", "-t", _EXACT, "@remote_agents_id", str(_SESSION)),
+        ("set-option", "-p", "-t", _EXACT, "@remote_agents_project_id", "opaque-editor"),
+        ("set-option", "-p", "-t", _EXACT, "@remote_agents_profile", "claude"),
+    ]
+    assert all(call[:3] == _BASE for call in marks)
+    assert not [call for call in marks if "-p" not in call]
+
+
+async def test_launch_still_makes_the_pane_survive_its_agent(tmp_path: Path) -> None:
+    """`remain-on-exit` is session-scoped and stays that way: it is pane *behaviour*, not
+    identity, and nothing decodes it — so nothing can inherit a wrong answer from it."""
+    runner = RecordingRunner()
+    await gateway(runner).launch(_SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
+
+    assert (*_BASE, "set-option", "-t", _EXACT, "remain-on-exit", "on") in runner.calls

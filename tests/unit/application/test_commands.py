@@ -472,8 +472,10 @@ async def test_the_fake_carries_ownership_across_a_preserving_stop() -> None:
 
     Ownership is what `copy_attach` compares against the record, so a fake that blanked it on
     the transition modelled a terminal whose preserved panes have no owner — and the real one
-    does keep them: a dead pane still answers `parse_pane` with its `@remote_agents_*` session
-    options, verified against tmux 3.4 during the Stage 3 gate.
+    does keep them: a dead pane still answers `parse_pane` with its `@remote_agents_*` marks,
+    verified against tmux 3.4 during the Stage 3 gate — and re-verified 2026-08-19 once those
+    marks became pane-scoped, by killing a marked pane's process under `remain-on-exit` and
+    re-reading its options (Claim 6, `tests/contract/adapters/tmux/test_feature_probe.py`).
 
     **This does not assert that a gracefully stopped session is attachable, and an earlier
     draft did — wrongly, on a premise a reviewer and I both accepted without checking.**

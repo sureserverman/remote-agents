@@ -8,7 +8,10 @@ field-count-safe). The claims live here, against a real tmux on a disposable soc
 the docstrings' evidence stays evidence across tmux upgrades.
 """
 
+import os
+import signal
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -31,9 +34,7 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
     base = ("tmux", "-L", socket)
 
     def run(*args: str) -> str:
-        return subprocess.run(
-            (*base, *args), check=True, text=True, capture_output=True
-        ).stdout
+        return subprocess.run((*base, *args), check=True, text=True, capture_output=True).stdout
 
     try:
         run("new-session", "-d", "-s", "w", "-c", str(tmp_path))
@@ -47,5 +48,52 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         run("new-session", "-d", "-s", "ra-console|x", "-c", str(tmp_path))
         names = run("list-sessions", "-F", "#{session_name}").splitlines()
         assert "ra-console|x" in names
+        # Claim 4 (codec.pane_mark_args): a user option resolves by falling back
+        # pane -> session, so a session-scoped mark is reported by *whatever* pane occupies
+        # that session's window — including one that arrived long after the mark was set.
+        # This is the reason schema 2 has no session-scoped twin.
+        run("new-session", "-d", "-s", "fallback", "-c", str(tmp_path))
+        run("set-option", "-t", "fallback:", "@remote_agents_probe", "session-scoped")
+        assert (
+            run("display-message", "-p", "-t", "fallback:", "#{@remote_agents_probe}").strip()
+            == "session-scoped"
+        )
+        # Claim 5 (codec.pane_mark_args, codec.exact_pane_target): a pane-scoped option is
+        # intrinsic to the pane — it survives `swap-pane` into a foreign session and reads
+        # back there, while the session it left behind answers with nothing. Identity can
+        # therefore live on the pane, and a bare pane id can address it wherever it is.
+        run("new-session", "-d", "-s", "home", "-c", str(tmp_path))
+        run("new-session", "-d", "-s", "host", "-c", str(tmp_path))
+        run("set-option", "-p", "-t", "home:", "@remote_agents_probe", "pane-scoped")
+        moved = run("list-panes", "-t", "home:", "-F", "#{pane_id}").strip()
+        stays = run("list-panes", "-t", "host:", "-F", "#{pane_id}").strip()
+        run("swap-pane", "-s", moved, "-t", stays)
+        # Keyed on the pane id, which never contains a space; every session name in this
+        # file is a fixed space-free literal, which is what makes the two-field split safe.
+        marked = dict(
+            line.split(" ", 1)
+            for line in run(
+                "list-panes", "-a", "-F", "#{pane_id} #{session_name}|#{@remote_agents_probe}"
+            ).splitlines()
+        )
+        assert marked[moved] == "host|pane-scoped"
+        assert marked[stays] == "home|"
+        assert set(run("list-sessions", "-F", "#{session_name}").splitlines()) >= {"home", "host"}
+        # Claim 6 (adapters/tmux/fake.py, application PRESERVED handling): a pane's own
+        # options outlive its own process. Under `remain-on-exit` the pane stays as dead
+        # evidence, and it still answers with its marks — which is what keeps a PRESERVED
+        # session decodable now that identity is pane-scoped rather than session-scoped.
+        run("set-option", "-t", "host:", "remain-on-exit", "on")
+        pid = run("display-message", "-p", "-t", moved, "#{pane_pid}").strip()
+        os.kill(int(pid), signal.SIGKILL)
+        for _ in range(50):
+            if run("display-message", "-p", "-t", moved, "#{pane_dead}").strip() == "1":
+                break
+            time.sleep(0.1)
+        assert run("display-message", "-p", "-t", moved, "#{pane_dead}").strip() == "1"
+        assert (
+            run("display-message", "-p", "-t", moved, "#{@remote_agents_probe}").strip()
+            == "pane-scoped"
+        )
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)

@@ -38,7 +38,7 @@ def pane_line(session_id: SessionId, *, schema: str = "1") -> str:
 
 async def test_inventory_uses_only_the_configured_socket_and_quarantines_bad_tags() -> None:
     session_id = SessionId.new()
-    runner = RecordingRunner(f"{pane_line(session_id)}\n{pane_line(SessionId.new(), schema='2')}\n")
+    runner = RecordingRunner(f"{pane_line(session_id)}\n{pane_line(SessionId.new(), schema='3')}\n")
     gateway = TmuxGateway("remote-agents", runner)
 
     inventory = await gateway.inventory()
