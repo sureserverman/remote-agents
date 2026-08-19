@@ -76,13 +76,16 @@ class RecordingGateway:
         self.keys.append((session_id, keys))
         self.preserved.add(session_id)
 
-    async def mutate(self, verb: str, target: str) -> None:
-        """Model `kill-session`, which is how force stop and cleanup retire a pane."""
-        self.mutations.append((verb, target))
-        for session_id in list(self.panes):
-            if target == f"ra-{session_id}":
-                del self.panes[session_id]
-                self.preserved.discard(session_id)
+    async def destroy(self, session_id: SessionId) -> None:
+        """Model the pane kill, which is how force stop and cleanup retire a pane.
+
+        Recorded as `("kill-pane", …)` because that is what the real gateway now issues:
+        a session target destroys whichever pane occupies that window, which stops being
+        the agent's the moment anything hosts it elsewhere.
+        """
+        self.mutations.append(("kill-pane", f"ra-{session_id}"))
+        self.panes.pop(session_id, None)
+        self.preserved.discard(session_id)
 
 
 _PROJECT = ProjectId("opaque-project")
@@ -172,7 +175,7 @@ async def test_the_terminal_gracefully_stops_a_session_the_service_launched(
 
         assert gateway.keys, "the terminal resolved no profile and sent no keys"
         assert gateway.keys[0][0] == launched.session_id
-        assert gateway.mutations == [("kill-session", f"ra-{launched.session_id}")]
+        assert gateway.mutations == [("kill-pane", f"ra-{launched.session_id}")]
         final = await service.list_sessions()
         assert [record.state for record in final] == [SessionState.ENDED]
     finally:

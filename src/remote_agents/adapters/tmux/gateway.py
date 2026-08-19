@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -100,6 +101,31 @@ def _target_missing_or(error: RuntimeError, target: str) -> RuntimeError:
     return error
 
 
+def _decoded_lines(output: str) -> Iterator[tuple[str, ManagedPane | str | None]]:
+    """Decode a `list-panes -a` body once, and let each caller apply its own policy.
+
+    Yields `(line, ManagedPane)` for a trusted pane, `(line, reason)` for one that would not
+    decode, and `(line, None)` for a line that is not evidence at all — blank, or the
+    console's own view of itself. A console line is presentation exactly when it carries no
+    managed mark; a *marked* pane hosted by the console is a displaced agent and comes back
+    as evidence.
+
+    Shared rather than written twice because the two callers want different things from the
+    same reading — `inventory` keeps one pane per session and quarantines the rest, while
+    `_claiming_panes` deliberately keeps them all — and both of this task's Critical findings
+    lived in exactly these skip rules. Two copies of them is two chances to fix one and miss
+    the other, and the bug that produces is a kill landing on the wrong pane.
+    """
+    for line in output.splitlines():
+        if not line or is_console_view(line):
+            yield line, None
+            continue
+        try:
+            yield line, parse_pane(line)
+        except ValueError as error:
+            yield line, str(error)
+
+
 @dataclass(frozen=True, slots=True)
 class TmuxInventory:
     """Trusted managed panes and quarantined evidence from one dedicated server."""
@@ -141,19 +167,13 @@ class TmuxGateway:
             raise
         managed: list[ManagedPane] = []
         orphans: list[OrphanEvidence] = []
-        for line in output.splitlines():
-            if not line:
+        for line, decoded in _decoded_lines(output):
+            if decoded is None:
                 continue
-            # The console's view of the server is presentation, never evidence: its own
-            # dashboard pane and its re-listing of every linked window are dropped before
-            # decoding, so expected console noise cannot pollute the orphan quarantine.
-            if is_console_view(line):
+            if isinstance(decoded, str):
+                orphans.append(OrphanEvidence(line, decoded))
                 continue
-            try:
-                pane = parse_pane(line)
-            except ValueError as error:
-                orphans.append(OrphanEvidence(line, str(error)))
-                continue
+            pane = decoded
             # One observation per session identity — reconciliation keys evidence by
             # session. Every session this service launches is single-window, so a second
             # valid line for a known identity is either a repeat listing (dropped, first
@@ -215,7 +235,15 @@ class TmuxGateway:
         )
 
     async def mutate(self, operation: str, session_name: str) -> str:
-        """Run the one supported destructive operation against an exact managed target."""
+        """Run the one supported destructive operation against an exact managed target.
+
+        **No longer the lifecycle stop.** `destroy` is, because a stop has to follow the
+        agent's pane rather than the window it started in. What is left here is the
+        session-level kill itself — the operation that removes a whole managed session by
+        name — kept because the closed `operation` check is a DEC-001 guard on the only
+        generic entry point this adapter has, and removing the method would not remove the
+        need for that shape. Reach for `destroy` for anything that means "stop this agent".
+        """
         if operation != "kill-session":
             raise ValueError("forbidden tmux operation")
         try:
@@ -303,6 +331,96 @@ class TmuxGateway:
                 raise _target_missing_or(error, f"ra-{session_id}") from error
             if index < len(keys) - 1:
                 await asyncio.sleep(0.15)
+
+    async def _claiming_panes(self, session_id: SessionId) -> tuple[tuple[str, bool], ...]:
+        """Every decoded pane claiming one identity, with whether the claim is its own.
+
+        Deliberately *before* `inventory`'s one-per-session dedup. That dedup keeps whichever
+        line tmux listed first and quarantines the rest as ambiguous evidence for a reader to
+        resolve (DEC-020) — the right answer for observation, and the wrong basis for a kill,
+        because "listed first" is an ordering, not an identification.
+        """
+        output = await self._runner.run(*self._base_argv(), "list-panes", "-a", "-F", PANE_FORMAT)
+        claiming: dict[str, bool] = {}
+        for _line, decoded in _decoded_lines(output):
+            if isinstance(decoded, ManagedPane) and decoded.session_id == session_id:
+                claiming.setdefault(decoded.pane_id, decoded.pane_scoped)
+        return tuple(claiming.items())
+
+    async def destroy(self, session_id: SessionId) -> None:
+        """Destroy one agent by killing the pane it occupies, whatever is hosting it.
+
+        The operation this whole addressing change was ordered around, and the one where
+        `kill-session` is not merely imprecise but wrong. Verified on tmux 3.4 (2026-08-19):
+        killing a session whose window is **linked into another session** removes the session
+        name, exits 0, and leaves the pane — and the agent in it — running. The shipped
+        console links a window for every live session, so `kill-session` on a session the
+        owner had open as a tab reported success while the agent kept going: a record at
+        ENDED over a live process, exactly what DEC-006 forbids. That is a bug this method
+        fixes, not only one it prevents. `kill-pane` names the pane object, so it reaches the
+        agent through a link or a swap, and takes nothing else with it.
+
+        **Which pane, and how much a mark is allowed to say.** A schema-2 mark is the pane's
+        own, so it identifies one pane and that pane is killed. A schema-1 mark is
+        session-scoped, and tmux's pane → session fallback hands it to *every* pane in that
+        session's window — verified: an operator's hand-split pane reports the agent's
+        identity, and `split-window -b` puts it first in `list-panes -a`. So an inherited
+        mark identifies the **session**, never a pane within it, and picking one of those
+        panes would be picking by listing order: a draft of this method did exactly that and
+        killed the operator's pane while the agent ran on. Every pane claiming by inheritance
+        is therefore killed — the same set `kill-session` would have destroyed, minus its
+        inability to reach a linked window.
+
+        `kill-session` survives only for an identity with no decoded pane at all, where
+        nothing narrower exists to name and the alternative to a wide kill is not stopping
+        the agent.
+
+        **Nothing chases the kill.** Probed: killing a session's last pane destroys the
+        session, so the stranded-empty-session the task's second clause guarded against
+        cannot exist. The only home session that survives is one still holding another pane —
+        once the swap console lands, the projects surface parked there — and removing it
+        would destroy a process this service never started.
+        """
+        try:
+            claiming = await self._claiming_panes(session_id)
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+        owned = [pane_id for pane_id, is_own in claiming if is_own]
+        targets = owned or [pane_id for pane_id, _ in claiming]
+        if not targets:
+            try:
+                await self._runner.run(
+                    *self._base_argv(),
+                    "kill-session",
+                    "-t",
+                    exact_session_target(f"ra-{session_id}"),
+                )
+            except RuntimeError as error:
+                raise _target_missing_or(error, f"ra-{session_id}") from error
+            return
+        # Killing the first may take the window, and so the rest, with it — that is success,
+        # not failure. Only a kill that reached nothing at all is worth raising about.
+        missing: TerminalTargetMissing | None = None
+        killed = False
+        for pane_id in targets:
+            try:
+                await self._runner.run(
+                    *self._base_argv(), "kill-pane", "-t", exact_pane_target(pane_id)
+                )
+                killed = True
+            except RuntimeError as error:
+                retyped = _target_missing_or(error, f"ra-{session_id}")
+                if not isinstance(retyped, TerminalTargetMissing):
+                    # Only "already gone" is tolerable here, and only because an earlier kill
+                    # can take the window and its siblings with it. Any other failure is a
+                    # tmux that did not do what it was told, and swallowing it because some
+                    # *other* pane's kill happened to succeed would report a stop that did
+                    # not reach the agent — the DEC-006 outcome, arriving through the error
+                    # path instead of the targeting one.
+                    raise retyped from error
+                missing = missing or retyped
+        if not killed and missing is not None:
+            raise missing
 
     async def launch(
         self, session_id: SessionId, project_id: ProjectId, profile_id: ProfileId, cwd: Path

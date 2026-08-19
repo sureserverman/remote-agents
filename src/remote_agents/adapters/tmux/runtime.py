@@ -293,7 +293,7 @@ class TmuxTerminal:
         case that most needs to succeed.
         """
         try:
-            await self._gateway.mutate("kill-session", f"ra-{session_id}")
+            await self._gateway.destroy(session_id)
         except TerminalTargetMissing:
             pass
         self._session_profiles.pop(session_id, None)
@@ -306,7 +306,7 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="ownership_lost"
             )
-        await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        await self._gateway.destroy(session_id)
         self._session_profiles.pop(session_id, None)
         (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
         return TerminalObservation(session_id, live=False, preserved=False)

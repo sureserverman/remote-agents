@@ -65,9 +65,9 @@ class GoneGateway:
         self.intent_directory = intent_directory
         self.attempted = False
 
-    async def mutate(self, operation: str, session_name: str) -> str:
+    async def destroy(self, session_id: SessionId) -> str:
         self.attempted = True
-        raise TerminalTargetMissing(f"managed target is gone: {session_name}")
+        raise TerminalTargetMissing(f"managed target is gone: ra-{session_id}")
 
 
 @pytest.mark.asyncio

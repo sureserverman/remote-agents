@@ -145,5 +145,28 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         run("swap-pane", "-s", agent2, "-t", occupant2)
         assert _die(run, agent2) == "1"
         assert "armed-host" in run("list-sessions", "-F", "#{session_name}").split()
+        # Claim 8 (adapters/tmux/gateway.py::destroy): a *session*-scoped mark is reported by
+        # every pane in that session's window, and a hand-split pane can be listed BEFORE the
+        # one that was there first. Both halves matter: the first is why an inherited mark
+        # identifies a session rather than a pane, and the second is why picking one of those
+        # panes means picking by listing order. A draft that did exactly that killed the
+        # operator's pane and left the agent running, twice through review — so the ordering
+        # is pinned here rather than left as a sentence.
+        run("new-session", "-d", "-s", "legacy", "-c", str(tmp_path))
+        run("set-option", "-t", "legacy:", "@remote_agents_probe", "session-scoped")
+        original = run("list-panes", "-t", "legacy:", "-F", "#{pane_id}").strip()
+        run("split-window", "-b", "-d", "-t", "legacy:")
+        listed = [
+            line.split("|")
+            for line in run(
+                "list-panes", "-t", "legacy:", "-F", "#{pane_id}|#{@remote_agents_probe}"
+            ).splitlines()
+        ]
+        assert [mark for _pane, mark in listed] == ["session-scoped", "session-scoped"], (
+            "every pane in the window inherits the session's mark"
+        )
+        assert [pane for pane, _mark in listed][-1] == original, (
+            "and the pane that was there first is listed last, so first-listed is not identity"
+        )
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)
