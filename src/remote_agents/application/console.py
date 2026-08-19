@@ -117,6 +117,21 @@ class ConsoleComposer:
             _LOG.exception("opening by tab failed; switching the client directly")
         await self._console.switch_client_to_session(session_id)
 
+    async def flash(self, text: str) -> None:
+        """One status-bar line for news, suppressed while the owner is looking at it.
+
+        The console's current window being 0 means the client rests on the dashboard,
+        where the feed pane already shows the same news — flashing there would say one
+        thing twice on one screen. Failure degrades to silence: the feed row is the
+        durable record, the flash is only a nudge.
+        """
+        try:
+            if await self._console.console_active_window() == 0:
+                return
+            await self._console.display_message(text)
+        except Exception:
+            _LOG.exception("the console status flash failed")
+
     async def _tab_index(self, session_id: SessionId) -> int | None:
         for index, owner in await self._console.console_windows():
             if owner == session_id:

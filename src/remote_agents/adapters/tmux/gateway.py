@@ -12,6 +12,7 @@ from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
     console_target,
+    current_console_window_args,
     display_message_args,
     exact_session_target,
     is_console_view,
@@ -320,6 +321,20 @@ class TmuxGateway:
             await self._runner.run(*self._base_argv(), *switch_client_console_args())
         except RuntimeError as error:
             raise _target_missing_or(error, "ra-console") from error
+
+    async def console_active_window(self) -> int | None:
+        """The console's current window index, or None when there is nothing to ask."""
+        try:
+            output = await self._runner.run(*self._base_argv(), *current_console_window_args())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return None
+            raise
+        try:
+            return int(output.strip())
+        except ValueError:
+            return None
 
     async def display_message(self, text: str) -> None:
         """Flash one line on the status bar of whatever window the client is on."""

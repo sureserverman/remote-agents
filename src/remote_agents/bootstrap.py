@@ -687,6 +687,7 @@ def local_context(config, connection, paths: ProductionPaths):
 
     open_in_console = None
     console_sync = None
+    console_flash = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
         # Hosted by a client on our own server: opening a session focuses its console tab
         # (the composer falls back to a direct client switch), tabs are reconciled on
@@ -717,6 +718,7 @@ def local_context(config, connection, paths: ProductionPaths):
             await composer.open(SessionId.parse(session_id))
 
         console_sync = composer.sync
+        console_flash = composer.flash
 
     return TuiContext(
         launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
@@ -748,6 +750,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # A reader of the durable observation table, never a drainer: consuming the spool
         # would starve the phone's notifications (see Task 5.2's correction note).
         activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=20),
+        console_flash=console_flash,
     )
 
 

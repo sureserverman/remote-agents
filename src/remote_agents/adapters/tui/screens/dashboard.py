@@ -84,6 +84,9 @@ class DashboardScreen(ProjectsScreen):
         self._sessions_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
+        #: The newest observation already rendered, or None before the first read. The
+        #: first load is history, not news — it renders without flashing.
+        self._feed_head: tuple[str, str, object] | None = None
 
     def compose(self) -> ComposeResult:
         """The base body, re-arranged: same ids, so every inherited method still lands.
@@ -262,6 +265,17 @@ class DashboardScreen(ProjectsScreen):
             detail = f" — {activity.detail}" if activity.detail else ""
             lines.append(f"{age(activity.observed_at)} · {words}{detail}")
         pane.update("\n".join(lines))
+
+        newest = activities[0]
+        head = (newest.session_id, newest.kind.value, newest.observed_at)
+        arrived = self._feed_head is not None and head != self._feed_head
+        self._feed_head = head
+        flash = self.services.console_flash
+        if arrived and flash is not None:
+            try:
+                await flash(_KIND_WORDS.get(newest.kind, newest.kind.value))
+            except Exception:
+                _LOG.exception("the status flash failed; the feed row is the record")
 
 
 class ProjectChooserScreen(ChoiceScreen):

@@ -122,3 +122,40 @@ async def test_a_raising_feed_keeps_the_pane_and_the_dashboard_standing() -> Non
         await pilot.pause()
         assert app.is_running
         assert "No notifications yet." in str(app.screen.query_one("#feed-pane", Static).content)
+
+
+async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_load() -> None:
+    """The first load is history, not news — replaying it onto the status line would
+    flash the owner for things they were already told. After that, one flash per batch
+    that actually contains something new, and silence for an unchanged feed."""
+    feed_rows: list[tuple[AgentActivity, ...]] = [
+        (_activity(ActivityKind.COMPLETED, minutes_ago=5),),
+    ]
+    flashes: list[str] = []
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return feed_rows[0]
+
+    async def flash(text: str) -> None:
+        flashes.append(text)
+
+    from dataclasses import replace
+
+    context = replace(_context(feed), console_flash=flash)
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert flashes == [], "history must not flash"
+
+        feed_rows[0] = (
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="May I push?"),
+            *feed_rows[0],
+        )
+        await app.screen._reload_feed()
+        await pilot.pause()
+        assert len(flashes) == 1
+        assert "waiting for an answer" in flashes[0]
+
+        await app.screen._reload_feed()
+        await pilot.pause()
+        assert len(flashes) == 1, "an unchanged feed must not flash again"

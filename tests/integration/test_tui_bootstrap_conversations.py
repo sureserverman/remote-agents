@@ -60,7 +60,7 @@ def test_no_further_capability_leaked_into_the_context() -> None:
 
     `capture`/`conversations` were the TUI-parity widening (Stage 4 of that plan);
     `open_in_console` is the console-surface plan's Stage 2 widening, `console_sync` its
-    Stage 3 sibling, and `activity_feed` its Stage 5 one — a reader of the durable
+    Stage 3 sibling, and `activity_feed`/`console_flash` its Stage 5 pair — a reader of the durable
     observation table, wired in every hosting since the feed is useful outside the
     console. The two console capabilities are wired only under console hosting; anywhere
     else those fields stay None and the exec-attach contract is untouched. Growing this
@@ -80,6 +80,7 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "open_in_console",
         "console_sync",
         "activity_feed",
+        "console_flash",
     }
     assert set(TuiContext.__dataclass_fields__) == expected
 

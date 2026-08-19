@@ -183,6 +183,16 @@ def display_message_args(text: str) -> tuple[str, ...]:
     return ("display-message", "-l", "--", text)
 
 
+def current_console_window_args() -> tuple[str, ...]:
+    """Return the argv suffix that prints the console session's current window index.
+
+    A proxy for "is the owner looking at the dashboard": the console's current window is
+    0 exactly when its client rests on the dashboard tab. The format string is this
+    module's own fixed text, so expansion here is safe and wanted.
+    """
+    return ("display-message", "-p", "-t", console_target(), "#{window_index}")
+
+
 def list_console_windows_args() -> tuple[str, ...]:
     """Return the argv suffix that lists console windows in the pinned mapping format."""
     return ("list-windows", "-t", console_target(), "-F", CONSOLE_WINDOW_FORMAT)

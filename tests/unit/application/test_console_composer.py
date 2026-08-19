@@ -52,6 +52,7 @@ class RecordingConsole:
         self.exists = exists
         self.windows = windows
         self.error = error
+        self.active_window: int | None = 2
         self.calls: list[tuple] = []
 
     def _raise_if_armed(self) -> None:
@@ -92,6 +93,15 @@ class RecordingConsole:
 
     async def switch_client_to_session(self, session_id: SessionId) -> None:
         self.calls.append(("switch_client_to_session", session_id))
+        self._raise_if_armed()
+
+    async def console_active_window(self) -> int | None:
+        self.calls.append(("console_active_window",))
+        self._raise_if_armed()
+        return self.active_window
+
+    async def display_message(self, text: str) -> None:
+        self.calls.append(("display_message", text))
         self._raise_if_armed()
 
 
@@ -195,3 +205,23 @@ async def test_open_falls_back_to_a_direct_switch_when_tabs_fail() -> None:
     assert named(console, "switch_client_to_session") == [
         ("switch_client_to_session", _RUNNING)
     ]
+
+
+async def test_flash_is_suppressed_while_the_owner_is_looking_at_the_dashboard() -> None:
+    """Window 0 means the client rests on the dashboard, where the feed pane already
+    shows the same news — flashing there would say one thing twice on one screen."""
+    console = RecordingConsole()
+    console.active_window = 0
+    await _composer(console).flash("the agent is waiting for an answer")
+    assert named(console, "display_message") == []
+
+    console.active_window = 3
+    await _composer(console).flash("the agent is waiting for an answer")
+    assert named(console, "display_message") == [
+        ("display_message", "the agent is waiting for an answer")
+    ]
+
+
+async def test_a_failing_flash_is_silence_never_an_exception() -> None:
+    broken = RecordingConsole(error=RuntimeError("no server"))
+    await _composer(broken).flash("news")  # must not raise

@@ -60,6 +60,9 @@ class TuiContext:
     # A reader, never a drainer — consuming the spool would starve the phone's
     # notifications, which is the delivery story DEC-031/DEC-034 fought for.
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None
+    # One line on the tmux status bar when the feed gains news — wired only under console
+    # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
+    console_flash: Callable[[str], Awaitable[None]] | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

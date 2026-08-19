@@ -39,6 +39,8 @@ def test_every_port_method_matches_the_gateway_signature_exactly() -> None:
         "unlink_console_window",
         "select_console_window",
         "switch_client_to_session",
+        "console_active_window",
+        "display_message",
     ):
         port_signature = inspect.signature(getattr(ConsolePort, name))
         gateway_signature = inspect.signature(type(gateway).__dict__[name])
