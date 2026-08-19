@@ -272,10 +272,12 @@ class TmuxTerminal:
             await self._gateway.send_keys(session_id, profile.graceful_keys)
         except TerminalTargetMissing:
             # The pane went while the sequence was in flight. Reported as never-sent, which
-            # *understates* — a key may well have landed — and understating is the side to err
-            # on: the alternative claims a graceful exit this service can no longer show it
-            # caused. Before this, the typed error escaped the use case entirely, after
-            # GRACEFUL_STOP_REQUESTED was already written, and the record stuck at
+            # *understates* — a key may well have landed. **DEC-038 accepted cost 2** records
+            # this, because it is the case DEC-022 did not enumerate and a code comment is not
+            # where an accepted inaccuracy in the durable history belongs. Understating is the
+            # side to err on: the alternative claims a graceful exit this service can no
+            # longer show it caused. Before this, the typed error escaped the use case
+            # entirely, after GRACEFUL_STOP_REQUESTED was already written, and the record stuck at
             # STOP_REQUESTED behind a generic "stop failed" — the one outcome DEC-022 exists
             # to replace with an event that names its cause.
             return TerminalObservation(
