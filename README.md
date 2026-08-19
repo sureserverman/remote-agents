@@ -185,13 +185,15 @@ itself, so none of what follows needs Telegram credentials or a running user ser
 resume, the session list, inspect, Copy Attach, rename, all three stops, and Claude Remote
 Control are available with the service stopped.
 
-The wizard opens on the project list with the filter focused and reports how many projects are
-available. Type to narrow the list one character at a time, press enter to move into it, then use
-the arrows and enter to choose; registered projects are listed before unregistered ones and each
-row names its group. The agent list names every curated profile and shows the blocking reason
-beside one that cannot be launched here; choosing that one is refused rather than attempted.
-Choosing an agent goes straight to Review — three positions from start to launch, with no name
-asked for on the way. Review carries the project and the agent in its breadcrumb and says what
+The dashboard rests on the project list with the filter focused and reports how many projects
+are available. Type to narrow the list one character at a time, press enter to move into it,
+then use the arrows and enter to choose; registered projects are listed before unregistered
+ones and each row names its group. Choosing a project asks one question — launch a new session,
+or reopen a saved conversation — with the cursor resting on Launch, and Resume offered only on
+a host whose conversation service is wired. Launch opens the agent list, which names every
+curated profile and shows the blocking reason beside one that cannot be launched here; choosing
+a blocked one is refused rather than attempted. Choosing an agent goes straight to Review, with
+no name asked for on the way. Review carries the project and the agent in its breadcrumb and says what
 going through with it does: a ready launch hands this terminal to the session's pane, or prints
 how to reach it. It opens with Back highlighted rather than Launch, so a stray enter mutates
 nothing; Back restores the agent choice and Cancel returns to the project list. Escape is

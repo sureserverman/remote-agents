@@ -575,6 +575,9 @@ uv run --locked remote-agents tui
 
 1. Confirm the wizard opens on the project list with the filter focused. Type to narrow it, press
    enter to move into the list, and choose a project with the arrows and enter.
+1b. Confirm choosing the project opens the Launch/Resume chooser resting on Launch, that Resume
+    is absent (not greyed) when no conversation service is wired, and that enter on Launch opens
+    the agent list.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
 3. Confirm choosing the agent lands on Review directly — there is no label step — and that its
