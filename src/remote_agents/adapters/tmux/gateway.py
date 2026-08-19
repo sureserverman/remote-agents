@@ -24,6 +24,7 @@ from remote_agents.adapters.tmux.codec import (
     parse_console_window,
     parse_pane,
     select_window_args,
+    swap_pane_args,
     switch_client_args,
     switch_client_console_args,
     unlink_window_args,
@@ -345,6 +346,30 @@ class TmuxGateway:
                 raise _target_missing_or(error, f"ra-{session_id}") from error
             if index < len(keys) - 1:
                 await asyncio.sleep(0.15)
+
+    async def swap_panes(self, source_pane: str, target_pane: str) -> None:
+        """Exchange two panes between their windows, taking neither session with it.
+
+        The one operation here that *moves* an agent rather than reading or writing it, and
+        the reason the whole addressing change had to land first: it takes two agent-reaching
+        addresses, and a window target on either end exchanges whatever occupies that window
+        now. Both go through the codec's `exact_pane_target` (DEC-001, DEC-038).
+
+        It does not decide who is on which end, nor read the console's arrangement — that is
+        the composer's, which re-derives the left slot from a position on every call rather
+        than remembering a pane id. This method exchanges exactly the two panes it is given.
+
+        Retyped like every other single-target operation: a pane that has gone raises
+        `TerminalTargetMissing`, so a composer can tell "already unwound" from a tmux that
+        refused. Named for the exchange, not for the console, because nothing about it is
+        console-specific.
+        """
+        try:
+            await self._runner.run(
+                *self._base_argv(), *swap_pane_args(source_pane, target_pane)
+            )
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"{source_pane} <-> {target_pane}") from error
 
     async def _claiming_panes(self, session_id: SessionId) -> tuple[ManagedPane, ...]:
         """Every decoded pane claiming one identity, in listing order.

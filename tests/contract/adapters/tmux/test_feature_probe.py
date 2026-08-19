@@ -208,5 +208,58 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         # ...where kill-pane reaches it through the same link.
         run("kill-pane", "-t", agent)
         assert agent not in run("list-panes", "-a", "-F", "#{pane_id}").split()
+
+        # Claim 12 (codec.swap_pane_args): the exchange the swap console is built on.
+        # `swap-pane` moves each pane into the other's window and leaves **both sessions
+        # alive** — unlike `join-pane`, which empties the source window and takes its session
+        # with it (DEC-036's rejected Shape B). And `-d` is what keeps focus out of the
+        # mechanism: with the console's right pane active, a bare `swap-pane` leaves the
+        # swapped-in pane active at the target position, while `-d` leaves the previously
+        # active pane active. The composer relies on both — a background recovery unwind must
+        # not yank the client, and a stop mid-swap must not destroy a session.
+        run("new-session", "-d", "-s", "swap-console", "-c", str(tmp_path))
+        run("split-window", "-d", "-t", "swap-console:", "-c", str(tmp_path))
+        run("new-session", "-d", "-s", "swap-agent", "-c", str(tmp_path))
+        slot, right = run(
+            "list-panes", "-t", "swap-console:", "-F", "#{pane_id}"
+        ).split()
+        moved = run("list-panes", "-t", "swap-agent:", "-F", "#{pane_id}").strip()
+        run("select-pane", "-t", right)
+
+        run("swap-pane", "-d", "-s", moved, "-t", slot)
+
+        assert run("list-panes", "-t", "swap-console:", "-F", "#{pane_id}").split() == [
+            moved,
+            right,
+        ], "the swapped-in pane did not take the left slot's position"
+        assert run("list-panes", "-t", "swap-agent:", "-F", "#{pane_id}").strip() == slot, (
+            "the console's occupant did not go to live in the agent's window"
+        )
+        alive = run("list-sessions", "-F", "#{session_name}").split()
+        assert "swap-console" in alive and "swap-agent" in alive, (
+            "an exchange took a session with it — the failure join-pane has and swap-pane does not"
+        )
+        assert run("display-message", "-p", "-t", right, "#{pane_active}").strip() == "1", (
+            "-d did not keep the previously active pane active"
+        )
+        # The comparison half, on a fresh pair, because a flag whose effect is never contrasted
+        # with its absence is a flag nobody has evidence for. Bare `swap-pane` makes the target
+        # position active — which is why the exchange carries `-d` and the surface selects
+        # separately: a background recovery unwind must not move the client.
+        run("new-session", "-d", "-s", "bare-console", "-c", str(tmp_path))
+        run("split-window", "-d", "-t", "bare-console:", "-c", str(tmp_path))
+        run("new-session", "-d", "-s", "bare-agent", "-c", str(tmp_path))
+        bare_slot, bare_right = run(
+            "list-panes", "-t", "bare-console:", "-F", "#{pane_id}"
+        ).split()
+        bare_moved = run("list-panes", "-t", "bare-agent:", "-F", "#{pane_id}").strip()
+        run("select-pane", "-t", bare_right)
+
+        run("swap-pane", "-s", bare_moved, "-t", bare_slot)
+
+        assert run("display-message", "-p", "-t", bare_moved, "#{pane_active}").strip() == "1", (
+            "bare swap-pane did not make the target position active — the contrast -d exists for"
+        )
+        assert run("display-message", "-p", "-t", bare_right, "#{pane_active}").strip() == "0"
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)

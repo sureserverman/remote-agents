@@ -97,6 +97,41 @@ def exact_pane_target(pane_id: str) -> str:
     return pane_id
 
 
+def swap_pane_args(source_pane: str, target_pane: str) -> tuple[str, ...]:
+    """Return the argv suffix that exchanges two decoded panes, leaving focus alone.
+
+    **Both ends go through `exact_pane_target`.** Every other single-target operation has one
+    address to get right; an exchange has two, and a session target on *either* end is a
+    window target tmux resolves to whichever pane sits there now — so the wrong end puts an
+    agent into a stranger's window and crosses two identities (DEC-038). There is no
+    "obviously the console" end to relax: the console's left slot is a position whose
+    occupant changes with every exchange, which is exactly what a pane id pins and a window
+    target does not.
+
+    **`-d` is the mechanism refusing to make a presentation decision.** Without it tmux makes
+    the target position active, so the client jumps to the left slot on every exchange —
+    right when the owner opened a session, wrong when a background recovery unwound a
+    half-swapped console under them. Focus belongs to whoever asked for the swap, so the
+    exchange never moves it and the surface selects when it means to. Verified on tmux 3.4
+    (2026-08-19) rather than read off the manual: with the console's *right* pane active, a
+    bare `swap-pane` left the swapped-in pane active at index 0, and `-d` left the right pane
+    active. Pinned as Claim 12.
+
+    Session-destroying by construction it is not: `swap-pane` exchanges two panes and leaves
+    both windows non-empty, which is the whole reason this design is swap-based rather than
+    the `join-pane` shape that emptied a managed session's window and destroyed the session
+    with it (probed 2026-08-19; DEC-036's rejected Shape B).
+    """
+    return (
+        "swap-pane",
+        "-d",
+        "-s",
+        exact_pane_target(source_pane),
+        "-t",
+        exact_pane_target(target_pane),
+    )
+
+
 def pane_mark_args(
     session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
 ) -> tuple[tuple[str, ...], ...]:
