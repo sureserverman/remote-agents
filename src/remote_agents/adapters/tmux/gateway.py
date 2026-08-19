@@ -14,6 +14,7 @@ from remote_agents.adapters.tmux.codec import (
     console_target,
     current_console_window_args,
     display_message_args,
+    exact_pane_target,
     exact_session_target,
     is_console_view,
     link_window_args,
@@ -224,26 +225,82 @@ class TmuxGateway:
         except RuntimeError as error:
             raise _target_missing_or(error, session_name) from error
 
+    async def _following_target(self, session_id: SessionId) -> str:
+        """Return the target that follows this agent: its pane if it has one, else its session.
+
+        The one place the two addressing schemes meet, so an operation cannot pick a scheme
+        by accident and the fallback cannot drift between callers. A resolved pane id is
+        exact and stays correct wherever the pane is hosted; the session target is what a
+        schema-1 session has always used and still means the right thing, because a session
+        marked under schema 1 has never been anywhere but its own window.
+
+        The fallback is what keeps the upgrade continuous. Refusing to act on an
+        unresolvable session would have stopped every already-running session working on the
+        day this shipped, which is a worse failure than the one being fixed.
+
+        A resolution that *fails* is a different answer from one that comes back without
+        this pane, and it does **not** fall back. "I could not find out where the agent is"
+        must never become "address its session target", because that target is a *window*
+        target: tmux resolves it to whichever pane is there now, which after an exchange is
+        not the agent. An earlier draft did fold the two together, reasoning that the
+        operation would meet the same broken tmux one line later — but that only holds if
+        the failure is symmetric, and a listing can fail transiently while a single-target
+        call against the vacated window succeeds perfectly, against the wrong pane. On the
+        `capture` path that misreads somebody else's screen; on the `send_keys` path it
+        types into their terminal, and DEC-016 puts a bare Enter on that path.
+
+        So the error is retyped and raised. A caller that could answer "already gone" still
+        can — `_target_missing_or` keeps that signal — and a genuinely broken tmux still
+        arrives as itself rather than as an ended session.
+        """
+        try:
+            pane_id = await self.pane_for(session_id)
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+        if pane_id is None:
+            return exact_session_target(f"ra-{session_id}")
+        return exact_pane_target(pane_id)
+
     async def capture(self, session_id: SessionId) -> str:
         """Capture only one exact managed pane without tmux escape-sequence output."""
+        target = await self._following_target(session_id)
         try:
             return await self._runner.run(
                 *self._base_argv(),
                 "capture-pane",
                 "-p",
                 "-t",
-                exact_session_target(f"ra-{session_id}"),
+                target,
             )
         except RuntimeError as error:
             raise _target_missing_or(error, f"ra-{session_id}") from error
 
     async def send_keys(self, session_id: SessionId, keys: tuple[str, ...]) -> None:
-        """Send a profile-owned fixed key sequence to one exact managed target."""
+        """Send a profile-owned fixed key sequence to one exact managed target.
+
+        Resolved **once for the whole sequence**, deliberately, and worth being precise
+        about what that buys. A resolved pane id is a handle to one physical pane: every key
+        in the loop reaches that same pane however many exchanges happen meanwhile, so the
+        sequence cannot be split across two terminals. That protection belongs to the
+        pane-id branch alone — the session-target fallback is a *window* target that tmux
+        re-resolves on each `send-keys` subprocess, so a sequence addressed that way can
+        still split if the window's occupant changes midway. Resolving once does not fix
+        that and is not claimed to; what removes it is the pane id, which a schema-1 session
+        does not have. The rest of what once-per-sequence buys is round-trips: one listing
+        per stop rather than one per keystroke.
+        """
         if not keys:
             raise ValueError("graceful stop requires a fixed key sequence")
-        target = exact_session_target(f"ra-{session_id}")
+        target = await self._following_target(session_id)
         for index, key in enumerate(keys):
-            await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+            try:
+                await self._runner.run(*self._base_argv(), "send-keys", "-t", target, key)
+            except RuntimeError as error:
+                # Retyped like every other single-target operation. A pane that vanishes
+                # between two keys left the caller a raw RuntimeError, so a stop interrupted
+                # by the agent exiting mid-sequence was indistinguishable from a broken
+                # tmux — and DEC-022 turns on telling those apart.
+                raise _target_missing_or(error, f"ra-{session_id}") from error
             if index < len(keys) - 1:
                 await asyncio.sleep(0.15)
 
