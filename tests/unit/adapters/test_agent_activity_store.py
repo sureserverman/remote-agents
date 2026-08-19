@@ -58,11 +58,13 @@ async def test_appended_observations_read_back_newest_first_and_bounded(store) -
         ActivityKind.QUIET,
         ActivityKind.NEEDS_ANSWER,
     ]
-    assert recent[1].detail == "push?"
+    # The agent's words are never persisted (DEC-013: payload content reaches
+    # presentation only); the durable row keeps this project's own vocabulary.
+    assert recent[1].detail is None
     assert all(activity.observed_at.tzinfo is not None for activity in recent)
 
 
-async def test_the_round_trip_preserves_every_field(store) -> None:
+async def test_the_round_trip_preserves_every_field_but_never_the_agents_words(store) -> None:
     original = AgentActivity(
         "01234567-89ab-cdef-0123-456789abcdef",
         ActivityKind.LIMIT_REACHED,

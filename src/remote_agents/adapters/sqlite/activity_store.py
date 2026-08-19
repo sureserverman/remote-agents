@@ -32,7 +32,13 @@ class SQLiteActivityStore:
                 (
                     activity.session_id,
                     activity.kind.value,
-                    activity.detail,
+                    # Deliberately not persisted. DEC-013: nothing a payload carries is
+                    # stored — agent-reported content reaches presentation only. The kind,
+                    # session, time, and confidence are this project's own vocabulary; the
+                    # detail is the agent's words, rendered by the live pass and then gone.
+                    # Whether the durable feed should carry it is the owner's decision to
+                    # take (it needs a DEC-013 supersede), recorded in the backlog.
+                    None,
                     activity.confidence.value,
                     activity.observed_at.astimezone(UTC).isoformat(),
                 ),
