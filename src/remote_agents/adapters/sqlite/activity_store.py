@@ -32,13 +32,13 @@ class SQLiteActivityStore:
                 (
                     activity.session_id,
                     activity.kind.value,
-                    # Deliberately not persisted. DEC-013: nothing a payload carries is
-                    # stored — agent-reported content reaches presentation only. The kind,
-                    # session, time, and confidence are this project's own vocabulary; the
-                    # detail is the agent's words, rendered by the live pass and then gone.
-                    # Whether the durable feed should carry it is the owner's decision to
-                    # take (it needs a DEC-013 supersede), recorded in the backlog.
-                    None,
+                    # The agent's own words, persisted deliberately (DEC-037, the owner's
+                    # decision closing BL-005 — it supersedes exactly the storage clause of
+                    # DEC-013). Bounded once at the drain (`bounded_detail_line`), rendered
+                    # inert at the feed, never reaching the status flash; retention is
+                    # indefinite by migration 9's own never-delete invariant, and that pair
+                    # is DEC-037's stated, accepted cost.
+                    activity.detail,
                     activity.confidence.value,
                     activity.observed_at.astimezone(UTC).isoformat(),
                 ),

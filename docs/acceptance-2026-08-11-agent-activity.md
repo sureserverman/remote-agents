@@ -335,7 +335,9 @@ it true.
 
 Worth knowing before the run, so the record can say which is which. The store keeps **nothing**
 about activity — that is DEC-013's second clause — so a notification leaves no durable trace of its
-own. What can be checked afterwards is the spool directory being empty (`ls -A
+own. *(Correction, 2026-08-19: DEC-037 superseded that clause — the `agent_activity` table now
+durably records each observation including its bounded detail line, so this paragraph describes
+the system as it stood on 2026-08-11, not as it stands now.)* What can be checked afterwards is the spool directory being empty (`ls -A
 ~/.local/state/remote-agents/activity`), because the drain deletes each record once it has been
 turned into a message; the session's own row and state in SQLite; the service journal; and the
 settings file before and after. **The message on the phone, its wording, and the button's effect
