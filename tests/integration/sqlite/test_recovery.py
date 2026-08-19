@@ -140,7 +140,7 @@ async def test_terminal_inspection_remains_read_only_when_store_is_unavailable(
         assert mutation_terminal.launch_calls == 0
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 

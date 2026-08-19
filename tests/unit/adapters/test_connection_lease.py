@@ -151,9 +151,9 @@ async def test_the_eager_cursor_answers_fetchone_and_fetchall(database: Path) ->
     )
     assert lease.execute("SELECT key FROM idempotency_claims").fetchone() == ("a",)
     assert lease.execute("SELECT key FROM idempotency_claims").fetchall() == [("a",)]
-    assert lease.execute(
-        "SELECT key FROM idempotency_claims WHERE key = 'missing'"
-    ).fetchone() is None
+    assert (
+        lease.execute("SELECT key FROM idempotency_claims WHERE key = 'missing'").fetchone() is None
+    )
 
 
 async def test_close_is_a_safe_no_op_with_nothing_held(database: Path) -> None:

@@ -101,9 +101,7 @@ async def test_an_empty_feed_says_so_rather_than_going_blank() -> None:
 async def test_hostile_text_is_rendered_inert() -> None:
     async def feed() -> tuple[AgentActivity, ...]:
         return (
-            _activity(
-                ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="[link=https://x][bold]t[/"
-            ),
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="[link=https://x][bold]t[/"),
         )
 
     app = RemoteAgentsTui(_context(feed))

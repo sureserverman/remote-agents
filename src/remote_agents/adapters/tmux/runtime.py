@@ -18,6 +18,7 @@ from remote_agents.adapters.tmux.remote_control import (
     classify_remote_control_capture,
 )
 from remote_agents.adapters.tmux.trust import TRUST_KEYS, classify_trust_capture
+from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.domain.conversations import ProviderConversationId
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
@@ -245,14 +246,41 @@ class TmuxTerminal:
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
-        """Send a known profile sequence only after rechecking current trusted ownership."""
+        """Send a known profile sequence only after rechecking current trusted ownership.
+
+        **A pane that is not live is a stop that was never sent** (DEC-022), and saying so is
+        the whole reason this checks liveness before typing rather than after. tmux answers
+        `send-keys` at a dead pane with exit 0 and no effect (Claim 10), so an unchecked stop
+        into a pane that had already died out of band — an OOM kill, a crash, anything between
+        the last reconciliation pass and the owner pressing Stop — would find `preserved` true
+        on its very first poll, because it was true before any key was sent, and report a
+        graceful exit this service did not cause. The record then reads
+        GRACEFUL_STOP_REQUESTED → PANE_EXITED → CLEANUP_CONFIRMED: a history asserting a
+        sequence that never left the host.
+        """
         profile = self._resolved_profile(session_id, profile_id)
         observation = await self.inspect(session_id)
         if profile is None or observation is None or observation.profile_id != profile_id:
             return TerminalObservation(
-                session_id, live=False, preserved=False, detail="unknown_session"
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
-        await self._gateway.send_keys(session_id, profile.graceful_keys)
+        if not observation.live:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+            )
+        try:
+            await self._gateway.send_keys(session_id, profile.graceful_keys)
+        except TerminalTargetMissing:
+            # The pane went while the sequence was in flight. Reported as never-sent, which
+            # *understates* — a key may well have landed — and understating is the side to err
+            # on: the alternative claims a graceful exit this service can no longer show it
+            # caused. Before this, the typed error escaped the use case entirely, after
+            # GRACEFUL_STOP_REQUESTED was already written, and the record stuck at
+            # STOP_REQUESTED behind a generic "stop failed" — the one outcome DEC-022 exists
+            # to replace with an event that names its cause.
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+            )
         deadline = asyncio.get_running_loop().time() + self._startup_timeout
         while asyncio.get_running_loop().time() < deadline:
             observation = await self.inspect(session_id)
@@ -260,7 +288,7 @@ class TmuxTerminal:
                 return observation
             await asyncio.sleep(0.01)
         return TerminalObservation(
-            session_id, live=True, preserved=False, detail="graceful_timeout"
+            session_id, live=True, preserved=False, detail=GRACEFUL_TIMEOUT
         )
 
     async def confirm_ready(

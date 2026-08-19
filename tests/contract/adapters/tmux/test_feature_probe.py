@@ -1,7 +1,7 @@
-"""Live disposable tmux 3.4 feature probe, and the codec's verified-behavior claims.
+"""Live disposable tmux 3.4 feature probe, and the adapter's verified-behavior claims.
 
-The codec pins three empirical claims about tmux 3.4 with "verified" language, and each
-one guards a safety property: `display-message -l --` renders caller text literally and
+The tmux adapter pins its empirical claims about tmux 3.4 with "verified" language, and each
+one guards a safety property. `display-message -l --` renders caller text literally and
 un-flag-like (the difference between a status flash and a command sink), and session
 names may contain the pane-format delimiter (the reason `is_console_view` must be
 field-count-safe). The claims live here, against a real tmux on a disposable socket, so
@@ -168,5 +168,45 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         assert [pane for pane, _mark in listed][-1] == original, (
             "and the pane that was there first is listed last, so first-listed is not identity"
         )
+        # Claim 9 (gateway.py::launch): `remain-on-exit` is a **window** option, so setting it
+        # at window scope leaves it behind when a pane moves. Set with `-p` it travels, and a
+        # pane that exits in a foreign, unarmed window is still preserved as evidence rather
+        # than destroyed — which is what keeps DEC-021's read-only attach reachable for an
+        # agent that was being displayed when it exited, and keeps the host window from
+        # losing its last pane.
+        run("new-session", "-d", "-s", "travels", "-c", str(tmp_path))
+        run("set-option", "-p", "-t", "travels:", "remain-on-exit", "on")
+        run("new-session", "-d", "-s", "unarmed", "-c", str(tmp_path))
+        moving = run("list-panes", "-t", "travels:", "-F", "#{pane_id}").strip()
+        sitting = run("list-panes", "-t", "unarmed:", "-F", "#{pane_id}").strip()
+        run("swap-pane", "-s", moving, "-t", sitting)
+        assert run("display-message", "-p", "-t", moving, "#{remain-on-exit}").strip() == "on"
+        assert _die(run, moving) == "1", "a pane-scoped remain-on-exit did not travel"
+        assert "unarmed" in run("list-sessions", "-F", "#{session_name}").split()
+
+        # Claim 10 (gateway.py::pane_for, runtime.py::graceful_stop): `send-keys` at a dead
+        # pane exits 0 and does nothing. This is why a stop checks liveness *before* typing —
+        # DEC-022's stop that was never sent is otherwise indistinguishable from one that was.
+        assert run("send-keys", "-t", moving, "Enter") == ""
+
+        # Claim 11 (gateway.py::destroy): the fact the whole destruction rewrite rests on.
+        # `kill-session` on a session whose window is linked into another removes the session
+        # name, exits 0, and leaves the pane and its process running. The shipped console
+        # links a window per live session, so this was a stop reporting success over a live
+        # agent — the DEC-006 outcome — and it is why destruction names a pane.
+        run("new-session", "-d", "-s", "linked-home", "-c", str(tmp_path))
+        run("new-session", "-d", "-s", "linked-host", "-c", str(tmp_path))
+        run("link-window", "-d", "-s", "linked-home:", "-t", "linked-host:")
+        agent = run("list-panes", "-t", "linked-home:", "-F", "#{pane_id}").strip()
+        agent_pid = run("display-message", "-p", "-t", agent, "#{pane_pid}").strip()
+        run("kill-session", "-t", "linked-home:")
+        assert "linked-home" not in run("list-sessions", "-F", "#{session_name}").split()
+        assert agent in run("list-panes", "-a", "-F", "#{pane_id}").split(), (
+            "kill-session left the linked pane alive — the reason destroy names a pane"
+        )
+        assert Path(f"/proc/{agent_pid}").exists(), "and left its process running"
+        # ...where kill-pane reaches it through the same link.
+        run("kill-pane", "-t", agent)
+        assert agent not in run("list-panes", "-a", "-F", "#{pane_id}").split()
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)

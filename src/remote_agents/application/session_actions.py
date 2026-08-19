@@ -409,10 +409,14 @@ end and the row does go away — so what was wrong was never the outcome, only t
 surfaces reported "Force stopped X" over a kill nobody observed.
 
 Read it with DEC-017's accepted cost 1 in hand: `VERIFIED_FORCE_STOP` is still written to the
-durable history whether or not `kill-session` ran, so the audit log cannot tell these apart and
-only this sentence carries the distinction. That asymmetry with DEC-006 — graceful fails closed
-on an unresolved profile, force does not fail closed on an unresolved pane — is recorded and
-deliberate, not an oversight to be "restored".
+durable history whether or not a kill ran, so the audit log cannot tell these apart and only
+this sentence carries the distinction. (It said "`kill-session`" until force stop moved onto
+the pane; the destructive call is now `kill-pane` for anything with a decoded pane, and the
+accepted cost is unchanged by which verb reaches tmux.)
+
+That asymmetry with DEC-006 — graceful fails closed on an unresolved
+profile, force does not fail closed on an unresolved pane — is recorded and deliberate, not
+an oversight to be "restored".
 """
 
 

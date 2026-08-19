@@ -91,7 +91,7 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -163,7 +163,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -220,7 +220,7 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -279,7 +279,7 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -363,7 +363,7 @@ async def test_a_quiet_fake_agent_produces_exactly_one_quiet_activity(tmp_path: 
     finally:
         if gateway is not None and session_id is not None:
             try:
-                await gateway.mutate("kill-session", f"ra-{session_id}")
+                await gateway.destroy(session_id)
             except RuntimeError:
                 pass
 
@@ -387,6 +387,6 @@ async def test_a_fake_agent_that_keeps_printing_produces_no_quiet_activity(tmp_p
     finally:
         if gateway is not None and session_id is not None:
             try:
-                await gateway.mutate("kill-session", f"ra-{session_id}")
+                await gateway.destroy(session_id)
             except RuntimeError:
                 pass

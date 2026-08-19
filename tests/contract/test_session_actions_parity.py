@@ -195,10 +195,7 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     )
     detail = await boundary._detail_reply(str(record.session_id))
     return [
-        button.text
-        for row in detail.keyboard
-        for button in row
-        if "Remote Control" in button.text
+        button.text for row in detail.keyboard for button in row if "Remote Control" in button.text
     ]
 
 

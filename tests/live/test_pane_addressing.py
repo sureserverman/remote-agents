@@ -104,12 +104,14 @@ async def test_every_pane_following_operation_reaches_a_displaced_agent(tmp_path
     )
     try:
         await gateway.create_console(("sleep", "600"), tmp_path)
-        # Claim 7: `remain-on-exit` is a window option and does not travel with a swapped
-        # pane, so a console window that is not armed loses the agent's pane outright when
-        # the agent exits — and its own session with it. Arming it here is what Sub-plan 2
-        # must do at console construction; without it this test would be measuring that gap
-        # rather than addressing.
-        await runner.run(*base, "set-option", "-t", "ra-console:", "remain-on-exit", "on")
+        # The console window is deliberately NOT armed with `remain-on-exit`. An earlier draft
+        # armed it here, with a note that Sub-plan 2 would have to do the same at console
+        # construction — because a window-scoped flag does not travel with a swapped pane, so
+        # an agent exiting while displayed was destroyed outright and took the console's
+        # session with it. `launch` now sets the flag on the **pane** instead, so it goes
+        # where the agent goes (Claim 9), and the console needs no arming of its own. Leaving
+        # this window bare is what proves that: the graceful stop below preserves the agent's
+        # pane while it is hosted here, and the console survives.
         # The console window carries more than one pane, as the three-pane design does: the
         # left slot is what the swap exchanges, and the others are what keep the window from
         # being emptied when the slot's occupant is killed. Written the first time without

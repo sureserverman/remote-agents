@@ -145,7 +145,7 @@ async def test_restart_reconciles_launch_running_stop_requested_and_preserved_st
     finally:
         for session_id in (starting, running, stopping, preserved):
             try:
-                await gateway.mutate("kill-session", f"ra-{session_id}")
+                await gateway.destroy(session_id)
             except RuntimeError:
                 pass
 
@@ -184,7 +184,7 @@ async def test_restart_can_gracefully_stop_a_running_managed_session(tmp_path: P
     finally:
         if record is not None:
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -237,7 +237,7 @@ async def test_duplicate_launch_delivery_creates_one_real_session(tmp_path: Path
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -261,7 +261,7 @@ async def test_concurrent_inspect_and_graceful_stop_preserve_one_session(tmp_pat
     finally:
         for record in await service.list_sessions():
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass
 
@@ -456,6 +456,6 @@ async def test_a_second_process_stops_a_session_it_never_launched(tmp_path: Path
     finally:
         if record is not None:
             try:
-                await gateway.mutate("kill-session", f"ra-{record.session_id}")
+                await gateway.destroy(record.session_id)
             except RuntimeError:
                 pass

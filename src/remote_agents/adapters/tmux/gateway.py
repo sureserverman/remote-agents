@@ -135,7 +135,26 @@ class TmuxInventory:
 
 
 class TmuxGateway:
-    """Forbid default-server and broad-target paths before subprocess execution."""
+    """Forbid default-server and broad-target paths before subprocess execution.
+
+    **What each operation is allowed to name.** tmux's `ra-<uuid>:` is a *window* target: it
+    resolves to whichever pane occupies that window at the moment of the call. So the rule is
+    about what an operation means, not about which is tidier —
+
+    - An operation that acts on **the agent** — reading its screen, typing at it, killing it —
+      names a **pane id**, because the pane is the thing that carries the agent and the thing
+      that moves. The only exception is a session marked under schema 1, which names no pane
+      and never leaves its own window; it keeps the session target it has always used.
+    - An operation that acts on **a container a person navigates** — creating the console,
+      moving a client into it, focusing a window, attaching — names that container. There is
+      no agent to miss: the owner is asking to be taken somewhere, and where they land is the
+      answer rather than a mis-target.
+    - `launch` names the session because it is what creates it, at the one moment the session
+      has exactly one pane and there is nothing yet to resolve.
+
+    Pinned by `tests/architecture/test_the_agent_is_addressed_by_pane.py`, so the split fails a
+    test rather than a reading.
+    """
 
     def __init__(
         self,
@@ -233,25 +252,6 @@ class TmuxGateway:
             ),
             None,
         )
-
-    async def mutate(self, operation: str, session_name: str) -> str:
-        """Run the one supported destructive operation against an exact managed target.
-
-        **No longer the lifecycle stop.** `destroy` is, because a stop has to follow the
-        agent's pane rather than the window it started in. What is left here is the
-        session-level kill itself — the operation that removes a whole managed session by
-        name — kept because the closed `operation` check is a DEC-001 guard on the only
-        generic entry point this adapter has, and removing the method would not remove the
-        need for that shape. Reach for `destroy` for anything that means "stop this agent".
-        """
-        if operation != "kill-session":
-            raise ValueError("forbidden tmux operation")
-        try:
-            return await self._runner.run(
-                *self._base_argv(), operation, "-t", exact_session_target(session_name)
-            )
-        except RuntimeError as error:
-            raise _target_missing_or(error, session_name) from error
 
     async def _following_target(self, session_id: SessionId) -> str:
         """Return the target that follows this agent: its pane if it has one, else its session.
@@ -375,6 +375,13 @@ class TmuxGateway:
         nothing narrower exists to name and the alternative to a wide kill is not stopping
         the agent.
 
+        **The host side, which the home-side argument does not cover.** Killing a displaced
+        pane that is the only one in its *host* window destroys that window's session too —
+        tmux drops a session with its last pane, and it does not care that the pane was a
+        guest. Once the console holds an agent in a window of its own that would be the
+        console itself. It is not this method's to prevent: the console is what knows how many
+        panes it has, and the three-pane design is what keeps the count above one.
+
         **Nothing chases the kill.** Probed: killing a session's last pane destroys the
         session, so the stranded-empty-session the task's second clause guarded against
         cannot exist. The only home session that survives is one still holding another pane —
@@ -445,8 +452,16 @@ class TmuxGateway:
             "--intent-dir",
             str(self._intent_directory),
         )
+        # `-p`, so the pane keeps its own copy. `remain-on-exit` is a *window* option, and a
+        # window option does not travel with a pane: armed at window scope, an agent swapped
+        # into some other window lands unprotected, so its exit destroys the pane outright —
+        # no `pane_dead` evidence, nothing for DEC-021's read-only attach to attach to, and
+        # the host window losing its last pane takes that session with it. Set on the pane it
+        # protects, the flag goes where the agent goes. Verified on tmux 3.4 (2026-08-19) and
+        # pinned as Claim 9: a pane-scoped `remain-on-exit` survives `swap-pane` into an
+        # unarmed window, and the pane there dies to `pane_dead=1` rather than vanishing.
         await self._runner.run(
-            *self._base_argv(), "set-option", "-t", target, "remain-on-exit", "on"
+            *self._base_argv(), "set-option", "-p", "-t", target, "remain-on-exit", "on"
         )
         # Identity is stamped on the pane and nowhere else, so it travels with the agent and
         # leaves nothing behind for a later occupant of this window to inherit. The option

@@ -91,7 +91,7 @@ async def test_terminal_launch_reports_real_readiness(
         assert observation.live is expected_live
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -106,7 +106,7 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
         assert observation.detail == "startup_timeout"
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -192,7 +192,7 @@ async def test_terminal_rechecks_a_timed_out_launch_before_recovering_it(tmp_pat
         assert await settle_ready(terminal, session_id, ProfileId("fake"))
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -233,7 +233,7 @@ async def test_terminal_builds_a_profile_for_the_actual_generated_session(tmp_pa
         assert created_for == [session_id]
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -277,7 +277,7 @@ async def test_the_written_intent_carries_the_session_environment(tmp_path: Path
         assert written["environment"][SESSION_ID_VARIABLE] == str(session_id)
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 

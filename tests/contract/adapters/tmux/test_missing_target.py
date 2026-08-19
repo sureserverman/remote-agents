@@ -42,7 +42,7 @@ async def test_killing_a_target_that_is_gone_is_reported_as_missing(message: str
     gateway = TmuxGateway("remote-agents", FailingRunner(message))
 
     with pytest.raises(TerminalTargetMissing):
-        await gateway.mutate("kill-session", f"ra-{SessionId.new()}")
+        await gateway.destroy(SessionId.new())
 
 
 @pytest.mark.asyncio

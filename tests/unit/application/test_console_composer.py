@@ -202,9 +202,7 @@ async def test_open_falls_back_to_a_direct_switch_when_tabs_fail() -> None:
 
     console.console_windows = windows  # type: ignore[method-assign]
     await _composer(console).open(_RUNNING)
-    assert named(console, "switch_client_to_session") == [
-        ("switch_client_to_session", _RUNNING)
-    ]
+    assert named(console, "switch_client_to_session") == [("switch_client_to_session", _RUNNING)]
 
 
 async def test_flash_is_suppressed_while_the_owner_is_looking_at_the_dashboard() -> None:

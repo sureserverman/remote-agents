@@ -1,8 +1,11 @@
-"""Console operations widen the gateway without widening what `mutate` accepts.
+"""Console operations are named methods over codec-generated targets, like every other.
 
-Every console operation is its own named method over codec-generated targets, exactly the
-discipline `kill-session` set: no free-text target ever reaches the runner, and the generic
-`mutate` entry still refuses everything it refused before this file existed.
+No free-text target reaches the runner, because no method takes one: each builds its own
+argv from typed identifiers through the codec (DEC-001). This file used to open by saying
+the generic `mutate` entry "still refuses everything it refused" — that entry is gone, its
+guard having been circular (the only thing needing an allow-list was the entry point that
+carried it), and the shape that replaced it is asserted in
+`tests/architecture/test_the_agent_is_addressed_by_pane.py`.
 """
 
 from __future__ import annotations
@@ -35,14 +38,6 @@ class RecordingRunner:
 
 def gateway(runner: RecordingRunner) -> TmuxGateway:
     return TmuxGateway("remote-agents-test-console", runner)
-
-
-async def test_the_forbidden_operation_rule_is_unchanged() -> None:
-    runner = RecordingRunner()
-    for operation in ("link-window", "switch-client", "kill-server", "unlink-window"):
-        with pytest.raises(ValueError):
-            await gateway(runner).mutate(operation, f"ra-{_SESSION}")
-    assert runner.calls == []
 
 
 async def test_console_exists_asks_has_session_and_reads_an_absent_server_as_no() -> None:
@@ -238,9 +233,16 @@ async def test_launch_stamps_identity_on_the_pane_and_leaves_the_session_bare(
 
 
 async def test_launch_still_makes_the_pane_survive_its_agent(tmp_path: Path) -> None:
-    """`remain-on-exit` is session-scoped and stays that way: it is pane *behaviour*, not
-    identity, and nothing decodes it — so nothing can inherit a wrong answer from it."""
+    """`remain-on-exit` is set on the **pane**, so the protection travels with the agent.
+
+    It is a window option, and a window option does not move with a pane: armed at window
+    scope, an agent swapped into another window lands unprotected, and its exit destroys the
+    pane outright — no `pane_dead` evidence for DEC-021's read-only attach, and the host
+    window losing its last pane takes that session with it. An earlier draft of this test
+    asserted the session-scoped form and explained that identity could not be inherited from
+    it, which was true and beside the point: the question is not what can be inherited but
+    what travels. Pinned live as Claim 9."""
     runner = RecordingRunner()
     await gateway(runner).launch(_SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
 
-    assert (*_BASE, "set-option", "-t", _EXACT, "remain-on-exit", "on") in runner.calls
+    assert (*_BASE, "set-option", "-p", "-t", _EXACT, "remain-on-exit", "on") in runner.calls

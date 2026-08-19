@@ -137,13 +137,6 @@ async def test_a_failed_resolution_refuses_to_destroy_anything() -> None:
     assert killed(runner) == []
 
 
-async def test_the_forbidden_operation_rule_is_untouched() -> None:
-    runner = TargetingRunner(panes=())
-    for operation in ("kill-pane", "kill-server", "link-window"):
-        with pytest.raises(ValueError):
-            await gateway_for(runner).mutate(operation, f"ra-{_SESSION}")
-
-
 async def test_a_hand_split_legacy_session_never_kills_by_listing_order() -> None:
     """The reproduction that blocked this task twice, pinned.
 
