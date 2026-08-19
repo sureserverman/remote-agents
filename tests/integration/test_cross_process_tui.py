@@ -56,6 +56,7 @@ class RecordingGateway:
                 ManagedPane(
                     f"ra-{session_id}",
                     f"%{index}",
+                    True,
                     session_id,
                     project_id,
                     profile_id,

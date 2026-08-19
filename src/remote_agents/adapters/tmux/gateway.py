@@ -181,6 +181,38 @@ class TmuxGateway:
             managed.append(pane)
         return TmuxInventory(tuple(managed), tuple(orphans))
 
+    async def pane_for(self, session_id: SessionId) -> str | None:
+        """Return the pane id currently carrying one identity, or None if none does.
+
+        Asked fresh on every call and never cached, because the pane is the thing that
+        moves: an answer taken once at launch is right until the first exchange and quietly
+        wrong afterwards, which is the whole failure this addressing exists to remove.
+
+        `None` has two causes that deliberately share an answer — a session marked under
+        schema 1, whose identity lives on the session and names no pane, and a session that
+        is gone. Both mean the same thing to a caller: there is no pane here to address. A
+        third case never reaches here: two panes claiming one identity are resolved a level
+        up, in `inventory`, which keeps one and quarantines the other (DEC-020), so this
+        method never chooses between candidates.
+
+        **Liveness is deliberately not a filter.** A PRESERVED pane still carries its mark
+        and still resolves, because its retained output is the thing PRESERVED exists to
+        keep and `capture` must reach it (DEC-021). The cost is that callers own the
+        liveness question: verified against tmux 3.4, `send-keys` at a dead pane exits 0 and
+        does nothing, so a caller that types without checking gets a success for a keystroke
+        that went nowhere — which is exactly the never-sent stop DEC-022 requires be told
+        apart from a sent one.
+        """
+        inventory = await self.inventory()
+        return next(
+            (
+                pane.pane_id
+                for pane in inventory.managed
+                if pane.session_id == session_id and pane.pane_scoped
+            ),
+            None,
+        )
+
     async def mutate(self, operation: str, session_name: str) -> str:
         """Run the one supported destructive operation against an exact managed target."""
         if operation != "kill-session":

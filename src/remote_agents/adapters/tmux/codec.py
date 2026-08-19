@@ -55,6 +55,13 @@ class ManagedPane:
     from `session_id`, never from this."""
 
     pane_id: str
+
+    pane_scoped: bool
+    """Whether the identity was read from the pane's *own* mark (schema 2) rather than
+    inherited from its session (schema 1). Only a pane-scoped mark makes `pane_id` an
+    address: an inherited one says which session the pane sits in, which is what the pane
+    id would have told you anyway, and stops being true the moment anything moves."""
+
     session_id: SessionId
     project_id: ProjectId
     profile_id: ProfileId
@@ -350,6 +357,7 @@ def parse_pane(line: str) -> ManagedPane:
     return ManagedPane(
         name,
         pane_id,
+        schema == _PANE_SCHEMA_VERSION,
         session_id,
         ProjectId(project),
         ProfileId(profile),
