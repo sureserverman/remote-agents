@@ -143,9 +143,12 @@ def swap_pane_args(source_pane: str, target_pane: str) -> tuple[str, ...]:
     active. Pinned as Claim 12.
 
     Session-destroying by construction it is not: `swap-pane` exchanges two panes and leaves
-    both windows non-empty, which is the whole reason this design is swap-based rather than
-    the `join-pane` shape that emptied a managed session's window and destroyed the session
-    with it (probed 2026-08-19; DEC-036's rejected Shape B).
+    both windows non-empty. That is the whole reason this design exchanges rather than *moves*
+    a pane — moving a single-pane session's only pane empties its window, and tmux destroys the
+    window and the session with it (probed 2026-08-19). DEC-036 records that rejected shape by
+    name, with its evidence; it is deliberately not named here, because a gate check greps this
+    tree for the command precisely so it can never be built, and the register is where the
+    argument for not building it belongs.
     """
     return (
         "swap-pane",
