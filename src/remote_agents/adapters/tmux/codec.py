@@ -28,6 +28,14 @@ CONSOLE_SESSION_NAME = "ra-console"
 # managed session's session-scoped options do not (verified against tmux 3.4, 2026-08-18).
 WINDOW_SESSION_OPTION = "@remote_agents_window_session"
 
+# The console's own surface pane, marked so recovery can find it wherever an exchange parked
+# it. Deliberately *not* one of the four identity options above and not part of that
+# vocabulary: it says "this pane belongs to the console", never "this pane is a session".
+# Pane-scoped, so it travels with the surface exactly as identity travels with an agent — and
+# so nothing inherits it, since neither the console session nor a managed one sets it.
+CONSOLE_SLOT_OPTION = "@remote_agents_console_slot"
+SURFACE_SLOT = "surface"
+
 # The four identity option names, spelled **once each** and referenced everywhere else in this
 # module. They are written by `pane_mark_args` and read back by two format strings, and those
 # three uses only agree because they are generated from one place — so the name itself is a
@@ -51,6 +59,7 @@ ARRANGEMENT_FORMAT = _DELIMITER.join(
         "#{pane_id}",
         f"#{{{_SCHEMA_OPTION}}}",
         f"#{{{_ID_OPTION}}}",
+        f"#{{{CONSOLE_SLOT_OPTION}}}",
     )
 )
 PANE_FORMAT = _DELIMITER.join(
@@ -415,6 +424,22 @@ def parse_console_window(line: str) -> tuple[int, SessionId | None]:
     return (index, SessionId.parse(raw_session))
 
 
+def console_slot_mark_args(pane_id: str) -> tuple[str, ...]:
+    """Return the argv suffix that marks one pane as the console's projects surface.
+
+    `-p`, for the same reason identity is pane-scoped: the mark has to travel with the pane
+    an exchange sends into an agent's window, because finding it there again is the entire
+    job. Marked on the console *session* it would stay behind and describe whatever swapped
+    in — the failure mode DEC-038 records for identity, in a second vocabulary.
+
+    What it buys is exactness. Without it the parked surface is identified as "the only pane
+    in that window carrying no identity", which stops being an answer the moment an operator
+    splits the agent's window: two candidates, no way to choose, and a console with no route
+    back to its own surface.
+    """
+    return ("set-option", "-p", "-t", exact_pane_target(pane_id), CONSOLE_SLOT_OPTION, SURFACE_SLOT)
+
+
 def list_arrangement_args() -> tuple[str, ...]:
     """Return the argv suffix that lists every pane on the server with its position.
 
@@ -427,8 +452,10 @@ def list_arrangement_args() -> tuple[str, ...]:
     return ("list-panes", "-a", "-F", ARRANGEMENT_FORMAT)
 
 
-def parse_arrangement(line: str) -> tuple[SessionId | None, bool, int, int, str, SessionId | None]:
-    """Decode one arrangement line into (host, on console, window, position, pane, identity).
+def parse_arrangement(
+    line: str,
+) -> tuple[SessionId | None, bool, int, int, str, SessionId | None, bool]:
+    """Decode one line into (host, on console, window, position, pane, identity, surface).
 
     Two decodings, and keeping them apart is the whole job. **Host** comes from the session
     name the pane is *listed under* — the console, a managed session, or neither — and says
@@ -443,13 +470,13 @@ def parse_arrangement(line: str) -> tuple[SessionId | None, bool, int, int, str,
     pane sits in — is what `host` already answers.
 
     Refuses rather than guesses. A session name containing the format delimiter inflates the
-    split past six fields (tmux 3.4 accepts `|` in a session name — Claim 3), and an
+    split past seven fields (tmux 3.4 accepts `|` in a session name — Claim 3), and an
     unparseable position is not a position; both raise, and the gateway drops the line.
     """
     fields = line.rstrip("\n").split(_DELIMITER)
-    if len(fields) != 6:
+    if len(fields) != 7:
         raise ValueError("arrangement format has missing fields")
-    name, raw_window, raw_pane_index, pane_id, schema, raw_id = fields
+    name, raw_window, raw_pane_index, pane_id, schema, raw_id, slot = fields
     try:
         window_index, pane_index = int(raw_window), int(raw_pane_index)
     except ValueError as error:
@@ -466,7 +493,7 @@ def parse_arrangement(line: str) -> tuple[SessionId | None, bool, int, int, str,
         except ValueError:
             host = None
     identity = pane_owned_identity(schema, raw_id)
-    return host, on_console, window_index, pane_index, pane_id, identity
+    return host, on_console, window_index, pane_index, pane_id, identity, slot == SURFACE_SLOT
 
 
 def is_console_view(line: str) -> bool:

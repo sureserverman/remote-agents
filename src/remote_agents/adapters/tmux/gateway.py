@@ -12,6 +12,7 @@ from typing import Protocol
 from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
+    console_slot_mark_args,
     console_target,
     current_console_window_args,
     display_message_args,
@@ -409,6 +410,19 @@ class TmuxGateway:
             except ValueError:
                 continue
         return tuple(arrangement)
+
+    async def mark_console_surface(self, pane_id: str) -> None:
+        """Mark one pane as the console's projects surface, so an exchange cannot lose it.
+
+        Idempotent by nature — setting the same option to the same value twice is one state —
+        so a caller may run it on every start without checking. What it must never be given
+        is a pane carrying an agent's identity; that decision belongs to the composer, which
+        can see the whole arrangement, and is not re-litigated here.
+        """
+        try:
+            await self._runner.run(*self._base_argv(), *console_slot_mark_args(pane_id))
+        except RuntimeError as error:
+            raise _target_missing_or(error, pane_id) from error
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.

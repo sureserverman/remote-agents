@@ -23,6 +23,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.console import HostedPane
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _RUNNING = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -77,6 +78,21 @@ class RecordingConsole:
         self.calls.append(("console_windows",))
         self._raise_if_armed()
         return self.windows
+
+    async def pane_arrangement(self) -> tuple[HostedPane, ...]:
+        """A console already at rest: its left slot holds the marked projects surface.
+
+        Answered rather than omitted, because `ensure` now repairs a missing surface mark and
+        a double that raised here would have that repair swallowed — leaving these tests
+        green on an exception rather than on the behaviour they name.
+        """
+        self.calls.append(("pane_arrangement",))
+        self._raise_if_armed()
+        return (HostedPane(None, True, 0, 0, "%0", None, True),)
+
+    async def mark_console_surface(self, pane_id: str) -> None:
+        self.calls.append(("mark_console_surface", pane_id))
+        self._raise_if_armed()
 
     async def link_session_window(self, session_id: SessionId) -> None:
         self.calls.append(("link_session_window", session_id))

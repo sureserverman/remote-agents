@@ -56,7 +56,16 @@ class HostedPane:
     managed agent at all (a console surface, an operator's split), and a pane whose session
     is marked under the old session-scoped schema, which names no pane and cannot be
     displayed by exchange. An inherited mark is never reported here — it says which session's
-    window a pane sits in, which `host_session` already answers (DEC-038).
+    window a pane sits in, which `host` already answers (DEC-038).
+    """
+
+    surface: bool = False
+    """Whether this pane is the console's own projects surface, by its own mark.
+
+    The counterpart to `session_id` for the pane on the other end of every exchange. An agent
+    is found by the identity it carries; the surface has to be findable the same way, because
+    after an exchange it is living in some agent's window and "the pane with no identity" is
+    not an answer there — an operator's split makes two of those. Marked, it is exactly one.
     """
 
 
@@ -87,3 +96,5 @@ class ConsolePort(Protocol):
     async def pane_arrangement(self) -> tuple[HostedPane, ...]: ...
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
+
+    async def mark_console_surface(self, pane_id: str) -> None: ...

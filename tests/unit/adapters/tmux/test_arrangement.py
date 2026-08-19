@@ -42,11 +42,19 @@ def gateway(runner: RecordingRunner) -> TmuxGateway:
 
 
 def test_a_displaced_agent_reads_as_hosted_by_the_console_and_owned_by_itself() -> None:
-    host, on_console, window, position, pane, identity = parse_arrangement(
-        f"ra-console|0|0|%2|2|{_A}"
+    host, on_console, window, position, pane, identity, surface = parse_arrangement(
+        f"ra-console|0|0|%2|2|{_A}|"
     )
 
-    assert (host, on_console, window, position, pane, identity) == (None, True, 0, 0, "%2", _A)
+    assert (host, on_console, window, position, pane, identity, surface) == (
+        None,
+        True,
+        0,
+        0,
+        "%2",
+        _A,
+        False,
+    )
 
 
 def test_the_pane_it_displaced_reads_as_hosted_by_that_session_and_owned_by_nobody() -> None:
@@ -56,15 +64,19 @@ def test_the_pane_it_displaced_reads_as_hosted_by_that_session_and_owned_by_nobo
     agent's own window — and its empty identity is what stops it being mistaken for the
     agent by anything that looks for one.
     """
-    host, on_console, _window, _position, pane, identity = parse_arrangement(f"ra-{_A}|0|0|%1||")
+    host, on_console, _window, _position, pane, identity, surface = parse_arrangement(
+        f"ra-{_A}|0|0|%1|||surface"
+    )
 
-    assert (host, on_console, pane, identity) == (_A, False, "%1", None)
+    assert (host, on_console, pane, identity, surface) == (_A, False, "%1", None, True), (
+        "the console surface parked in an agent's window was not recognised by its own mark"
+    )
 
 
 def test_an_inherited_schema_one_mark_is_hosting_and_never_identity() -> None:
     """tmux reports the session's mark on every pane in its window; only schema 2 is the pane's."""
-    host, _on_console, _window, _position, _pane, identity = parse_arrangement(
-        f"ra-{_A}|0|1|%9|1|{_A}"
+    host, _on_console, _window, _position, _pane, identity, _surface = parse_arrangement(
+        f"ra-{_A}|0|1|%9|1|{_A}|"
     )
 
     assert host == _A
@@ -72,7 +84,9 @@ def test_an_inherited_schema_one_mark_is_hosting_and_never_identity() -> None:
 
 
 def test_a_pane_in_nobodys_managed_window_has_neither_a_host_nor_the_console() -> None:
-    host, on_console, _window, _position, _pane, identity = parse_arrangement("scratch|0|0|%4||")
+    host, on_console, _window, _position, _pane, identity, _surface = parse_arrangement(
+        "scratch|0|0|%4|||"
+    )
 
     assert (host, on_console, identity) == (None, False, None)
 
@@ -80,11 +94,11 @@ def test_a_pane_in_nobodys_managed_window_has_neither_a_host_nor_the_console() -
 @pytest.mark.parametrize(
     "line",
     [
-        "ra-console|0|0|%2|2",
-        "ra-console|x|0|%2||",
-        "ra-console|0|-1|%2||",
-        "ra-console|0|0|||",
-        "ra-console|0|0|%2|2|not-a-uuid",
+        "ra-console|0|0|%2|2|",
+        "ra-console|x|0|%2|||",
+        "ra-console|0|-1|%2|||",
+        "ra-console|0|0||||",
+        "ra-console|0|0|%2|2|not-a-uuid|",
     ],
 )
 def test_a_line_that_cannot_be_decoded_is_refused_rather_than_guessed(line: str) -> None:
@@ -98,14 +112,14 @@ def test_a_session_name_carrying_the_delimiter_cannot_impersonate_the_console() 
     Split naively, `ra-console|x` yields a first field reading `ra-console` — a stray session
     presenting itself as the console, whose left slot the composer would then exchange
     against. The field count is what keeps it out: the embedded delimiter inflates the split
-    past six, so the line is refused here and dropped by the gateway.
+    past seven, so the line is refused here and dropped by the gateway.
     """
     with pytest.raises(ValueError):
-        parse_arrangement("ra-console|x|0|0|%2||")
+        parse_arrangement("ra-console|x|0|0|%2|||")
 
 
 async def test_the_gateway_asks_for_every_pane_on_the_server_and_names_no_session() -> None:
-    runner = RecordingRunner(output=f"ra-console|0|0|%2|2|{_A}\nra-{_A}|0|0|%1||\n")
+    runner = RecordingRunner(output=f"ra-console|0|0|%2|2|{_A}|\nra-{_A}|0|0|%1|||surface\n")
 
     arrangement = await gateway(runner).pane_arrangement()
 
@@ -114,8 +128,8 @@ async def test_the_gateway_asks_for_every_pane_on_the_server_and_names_no_sessio
         "the format's field order is what parse_arrangement unpacks positionally"
     )
     assert arrangement == (
-        HostedPane(None, True, 0, 0, "%2", _A),
-        HostedPane(_A, False, 0, 0, "%1", None),
+        HostedPane(None, True, 0, 0, "%2", _A, False),
+        HostedPane(_A, False, 0, 0, "%1", None, True),
     )
 
 
@@ -126,9 +140,11 @@ async def test_a_line_the_decoder_refuses_costs_one_pane_rather_than_the_whole_r
     see and act on. In `inventory` the same line is a session whose state nobody can explain,
     which is why that path keeps it as evidence (DEC-020). Same server, different question.
     """
-    runner = RecordingRunner(output=f"garbage\nra-console|0|0|%2|2|{_A}\n|||||\n")
+    runner = RecordingRunner(output=f"garbage\nra-console|0|0|%2|2|{_A}|\n||||||\n")
 
-    assert await gateway(runner).pane_arrangement() == (HostedPane(None, True, 0, 0, "%2", _A),)
+    assert await gateway(runner).pane_arrangement() == (
+        HostedPane(None, True, 0, 0, "%2", _A, False),
+    )
 
 
 async def test_an_absent_server_is_an_empty_arrangement_rather_than_a_failure() -> None:

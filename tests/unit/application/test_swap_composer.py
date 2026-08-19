@@ -37,18 +37,31 @@ _LEGACY = SessionId.parse("21234567-89ab-cdef-0123-456789abcdef")
 
 
 def _slot(pane_id: str, identity: SessionId | None = None) -> HostedPane:
-    """The console's left slot: window 0, pane index 0."""
-    return HostedPane(None, True, 0, 0, pane_id, identity)
+    """The console's left slot: window 0, pane index 0.
+
+    Carries the surface mark when it holds no agent, because that is what it then is. The
+    surface is found by that mark rather than by being the only unmarked pane in a window —
+    an inference that stopped being an answer as soon as anything else shared the window.
+    """
+    return HostedPane(None, True, 0, 0, pane_id, identity, identity is None)
 
 
 def _feed(pane_id: str) -> HostedPane:
     """A second console pane, so the window is never one pane away from being empty."""
-    return HostedPane(None, True, 0, 1, pane_id, None)
+    return HostedPane(None, True, 0, 1, pane_id, None, False)
 
 
-def _home(session_id: SessionId, pane_id: str, identity: SessionId | None) -> HostedPane:
-    """A pane hosted by one managed session's own window."""
-    return HostedPane(session_id, False, 0, 0, pane_id, identity)
+def _home(
+    session_id: SessionId, pane_id: str, identity: SessionId | None, *, surface: bool = False
+) -> HostedPane:
+    """A pane hosted by one managed session's own window.
+
+    `surface` is explicit and defaults off. Derived from `identity is None` it silently made
+    every unidentified pane the console's surface — including a legacy session's own pane in
+    the test below, which is an agent and not the console's anything. A helper that decides a
+    mark for you is a helper that will mark the wrong thing eventually.
+    """
+    return HostedPane(session_id, False, 0, 0, pane_id, identity, surface)
 
 
 class RecordingConsole:
@@ -86,6 +99,7 @@ class RecordingConsole:
                 target.pane_index,
                 source.pane_id,
                 source.session_id,
+                source.surface,
             ),
             target_pane: HostedPane(
                 source.host,
@@ -94,6 +108,7 @@ class RecordingConsole:
                 source.pane_index,
                 target.pane_id,
                 target.session_id,
+                target.surface,
             ),
         }
         self.arrangement = tuple(moved.get(pane.pane_id, pane) for pane in self.arrangement)
@@ -123,7 +138,7 @@ async def test_showing_an_agent_exchanges_its_pane_with_the_left_slot() -> None:
 
 async def test_showing_the_projects_surface_issues_the_inverse_exchange() -> None:
     """The surface is found where the exchange left it, not where it started."""
-    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None)))
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).show_projects()
 
@@ -139,7 +154,7 @@ async def test_changing_agents_sends_the_first_home_before_bringing_the_second_i
     Both sessions still run, which is what makes it silent.
     """
     console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None), _home(_B, "%4", _B))
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True), _home(_B, "%4", _B))
     )
 
     await composer(console).show(_B)
@@ -164,7 +179,7 @@ async def test_the_second_exchange_targets_the_slot_as_re_read_not_as_remembered
     that is *now* in the slot — which is only knowable by reading again.
     """
     console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None), _home(_B, "%4", _B))
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True), _home(_B, "%4", _B))
     )
 
     await composer(console).show(_B)
@@ -174,7 +189,7 @@ async def test_the_second_exchange_targets_the_slot_as_re_read_not_as_remembered
 
 
 async def test_showing_the_agent_already_in_the_slot_exchanges_nothing() -> None:
-    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None)))
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).show(_A)
 
@@ -203,16 +218,45 @@ async def test_a_session_with_no_pane_of_its_own_is_not_shown_and_does_not_raise
     assert console.swaps == []
 
 
-async def test_an_ambiguous_home_window_refuses_to_guess_which_pane_is_the_surface() -> None:
-    """Two unidentified panes in the shown agent's window: an operator hand-split one.
+async def test_a_hand_split_beside_the_parked_surface_no_longer_stops_the_exchange() -> None:
+    """Two unmarked panes in the shown agent's window, and the surface is still exactly one.
 
-    Picking either would be picking by listing order — the same wrong basis Sub-plan 1
-    removed from destruction — and the loser here is a pane swapped into the console window
-    in place of the surface. Refusing leaves the console showing the agent, which is a state
-    the owner can see and act on.
+    **This test asserted the opposite until Stage 1's gate.** While the surface was identified
+    as "the only pane in that window carrying no identity", an operator's hand-split made two
+    candidates, and refusing was the right call — picking by listing order is the wrong basis
+    Sub-plan 1 removed from destruction, and the loser here is a stranger's pane swapped into
+    the console in place of the surface. What the refusal left behind was a console showing an
+    agent with **no route back**: `show_projects` and every later `show` returned without
+    moving anything until somebody used tmux by hand. The gate evaluator graded that a real
+    defect, and the repair was to stop inferring — the console's own surface carries its own
+    mark now, so the question the refusal protected against is not asked.
     """
     console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None), _home(_A, "%4", None))
+        (
+            _slot("%3", _A),
+            _feed("%2"),
+            _home(_A, "%1", None, surface=True),
+            HostedPane(_A, False, 0, 1, "%9", None, False),
+        )
+    )
+
+    await composer(console).show_projects()
+
+    assert console.swaps == [("%1", "%3")], (
+        "the marked surface was not brought back past an unmarked neighbour"
+    )
+
+
+async def test_a_console_with_no_marked_surface_still_refuses_rather_than_guessing() -> None:
+    """The case the mark cannot answer, which is the one the refusal is still for.
+
+    A console created before the mark existed, caught while displaced, has no marked pane
+    anywhere. Nothing distinguishes the parked surface from anything else in that window, so
+    there is still no safe guess — and refusing leaves a console that plainly shows an agent,
+    which the owner can see, rather than one that has swapped a stranger's pane into itself.
+    """
+    console = RecordingConsole(
+        (_slot("%3", _A), _feed("%2"), HostedPane(_A, False, 0, 0, "%1", None, False))
     )
 
     await composer(console).show_projects()
@@ -239,7 +283,7 @@ async def test_a_second_call_waits_for_the_first_rather_than_interleaving_its_ex
     only thing preventing it, since every step is an awaited round trip.
     """
     console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None), _home(_B, "%4", _B))
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True), _home(_B, "%4", _B))
     )
     gate = asyncio.Event()
     original = console.pane_arrangement
