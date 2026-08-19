@@ -222,12 +222,21 @@ class ProfilesScreen(ChoiceScreen):
 
     @property
     def crumb(self) -> str:
-        """The project this wizard is launching into, which is what the owner just chose.
+        """The project this wizard is launching into — unless the trail already names it.
 
-        A property rather than a class attribute because the trail has to name the *choice*,
-        not the step: "Projects › Agent" would tell the owner nothing they did not already
-        know from the rows in front of them.
+        The chooser now stands between the project list and this screen, and its crumb is
+        the project; repeating it here would make the trail say the same thing twice in a
+        row, which is the exact defect the label step's crumb was once removed for. So this
+        yields the project only when nothing beneath it already did — which today means the
+        legacy path where this screen is pushed without a chooser (tests, and any future
+        direct entry).
         """
+        from remote_agents.adapters.tui.screens.dashboard import ProjectChooserScreen
+
+        stack = self.app.screen_stack
+        index = stack.index(self) if self in stack else -1
+        if index >= 1 and isinstance(stack[index - 1], ProjectChooserScreen):
+            return ""
         project = self.tui.selection.project
         return f"{project.area}/{project.name}" if project is not None else "Agent"
 
@@ -311,10 +320,12 @@ class ReviewScreen(ChoiceScreen):
         # line whose whole content is the absence of a step that no longer exists.
         #
         # What it says instead is the consequence, because this is the position that commits to
-        # it and the consequence is the largest the surface has: a ready launch **execs away**
-        # (DEC-023), replacing this process with the tmux client, so detaching afterwards
-        # returns the owner to their shell rather than to this app. That was written down in
-        # `adapters/tui/attach.py` and in the README and nowhere the owner could see it.
+        # it and the consequence is the largest the surface has: from a bare shell a ready
+        # launch execs away, replacing this process with the tmux client; hosted by a client
+        # on the project's own server it switches that client instead and this app stays. The
+        # status line below covers both — "hands this terminal to the session's pane" is what
+        # each route does — and the routing itself lives in `adapters/tui/attach.py` and the
+        # README's attach paragraph.
         #
         # **"or prints how to reach it" is not hedging; it is the other half of the truth.**
         # The first version of this line stopped at "hands this terminal to the session's pane"

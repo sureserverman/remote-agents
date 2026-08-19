@@ -10,6 +10,12 @@ from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.agent_activity import AgentActivity
+
+#: How many observations the feed shows and its reader fetches — one number, imported by
+#: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
+#: the two can never drift.
+FEED_LIMIT = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +53,21 @@ class TuiContext:
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
     conversations: ConversationService | None = None
+    # The console capabilities, same widening pattern as the two above: when the
+    # composition root determines the surface is hosted by a client on our own tmux
+    # server, opening a session means focusing its console tab (falling back to a client
+    # switch) and the surface stays alive, while `console_sync` reconciles tabs against a
+    # fresh session read wherever the surface reloads its list. Hosts wiring neither keep
+    # the exec-attach contract exactly as it was.
+    open_in_console: Callable[[str], Awaitable[None]] | None = None
+    console_sync: Callable[[tuple], Awaitable[None]] | None = None
+    # The feed capability: a bounded newest-first read of the durable activity table.
+    # A reader, never a drainer — consuming the spool would starve the phone's
+    # notifications, which is the delivery story DEC-031/DEC-034 fought for.
+    activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None
+    # One line on the tmux status bar when the feed gains news — wired only under console
+    # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
+    console_flash: Callable[[str], Awaitable[None]] | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

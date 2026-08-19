@@ -32,12 +32,13 @@ from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
+    DashboardScreen,
     ForceConfirmModal,
     InspectScreen,
     NameScreen,
     ProfilesScreen,
+    ProjectChooserScreen,
     ProjectReviewScreen,
-    ProjectsScreen,
     RemoteControlConfirmModal,
     RenameScreen,
     ResumeConversationsScreen,
@@ -47,6 +48,7 @@ from remote_agents.adapters.tui.screens import (
     SessionDetailScreen,
     SessionsScreen,
 )
+from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -158,6 +160,7 @@ _RESOLVED = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
 # state it renders is the point of moving the seven navigation fields onto them.
 _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ProfilesScreen: ProfilesScreen,
+    ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
     ReviewScreen: ReviewScreen,
     AreasScreen: AreasScreen,
     NameScreen: lambda: NameScreen("infra"),
@@ -183,7 +186,7 @@ def test_every_registered_screen_is_reachable_by_this_file() -> None:
     screen absent from `_DIRECT` and from the two special cases would otherwise simply never
     be walked, and the file would stay green while covering less than it claims.
     """
-    arranged = set(_DIRECT) | {ProjectsScreen}
+    arranged = set(_DIRECT) | {DashboardScreen}
     assert set(ALL_SCREENS) == arranged, (
         "every screen in ALL_SCREENS needs an arrangement in this file, and every "
         "arrangement needs to still be registered"
@@ -192,7 +195,7 @@ def test_every_registered_screen_is_reachable_by_this_file() -> None:
 
 async def _arrange(app: RemoteAgentsTui, pilot, screen_type: type[Screen]) -> None:
     """Put `screen_type` on the stack, the way the surface itself gets there."""
-    if screen_type is ProjectsScreen:
+    if screen_type is DashboardScreen:
         return
     await app.push_screen(_DIRECT[screen_type]())
     await pilot.pause()
@@ -279,8 +282,8 @@ async def test_the_error_path_back_row_goes_back_from_any_screen_it_lands_on() -
         depth_after = len(app.screen_stack)
         position_after = app.screen.position
 
-    assert position_before == "PROFILES"
+    assert position_before == "PROJECT_CHOOSER"
     assert depth_after == depth_before - 1, (
         f"choosing the error-path Back row did not pop the screen: {position_after}"
     )
-    assert position_after == "PROJECTS"
+    assert position_after == "DASHBOARD"

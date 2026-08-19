@@ -8,6 +8,18 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 _DELIMITER = "|"
 _SCHEMA_VERSION = "1"
+
+# The console session carries the `ra-` prefix so it visibly belongs to this socket, and a
+# non-UUID suffix so `exact_session_target` can never accept it: no lifecycle code path can
+# address the console as a managed session by construction rather than by discipline.
+CONSOLE_SESSION_NAME = "ra-console"
+
+# Window-index-to-owning-session mapping for the console. The mark below is set
+# *window-scoped* on the source (see `window_session_mark_args`) because a linked window is
+# one shared object: a window option travels with it into the console's listing, while the
+# managed session's session-scoped options do not (verified against tmux 3.4, 2026-08-18).
+WINDOW_SESSION_OPTION = "@remote_agents_window_session"
+CONSOLE_WINDOW_FORMAT = _DELIMITER.join(("#{window_index}", f"#{{{WINDOW_SESSION_OPTION}}}"))
 PANE_FORMAT = _DELIMITER.join(
     (
         "#{session_name}",
@@ -82,6 +94,160 @@ def attach_argv(session_id: SessionId, *, read_only: bool = False) -> tuple[str,
 def attach_command(session_id: SessionId, *, read_only: bool = False) -> str:
     """Return the one copyable attach command for a currently verified managed session."""
     return " ".join(attach_argv(session_id, read_only=read_only))
+
+
+def console_target() -> str:
+    """Return tmux's exact session target for the one console session."""
+    return f"{CONSOLE_SESSION_NAME}:"
+
+
+def console_attach_argv() -> tuple[str, ...]:
+    """Return the full production argv that attaches a bare shell to the console.
+
+    The full form for the same reason `attach_argv` and `switch_client_argv` carry one:
+    the composition root execs this without assembling a tmux invocation of its own.
+    """
+    return ("tmux", "-L", "remote-agents", "attach-session", "-t", console_target())
+
+
+def link_window_args(session_id: SessionId) -> tuple[str, ...]:
+    """Return the argv suffix that links one managed session's window into the console.
+
+    The bare destination `ra-console:` appends at the next free index (tmux 3.4 behavior,
+    verified on a disposable socket rather than assumed), so the builder never has to guess
+    an index that another link may have taken between the listing and the call. `-d` is
+    load-bearing: without it tmux makes the new window current, so every background sync
+    that linked a tab yanked the console away from whatever the owner was doing — observed
+    on the first live drive against real sessions, invisible to every headless test.
+    """
+    return (
+        "link-window",
+        "-d",
+        "-s",
+        exact_session_target(f"ra-{session_id}"),
+        "-t",
+        console_target(),
+    )
+
+
+def window_session_mark_args(session_id: SessionId) -> tuple[str, ...]:
+    """Return the argv suffix that marks a managed session's window with its own identity.
+
+    `-w` is the point: the mark must live on the *window*, which is the object `link-window`
+    shares with the console, not on the session, whose options stay home.
+    """
+    return (
+        "set-option",
+        "-w",
+        "-t",
+        exact_session_target(f"ra-{session_id}"),
+        WINDOW_SESSION_OPTION,
+        str(session_id),
+    )
+
+
+def unlink_window_args(window_index: int) -> tuple[str, ...]:
+    """Return the argv suffix that unlinks one console tab; the dashboard is not a tab."""
+    if window_index < 1:
+        raise ValueError("only linked console tabs may be unlinked, never the dashboard")
+    return ("unlink-window", "-t", f"{CONSOLE_SESSION_NAME}:{window_index}")
+
+
+def select_window_args(window_index: int) -> tuple[str, ...]:
+    """Return the argv suffix that focuses one console window, index 0 being the dashboard."""
+    if window_index < 0:
+        raise ValueError("a console window index is never negative")
+    return ("select-window", "-t", f"{CONSOLE_SESSION_NAME}:{window_index}")
+
+
+def switch_client_args(session_id: SessionId) -> tuple[str, ...]:
+    """Return the argv suffix that moves the attached client to one exact managed session."""
+    return ("switch-client", "-t", exact_session_target(f"ra-{session_id}"))
+
+
+def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
+    """Return the full production argv that switches the current client to one session.
+
+    The full form exists for the same reason `attach_argv` does: the one non-adapter caller
+    (`adapters/tui/attach.py`, on the already-inside-our-server path) must not assemble a
+    `tmux` invocation of its own — every tmux argv in the tree is codec-built (DEC-001).
+    """
+    return ("tmux", "-L", "remote-agents", *switch_client_args(session_id))
+
+
+def switch_client_console_args() -> tuple[str, ...]:
+    """Return the argv suffix that moves the attached client back to the console."""
+    return ("switch-client", "-t", console_target())
+
+
+def display_message_args(text: str) -> tuple[str, ...]:
+    """Return the argv suffix that flashes one line on the status bar and nothing more.
+
+    `-l` is load-bearing, not cosmetic: without it tmux format-expands the message, and
+    FORMATS includes `#(shell-command)`, which tmux executes and substitutes — a status
+    flash carrying session- or agent-derived text would be an arbitrary-command sink.
+    With `-l` the text is printed unchanged, and `--` fences the text from the option
+    parser — a message beginning with `-` is otherwise consumed as a flag (`-a` dumps the
+    format table, `-c…` silently misroutes the flash). Both verified against tmux 3.4,
+    2026-08-18, and pinned by the feature probe's contract test.
+    """
+    if not text or "\n" in text:
+        raise ValueError("a status flash is exactly one non-empty line")
+    return ("display-message", "-l", "--", text)
+
+
+def current_console_window_args() -> tuple[str, ...]:
+    """Return the argv suffix that prints the console session's current window index.
+
+    A proxy for "is the owner looking at the dashboard": the console's current window is
+    0 exactly when its client rests on the dashboard tab. The format string is this
+    module's own fixed text, so expansion here is safe and wanted.
+    """
+    return ("display-message", "-p", "-t", console_target(), "#{window_index}")
+
+
+def list_console_windows_args() -> tuple[str, ...]:
+    """Return the argv suffix that lists console windows in the pinned mapping format."""
+    return ("list-windows", "-t", console_target(), "-F", CONSOLE_WINDOW_FORMAT)
+
+
+def parse_console_window(line: str) -> tuple[int, SessionId | None]:
+    """Decode one console window line into (index, owning session or None for unmarked)."""
+    fields = line.rstrip("\n").split(_DELIMITER)
+    if len(fields) != 2:
+        raise ValueError("console window format has missing fields")
+    raw_index, raw_session = fields
+    try:
+        index = int(raw_index)
+    except ValueError as error:
+        raise ValueError("console window index is invalid") from error
+    if index < 0:
+        raise ValueError("console window index is invalid")
+    if not raw_session:
+        return (index, None)
+    return (index, SessionId.parse(raw_session))
+
+
+def is_console_view(line: str) -> bool:
+    """Say whether one list-panes line is the console's view rather than evidence.
+
+    The console reports its own dashboard pane and re-reports every linked window under its
+    own name (tmux 3.4, verified). Both describe presentation, not sessions: the linked
+    duplicate's pane is already listed — with its options intact — under its home session.
+
+    tmux 3.4 accepts `|` inside a session name (verified 2026-08-18, pinned by the feature
+    probe's contract test), and the pane format uses `|` as its delimiter, so a stray
+    session named e.g. `ra-console|x` would mis-split into a line whose *first field* reads
+    `ra-console`. The field-count check keeps such an impostor out of this drop: its
+    embedded delimiter inflates the split past the format's ten fields, so it falls through
+    to `parse_pane` and is quarantined as orphan evidence — exactly where a stray session's
+    line always went. The empty-schema check closes the remaining shape: a genuine console
+    view always carries blank option fields (session options do not travel), so a ten-field
+    line named `ra-console` that *does* carry a schema tag is somebody's fabrication, and
+    it too falls through to be quarantined rather than dropped.
+    """
+    fields = line.rstrip("\n").split(_DELIMITER)
+    return len(fields) == 10 and fields[0] == CONSOLE_SESSION_NAME and fields[6] == ""
 
 
 def parse_pane(line: str) -> ManagedPane:

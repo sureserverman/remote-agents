@@ -150,7 +150,26 @@ Do not put secrets in this repository.
 
 ## Local terminal surface
 
-The same curated launches are available on this host without Telegram:
+The same curated launches are available on this host without Telegram. The front door is
+the bare command:
+
+```bash
+uv run --locked remote-agents
+```
+
+With no arguments, `remote-agents` enters the **console**: a tmux session named
+`ra-console` on the project's own server, whose window 0 is the dashboard — projects on
+the left, the running sessions and the notifications feed on the right — and whose other
+windows are tabs, one per live managed session, linked and unlinked as sessions come and
+go. Opening a session from the dashboard focuses its tab; `F12` returns to the dashboard
+from any tab (a binding installed on the project's own tmux server only — your own tmux
+configuration is never touched). Run from inside the console it says so instead of
+nesting; run from inside somebody else's tmux it prints the attach command instead.
+Killing the console at any time is safe: it is presentation only, and every managed
+session survives it. Every command with arguments is the CLI exactly as before — `serve`,
+`doctor`, `add-project`, and the rest are unchanged.
+
+The dashboard itself, in or out of the console, is:
 
 ```bash
 uv run --locked remote-agents tui
@@ -166,13 +185,15 @@ itself, so none of what follows needs Telegram credentials or a running user ser
 resume, the session list, inspect, Copy Attach, rename, all three stops, and Claude Remote
 Control are available with the service stopped.
 
-The wizard opens on the project list with the filter focused and reports how many projects are
-available. Type to narrow the list one character at a time, press enter to move into it, then use
-the arrows and enter to choose; registered projects are listed before unregistered ones and each
-row names its group. The agent list names every curated profile and shows the blocking reason
-beside one that cannot be launched here; choosing that one is refused rather than attempted.
-Choosing an agent goes straight to Review — three positions from start to launch, with no name
-asked for on the way. Review carries the project and the agent in its breadcrumb and says what
+The dashboard rests on the project list with the filter focused and reports how many projects
+are available. Type to narrow the list one character at a time, press enter to move into it,
+then use the arrows and enter to choose; registered projects are listed before unregistered
+ones and each row names its group. Choosing a project asks one question — launch a new session,
+or reopen a saved conversation — with the cursor resting on Launch, and Resume offered only on
+a host whose conversation service is wired. Launch opens the agent list, which names every
+curated profile and shows the blocking reason beside one that cannot be launched here; choosing
+a blocked one is refused rather than attempted. Choosing an agent goes straight to Review, with
+no name asked for on the way. Review carries the project and the agent in its breadcrumb and says what
 going through with it does: a ready launch hands this terminal to the session's pane, or prints
 how to reach it. It opens with Back highlighted rather than Launch, so a stray enter mutates
 nothing; Back restores the agent choice and Cancel returns to the project list. Escape is
@@ -210,15 +231,21 @@ accepts; a free-form area is never accepted. The name is typed and validated bef
 created, and Review names the area and the name before the mutation. After a create the catalogue
 is re-read, so the new project is selectable without leaving the app.
 
-After a ready launch this process is replaced by the attach command for the session it just
-started, `tmux -L remote-agents attach-session -t ra-<session>:`, and the store connection is
-closed first, so the attached terminal holds no database handle. The project ships no tmux
-configuration and sets no prefix, so detaching uses tmux's own binding: `Ctrl-b d` on a stock
-tmux, or the same `d` under whatever prefix this host's `~/.tmux.conf` sets. Detaching leaves the
-session running and managed; it stays listed, inspectable, and stoppable from either surface.
-Started from inside an existing tmux client, the launch still happens but the attach is refused
-rather than nested, and the command to reach the new session is printed instead. An exec that
-cannot happen prints the same command and exits non-zero, so a started session is never lost.
+After a ready launch, where the surface goes depends on where it is hosted. From a bare shell
+this process is replaced by the attach command for the session it just started,
+`tmux -L remote-agents attach-session -t ra-<session>:`, exactly as before. Run inside a client
+on the project's own tmux server, the surface instead switches that client to the new session
+and stays alive, because a client already on the server is not nesting when it reaches a
+session — it is switching. Either way the store is never held open across your work: the
+surface's database connection exists only for the duration of a single store operation, so
+however long it stays up beside running sessions, the terminal you type into holds no standing
+database handle. The project ships no tmux configuration and sets no prefix, so detaching uses
+tmux's own binding: `Ctrl-b d` on a stock tmux, or the same `d` under whatever prefix this
+host's `~/.tmux.conf` sets. Detaching leaves the session running and managed; it stays listed,
+inspectable, and stoppable from either surface. Started from inside somebody else's tmux
+client, the launch still happens but the attach is refused rather than nested, and the command
+to reach the new session is printed instead. An exec that cannot happen prints the same command
+and exits non-zero, so a started session is never lost.
 
 Ctrl+S lists the managed sessions. The list is the shared store's rather than this process's, so a
 session the bot launched, or one a previous run of this app started, is there too; each row names

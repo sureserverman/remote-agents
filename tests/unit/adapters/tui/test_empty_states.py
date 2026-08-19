@@ -152,7 +152,7 @@ def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source()
     }
 
     assert emptiable == {
-        "ProjectsScreen",
+        "DashboardScreen",
         "SessionsScreen",
         "ResumeConversationsScreen",
         "ResumeProjectsScreen",
@@ -279,7 +279,7 @@ async def test_an_empty_catalogue_says_so_in_the_resume_flow() -> None:
 
     assert rows == [ResumeProjectsScreen.empty_state, "Back"]
     assert enabled == ["Back"]
-    assert still_here == "RESUME_PROJECTS" or still_here == "PROJECTS", still_here
+    assert still_here == "RESUME_PROJECTS" or still_here == "DASHBOARD", still_here
     assert not any("no longer available" in str(note.message) for note in announced), (
         "the empty catalogue was reported as a project that had vanished"
     )

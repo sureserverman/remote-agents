@@ -575,6 +575,9 @@ uv run --locked remote-agents tui
 
 1. Confirm the wizard opens on the project list with the filter focused. Type to narrow it, press
    enter to move into the list, and choose a project with the arrows and enter.
+1b. Confirm choosing the project opens the Launch/Resume chooser resting on Launch, that Resume
+    is absent (not greyed) when no conversation service is wired, and that enter on Launch opens
+    the agent list.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
 3. Confirm choosing the agent lands on Review directly — there is no label step — and that its
@@ -589,9 +592,12 @@ uv run --locked remote-agents tui
    inspectable, and stoppable exactly like one the bot started. Launch one from Telegram and
    confirm it is equally a managed session for the terminal's store; neither surface owns a
    session the other cannot manage.
-6. Run `remote-agents tui` from inside a tmux client and launch. The launch must still happen, but
-   the attach must be refused rather than nested, printing the command that reaches the new
-   session. Nothing is launched twice.
+6. Run `remote-agents tui` from inside a tmux client **that is not the project's own server**
+   (any socket other than `-L remote-agents`) and launch. The launch must still happen, but the
+   attach must be refused rather than nested, printing the command that reaches the new session.
+   Nothing is launched twice. Hosted by a client on the project's own server, the surface
+   instead switches that client to the new session and stays alive — that path is exercised by
+   the console acceptance steps, not this one.
 6b. Open a session's detail from Ctrl+S, choose Rename, type a name and press enter. Confirm
     the detail comes back naming it and the sessions list agrees, and that an empty entry
     leaves the existing name alone rather than clearing it. This is the capability the local
@@ -644,6 +650,26 @@ there until the terminal is restarted, and the
 service's profile list is a snapshot of its own start in the same way. When the two surfaces
 disagree about which projects or agents exist, neither is wrong; refresh or restart the older
 process, and treat `doctor --profiles`, which probes when it is run, as the current answer.
+
+## Console recovery
+
+The console — the `ra-console` tmux session the bare `remote-agents` command enters — is
+presentation only, and that is the whole recovery story: **killing it never touches a
+session.** A console that is stuck, stale, or showing tabs that disagree with reality is
+rebuilt from scratch:
+
+```bash
+tmux -L remote-agents kill-session -t ra-console
+remote-agents
+```
+
+Every managed session survives the kill (the tabs are `link-window` shares, and a window
+dies only with its last link, which the home session always holds). The fresh console
+re-links a tab per live session on its first reload. If the console cannot be prepared at
+all, the bare command says so and exits non-zero; `remote-agents doctor` reports whether
+this host's tmux supports the console's window contract, and `remote-agents tui` still
+runs the dashboard directly in the current terminal, where opening a session falls back
+to the exec-attach handoff.
 
 ## Local recovery without Telegram
 

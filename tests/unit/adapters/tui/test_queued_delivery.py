@@ -234,6 +234,7 @@ async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
     the launch flow lost its label step.
     """
     await app.screen.choose("opaque-existing")
+    await app.screen.choose("launch")
     await app.screen.choose("claude")
     await settle(app, pilot)
     assert position(app) == "REVIEW", f"the wizard stopped on {position(app)}"
@@ -259,6 +260,7 @@ async def test_a_queued_burst_reaches_the_screen_twice() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.screen.choose("opaque-existing")
+        await app.screen.choose("launch")
         await settle(app, pilot)
         assert position(app) == "PROFILES", f"the wizard stopped on {position(app)}"
 

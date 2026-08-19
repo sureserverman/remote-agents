@@ -102,37 +102,48 @@ class ResumeProjectsScreen(ChoiceScreen):
                 "That project is no longer available. Refresh and try again.", severity="warning"
             )
             return
-        conversations = self.services.conversations
-        if conversations is None:
-            return
-        # Guarded across the read for the reason the hand-rolled flow established: a second
-        # entry point firing mid-navigation used to reset the chosen project, after which
-        # selecting a profile silently did nothing and only Escape recovered.
-        async with self.holding_the_guard():
-            try:
-                capabilities = await conversations.capabilities()
-            except Exception as error:
-                _LOG.exception("resume capabilities failed")
-                self.set_status(
-                    "Resume is unavailable on this host. Press escape to return to the "
-                    "project list.",
-                    severity="error",
-                )
-                self.announce(f"Resume is unavailable: {error}")
-                self.show_choices(((_BACK, "Back"),))
-                return
-            capable = tuple(
-                capability
-                for capability in capabilities
-                if capability.catalogue_available and capability.selected_resume_available
+        await advance_to_resume_profiles(self, project)
+
+
+async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProject) -> None:
+    """Fetch capabilities under the guard and land on the resume-capable agent list.
+
+    Shared by the resume flow's own project picker and the dashboard's per-project chooser,
+    so the two entrances into the resume flow cannot drift on the guard, the failure
+    rendering, or the capability filter.
+
+    Guarded across the read for the reason the hand-rolled flow established: a second
+    entry point firing mid-navigation used to reset the chosen project, after which
+    selecting a profile silently did nothing and only Escape recovered.
+    """
+    conversations = screen.services.conversations
+    if conversations is None:
+        return
+    async with screen.holding_the_guard():
+        try:
+            capabilities = await conversations.capabilities()
+        except Exception as error:
+            _LOG.exception("resume capabilities failed")
+            screen.set_status(
+                "Resume is unavailable on this host. Press escape to return to the "
+                "project list.",
+                severity="error",
             )
-            # Inside the guard, not after it. `push_screen` yields while the new screen
-            # mounts, so clearing first leaves a window in which a second of this app's
-            # bindings pops the screen being mounted and the fetched capabilities are
-            # discarded with no error — the same "a second entry point mid-navigation" class
-            # the guard exists for, just failing silently instead of stranding. What the
-            # guard does *not* cover is written down once, on `ChoiceScreen.advance_to`.
-            await self.advance_to(ResumeProfilesScreen(project, capable))
+            screen.announce(f"Resume is unavailable: {error}")
+            screen.show_choices(((_BACK, "Back"),))
+            return
+        capable = tuple(
+            capability
+            for capability in capabilities
+            if capability.catalogue_available and capability.selected_resume_available
+        )
+        # Inside the guard, not after it. `push_screen` yields while the new screen
+        # mounts, so clearing first leaves a window in which a second of this app's
+        # bindings pops the screen being mounted and the fetched capabilities are
+        # discarded with no error — the same "a second entry point mid-navigation" class
+        # the guard exists for, just failing silently instead of stranding. What the
+        # guard does *not* cover is written down once, on `ChoiceScreen.advance_to`.
+        await screen.advance_to(ResumeProfilesScreen(project, capable))
 
 
 class ResumeProfilesScreen(ChoiceScreen):

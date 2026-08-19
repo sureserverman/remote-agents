@@ -61,7 +61,7 @@ def test_an_existing_tmux_client_is_told_how_to_switch_rather_than_nested() -> N
 
     assert status == 0
     assert exec_argv.calls == []
-    assert "Already inside tmux" in reported[0]
+    assert "Already inside another tmux" in reported[0]
     assert "attach-session" in reported[0]
 
 

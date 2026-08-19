@@ -487,7 +487,11 @@ def test_a_huge_record_is_refused_without_being_read_into_memory(tmp_path: Path)
 
     def record_the_read(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         handle = real_open(self, *args, **kwargs)
-        if self.name == "oversized.json":
+        # The drain claims each record by rename before reading it, so every read the
+        # drain makes opens a `.claim-*.tmp` — watching those watches them all, which is
+        # a strictly wider claim than the original filter on one filename: no drain read,
+        # oversized or modest, is ever unbounded.
+        if self.name.startswith(".claim-"):
             real_read = handle.read
 
             def watched(size: int | None = -1, /):
@@ -504,7 +508,7 @@ def test_a_huge_record_is_refused_without_being_read_into_memory(tmp_path: Path)
     assert [activity.detail for activity in activities] == ["modest"]
     assert list(tmp_path.iterdir()) == []
     # A bounded read asks for a bounded number of bytes. Reading to the end asks for -1 or None.
-    assert requested, "the oversized record was never read at all"
+    assert requested, "the records were never read at all"
     assert all(size is not None and 0 < size <= MAXIMUM_RECORD_BYTES + 1 for size in requested), (
         f"the whole file was read before it was judged: {requested}"
     )

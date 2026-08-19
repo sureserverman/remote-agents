@@ -113,13 +113,17 @@ async def test_ctrl_s_is_refused_while_busy() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        # The dashboard's own mount reload is the baseline; the refusal is about the key
+        # adding nothing on top of it.
+        before = launcher.refreshed
         app._busy = True
         await app.action_sessions()
         await pilot.pause()
         step = position(app)
 
-    assert step == "PROJECTS"
-    assert launcher.refreshed == 0
+    assert step == "DASHBOARD"
+    assert launcher.refreshed == before
 
 
 async def test_pressing_the_key_actually_reaches_the_action() -> None:
@@ -128,12 +132,14 @@ async def test_pressing_the_key_actually_reaches_the_action() -> None:
     app = RemoteAgentsTui(_context(launcher))
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        before = launcher.refreshed
         await pilot.press("ctrl+s")
         await pilot.pause()
         step = position(app)
 
     assert step == "SESSIONS"
-    assert launcher.refreshed == 1
+    assert launcher.refreshed == before + 1
 
 
 async def test_ctrl_r_on_the_sessions_list_re_lists_it_and_stays_put() -> None:
@@ -171,6 +177,8 @@ async def test_ctrl_r_where_there_is_nothing_to_re_read_does_not_navigate() -> N
 
     async with app.run_test() as pilot:
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("launch")
         await pilot.pause()
         assert position(app) == "PROFILES"
         depth = len(app.screen_stack)

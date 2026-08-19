@@ -34,10 +34,12 @@ from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
+from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import (
     database_is_ready,
+    leased_connection,
     open_database,
     restore_database,
 )
@@ -170,6 +172,15 @@ class ServiceComposition:
     a pane for and everything to deliver.
     """
 
+    activity_store: SQLiteActivityStore | None = None
+    """Where every observation becomes durable before delivery, or None to skip recording.
+
+    The local feed's source (migration 9), never a delivery ledger — DEC-026's in-memory
+    notifier state is unchanged. Recorded *before* `deliver` so the feed shows what was
+    observed even when Telegram refuses the send; a failed append costs the feed one row
+    and never costs the phone its notification.
+    """
+
 
 async def _serve_with_reconciliation(
     secrets: TelegramSecrets,
@@ -271,6 +282,12 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
+    if composition.activity_store is not None:
+        for activity in activities:
+            try:
+                await composition.activity_store.append(activity)
+            except Exception:
+                _LOG.exception("recording an activity observation failed; delivery continues")
     try:
         await composition.boundary.notifier.deliver(activities)
     except Exception:
@@ -416,6 +433,7 @@ def main(
             core_ready=registry.error is None,
             database_ready=database_is_ready(config.database_path),
             tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+            tmux_console_ready=_console_features_available(paths.home),
             telegram_ready=_telegram_credentials_are_private(paths),
             service_ready=_command_succeeds(
                 ("systemctl", "--user", "is-active", "--quiet", "remote-agents.service")
@@ -462,7 +480,16 @@ def main(
             print(error, file=sys.stderr)
             return 1
         paths.ensure_directories()
-        connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        # Migrations and the pre-migration backup run once, on a real connection that is
+        # closed before the surface starts; the surface itself works over a per-operation
+        # lease and holds no database handle between operations. This is the stated answer
+        # to the question DEC-023 recorded as open (superseding it — recorded at the
+        # console-surface plan's close-out): the surface may now be long-lived beside
+        # attached sessions, and what keeps DEC-005's two-writer story simple is no longer
+        # "the terminal exec'd away", it is that the terminal's handle exists only inside a
+        # single store operation. The README states the reworded guarantee.
+        paths.open_database(open_database, migrations=MIGRATIONS).close()
+        connection = leased_connection(config.database_path)
         request = None
         try:
             request = run_local_terminal(local_context(config, connection, paths))
@@ -476,17 +503,6 @@ def main(
             return 1
         finally:
             connection.close()
-        # Closed above, exec'd below, and that order is the guarantee (DEC-023). The alternative
-        # was Textual's `App.suspend()`, which would have kept this process — and therefore this
-        # connection — alive underneath the attached tmux client, buying a detach that returns the
-        # owner to the session list instead of to the shell. It was declined: a suspended surface
-        # holds the SQLite handle for the whole attached session, which breaks what
-        # README.md:173-175 states outright ("the attached terminal holds no database handle") and
-        # changes the two-writer story DEC-005 accepted, where the bot and this terminal share the
-        # store and the terminal simply lets go while the owner is attached. Declining costs a UX
-        # nicety — a re-entry is a fresh launch; adopting costs a documented guarantee, and the
-        # guarantee is load-bearing in a way the nicety is not. DEC-005 stands unamended; DEC-023
-        # declines to override it and records no supersede.
         return attach_to(request)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
@@ -506,6 +522,11 @@ def main(
             )
         finally:
             connection.close()
+    if arguments.command is None:
+        # The bare name was unclaimed — no arguments fell through every branch above and
+        # exited 0 silently — so this claims it for the one thing a bare invocation can
+        # mean: enter the console.
+        return _enter_console()
     return 0
 
 
@@ -515,6 +536,10 @@ class LocalRuntime:
 
     terminal: TmuxTerminal
     profiles: tuple[ProfileAvailability, ...]
+    # The gateway the terminal wraps, carried separately so the composition root can wire
+    # console capabilities (client switching) without widening the terminal port for a
+    # concern that is presentation, not lifecycle.
+    gateway: TmuxGateway
 
 
 def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
@@ -558,15 +583,18 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
             resume_profile_factories[result.profile_id] = _resume_profile_factory(
                 definition, executable, allowed_environment
             )
+    gateway = TmuxGateway(
+        "remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory
+    )
     terminal = TmuxTerminal(
-        TmuxGateway("remote-agents", AsyncTmuxRunner(), intent_directory=paths.intent_directory),
+        gateway,
         project_paths,
         {},
         startup_timeout=20,
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles)
+    return LocalRuntime(terminal, profiles, gateway)
 
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
@@ -616,7 +644,63 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
         PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
         paths.activity_directory,
+        SQLiteActivityStore(connection),
     )
+
+
+def _enter_console(
+    *,
+    environment: Mapping[str, str] | None = None,
+    ensure_console: Callable[[], Awaitable[bool]] | None = None,
+    exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
+) -> int:
+    """Enter the console: ensure it exists and become its client, honoring the hosting.
+
+    The bare invocation's whole meaning. A client already on our server is told it is
+    already there (F12 reaches the dashboard); a foreign tmux client gets the command
+    printed rather than a nested client; a bare shell ensures the console — window 0
+    running `remote-agents tui` — and execs the attach, exactly the handoff shape a
+    ready launch has always used. An exec that cannot happen prints the same command
+    and exits non-zero, so the console is never lost behind a silent failure.
+    """
+    from remote_agents.adapters.tmux.codec import console_attach_argv
+    from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
+
+    values = os.environ if environment is None else environment
+    mode = hosting_mode(values)
+    command = " ".join(console_attach_argv())
+    if mode is HostingMode.CONSOLE:
+        print("Already in the console. F12 returns to the dashboard.")
+        return 0
+    if mode is HostingMode.FOREIGN:
+        print(
+            "Already inside another tmux. Detach first and run `remote-agents`, or attach "
+            f"from a new terminal with:\n{command}"
+        )
+        return 0
+    if ensure_console is None:
+        from remote_agents.application.console import ConsoleComposer
+
+        composer = ConsoleComposer(
+            TmuxGateway("remote-agents", AsyncTmuxRunner()),
+            (sys.executable, "-m", "remote_agents", "tui"),
+            Path.home(),
+        )
+        ensure_console = composer.ensure
+    if not asyncio.run(ensure_console()):
+        print(
+            "The console could not be prepared. Check tmux on this host, or run: "
+            "remote-agents doctor",
+            file=sys.stderr,
+        )
+        return 1
+    argv = console_attach_argv()
+    try:
+        exec_argv(argv[0], argv)
+    except OSError:
+        print(f"Could not attach automatically. Attach with:\n{command}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):
@@ -654,11 +738,48 @@ def local_context(config, connection, paths: ProductionPaths):
     The terminal's own modules are imported here rather than at module scope, so the
     service never loads the terminal library and a failure in it cannot reach serve.
     """
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
+    from remote_agents.adapters.tui.context import FEED_LIMIT, ProfileChoice, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     runtime = _local_runtime(config, paths, projects.paths)
+
+    open_in_console = None
+    console_sync = None
+    console_flash = None
+    if hosting_mode(os.environ) is HostingMode.CONSOLE:
+        # Hosted by a client on our own server: opening a session focuses its console tab
+        # (the composer falls back to a direct client switch), tabs are reconciled on
+        # every sessions reload, and the surface stays alive. Everywhere else both fields
+        # stay None and the surface keeps the exec-attach contract untouched. ensure()
+        # runs before the app starts so the common failure is met here first and logged;
+        # the capabilities are then wired regardless — deliberately, because under console
+        # hosting an exec-attach would cost the dashboard its own process (attach.py), so
+        # a degraded console keeps retrying quietly per pass rather than re-routing opens
+        # through exec.
+        from remote_agents.application.console import ConsoleComposer
+
+        composer = ConsoleComposer(
+            runtime.gateway,
+            (sys.executable, "-m", "remote_agents", "tui"),
+            paths.home,
+        )
+        if not asyncio.run(composer.ensure()):
+            # Wiring continues regardless (see above), but the operator hears about it
+            # here once, at the surface's front door, not only in per-pass debug logs.
+            print(
+                "The console could not be prepared; sessions open by direct switch and "
+                "no tab bar will appear. See the log, or run: remote-agents doctor",
+                file=sys.stderr,
+            )
+
+        async def open_in_console(session_id: str) -> None:
+            await composer.open(SessionId.parse(session_id))
+
+        console_sync = composer.sync
+        console_flash = composer.flash
+
     return TuiContext(
         launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
         creator=_project_creator(config),
@@ -684,6 +805,12 @@ def local_context(config, connection, paths: ProductionPaths):
         # the bot also uses -- no configuration key sources them today.
         capture=runtime.terminal.capture,
         conversations=_conversation_service(projects.paths),
+        open_in_console=open_in_console,
+        console_sync=console_sync,
+        # A reader of the durable observation table, never a drainer: consuming the spool
+        # would starve the phone's notifications (see Task 5.2's correction note).
+        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+        console_flash=console_flash,
     )
 
 
@@ -718,6 +845,22 @@ def _resolve_profile_executable(executable: str, home: Path) -> Path | None:
             return candidate
     resolved = shutil.which(executable)
     return Path(resolved) if resolved is not None else None
+
+
+def _console_features_available(working_directory: Path) -> bool:
+    """Probe, on a disposable socket, whether this host's tmux can host the console.
+
+    `doctor` is the one command an operator runs before trusting a deploy, so the console's
+    window contract is proved here — by the same round trip the console will actually make —
+    rather than discovered as a mid-composition failure the first time the surface starts.
+    Any failure is a plain no: the probe is diagnosis, never a gate that can crash `doctor`.
+    """
+    from remote_agents.adapters.tmux.feature_probe import probe_features
+
+    try:
+        return probe_features(working_directory).window_linkable
+    except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
+        return False
 
 
 def _command_succeeds(argv: tuple[str, ...]) -> bool:

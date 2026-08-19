@@ -143,6 +143,8 @@ async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
     """Two choices, not three: the agent choice is the arrival at the review."""
     await app.screen.choose("opaque-existing")
     await pilot.pause()
+    await app.screen.choose("launch")
+    await pilot.pause()
     await app.screen.choose("claude")
     await pilot.pause()
 
@@ -403,6 +405,8 @@ async def test_the_trail_grows_as_the_owner_walks_into_a_flow() -> None:
         trail = [breadcrumb(app)]
         await app.screen.choose("opaque-existing")
         await pilot.pause()
+        await app.screen.choose("launch")
+        await pilot.pause()
         trail.append(breadcrumb(app))
         await app.screen.choose("claude")
         await pilot.pause()
@@ -472,6 +476,8 @@ async def test_leaving_a_flow_shortens_the_trail_again() -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("launch")
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()

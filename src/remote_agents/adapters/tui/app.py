@@ -30,13 +30,14 @@ from remote_agents.adapters.tui.model import (
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
-    ProjectsScreen,
+    DashboardScreen,
     ResumeProjectsScreen,
     SessionDetailScreen,
     SessionsScreen,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
+from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -228,8 +229,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         `pop_screen` raises `ScreenStackError` on the last screen, so making the resting
         position the *default* screen is what turns "a back path must never empty the stack"
         from a rule every screen has to observe into something the stack cannot do.
+
+        The dashboard subclasses the projects picker, so `return_to_projects`'s isinstance
+        check and every flow that unwinds to "the projects position" land here unchanged.
         """
-        return ProjectsScreen()
+        return DashboardScreen()
 
     # Shared state screens read ---------------------------------------------------
 
@@ -291,6 +295,37 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         self._leaving = True
         self.exit(request)
+
+    async def _open_or_leave(self, session_id: str) -> None:
+        """Open one ready session by the route the composition wired, in one place.
+
+        `launch` and `issue_resume` both end here so they cannot each invent their own
+        answer to "does opening a session end the surface". Without the console capability
+        this is exactly the old contract: exit with an `AttachRequest` and let `attach_to`
+        exec. With it, the client is switched to the session and the surface stays alive —
+        returned to its resting screen, so the jump-home key finds it at rest rather than
+        mid-flow.
+        """
+        opener = self._services.open_in_console
+        if opener is None:
+            self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+            return
+        # Re-arm the guard for the switch's own await. Both callers clear `_busy` in their
+        # `finally` just before calling here, and on the exec route `_leave`'s permanent
+        # latch covers the gap — but this route succeeds *without* leaving, so without this
+        # the queued second Enter `_leave`'s docstring describes (DEC-008's defect) would
+        # find an open guard mid-switch and issue a second real launch. There is no yield
+        # between the caller's clear and this set, so the window never opens.
+        self._busy = True
+        try:
+            await opener(session_id)
+        except Exception as error:
+            _LOG.exception("switching the client to the session failed")
+            self.announce(f"The session is running but could not be opened: {error}")
+            return
+        finally:
+            self._busy = False
+        self.return_to_projects()
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
         """Announce something that did not happen, without taking the position off screen.
@@ -725,8 +760,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 "The command below reaches it."
             )
             return
-        session_id = str(record.session_id)
-        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        await self._open_or_leave(str(record.session_id))
 
     # The mutating path ------------------------------------------------------------
     #
@@ -1019,9 +1053,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
         Order is whatever the store returns; nothing here sorts, and the row's age column
         is what tells the owner how old a session is.
+
+        Console-hosted, this is also where tabs track reality. Opens link their own tab,
+        and everything else catches up when the sessions list is next loaded — its reveal,
+        Ctrl+R, or the 10s auto-refresh. That is a stated latency, not an accident: a stop
+        issued from the detail screen leaves its tab standing until the list is next
+        shown, because this method is deliberately the only sync schedule there is. The
+        sync degrades to nothing on failure by its own contract; a broken console never
+        costs this list.
         """
         await self._services.launcher.refresh_readiness()
-        return await self.read_sessions()
+        records = await self.read_sessions()
+        if self._services.console_sync is not None:
+            await self._services.console_sync(records)
+        return records
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
@@ -1093,8 +1138,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     "session will run alongside it."
                 ),
             )
-        session_id = str(record.session_id)
-        self._leave(AttachRequest(session_id, self._services.attach_argv(session_id)))
+        await self._open_or_leave(str(record.session_id))
         return None
 
 

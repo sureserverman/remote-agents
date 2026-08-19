@@ -128,7 +128,8 @@ _THEME = "textual-dark"
 # baseline would stop being compared instead of failing. `test_every_position_has_a_baseline`
 # below is what ties this list back to the registry.
 _POSITIONS = (
-    "PROJECTS",
+    "DASHBOARD",
+    "PROJECT_CHOOSER",
     "PROFILES",
     "REVIEW",
     "AREAS",
@@ -365,12 +366,16 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     Answers with the suspended caller when the position is a modal, and with `None`
     otherwise — a modal is not a position the driver can simply arrive at and leave.
     """
-    if step == "PROJECTS":
+    if step == "DASHBOARD":
         return None
-    if step in {"PROFILES", "REVIEW"}:
+    if step in {"PROJECT_CHOOSER", "PROFILES", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        if step == "PROJECT_CHOOSER":
+            return None
+        await app.screen.choose("launch")
         await pilot.pause()
         if step == "PROFILES":
             return None

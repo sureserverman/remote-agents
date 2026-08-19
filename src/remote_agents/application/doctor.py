@@ -79,6 +79,7 @@ def production_doctor(
     discovered_projects: int,
     catalogue_projects: int,
     config_drift: dict[str, object] | None = None,
+    tmux_console_ready: bool | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -109,6 +110,12 @@ def production_doctor(
         "discovered": discovered_projects,
         "catalogue": catalogue_projects,
     }
+    # Reported, deliberately not aggregated: nothing live depends on the console until the
+    # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
+    # the operator and not worth failing an otherwise healthy deploy over. The stage that
+    # makes the console load-bearing is the one entitled to move this into `components`.
+    if tmux_console_ready is not None:
+        report["console"] = {"window_linkable": tmux_console_ready}
     if config_drift is not None:
         report["config"] = config_drift
         # A config the code cannot load is not a healthy deploy, whatever else is answering.

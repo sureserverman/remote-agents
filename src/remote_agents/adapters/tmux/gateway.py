@@ -11,8 +11,20 @@ from typing import Protocol
 from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
+    console_target,
+    current_console_window_args,
+    display_message_args,
     exact_session_target,
+    is_console_view,
+    link_window_args,
+    list_console_windows_args,
+    parse_console_window,
     parse_pane,
+    select_window_args,
+    switch_client_args,
+    switch_client_console_args,
+    unlink_window_args,
+    window_session_mark_args,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -34,6 +46,26 @@ class OrphanEvidence:
 
 _ABSENT_SERVER_SIGNATURES = ("no server running on", "error connecting to")
 _ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session not found")
+
+# tmux key names this adapter will bind: bare keys and function keys, optionally behind one
+# C-/M- modifier. Deliberately narrower than what tmux accepts — a key is configuration, not
+# input, and the closed shape keeps shell metacharacters out of the argv by construction.
+_BINDABLE_KEY_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+
+def _validate_binding_key(key: str) -> str:
+    body = key
+    for modifier in ("C-", "M-"):
+        if body.startswith(modifier):
+            body = body.removeprefix(modifier)
+            break
+    if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
+        raise ValueError(
+            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
+        )
+    return key
 
 
 def _reports_absent_server(message: str) -> bool:
@@ -110,10 +142,28 @@ class TmuxGateway:
         for line in output.splitlines():
             if not line:
                 continue
+            # The console's view of the server is presentation, never evidence: its own
+            # dashboard pane and its re-listing of every linked window are dropped before
+            # decoding, so expected console noise cannot pollute the orphan quarantine.
+            if is_console_view(line):
+                continue
             try:
-                managed.append(parse_pane(line))
+                pane = parse_pane(line)
             except ValueError as error:
                 orphans.append(OrphanEvidence(line, str(error)))
+                continue
+            # One observation per session identity — reconciliation keys evidence by
+            # session. Every session this service launches is single-window, so a second
+            # valid line for a known identity is either a repeat listing (dropped, first
+            # wins) or a hand-grown extra window whose liveness *disagrees* with the first
+            # — and a disagreement is ambiguous evidence, quarantined where a reader can
+            # see it, never silently resolved in either direction.
+            earlier = next((p for p in managed if p.session_id == pane.session_id), None)
+            if earlier is not None:
+                if (pane.live, pane.preserved) != (earlier.live, earlier.preserved):
+                    orphans.append(OrphanEvidence(line, "duplicate session evidence disagrees"))
+                continue
+            managed.append(pane)
         return TmuxInventory(tuple(managed), tuple(orphans))
 
     async def mutate(self, operation: str, session_name: str) -> str:
@@ -183,6 +233,122 @@ class TmuxGateway:
             ("@remote_agents_profile", str(profile_id)),
         ):
             await self._runner.run(*self._base_argv(), "set-option", "-t", target, option, value)
+
+    async def console_exists(self) -> bool:
+        """Ask whether the console session is present; an absent server is a plain no."""
+        try:
+            await self._runner.run(*self._base_argv(), "has-session", "-t", console_target())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return False
+            raise
+        return True
+
+    async def create_console(self, dashboard_command: tuple[str, ...], cwd: Path) -> None:
+        """Create the detached console session running the dashboard as window 0.
+
+        The command is the composition root's own program, passed as an argument vector
+        rather than assembled here, because which entry point *is* the dashboard is
+        composition policy — while everything about the session (name, socket, detachment)
+        stays this adapter's closed shape.
+        """
+        if not dashboard_command:
+            raise ValueError("the console needs a dashboard command")
+        if not cwd.is_absolute() or not cwd.is_dir():
+            raise ValueError("console working directory must be an existing absolute directory")
+        await self._runner.run(
+            *self._base_argv(),
+            "new-session",
+            "-d",
+            "-s",
+            "ra-console",
+            "-c",
+            str(cwd),
+            *dashboard_command,
+        )
+
+    async def link_session_window(self, session_id: SessionId) -> None:
+        """Mark one managed session's window with its identity, then tab it into the console.
+
+        The mark travels with the shared window object into the console's listing; the link
+        appends at the console's next free index (tmux 3.4, verified). Order matters only in
+        that an unmarked linked window would be a tab `console_windows` cannot attribute.
+        """
+        try:
+            await self._runner.run(*self._base_argv(), *window_session_mark_args(session_id))
+            await self._runner.run(*self._base_argv(), *link_window_args(session_id))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+
+    async def unlink_console_window(self, window_index: int) -> None:
+        """Remove one console tab; the codec refuses index 0 so the dashboard cannot go."""
+        try:
+            await self._runner.run(*self._base_argv(), *unlink_window_args(window_index))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-console:{window_index}") from error
+
+    async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
+        """List (index, owning session) per console window; no console means no windows."""
+        try:
+            output = await self._runner.run(*self._base_argv(), *list_console_windows_args())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return ()
+            raise
+        return tuple(
+            parse_console_window(line) for line in output.splitlines() if line
+        )
+
+    async def select_console_window(self, window_index: int) -> None:
+        """Focus one console window by index, 0 being the dashboard."""
+        try:
+            await self._runner.run(*self._base_argv(), *select_window_args(window_index))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-console:{window_index}") from error
+
+    async def switch_client_to_session(self, session_id: SessionId) -> None:
+        """Move the attached client to one exact managed session."""
+        try:
+            await self._runner.run(*self._base_argv(), *switch_client_args(session_id))
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+
+    async def switch_client_to_console(self) -> None:
+        """Move the attached client back to the console session."""
+        try:
+            await self._runner.run(*self._base_argv(), *switch_client_console_args())
+        except RuntimeError as error:
+            raise _target_missing_or(error, "ra-console") from error
+
+    async def console_active_window(self) -> int | None:
+        """The console's current window index, or None when there is nothing to ask."""
+        try:
+            output = await self._runner.run(*self._base_argv(), *current_console_window_args())
+        except RuntimeError as error:
+            message = str(error)
+            if _reports_absent_server(message) or _reports_absent_target(message):
+                return None
+            raise
+        try:
+            return int(output.strip())
+        except ValueError:
+            return None
+
+    async def display_message(self, text: str) -> None:
+        """Flash one line on the status bar of whatever window the client is on."""
+        await self._runner.run(*self._base_argv(), *display_message_args(text))
+
+    async def install_console_binding(self, key: str) -> None:
+        """Bind one validated root-table key, on this socket only, to reach the dashboard."""
+        await self._runner.run(
+            *self._base_argv(),
+            "bind-key",
+            "-n",
+            _validate_binding_key(key),
+            *select_window_args(0),
+        )
 
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""

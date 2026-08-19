@@ -138,12 +138,13 @@ def _footer_keys(app: RemoteAgentsTui) -> set[str]:
 def _arrangements():
     from remote_agents.adapters.tui.screens import (
         AreasScreen,
+        DashboardScreen,
         ForceConfirmModal,
         InspectScreen,
         NameScreen,
         ProfilesScreen,
+        ProjectChooserScreen,
         ProjectReviewScreen,
-        ProjectsScreen,
         RemoteControlConfirmModal,
         RenameScreen,
         ResumeConversationsScreen,
@@ -162,8 +163,9 @@ def _arrangements():
     )
     page = ConversationCataloguePage((_summary(),), 1, 1)
     return {
-        ProjectsScreen: None,  # the resting position, already on the stack
+        DashboardScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
+        ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
         ReviewScreen: ReviewScreen,
         AreasScreen: AreasScreen,
         NameScreen: lambda: NameScreen("infra"),
@@ -444,12 +446,12 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
         await pilot.press(*"exist")
         await pilot.pause()
         assert entry.value == "exist"
-        assert app.screen.position == "PROJECTS"
+        assert app.screen.position == "DASHBOARD"
 
         await pilot.press(binding)
         await pilot.pause()
 
-        assert app.screen.position != "PROJECTS", (
+        assert app.screen.position != "DASHBOARD", (
             f"{binding} was refused on the project filter, where the text is disposable"
         )
 
@@ -473,6 +475,8 @@ async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> Non
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("launch")
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
@@ -510,6 +514,8 @@ async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_d
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("launch")
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
@@ -631,6 +637,8 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
         await pilot.pause()
         await app.screen.choose("opaque-existing")
         await pilot.pause()
+        await app.screen.choose("launch")
+        await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
         assert app.screen.position == "REVIEW"
@@ -647,7 +655,7 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
         # escape away and both lists are intact.
         await pilot.press("escape")
         await pilot.pause()
-        assert app.screen.position == "PROJECTS"
+        assert app.screen.position == "DASHBOARD"
         keys = [option.id for option in app.screen.query_one("#choices", OptionList).options]
         assert "opaque-existing" in keys, (
             f"the project must still be there to re-pick from; the list offered {keys}"
@@ -658,6 +666,8 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
         # `LaunchSelection` rather than patching the old one, so nothing from the abandoned pass
         # can survive into the new review — provable from the source, and now demonstrated.
         await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        await app.screen.choose("launch")
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()

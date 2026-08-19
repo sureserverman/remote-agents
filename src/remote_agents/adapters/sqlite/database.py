@@ -2,13 +2,131 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS, apply_migrations, current_version
 from remote_agents.ports.private_directory import open_private_directory
+
+
+def _current_task() -> object | None:
+    """The running task if an event loop is up, else None — sync callers own themselves."""
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
+
+
+class _EagerCursor:
+    """Rows fetched before their connection closed, answering the store's cursor calls."""
+
+    def __init__(self, rows: Sequence[tuple]) -> None:
+        self._rows = list(rows)
+
+    def fetchone(self) -> tuple | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple]:
+        return list(self._rows)
+
+
+class LeasedConnection:
+    """A `sqlite3.Connection` stand-in that holds no handle between operations.
+
+    This is the stated position on the question DEC-023 recorded as unanswered: the local
+    surface is long-lived beside attached sessions, and the guarantee the README makes is
+    kept by construction — a real connection exists only inside a single bare `execute`
+    or a single `with lease:` transaction block, and is closed before either returns.
+
+    The surface it implements is exactly what `SQLiteSessionStore` uses and nothing more:
+    `execute(...)` returning something answering `fetchone`/`fetchall`, the context-manager
+    transaction protocol, and `close()`. A bare `execute` outside a transaction commits
+    before its connection closes, so no write is ever lost to autocommit limbo; inside a
+    `with` block every `execute` shares the one held connection, and `__exit__` delegates
+    commit-or-rollback to sqlite3's own protocol before closing it.
+
+    The serve composition never sees this class — it keeps its one long-lived connection,
+    and the store cannot tell which composition it is running under.
+    """
+
+    def __init__(self, opener: Callable[[], sqlite3.Connection]) -> None:
+        self._opener = opener
+        self._held: sqlite3.Connection | None = None
+        self._owner: object | None = None
+
+    def execute(self, sql: str, parameters: Sequence = ()) -> object:
+        if self._held is not None:
+            self._require_owner()
+            return self._held.execute(sql, parameters)
+        connection = self._opener()
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+            # A no-op for the bare reads that dominate this path; it exists so a bare
+            # write can never be lost to autocommit limbo when the connection closes.
+            connection.commit()
+            return _EagerCursor(rows)
+        finally:
+            connection.close()
+
+    def __enter__(self) -> LeasedConnection:
+        # sqlite3 has no nested transactions, so pretending to support nesting would let
+        # an inner exit commit work the outer block still believes it can roll back.
+        # Failing loud is the honest answer; the store never nests (pinned by test).
+        if self._held is not None:
+            raise RuntimeError("leased transactions do not nest")
+        self._held = self._opener()
+        self._owner = _current_task()
+        self._held.__enter__()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        held = self._held
+        assert held is not None, "transaction exit without a held connection"
+        self._require_owner()
+        self._held = None
+        self._owner = None
+        try:
+            return bool(held.__exit__(exc_type, exc, traceback))
+        finally:
+            held.close()
+
+    def close(self) -> None:
+        """Release at rest; both compositions call this in a `finally`."""
+        assert self._held is None, "close() during an open leased transaction"
+
+    def _require_owner(self) -> None:
+        # Safe today because no store method awaits inside a `with` block — but that
+        # invariant is one edit away from silently breaking, and a second coroutine
+        # joining a stranger's transaction is worse than the long-lived connection this
+        # class replaced. A violation fails loudly instead of corrupting a write.
+        # Known limit: the key is the asyncio task, so two loop-less OS threads both read
+        # as owner None and the guard is blind to them. No store call runs on a
+        # `thread=True` worker today (verified across `in_thread` callers); moving one
+        # there means adding a real lock here first.
+        if self._owner is not _current_task():
+            raise RuntimeError("a leased transaction belongs to the task that opened it")
+
+
+def leased_connection(path: Path, *, busy_timeout_ms: int = 1_000) -> LeasedConnection:
+    """Return a per-operation lease over an already-migrated private database.
+
+    Migrations and the pre-migration backup are `open_database`'s job, run once at
+    composition time; each leased open only re-applies the connection pragmas. The
+    private-directory guard runs here once — the path cannot change between opens.
+    """
+    if open_private_directory(path.parent) is None:
+        raise ValueError("database directory cannot traverse a symlink")
+
+    def opener() -> sqlite3.Connection:
+        connection = sqlite3.connect(path, timeout=busy_timeout_ms / 1_000)
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        return connection
+
+    return LeasedConnection(opener)
 
 
 def open_database(

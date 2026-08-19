@@ -210,6 +210,8 @@ def _context(launcher: _Launcher, creator: _Creator | None = None) -> TuiContext
 async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
     await app.screen.choose("opaque-existing")
     await pilot.pause()
+    await app.screen.choose("launch")
+    await pilot.pause()
     await app.screen.choose("claude")
     await pilot.pause()
 

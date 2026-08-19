@@ -327,6 +327,7 @@ async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> N
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
         await app.screen.choose("opaque-existing")
+        await app.screen.choose("launch")
         await app.screen.choose("claude")
         await pilot.pause()
         first = asyncio.create_task(_select(app, "launch"))
