@@ -290,8 +290,10 @@ def is_console_view(line: str) -> bool:
     """Say whether one list-panes line is the console's view rather than evidence.
 
     The console reports its own dashboard pane and re-reports every linked window under its
-    own name (tmux 3.4, verified). Both describe presentation, not sessions: the linked
-    duplicate's pane is already listed — with its options intact — under its home session.
+    own name (tmux 3.4, verified). A console line is presentation exactly when it carries no
+    managed mark — which is the narrow reading, and it has to be narrow now: under the swap
+    model a managed pane can be *hosted* by the console, and that line is the agent itself.
+    Dropping it because of the name it is listed under would report a running session as gone.
 
     tmux 3.4 accepts `|` inside a session name (verified 2026-08-18, pinned by the feature
     probe's contract test), and the pane format uses `|` as its delimiter, so a stray
@@ -299,10 +301,12 @@ def is_console_view(line: str) -> bool:
     `ra-console`. The field-count check keeps such an impostor out of this drop: its
     embedded delimiter inflates the split past the format's ten fields, so it falls through
     to `parse_pane` and is quarantined as orphan evidence — exactly where a stray session's
-    line always went. The empty-schema check closes the remaining shape: a genuine console
-    view always carries blank option fields (session options do not travel), so a ten-field
-    line named `ra-console` that *does* carry a schema tag is somebody's fabrication, and
-    it too falls through to be quarantined rather than dropped.
+    line always went. The empty-schema check carries the rest: a console *view* has no mark
+    of its own and the console session sets none, so a blank schema field is what makes a
+    line presentation. A ten-field `ra-console` line that does carry a mark falls through to
+    `parse_pane`, which then decides on the schema — a pane-scoped schema-2 mark is a real
+    displaced agent and decodes, while a schema-1 mark under this name cannot be the session
+    it names and is quarantined.
     """
     fields = line.rstrip("\n").split(_DELIMITER)
     return len(fields) == 10 and fields[0] == CONSOLE_SESSION_NAME and fields[6] == ""

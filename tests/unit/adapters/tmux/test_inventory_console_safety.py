@@ -37,8 +37,10 @@ def managed_line(session_id: SessionId, *, pane: str = "%1") -> str:
 
 
 def console_line(*, pane: str, pid: str = "200") -> str:
-    """A pane as the console session reports it: session options do not travel, so the
-    schema fields arrive empty whether the pane is the dashboard or a linked duplicate."""
+    """A pane as the console session reports it, carrying no mark of its own: the console
+    session sets none, so the schema fields arrive empty. Under the swap model a *marked*
+    pane can also be hosted by the console — that line is a displaced agent rather than a
+    view, and it is covered in `test_inventory_pane_identity.py`."""
     return "|".join(("ra-console", "$0", pane, pid, "0", "", "", "", "", ""))
 
 
@@ -88,10 +90,11 @@ async def test_an_impostor_name_carrying_the_delimiter_is_quarantined_not_droppe
 
 
 async def test_a_schema_tagged_line_named_ra_console_is_quarantined_not_dropped() -> None:
-    """A genuine console view always carries blank option fields — session options do not
-    travel into the console's listing. A ten-field line named `ra-console` that *does*
-    carry a schema tag is a fabrication, and it must fall through to parse_pane's
-    quarantine rather than vanish into the console drop."""
+    """A console view carries blank option fields, so a ten-field `ra-console` line that
+    does carry a **schema-1** tag is claiming a session-scoped mark the console never set —
+    a fabrication or a stray, and it must fall through to parse_pane's quarantine rather
+    than vanish into the console drop. Schema 2 is the deliberate exception and is not this
+    test's subject: a pane-scoped mark under the console's name is a displaced agent."""
     fabricated = "|".join(
         ("ra-console", "$9", "%9", "300", "0", "", "1", str(_SESSION), "proj", "claude")
     )
@@ -105,10 +108,16 @@ async def test_duplicate_evidence_that_disagrees_on_liveness_is_quarantined() ->
     """Every session this service launches is single-window, so two valid lines for one
     identity that disagree on liveness mean someone grew a window by hand. First listed
     wins the observation; the disagreeing line becomes visible orphan evidence rather
-    than being resolved silently in either direction."""
-    live_line = managed_line(_SESSION)
+    than being resolved silently in either direction.
+
+    The second line names a **different pane**, which is what "someone grew a window" means
+    and what this test always intended. It used to be spelled by copying the first line and
+    flipping its liveness — indistinguishable, then, from tmux listing one pane twice, and
+    no longer so: a repeat listing of one pane is one pane (`test_inventory_pane_identity`)."""
+    live_line = managed_line(_SESSION, pane="%1")
     fields = live_line.split("|")
-    fields[4] = "1"  # pane_dead: the second window's pane has died
+    fields[2] = "%7"  # a second, hand-grown window has its own pane
+    fields[4] = "1"  # pane_dead: and that pane has died
     dead = "|".join(fields)
     result = await inventory_of(live_line, dead)
     assert len(result.managed) == 1

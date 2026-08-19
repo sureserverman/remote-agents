@@ -159,9 +159,19 @@ class TmuxGateway:
             # wins) or a hand-grown extra window whose liveness *disagrees* with the first
             # — and a disagreement is ambiguous evidence, quarantined where a reader can
             # see it, never silently resolved in either direction.
+            #
+            # The pane id is what tells those two apart, and it has to now: a pane-scoped
+            # mark is intrinsic to the pane, so tmux's re-listing of one pane under another
+            # session carries the identity too, where a session-scoped mark never did. Same
+            # pane id means one pane seen twice, and one pane cannot be in two states, so a
+            # difference between two listings of it is a listing artifact rather than a
+            # second window. Only *distinct* panes claiming one session are ambiguous.
             earlier = next((p for p in managed if p.session_id == pane.session_id), None)
             if earlier is not None:
-                if (pane.live, pane.preserved) != (earlier.live, earlier.preserved):
+                if pane.pane_id != earlier.pane_id and (pane.live, pane.preserved) != (
+                    earlier.live,
+                    earlier.preserved,
+                ):
                     orphans.append(OrphanEvidence(line, "duplicate session evidence disagrees"))
                 continue
             managed.append(pane)
