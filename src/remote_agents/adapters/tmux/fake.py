@@ -41,6 +41,12 @@ class FakeTerminal:
             preserved=False,
             project_id=project_id,
             profile_id=profile_id,
+            # A launched pane is in its own session's window, which is what the real adapter
+            # reports and what `copy_attach` builds the owner's command from (DEC-039). Left
+            # `None`, the fake modelled a terminal that cannot say where a pane is being
+            # shown, so no fake-backed test could reach the host-following branch at all —
+            # the same gap `graceful_stop` records below for project and profile.
+            host_session=f"ra-{session_id}",
         )
         self._observations[session_id] = observation
         return observation
@@ -61,10 +67,14 @@ class FakeTerminal:
         return self._observations.get(session_id)
 
     async def copy_attach(self, session_id: SessionId) -> str | None:
+        """Follow the host, as the real adapter does — a fake that did not would model away
+        the one thing DEC-039 changed about this command."""
         observation = await self.inspect(session_id)
         if observation is None or not (observation.live or observation.preserved):
             return None
-        return attach_command(session_id, read_only=not observation.live)
+        return attach_command(
+            session_id, read_only=not observation.live, host=observation.host_session
+        )
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState

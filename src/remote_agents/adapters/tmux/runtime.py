@@ -385,10 +385,17 @@ class TmuxTerminal:
         it would name where the agent used to be shown.
 
         **The command names the session showing the pane**, which is the console while this
-        agent is displayed there and its own session otherwise. `host_session` comes from the
-        same decoded pane the liveness check above reads, so the two cannot disagree. Attach
-        is the one agent-reaching operation that cannot name a pane — a tmux client attaches
-        to a session — so this is what "follow the agent" means for it (DEC-021, re-scoped).
+        agent is displayed there and its own session otherwise. Attach is the one
+        agent-reaching operation that cannot name a pane — a tmux client attaches to a
+        session — so this is what "follow the agent" means for it (DEC-021, re-scoped).
+
+        `host_session` is a property of the *listing*, not of the pane, and the difference
+        cost a real defect: tmux lists a linked window's pane under every session linked to
+        it, in alphabetical order, so `inventory`'s dedup was choosing the host by whether a
+        session's random id sorted before or after "console". A session that had never moved
+        got `ra-console:`. `inventory` now keeps the home listing whenever one exists, so a
+        pane is reported as hosted elsewhere only when nothing lists it under its own name —
+        which is what displaced actually means.
         """
         observation = await self.inspect(session_id)
         if observation is None or not (observation.live or observation.preserved):

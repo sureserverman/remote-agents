@@ -55,8 +55,14 @@ class LiveConsole:
         await self.gateway.create_console(("sleep", "600"), home)
         await self.runner.run(*self.base, "split-window", "-d", "-t", "ra-console:", "sleep", "600")
 
-    async def start(self) -> SessionId:
-        session_id = SessionId.new()
+    async def start(self, session_id: SessionId | None = None) -> SessionId:
+        """Launch a stand-in agent, optionally under a chosen id.
+
+        The id is choosable because one test needs to bracket the literal string `console` in
+        tmux's alphabetical listing order, and random ids make that a coin flip rather than a
+        test — see `test_a_tabbed_session_that_never_moved_is_attached_at_home`.
+        """
+        session_id = SessionId.new() if session_id is None else session_id
         started = await self.terminal.launch(session_id, _PROJECT, _PROFILE)
         assert started.live, f"the stand-in agent did not start: {started.detail}"
         return session_id
@@ -138,6 +144,47 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
         assert home is not None and home.endswith(f"-t ra-{agent_session}:"), (
             f"an agent back home is not attached at home: {home}"
         )
+    finally:
+        await console.teardown()
+
+
+async def test_a_tabbed_session_that_never_moved_is_attached_at_home(tmp_path: Path) -> None:
+    """A linked tab is not displacement, and the attach command must not treat it as one.
+
+    `ConsoleComposer.sync` links a window into the console for **every** live session, and
+    tmux then lists that pane twice — once under `ra-<uuid>`, once under `ra-console` — in
+    alphabetical session order. `inventory`'s first-wins dedup was therefore choosing the
+    reported host by whether a session's random id sorted before or after the literal
+    "console", so roughly the quarter beginning `d`, `e` or `f` were reported as hosted by
+    the console while sitting untouched in their own window. `copy_attach` then handed the
+    owner `attach-session -t ra-console:`, which resolves to the console's *current* window.
+
+    No swap is involved, which is what made it worth a live test rather than a unit one: the
+    defect is in what tmux emits and in what order, and only real tmux emits it. The two ids are
+    **chosen, not generated**: they bracket the literal string `console`, one sorting before
+    it and one after. Written first with six random ids, this was a coin flip — only the
+    `d`/`e`/`f` quarter reproduces the defect, so the test would have passed against the
+    broken code roughly three runs in ten. A live test that fails probabilistically is worse
+    than none, because the run that passes is the one that gets believed.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+
+    console = live_console(tmp_path)
+    try:
+        await console.build(tmp_path)
+        tabbed = [
+            await console.start(SessionId.parse("0aaaaaaa-0000-0000-0000-000000000001")),
+            await console.start(SessionId.parse("faaaaaaa-0000-0000-0000-000000000001")),
+        ]
+        for session_id in tabbed:
+            await console.gateway.link_session_window(session_id)
+
+        for session_id in tabbed:
+            command = await console.terminal.copy_attach(session_id)
+            assert command is not None and command.endswith(f"-t ra-{session_id}:"), (
+                f"a tabbed session that never moved is not attached at home: {command}"
+            )
     finally:
         await console.teardown()
 

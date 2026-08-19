@@ -74,10 +74,15 @@ class ManagedPane:
     """Trusted tmux metadata decoded from the pinned format-version contract."""
 
     session_name: str
-    """The session *hosting* this pane, which is only the managed session's own name under
-    schema 1. A schema-2 pane keeps its identity wherever tmux lists it, so this field
-    answers "who is showing it" and never "which session is it" — build a lifecycle target
-    from `session_id`, never from this."""
+    """The session this *line* lists the pane under — not, by itself, the session hosting it.
+
+    tmux reports a linked window's pane once per session linked to it, so one pane yields
+    several lines with different names here. `inventory` resolves that by keeping the line
+    under the pane's own session whenever there is one, which makes the surviving value mean
+    "the session showing this pane": its own, or another when nothing lists it at home.
+
+    Never a lifecycle target. Build one from `session_id` — a schema-2 pane keeps its
+    identity wherever tmux lists it, and this field is exactly the part that moves."""
 
     pane_id: str
 
@@ -93,6 +98,25 @@ class ManagedPane:
     process_id: int
     live: bool
     preserved: bool
+
+
+def pane_owned_identity(schema: str, raw_id: str) -> SessionId | None:
+    """Decode the identity a pane carries **in its own right**, or None if it carries none.
+
+    The one rule, called by both readers of the server. `parse_pane` decodes lifecycle
+    evidence and `parse_arrangement` decodes where panes are; each needs to know whether a
+    mark belongs to the pane or was inherited from its session, and each had its own copy of
+    the answer. Two copies of a rule that turns on a schema version is one schema bump away
+    from disagreeing — and disagreeing means one reader treats a displaced surface as the
+    agent while the other does not.
+
+    Only schema 2 is the pane's own. tmux resolves `#{@option}` by falling back pane ->
+    session, so under schema 1 every pane in a session's window reports that session's id
+    whether or not it is the agent (DEC-038).
+    """
+    if schema != _PANE_SCHEMA_VERSION or not raw_id:
+        return None
+    return SessionId.parse(raw_id)
 
 
 def exact_session_target(session_name: str) -> str:
@@ -441,7 +465,7 @@ def parse_arrangement(line: str) -> tuple[SessionId | None, bool, int, int, str,
             host = SessionId.parse(name.removeprefix("ra-"))
         except ValueError:
             host = None
-    identity = SessionId.parse(raw_id) if schema == _PANE_SCHEMA_VERSION and raw_id else None
+    identity = pane_owned_identity(schema, raw_id)
     return host, on_console, window_index, pane_index, pane_id, identity
 
 
@@ -509,7 +533,7 @@ def parse_pane(line: str) -> ManagedPane:
     return ManagedPane(
         name,
         pane_id,
-        schema == _PANE_SCHEMA_VERSION,
+        pane_owned_identity(schema, raw_id) is not None,
         session_id,
         ProjectId(project),
         ProfileId(profile),

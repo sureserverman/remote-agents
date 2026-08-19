@@ -287,9 +287,17 @@ async def test_the_composer_never_holds_who_is_in_the_left_pane() -> None:
         for name, value in vars(one).items()
         if isinstance(value, SessionId | HostedPane | str) and name != "_jump_home_key"
     }
+
     assert not any(isinstance(value, SessionId | HostedPane) for value in held.values()), (
         f"the composer is remembering who is shown: {held}"
     )
+    # And a bare pane id, which is how the bug would most naturally be written —
+    # `self._slot_pane = "%1"`. The first version of this test collected strings and then
+    # asserted only against the two rich types, so the one shape most likely to appear
+    # slipped through the check named for catching it.
+    assert not any(
+        isinstance(value, str) and value.startswith("%") for value in held.values()
+    ), f"the composer is remembering a pane id: {held}"
 
 
 @pytest.mark.parametrize("missing", ["slot", "agent"])

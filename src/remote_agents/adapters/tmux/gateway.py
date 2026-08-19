@@ -130,6 +130,17 @@ def _decoded_lines(output: str) -> Iterator[tuple[str, ManagedPane | str | None]
             yield line, str(error)
 
 
+def _is_home_listing(pane: ManagedPane) -> bool:
+    """Whether this line lists the pane under the session that owns it.
+
+    The one fact that tells "at home" from "displaced", and it has to be read off the
+    *listing* rather than the pane: tmux reports a linked window's pane under every session
+    linked to it, so a pane can be listed under the console and still be sitting in its own
+    window. It is displaced only when no line puts it under its own name.
+    """
+    return pane.session_name == f"ra-{pane.session_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class TmuxInventory:
     """Trusted managed panes and quarantined evidence from one dedicated server."""
@@ -221,6 +232,17 @@ class TmuxGateway:
             if earlier is not None:
                 if pane.pane_id != earlier.pane_id:
                     orphans.append(OrphanEvidence(line, "duplicate session evidence disagrees"))
+                elif _is_home_listing(pane) and not _is_home_listing(earlier):
+                    # Same pane, second listing, and *this* is the one under the pane's own
+                    # session. Which of the two arrives first is alphabetical: `list-panes -a`
+                    # emits sessions in name order, so a linked window's duplicate under
+                    # `ra-console` precedes its home line for every session id sorting after
+                    # the literal "console" — roughly the quarter beginning d, e or f. First
+                    # wins was therefore deciding `session_name`, and with it `host_session`
+                    # and the owner's copyable attach target (DEC-039), by sort order: a
+                    # session that had never been displaced handed back `ra-console:`.
+                    # Verified on tmux 3.4 (2026-08-19) with two ids either side of "console".
+                    managed[managed.index(earlier)] = pane
                 continue
             managed.append(pane)
         return TmuxInventory(tuple(managed), tuple(orphans))
@@ -422,7 +444,15 @@ class TmuxGateway:
         claiming: dict[str, ManagedPane] = {}
         for _line, decoded in _decoded_lines(output):
             if isinstance(decoded, ManagedPane) and decoded.session_id == session_id:
-                claiming.setdefault(decoded.pane_id, decoded)
+                seen = claiming.get(decoded.pane_id)
+                if seen is None or (_is_home_listing(decoded) and not _is_home_listing(seen)):
+                    # The same home-listing preference `inventory` applies, for the same
+                    # reason and swept here with it. No caller reads `session_name` off this
+                    # except `_following_target`'s legacy branch, and a schema-1 mark cannot
+                    # decode under a foreign name anyway — so this is latent rather than
+                    # live. It is fixed together because it is the same rule written twice,
+                    # and the next reader of one copy should not have to discover the other.
+                    claiming[decoded.pane_id] = decoded
         return tuple(claiming.values())
 
     async def destroy(self, session_id: SessionId) -> None:
