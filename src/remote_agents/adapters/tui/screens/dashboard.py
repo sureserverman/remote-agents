@@ -29,6 +29,7 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from remote_agents.adapters.tui.context import FEED_LIMIT
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection, age, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
@@ -44,8 +45,8 @@ _SESSIONS_AUTO_REFRESH = 10.0
 _NO_SESSIONS = "No sessions are running."
 #: The feed pane's one line when nothing has been observed — its DEC-009 answer.
 _NO_NOTIFICATIONS = "No notifications yet."
-#: How many observations the feed shows — a glance, not an archive.
-_FEED_LIMIT = 20
+#: A glance, not an archive — the number itself is shared with the reader's LIMIT.
+_FEED_LIMIT = FEED_LIMIT
 
 #: One line of owner-facing words per observation kind. Local to this pane on purpose:
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
@@ -211,7 +212,10 @@ class DashboardScreen(ProjectsScreen):
         finally:
             self._reloading_sessions = False
         # The feed rides the same cadence: one schedule, two panes. Its failure mode is
-        # the placeholder, never a broken resting position.
+        # the placeholder, never a broken resting position. Known blind spot, inherited
+        # from the pane's own suspend behavior: while a flow screen is pushed above the
+        # dashboard the timer is paused, so no flash fires until the flow pops — the same
+        # trade the sessions pane's staleness note records.
         await self._reload_feed()
         pane = self.query_one("#sessions-pane", OptionList)
         held = pane.highlighted

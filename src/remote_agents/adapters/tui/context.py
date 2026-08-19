@@ -12,6 +12,11 @@ from remote_agents.application.services import SessionService
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import AgentActivity
 
+#: How many observations the feed shows and its reader fetches — one number, imported by
+#: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
+#: the two can never drift.
+FEED_LIMIT = 20
+
 
 @dataclass(frozen=True, slots=True)
 class ProfileChoice:

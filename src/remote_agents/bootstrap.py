@@ -679,7 +679,7 @@ def local_context(config, connection, paths: ProductionPaths):
     service never loads the terminal library and a failure in it cannot reach serve.
     """
     from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import FEED_LIMIT, ProfileChoice, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
@@ -749,7 +749,7 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync=console_sync,
         # A reader of the durable observation table, never a drainer: consuming the spool
         # would starve the phone's notifications (see Task 5.2's correction note).
-        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=20),
+        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
         console_flash=console_flash,
     )
 

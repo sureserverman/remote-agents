@@ -120,3 +120,15 @@ def test_console_window_listing_and_decode_round_trip() -> None:
 def test_console_window_decode_refuses_ambiguity(line: str) -> None:
     with pytest.raises(ValueError):
         parse_console_window(line)
+
+
+def test_the_current_window_probe_prints_the_console_sessions_index() -> None:
+    from remote_agents.adapters.tmux.codec import current_console_window_args
+
+    assert current_console_window_args() == (
+        "display-message",
+        "-p",
+        "-t",
+        "ra-console:",
+        "#{window_index}",
+    )

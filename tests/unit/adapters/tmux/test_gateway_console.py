@@ -188,3 +188,19 @@ async def test_a_broken_tmux_is_never_misread_as_an_absent_console() -> None:
         await gateway(RecordingRunner(error=broken)).console_exists()
     with pytest.raises(RuntimeError, match="server exited unexpectedly"):
         await gateway(RecordingRunner(error=broken)).console_windows()
+
+
+async def test_the_active_window_probe_parses_and_degrades_per_branch() -> None:
+    """Every branch of the flash's window probe: a number parses, garbage is None (a
+    broken proxy must read as 'unknown', never crash the flash), an absent console or
+    server is a plain None, and a genuinely broken tmux keeps its error type."""
+    assert await gateway(RecordingRunner(output="2\n")).console_active_window() == 2
+    assert await gateway(RecordingRunner(output="0\n")).console_active_window() == 0
+    assert await gateway(RecordingRunner(output="garbage")).console_active_window() is None
+    for message in ("no server running on /tmp/x", "can't find session: ra-console"):
+        absent = RecordingRunner(error=RuntimeError(message))
+        assert await gateway(absent).console_active_window() is None
+    with pytest.raises(RuntimeError, match="server exited"):
+        await gateway(
+            RecordingRunner(error=RuntimeError("server exited unexpectedly"))
+        ).console_active_window()
