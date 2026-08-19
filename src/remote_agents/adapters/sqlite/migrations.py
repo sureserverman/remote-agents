@@ -123,6 +123,13 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     # standing messages stay in memory by decision (DEC-026) — this table is the local
     # feed's durable source. Append-only; INTEGER PRIMARY KEY is the read order, because
     # insertion order is the one clock every writer shares.
+    #
+    # **Invariant: rows are never deleted.** Without AUTOINCREMENT, sqlite reuses the max
+    # rowid after a delete, and a reused id would silently misorder the newest-first read.
+    # A future retention sweep must therefore not land against this schema — revisit this
+    # migration (a table rebuild to AUTOINCREMENT) before any delete path ships. Stated
+    # here rather than fixed with AUTOINCREMENT because v9 is already applied on a live
+    # database, and editing an applied migration's SQL forks the schema history.
     (
         9,
         """

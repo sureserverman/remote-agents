@@ -7,10 +7,13 @@ state in memory, and nothing here changes that — a row says "this was observed
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import UTC, datetime
 
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
+
+_LOG = logging.getLogger(__name__)
 
 
 class SQLiteActivityStore:
@@ -46,16 +49,24 @@ class SQLiteActivityStore:
             """,
             (limit,),
         ).fetchall()
-        return tuple(
-            AgentActivity(
-                row[0],
-                ActivityKind(row[1]),
-                row[2],
-                _instant(row[4]),
-                ActivityConfidence(row[3]),
-            )
-            for row in rows
-        )
+        activities = []
+        for row in rows:
+            try:
+                activities.append(
+                    AgentActivity(
+                        row[0],
+                        ActivityKind(row[1]),
+                        row[2],
+                        _instant(row[4]),
+                        ActivityConfidence(row[3]),
+                    )
+                )
+            except ValueError:
+                # A row written under a vocabulary this build no longer speaks — the enum
+                # docstrings call retiring a kind an expected evolution. One poisoned row
+                # costs itself, never the whole glance.
+                _LOG.warning("skipping an activity row with an unknown kind or confidence")
+        return tuple(activities)
 
 
 def _instant(value: str) -> datetime:

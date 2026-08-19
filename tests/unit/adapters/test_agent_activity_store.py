@@ -81,3 +81,24 @@ async def test_the_round_trip_preserves_every_field(store) -> None:
 async def test_the_reader_refuses_a_nonpositive_bound(store) -> None:
     with pytest.raises(ValueError):
         await store.recent(limit=0)
+
+
+async def test_a_poisoned_row_costs_itself_never_the_whole_glance(store, tmp_path: Path) -> None:
+    """Retiring an ActivityKind is an expected evolution (its own docstring says so); a
+    row written under the old vocabulary is skipped with a log line, and every row this
+    build still speaks renders."""
+    await store.append(_activity(ActivityKind.COMPLETED))
+    store._connection.execute(
+        "INSERT INTO agent_activity(session_id, kind, detail, confidence, observed_at)"
+        " VALUES ('s', 'retired-kind', NULL, 'reported', '2026-08-19T00:00:00+00:00')"
+    )
+    store._connection.commit()
+    recent = await store.recent(limit=10)
+    assert [activity.kind for activity in recent] == [ActivityKind.COMPLETED]
+
+
+def test_the_migration_count_is_pinned_by_hand() -> None:
+    """`len(MIGRATIONS)` comparisons elsewhere are conveniences; this literal is the one
+    assertion an accidentally dropped migration cannot pass. Bump this — and only this —
+    when adding a migration."""
+    assert len(MIGRATIONS) == 9
