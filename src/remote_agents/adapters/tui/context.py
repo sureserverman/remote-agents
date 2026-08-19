@@ -10,6 +10,7 @@ from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.agent_activity import AgentActivity
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,10 @@ class TuiContext:
     # the exec-attach contract exactly as it was.
     open_in_console: Callable[[str], Awaitable[None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
+    # The feed capability: a bounded newest-first read of the durable activity table.
+    # A reader, never a drainer — consuming the spool would starve the phone's
+    # notifications, which is the delivery story DEC-031/DEC-034 fought for.
+    activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

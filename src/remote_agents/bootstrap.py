@@ -745,6 +745,9 @@ def local_context(config, connection, paths: ProductionPaths):
         conversations=_conversation_service(projects.paths),
         open_in_console=open_in_console,
         console_sync=console_sync,
+        # A reader of the durable observation table, never a drainer: consuming the spool
+        # would starve the phone's notifications (see Task 5.2's correction note).
+        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=20),
     )
 
 

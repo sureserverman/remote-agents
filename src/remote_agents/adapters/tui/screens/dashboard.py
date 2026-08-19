@@ -29,11 +29,12 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
+from remote_agents.adapters.tui.model import _BACK, LaunchSelection, age, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.ports.agent_activity import ActivityKind
 
 _LOG = logging.getLogger(__name__)
 
@@ -41,6 +42,21 @@ _SESSION_KEY_PREFIX = "session:"
 _SESSIONS_AUTO_REFRESH = 10.0
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
+#: The feed pane's one line when nothing has been observed — its DEC-009 answer.
+_NO_NOTIFICATIONS = "No notifications yet."
+#: How many observations the feed shows — a glance, not an archive.
+_FEED_LIMIT = 20
+
+#: One line of owner-facing words per observation kind. Local to this pane on purpose:
+#: the bot's sentences live in its own adapter and carry chat conventions (grouping,
+#: standing messages) a glanceable feed line has no use for.
+_KIND_WORDS = {
+    ActivityKind.COMPLETED: "the agent has finished its work",
+    ActivityKind.LIMIT_REACHED: "the agent hit a usage limit",
+    ActivityKind.OUTPUT_LIMIT: "the response hit its output ceiling",
+    ActivityKind.NEEDS_ANSWER: "the agent is waiting for an answer",
+    ActivityKind.QUIET: "the pane has gone quiet",
+}
 
 
 class DashboardScreen(ProjectsScreen):
@@ -188,6 +204,9 @@ class DashboardScreen(ProjectsScreen):
             return
         finally:
             self._reloading_sessions = False
+        # The feed rides the same cadence: one schedule, two panes. Its failure mode is
+        # the placeholder, never a broken resting position.
+        await self._reload_feed()
         pane = self.query_one("#sessions-pane", OptionList)
         held = pane.highlighted
         held_id = (
@@ -216,6 +235,33 @@ class DashboardScreen(ProjectsScreen):
                 if pane.get_option_at_index(index).id == held_id:
                     pane.highlighted = index
                     break
+
+    async def _reload_feed(self) -> None:
+        """Render the newest observations, or the placeholder — never an exception.
+
+        A reader of the durable table via the composition's capability, and only that:
+        the feed never drains the spool, because consuming spool files would starve the
+        phone's notifications. Text an agent produced reaches a `markup=False` Static,
+        so it is displayed, never interpreted.
+        """
+        reader = self.services.activity_feed
+        pane = self.query_one("#feed-pane", Static)
+        if reader is None:
+            return
+        try:
+            activities = await reader()
+        except Exception:
+            _LOG.exception("the notifications feed could not be read")
+            return
+        if not activities:
+            pane.update(_NO_NOTIFICATIONS)
+            return
+        lines = []
+        for activity in activities[:_FEED_LIMIT]:
+            words = _KIND_WORDS.get(activity.kind, activity.kind.value)
+            detail = f" — {activity.detail}" if activity.detail else ""
+            lines.append(f"{age(activity.observed_at)} · {words}{detail}")
+        pane.update("\n".join(lines))
 
 
 class ProjectChooserScreen(ChoiceScreen):

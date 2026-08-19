@@ -59,10 +59,12 @@ def test_no_further_capability_leaked_into_the_context() -> None:
     """The sealed surface widens only deliberately; anything unlisted here is scope creep.
 
     `capture`/`conversations` were the TUI-parity widening (Stage 4 of that plan);
-    `open_in_console` is the console-surface plan's Stage 2 widening and `console_sync`
-    its Stage 3 sibling — the composition wires both only under console hosting, and
-    everywhere else the fields stay None and the exec-attach contract is untouched.
-    Growing this set is a decision, and this test is where it is made visible.
+    `open_in_console` is the console-surface plan's Stage 2 widening, `console_sync` its
+    Stage 3 sibling, and `activity_feed` its Stage 5 one — a reader of the durable
+    observation table, wired in every hosting since the feed is useful outside the
+    console. The two console capabilities are wired only under console hosting; anywhere
+    else those fields stay None and the exec-attach contract is untouched. Growing this
+    set is a decision, and this test is where it is made visible.
     """
     expected = {
         "launcher",
@@ -77,6 +79,7 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "conversations",
         "open_in_console",
         "console_sync",
+        "activity_feed",
     }
     assert set(TuiContext.__dataclass_fields__) == expected
 
