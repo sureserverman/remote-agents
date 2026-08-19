@@ -100,7 +100,7 @@ async def test_link_marks_the_source_window_before_linking_it() -> None:
             "@remote_agents_window_session",
             str(_SESSION),
         ),
-        (*_BASE, "link-window", "-s", _EXACT, "-t", "ra-console:"),
+        (*_BASE, "link-window", "-d", "-s", _EXACT, "-t", "ra-console:"),
     ]
 
 

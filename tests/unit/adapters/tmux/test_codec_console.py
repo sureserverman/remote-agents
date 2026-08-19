@@ -51,7 +51,14 @@ def test_console_target_is_the_exact_session_form() -> None:
 
 
 def test_link_window_appends_the_source_session_into_the_console() -> None:
-    assert link_window_args(_SESSION) == ("link-window", "-s", _EXACT, "-t", "ra-console:")
+    assert link_window_args(_SESSION) == (
+        "link-window",
+        "-d",
+        "-s",
+        _EXACT,
+        "-t",
+        "ra-console:",
+    )
 
 
 def test_window_session_mark_is_window_scoped_on_the_source() -> None:

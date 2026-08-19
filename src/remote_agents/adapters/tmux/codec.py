@@ -115,10 +115,14 @@ def link_window_args(session_id: SessionId) -> tuple[str, ...]:
 
     The bare destination `ra-console:` appends at the next free index (tmux 3.4 behavior,
     verified on a disposable socket rather than assumed), so the builder never has to guess
-    an index that another link may have taken between the listing and the call.
+    an index that another link may have taken between the listing and the call. `-d` is
+    load-bearing: without it tmux makes the new window current, so every background sync
+    that linked a tab yanked the console away from whatever the owner was doing — observed
+    on the first live drive against real sessions, invisible to every headless test.
     """
     return (
         "link-window",
+        "-d",
         "-s",
         exact_session_target(f"ra-{session_id}"),
         "-t",

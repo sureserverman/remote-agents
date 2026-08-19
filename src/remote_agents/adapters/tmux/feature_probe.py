@@ -63,7 +63,7 @@ def _window_linkable(base: tuple[str, ...], target: str, working_directory: Path
     try:
         _run(*base, "new-session", "-d", "-s", "probe-console", "-c", str(working_directory))
         _run(*base, "set-option", "-w", "-t", target, WINDOW_SESSION_OPTION, "probe")
-        _run(*base, "link-window", "-s", target, "-t", "probe-console:")
+        _run(*base, "link-window", "-d", "-s", target, "-t", "probe-console:")
         mapping = _run(
             *base,
             "list-windows",
