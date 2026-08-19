@@ -166,12 +166,16 @@ class TmuxGateway:
             # pane id means one pane seen twice, and one pane cannot be in two states, so a
             # difference between two listings of it is a listing artifact rather than a
             # second window. Only *distinct* panes claiming one session are ambiguous.
+            #
+            # Keyed on the pane id alone. The liveness comparison this replaces was doing two
+            # wrong things at once: on a repeat listing it was redundant, since one physical
+            # pane cannot disagree with itself inside a single snapshot; and on two *distinct*
+            # panes it silently swallowed the case where both happen to be alive — a
+            # hand-grown second window whose evidence then vanished with nothing quarantined
+            # for a reader to see, which is precisely the ambiguous half of DEC-020.
             earlier = next((p for p in managed if p.session_id == pane.session_id), None)
             if earlier is not None:
-                if pane.pane_id != earlier.pane_id and (pane.live, pane.preserved) != (
-                    earlier.live,
-                    earlier.preserved,
-                ):
+                if pane.pane_id != earlier.pane_id:
                     orphans.append(OrphanEvidence(line, "duplicate session evidence disagrees"))
                 continue
             managed.append(pane)

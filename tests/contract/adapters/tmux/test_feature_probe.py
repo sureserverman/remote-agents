@@ -18,6 +18,25 @@ from pathlib import Path
 from remote_agents.adapters.tmux.feature_probe import probe_features
 
 
+def _die(run, pane: str) -> str:
+    """Kill one pane's process and return its `pane_dead` once tmux has noticed, or "gone".
+
+    Polled rather than slept on: the exit is asynchronous to tmux's own bookkeeping, and a
+    fixed sleep either flakes on a loaded host or slows every run to the worst case.
+    """
+    import os as _os
+    import signal as _signal
+
+    _os.kill(int(run("display-message", "-p", "-t", pane, "#{pane_pid}").strip()), _signal.SIGKILL)
+    for _ in range(50):
+        if pane not in run("list-panes", "-a", "-F", "#{pane_id}").split():
+            return "gone"
+        if run("display-message", "-p", "-t", pane, "#{pane_dead}").strip() == "1":
+            return "1"
+        time.sleep(0.1)
+    return run("display-message", "-p", "-t", pane, "#{pane_dead}").strip()
+
+
 def test_feature_probe_uses_a_disposable_socket_and_exact_target(tmp_path: Path) -> None:
     result = probe_features(tmp_path)
 
@@ -80,20 +99,51 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         assert marked[stays] == "home|"
         assert set(run("list-sessions", "-F", "#{session_name}").splitlines()) >= {"home", "host"}
         # Claim 6 (adapters/tmux/fake.py, application PRESERVED handling): a pane's own
-        # options outlive its own process. Under `remain-on-exit` the pane stays as dead
-        # evidence, and it still answers with its marks — which is what keeps a PRESERVED
-        # session decodable now that identity is pane-scoped rather than session-scoped.
-        run("set-option", "-t", "host:", "remain-on-exit", "on")
-        pid = run("display-message", "-p", "-t", moved, "#{pane_pid}").strip()
-        os.kill(int(pid), signal.SIGKILL)
-        for _ in range(50):
-            if run("display-message", "-p", "-t", moved, "#{pane_dead}").strip() == "1":
-                break
-            time.sleep(0.1)
-        assert run("display-message", "-p", "-t", moved, "#{pane_dead}").strip() == "1"
-        assert (
-            run("display-message", "-p", "-t", moved, "#{@remote_agents_probe}").strip()
-            == "pane-scoped"
+        # options outlive its own process. Armed the way a launch arms it — on the pane's own
+        # window, before anything moves — the pane stays as dead evidence and still answers
+        # with its marks, which is what keeps a PRESERVED session decodable now that identity
+        # is pane-scoped rather than session-scoped.
+        run("new-session", "-d", "-s", "preserved", "-c", str(tmp_path))
+        run("set-option", "-t", "preserved:", "remain-on-exit", "on")
+        run("set-option", "-p", "-t", "preserved:", "@remote_agents_probe", "kept")
+        at_home = run("list-panes", "-t", "preserved:", "-F", "#{pane_id}").strip()
+        assert _die(run, at_home) == "1"
+        assert run("display-message", "-p", "-t", at_home, "#{@remote_agents_probe}").strip() == (
+            "kept"
         )
+
+        # Claim 7 (application/console.py, DEC-021): `remain-on-exit` is a **window** option
+        # and does NOT travel with a swapped pane. Armed at launch on the agent's own window,
+        # a pane that is then swapped elsewhere reports `off`, and its process exiting
+        # destroys the pane outright rather than leaving PRESERVED evidence — taking the
+        # host window's session with it when that pane was the window's last.
+        #
+        # The console therefore has to arm its own window, and this claim is the reason
+        # rather than a preference. Both halves are asserted, because a fix that armed the
+        # host would silently pass a test that only checked the failure.
+        run("new-session", "-d", "-s", "armed-home", "-c", str(tmp_path))
+        run("set-option", "-t", "armed-home:", "remain-on-exit", "on")
+        run("new-session", "-d", "-s", "bare-host", "-c", str(tmp_path))
+        agent = run("list-panes", "-t", "armed-home:", "-F", "#{pane_id}").strip()
+        occupant = run("list-panes", "-t", "bare-host:", "-F", "#{pane_id}").strip()
+        run("swap-pane", "-s", agent, "-t", occupant)
+        assert run("display-message", "-p", "-t", agent, "#{remain-on-exit}").strip() == "off"
+        os.kill(
+            int(run("display-message", "-p", "-t", agent, "#{pane_pid}").strip()), signal.SIGKILL
+        )
+        time.sleep(1)
+        assert agent not in run("list-panes", "-a", "-F", "#{pane_id}").split()
+        assert "bare-host" not in run("list-sessions", "-F", "#{session_name}").split()
+
+        # ...and arming the host window is what makes both survive.
+        run("new-session", "-d", "-s", "armed-home2", "-c", str(tmp_path))
+        run("set-option", "-t", "armed-home2:", "remain-on-exit", "on")
+        run("new-session", "-d", "-s", "armed-host", "-c", str(tmp_path))
+        run("set-option", "-t", "armed-host:", "remain-on-exit", "on")
+        agent2 = run("list-panes", "-t", "armed-home2:", "-F", "#{pane_id}").strip()
+        occupant2 = run("list-panes", "-t", "armed-host:", "-F", "#{pane_id}").strip()
+        run("swap-pane", "-s", agent2, "-t", occupant2)
+        assert _die(run, agent2) == "1"
+        assert "armed-host" in run("list-sessions", "-F", "#{session_name}").split()
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)

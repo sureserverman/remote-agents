@@ -131,13 +131,47 @@ async def test_one_pane_listed_twice_is_one_pane_not_a_disagreement() -> None:
 
 
 async def test_a_different_pane_claiming_one_identity_is_still_ambiguous() -> None:
-    """The rule the repeat-drop must not swallow: two *distinct* panes disagreeing about
-    one session is somebody's hand-grown second window, and it stays visible (DEC-020)."""
+    """The rule the repeat-drop must not swallow: two *distinct* panes claiming one session
+    is somebody's hand-grown second window, and it stays visible (DEC-020)."""
     second = line(_SESSION, pane="%9", dead="1")
     result = await inventory_of(line(_SESSION, pane="%4"), second)
     assert len(result.managed) == 1
     assert result.managed[0].pane_id == "%4"
     assert [orphan.reason for orphan in result.orphans] == ["duplicate session evidence disagrees"]
+
+
+async def test_two_distinct_panes_that_agree_on_liveness_are_ambiguous_too() -> None:
+    """The case a liveness comparison cannot see, and the reason the rule keys on pane id.
+
+    Two hand-grown windows for one session are ambiguous because they are *two panes*, not
+    because they disagree about anything. While the check also required disagreeing
+    liveness, two live panes claiming one session left exactly one observation and no orphan
+    — the second pane's evidence discarded silently, which is the failure the quarantine
+    exists to prevent. Both sibling tests happened to vary liveness, so neither could see it.
+    """
+    second = line(_SESSION, pane="%9")
+    result = await inventory_of(line(_SESSION, pane="%4"), second)
+    assert len(result.managed) == 1
+    assert result.managed[0].pane_id == "%4"
+    assert [orphan.raw for orphan in result.orphans] == [second]
+
+
+async def test_an_unmarked_pane_under_a_managed_name_is_quarantined_not_dropped() -> None:
+    """The shape the swap will produce on every poll: the console's surface pane, parked in
+    an agent's home window while that agent is displayed elsewhere. It carries no mark of
+    its own and — since schema 2 leaves no session-scoped twin — inherits none, so it
+    decodes to nothing.
+
+    Quarantined rather than silently dropped is the correct answer *here*, because inventory
+    cannot tell this pane from any other unmarked stray. It does mean one standing orphan
+    line per swapped session once the console ships, which is the console's to solve by
+    marking its own surface panes, not inventory's to solve by widening a drop.
+    """
+    parked = "|".join((f"ra-{_SESSION}", "$0", "%8", "300", "0", "", "", "", "", ""))
+    result = await inventory_of(line(_SESSION, host="ra-console"), parked)
+    assert [pane.session_id for pane in result.managed] == [_SESSION]
+    assert result.managed[0].pane_id == "%1"
+    assert [orphan.raw for orphan in result.orphans] == [parked]
 
 
 async def test_distinct_sessions_are_untouched_by_any_of_this() -> None:
