@@ -287,9 +287,7 @@ class TmuxTerminal:
             if observation is not None and observation.preserved:
                 return observation
             await asyncio.sleep(0.01)
-        return TerminalObservation(
-            session_id, live=True, preserved=False, detail=GRACEFUL_TIMEOUT
-        )
+        return TerminalObservation(session_id, live=True, preserved=False, detail=GRACEFUL_TIMEOUT)
 
     async def confirm_ready(
         self, session_id: SessionId, profile_id: ProfileId
@@ -353,6 +351,12 @@ class TmuxTerminal:
                     pane.preserved,
                     project_id=pane.project_id,
                     profile_id=pane.profile_id,
+                    # Answered here as fully as `managed_observations` answers it, from the
+                    # same decoded pane. `None` on this field is the port's way of saying a
+                    # terminal cannot track hosting at all; one adapter filling it on one path
+                    # and leaving it empty on another would make the same value mean two
+                    # things, and a caller could not tell which.
+                    host_session=pane.session_name,
                 )
         return None
 
@@ -451,6 +455,7 @@ class TmuxTerminal:
                 pane.preserved,
                 project_id=pane.project_id,
                 profile_id=pane.profile_id,
+                host_session=pane.session_name,
             )
             for pane in inventory.managed
         )

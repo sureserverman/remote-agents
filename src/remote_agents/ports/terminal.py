@@ -31,6 +31,19 @@ class TerminalObservation:
     project_id: ProjectId | None = None
     profile_id: ProfileId | None = None
 
+    host_session: str | None = None
+    """Which terminal session is *showing* this pane, when the terminal can say.
+
+    Provenance, never a lifecycle input. A pane can be hosted by a session that is not its
+    own — the console displays an agent by taking its pane — and the point of recording that
+    is so a reader can tell "displaced" from "gone" without inferring it. Reconciliation must
+    keep deciding on identity alone: if the host changed a verdict, moving a pane would move
+    a session's state, which is the coupling pane addressing exists to remove.
+
+    `None` from any terminal that does not track hosting, which keeps the port honest about
+    what it can answer rather than inventing a default that reads as fact.
+    """
+
 
 class TerminalPort(Protocol):
     async def managed_process_roots(self) -> tuple[int, ...]: ...
