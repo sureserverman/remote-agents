@@ -20,6 +20,7 @@ class Gateway:
             (
                 ManagedPane(
                     f"ra-{self.session_id}",
+                    "%1",
                     self.session_id,
                     ProjectId("opaque-editor"),
                     ProfileId("claude"),

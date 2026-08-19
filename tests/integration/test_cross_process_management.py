@@ -145,6 +145,7 @@ class RecordingGateway:
             tuple(
                 ManagedPane(
                     f"ra-{session_id}",
+                    f"%{index}",
                     session_id,
                     project_id,
                     profile_id,
@@ -152,7 +153,7 @@ class RecordingGateway:
                     session_id not in self.preserved,
                     session_id in self.preserved,
                 )
-                for session_id, (project_id, profile_id) in self.panes.items()
+                for index, (session_id, (project_id, profile_id)) in enumerate(self.panes.items())
             ),
             (),
         )

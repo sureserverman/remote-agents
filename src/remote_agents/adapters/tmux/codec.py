@@ -7,7 +7,15 @@ from dataclasses import dataclass
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 _DELIMITER = "|"
+
+# Schema 1 marked the *session*; schema 2 marks the *pane*. Both are decodable, because an
+# owner's already-running sessions must survive the upgrade, and a schema-1 session has no
+# pane mark to find. The version is what tells the two shapes apart on a single line, and it
+# has to, because tmux format expansion falls back pane -> session: a schema-1 session's
+# pane reports the session's mark as if it were its own (verified, tmux 3.4, 2026-08-19).
 _SCHEMA_VERSION = "1"
+_PANE_SCHEMA_VERSION = "2"
+_DECODABLE_SCHEMA_VERSIONS = frozenset({_SCHEMA_VERSION, _PANE_SCHEMA_VERSION})
 
 # The console session carries the `ra-` prefix so it visibly belongs to this socket, and a
 # non-UUID suffix so `exact_session_target` can never accept it: no lifecycle code path can
@@ -41,6 +49,12 @@ class ManagedPane:
     """Trusted tmux metadata decoded from the pinned format-version contract."""
 
     session_name: str
+    """The session *hosting* this pane, which is only the managed session's own name under
+    schema 1. A schema-2 pane keeps its identity wherever tmux lists it, so this field
+    answers "who is showing it" and never "which session is it" — build a lifecycle target
+    from `session_id`, never from this."""
+
+    pane_id: str
     session_id: SessionId
     project_id: ProjectId
     profile_id: ProfileId
@@ -58,6 +72,50 @@ def exact_session_target(session_name: str) -> str:
     except ValueError as error:
         raise ValueError("managed session name must contain a canonical UUID") from error
     return f"ra-{session_id}:"
+
+
+def exact_pane_target(pane_id: str) -> str:
+    """Return tmux's exact pane target for one decoded pane id, refusing anything else.
+
+    The closed shape `exact_session_target` has, for the address that replaces it on every
+    operation that must follow the agent rather than the window it started in. A pane id is
+    `%` followed by digits and nothing more — no whitespace, no session form, no free text —
+    so an id that came from anywhere but our own inventory cannot reach an argv (DEC-001).
+    """
+    if not pane_id.startswith("%"):
+        raise ValueError("a pane target must be a tmux pane id")
+    digits = pane_id.removeprefix("%")
+    if not digits or not digits.isascii() or not digits.isdigit():
+        raise ValueError("a pane target must be % followed by digits")
+    return pane_id
+
+
+def pane_mark_args(
+    session_id: SessionId, project_id: ProjectId, profile_id: ProfileId
+) -> tuple[tuple[str, ...], ...]:
+    """Return the argv suffixes that stamp schema-2 identity onto one launched pane.
+
+    **`-p` on every field, and no session-scoped twin.** The mark has to travel with the
+    pane, which `set-option -p` does — but the absence of the session-scoped copy is the
+    load-bearing half, because tmux resolves `#{@option}` by falling back pane -> session.
+    Marked on both scopes, a home session keeps answering with its identity after its agent
+    has moved out, so whatever pane swaps in inherits it and two panes report one session
+    (verified on tmux 3.4, 2026-08-19). Marked on the pane alone, the identity goes exactly
+    where the agent goes and the arriving pane carries nothing.
+
+    The target is the session at launch time, when its only pane is the one being marked;
+    thereafter the pane is addressed by the id `exact_pane_target` validates.
+    """
+    target = exact_session_target(f"ra-{session_id}")
+    return tuple(
+        ("set-option", "-p", "-t", target, option, value)
+        for option, value in (
+            ("@remote_agents_schema", _PANE_SCHEMA_VERSION),
+            ("@remote_agents_id", str(session_id)),
+            ("@remote_agents_project_id", str(project_id)),
+            ("@remote_agents_profile", str(profile_id)),
+        )
+    )
 
 
 def attach_argv(session_id: SessionId, *, read_only: bool = False) -> tuple[str, ...]:
@@ -258,7 +316,7 @@ def parse_pane(line: str) -> ManagedPane:
     (
         name,
         _tmux_session_id,
-        _pane_id,
+        pane_id,
         raw_pid,
         pane_dead,
         _dead_status,
@@ -267,12 +325,15 @@ def parse_pane(line: str) -> ManagedPane:
         project,
         profile,
     ) = fields
-    if schema != _SCHEMA_VERSION:
+    if schema not in _DECODABLE_SCHEMA_VERSIONS:
         raise ValueError("tmux management schema is missing or unsupported")
     if any(not field for index, field in enumerate(fields) if index not in {4, 5}):
         raise ValueError("tmux pane format has missing fields")
     session_id = SessionId.parse(raw_id)
-    if name != f"ra-{session_id}":
+    # A schema-1 mark on a line under another name is *inherited*, never identity: the
+    # session it belongs to still answers for panes that merely occupy its window. Schema 2
+    # is stamped on the pane itself, so it stays true wherever tmux lists the pane.
+    if schema == _SCHEMA_VERSION and name != f"ra-{session_id}":
         raise ValueError("managed session name does not match its opaque identifier")
     if pane_dead not in {"0", "1"}:
         raise ValueError("tmux pane-dead field is invalid")
@@ -284,6 +345,7 @@ def parse_pane(line: str) -> ManagedPane:
         raise ValueError("tmux pane PID is invalid")
     return ManagedPane(
         name,
+        pane_id,
         session_id,
         ProjectId(project),
         ProfileId(profile),
