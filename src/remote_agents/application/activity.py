@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator
@@ -218,6 +219,15 @@ def _read_one(path: Path) -> AgentActivity | None:
     at most one record lost, never one delivered twice.
     """
     claimed = path.with_name(f".claim-{uuid4().hex}.tmp")
+    with suppress(OSError):
+        # Before the rename, not after: the rename preserves the record's mtime, and the
+        # abandoned-claim sweep judges claims by mtime — so claiming an hour-old record
+        # (a backlog after an outage) would exist, for an instant, as a claim already
+        # past the sweep's horizon, and a concurrent drainer's sweep in that instant
+        # would eat a live claim. Freshened first, the claim is born its own age. A lost
+        # utime race with another drainer's rename costs nothing: our rename then fails
+        # and we skip, which is the ordinary losing-the-claim path.
+        os.utime(path)
     try:
         path.rename(claimed)
     except OSError:

@@ -72,3 +72,46 @@ def test_a_fresh_claim_is_left_alone(tmp_path: Path) -> None:
 
     _clear_abandoned_temporaries(spool)
     assert claim.exists(), "a claim younger than the horizon may still be mid-read"
+
+
+def test_a_claim_carries_its_own_age_not_its_records(tmp_path: Path) -> None:
+    """Claiming an hour-old record (a backlog after an outage) must not hand a live claim
+    to a concurrent sweep: the rename preserves the record's mtime, so the claim's stamp
+    is freshened at claim time — found by the Stage 5 gate evaluator's crash probes."""
+    spool = tmp_path / "activity"
+    _spool(spool, 1)
+    record = next(iter(spool.glob("*.json")))
+    stale = time.time() - 7200
+    os.utime(record, (stale, stale))
+
+    drained = drain_activity(spool)
+    assert len(drained) == 1, "a stale record is still drained by whoever claims it"
+
+
+def test_a_live_claim_of_a_stale_record_survives_a_concurrent_sweep(tmp_path: Path) -> None:
+    import remote_agents.application.activity as activity_module
+
+    spool = tmp_path / "activity"
+    _spool(spool, 1)
+    record = next(iter(spool.glob("*.json")))
+    stale = time.time() - 7200
+    os.utime(record, (stale, stale))
+
+    claimed_paths: list[Path] = []
+    original_rename = Path.rename
+
+    def watching_rename(self: Path, target):  # type: ignore[no-untyped-def]
+        result = original_rename(self, target)
+        if str(target).find(".claim-") != -1:
+            claimed_paths.append(Path(target))
+            # A concurrent drainer's sweep runs the instant the claim exists.
+            activity_module._clear_abandoned_temporaries(spool)
+        return result
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as patch:
+        patch.setattr(Path, "rename", watching_rename)
+        drained = drain_activity(spool)
+    assert len(claimed_paths) == 1
+    assert len(drained) == 1, "the sweep ate a live claim of a stale record"

@@ -84,9 +84,12 @@ class DashboardScreen(ProjectsScreen):
         self._sessions_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
-        #: The newest observation already rendered, or None before the first read. The
-        #: first load is history, not news — it renders without flashing.
+        #: The newest observation already rendered, and whether any read has completed.
+        #: The first read is history whatever it holds — it renders (or primes an empty
+        #: pane) without flashing; everything after a primed read that moves the head is
+        #: news, including the first row a fresh database ever gains.
         self._feed_head: tuple[str, str, object] | None = None
+        self._feed_primed = False
 
     def compose(self) -> ComposeResult:
         """The base body, re-arranged: same ids, so every inherited method still lands.
@@ -258,6 +261,9 @@ class DashboardScreen(ProjectsScreen):
             return
         if not activities:
             pane.update(_NO_NOTIFICATIONS)
+            # An empty first read still primes the news detector: the first row that
+            # ever arrives after this is genuine news, not history, and must flash.
+            self._feed_primed = True
             return
         lines = []
         for activity in activities[:_FEED_LIMIT]:
@@ -268,8 +274,9 @@ class DashboardScreen(ProjectsScreen):
 
         newest = activities[0]
         head = (newest.session_id, newest.kind.value, newest.observed_at)
-        arrived = self._feed_head is not None and head != self._feed_head
+        arrived = self._feed_primed and head != self._feed_head
         self._feed_head = head
+        self._feed_primed = True
         flash = self.services.console_flash
         if arrived and flash is not None:
             try:
