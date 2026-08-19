@@ -522,6 +522,11 @@ def main(
             )
         finally:
             connection.close()
+    if arguments.command is None:
+        # The bare name was unclaimed — no arguments fell through every branch above and
+        # exited 0 silently — so this claims it for the one thing a bare invocation can
+        # mean: enter the console.
+        return _enter_console()
     return 0
 
 
@@ -641,6 +646,61 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         paths.activity_directory,
         SQLiteActivityStore(connection),
     )
+
+
+def _enter_console(
+    *,
+    environment: Mapping[str, str] | None = None,
+    ensure_console: Callable[[], Awaitable[bool]] | None = None,
+    exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
+) -> int:
+    """Enter the console: ensure it exists and become its client, honoring the hosting.
+
+    The bare invocation's whole meaning. A client already on our server is told it is
+    already there (F12 reaches the dashboard); a foreign tmux client gets the command
+    printed rather than a nested client; a bare shell ensures the console — window 0
+    running `remote-agents tui` — and execs the attach, exactly the handoff shape a
+    ready launch has always used. An exec that cannot happen prints the same command
+    and exits non-zero, so the console is never lost behind a silent failure.
+    """
+    from remote_agents.adapters.tmux.codec import console_attach_argv
+    from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
+
+    values = os.environ if environment is None else environment
+    mode = hosting_mode(values)
+    command = " ".join(console_attach_argv())
+    if mode is HostingMode.CONSOLE:
+        print("Already in the console. F12 returns to the dashboard.")
+        return 0
+    if mode is HostingMode.FOREIGN:
+        print(
+            "Already inside another tmux. Detach first and run `remote-agents`, or attach "
+            f"from a new terminal with:\n{command}"
+        )
+        return 0
+    if ensure_console is None:
+        from remote_agents.application.console import ConsoleComposer
+
+        composer = ConsoleComposer(
+            TmuxGateway("remote-agents", AsyncTmuxRunner()),
+            (sys.executable, "-m", "remote_agents", "tui"),
+            Path.home(),
+        )
+        ensure_console = composer.ensure
+    if not asyncio.run(ensure_console()):
+        print(
+            "The console could not be prepared. Check tmux on this host, or run: "
+            "remote-agents doctor",
+            file=sys.stderr,
+        )
+        return 1
+    argv = console_attach_argv()
+    try:
+        exec_argv(argv[0], argv)
+    except OSError:
+        print(f"Could not attach automatically. Attach with:\n{command}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):

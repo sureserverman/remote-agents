@@ -101,6 +101,15 @@ def console_target() -> str:
     return f"{CONSOLE_SESSION_NAME}:"
 
 
+def console_attach_argv() -> tuple[str, ...]:
+    """Return the full production argv that attaches a bare shell to the console.
+
+    The full form for the same reason `attach_argv` and `switch_client_argv` carry one:
+    the composition root execs this without assembling a tmux invocation of its own.
+    """
+    return ("tmux", "-L", "remote-agents", "attach-session", "-t", console_target())
+
+
 def link_window_args(session_id: SessionId) -> tuple[str, ...]:
     """Return the argv suffix that links one managed session's window into the console.
 
