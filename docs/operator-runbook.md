@@ -648,6 +648,26 @@ service's profile list is a snapshot of its own start in the same way. When the 
 disagree about which projects or agents exist, neither is wrong; refresh or restart the older
 process, and treat `doctor --profiles`, which probes when it is run, as the current answer.
 
+## Console recovery
+
+The console — the `ra-console` tmux session the bare `remote-agents` command enters — is
+presentation only, and that is the whole recovery story: **killing it never touches a
+session.** A console that is stuck, stale, or showing tabs that disagree with reality is
+rebuilt from scratch:
+
+```bash
+tmux -L remote-agents kill-session -t ra-console
+remote-agents
+```
+
+Every managed session survives the kill (the tabs are `link-window` shares, and a window
+dies only with its last link, which the home session always holds). The fresh console
+re-links a tab per live session on its first reload. If the console cannot be prepared at
+all, the bare command says so and exits non-zero; `remote-agents doctor` reports whether
+this host's tmux supports the console's window contract, and `remote-agents tui` still
+runs the dashboard directly in the current terminal, where opening a session falls back
+to the exec-attach handoff.
+
 ## Local recovery without Telegram
 
 When the service is down, its credential has been revoked, or Telegram is unreachable, every

@@ -150,7 +150,26 @@ Do not put secrets in this repository.
 
 ## Local terminal surface
 
-The same curated launches are available on this host without Telegram:
+The same curated launches are available on this host without Telegram. The front door is
+the bare command:
+
+```bash
+uv run --locked remote-agents
+```
+
+With no arguments, `remote-agents` enters the **console**: a tmux session named
+`ra-console` on the project's own server, whose window 0 is the dashboard — projects on
+the left, the running sessions and the notifications feed on the right — and whose other
+windows are tabs, one per live managed session, linked and unlinked as sessions come and
+go. Opening a session from the dashboard focuses its tab; `F12` returns to the dashboard
+from any tab (a binding installed on the project's own tmux server only — your own tmux
+configuration is never touched). Run from inside the console it says so instead of
+nesting; run from inside somebody else's tmux it prints the attach command instead.
+Killing the console at any time is safe: it is presentation only, and every managed
+session survives it. Every command with arguments is the CLI exactly as before — `serve`,
+`doctor`, `add-project`, and the rest are unchanged.
+
+The dashboard itself, in or out of the console, is:
 
 ```bash
 uv run --locked remote-agents tui
