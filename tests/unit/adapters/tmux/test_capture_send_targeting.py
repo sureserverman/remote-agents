@@ -50,10 +50,34 @@ async def test_capture_falls_back_to_the_session_target_for_a_legacy_session() -
     assert runner.capture_call == (*_BASE, "capture-pane", "-p", "-t", _SESSION_TARGET)
 
 
-async def test_capture_falls_back_when_nothing_resolves_at_all() -> None:
-    runner = TargetingRunner(panes=(), capture="")
-    await gateway_for(runner).capture(_SESSION)
-    assert runner.capture_call == (*_BASE, "capture-pane", "-p", "-t", _SESSION_TARGET)
+async def test_nothing_resolving_at_all_refuses_rather_than_falling_back() -> None:
+    """No pane claims this identity, so there is no target — not a session target either.
+
+    Two situations produce this, and refusing is right for both. The session is gone, in
+    which case any target errors and the caller gets the same typed answer one call earlier.
+    Or the session exists and something foreign occupies its window — a displaced legacy
+    pane's replacement — in which case falling back reads and types at a stranger. The
+    fallback's precondition is that the session's own window still holds the pane claiming
+    the identity, and it is checked rather than assumed.
+    """
+    runner = TargetingRunner(panes=(), capture="somebody else's screen")
+    with pytest.raises(TerminalTargetMissing):
+        await gateway_for(runner).capture(_SESSION)
+    assert not [call for call in runner.calls if "capture-pane" in call]
+
+
+async def test_a_displaced_legacy_pane_is_refused_rather_than_mis_targeted() -> None:
+    """The case that motivated checking the precondition, reproduced at unit scale.
+
+    A schema-1 mark under a foreign host is inheritance rather than identity, so the pane
+    does not decode and nothing resolves. What is left in the home window is whatever swapped
+    in. Measured live by the close-out evaluator: with the old fallback, `capture` returned a
+    stranger's screen and `send_keys` landed in their terminal.
+    """
+    displaced = TargetingRunner(panes=(("%3", _SESSION, "1"),), host="ra-console")
+    with pytest.raises(TerminalTargetMissing):
+        await gateway_for(displaced).send_keys(_SESSION, ("Enter",))
+    assert displaced.key_calls == []
 
 
 async def test_send_keys_addresses_the_resolved_pane_for_every_key() -> None:

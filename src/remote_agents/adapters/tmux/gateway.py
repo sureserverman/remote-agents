@@ -281,13 +281,27 @@ class TmuxGateway:
         can — `_target_missing_or` keeps that signal — and a genuinely broken tmux still
         arrives as itself rather than as an ended session.
         """
+        home = f"ra-{session_id}"
         try:
-            pane_id = await self.pane_for(session_id)
+            claiming = await self._claiming_panes(session_id)
         except RuntimeError as error:
-            raise _target_missing_or(error, f"ra-{session_id}") from error
-        if pane_id is None:
-            return exact_session_target(f"ra-{session_id}")
-        return exact_pane_target(pane_id)
+            raise _target_missing_or(error, home) from error
+        owned = next((pane for pane in claiming if pane.pane_scoped), None)
+        if owned is not None:
+            return exact_pane_target(owned.pane_id)
+        # The legacy shape, and the fallback's precondition **checked rather than asserted**.
+        # A schema-1 session names no pane, so the session target is only exact while that
+        # session's own window still holds the pane claiming this identity. An earlier version
+        # took that as given — "a schema-1 session has never been anywhere but its own window"
+        # — which is true of the shipped console and not enforced anywhere. Displace such a
+        # pane and the mark stops decoding (a schema-1 mark under a foreign name is
+        # inheritance, not identity), so nothing resolves, and falling back would read and
+        # type at whatever moved in. Measured by the close-out evaluator, which swapped a
+        # legacy pane out and watched `capture` return a stranger's screen and `send_keys`
+        # land in their terminal.
+        if any(pane.session_name == home for pane in claiming):
+            return exact_session_target(home)
+        raise TerminalTargetMissing(f"managed target is gone: {home}")
 
     async def capture(self, session_id: SessionId) -> str:
         """Capture only one exact managed pane without tmux escape-sequence output."""
@@ -332,8 +346,8 @@ class TmuxGateway:
             if index < len(keys) - 1:
                 await asyncio.sleep(0.15)
 
-    async def _claiming_panes(self, session_id: SessionId) -> tuple[tuple[str, bool], ...]:
-        """Every decoded pane claiming one identity, with whether the claim is its own.
+    async def _claiming_panes(self, session_id: SessionId) -> tuple[ManagedPane, ...]:
+        """Every decoded pane claiming one identity, in listing order.
 
         Deliberately *before* `inventory`'s one-per-session dedup. That dedup keeps whichever
         line tmux listed first and quarantines the rest as ambiguous evidence for a reader to
@@ -341,11 +355,11 @@ class TmuxGateway:
         because "listed first" is an ordering, not an identification.
         """
         output = await self._runner.run(*self._base_argv(), "list-panes", "-a", "-F", PANE_FORMAT)
-        claiming: dict[str, bool] = {}
+        claiming: dict[str, ManagedPane] = {}
         for _line, decoded in _decoded_lines(output):
             if isinstance(decoded, ManagedPane) and decoded.session_id == session_id:
-                claiming.setdefault(decoded.pane_id, decoded.pane_scoped)
-        return tuple(claiming.items())
+                claiming.setdefault(decoded.pane_id, decoded)
+        return tuple(claiming.values())
 
     async def destroy(self, session_id: SessionId) -> None:
         """Destroy one agent by killing the pane it occupies, whatever is hosting it.
@@ -354,9 +368,12 @@ class TmuxGateway:
         `kill-session` is not merely imprecise but wrong. Verified on tmux 3.4 (2026-08-19):
         killing a session whose window is **linked into another session** removes the session
         name, exits 0, and leaves the pane — and the agent in it — running. The shipped
-        console links a window for every live session, so `kill-session` on a session the
-        owner had open as a tab reported success while the agent kept going: a record at
-        ENDED over a live process, exactly what DEC-006 forbids. That is a bug this method
+        console links a window for **every** live session — `ConsoleComposer.sync` does it
+        unconditionally, not only for sessions the owner opened — so `kill-session` reported
+        success while the agent kept going: a record at ENDED over a live process, exactly
+        what DEC-006 forbids. An earlier wording here said "a session the owner had open as a
+        tab", which understated the reach; the close-out evaluator read `sync` and corrected
+        it. That is a bug this method
         fixes, not only one it prevents. `kill-pane` names the pane object, so it reaches the
         agent through a link or a swap, and takes nothing else with it.
 
@@ -392,8 +409,8 @@ class TmuxGateway:
             claiming = await self._claiming_panes(session_id)
         except RuntimeError as error:
             raise _target_missing_or(error, f"ra-{session_id}") from error
-        owned = [pane_id for pane_id, is_own in claiming if is_own]
-        targets = owned or [pane_id for pane_id, _ in claiming]
+        owned = [pane.pane_id for pane in claiming if pane.pane_scoped]
+        targets = owned or [pane.pane_id for pane in claiming]
         if not targets:
             try:
                 await self._runner.run(

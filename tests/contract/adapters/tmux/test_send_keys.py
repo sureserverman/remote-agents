@@ -7,17 +7,40 @@ from remote_agents.domain.models import SessionId
 
 
 class RecordingRunner:
-    def __init__(self) -> None:
+    """Answers the resolution listing with a legacy pane at home, then records the keys.
+
+    The listing matters because a sequence is aimed before it is typed: a schema-1 session
+    resolves to no pane and keeps the session target it has always used, which is the shape
+    this file asserts. Returning nothing at all would mean nothing claims the identity, and
+    the gateway refuses to aim at a window it cannot show still holds the agent.
+    """
+
+    def __init__(self, session_id: SessionId) -> None:
+        self._line = "|".join(
+            (
+                f"ra-{session_id}",
+                "$1",
+                "%1",
+                "100",
+                "0",
+                "",
+                "1",
+                str(session_id),
+                "opaque-editor",
+                "claude",
+            )
+        )
         self.calls: list[tuple[str, ...]] = []
 
     async def run(self, *argv: str) -> str:
         self.calls.append(argv)
-        return ""
+        return self._line if "list-panes" in argv else ""
 
 
 @pytest.mark.asyncio
 async def test_fixed_key_sequence_is_sent_as_ordered_events(monkeypatch) -> None:
-    runner = RecordingRunner()
+    session_id = SessionId.new()
+    runner = RecordingRunner(session_id)
     gateway = TmuxGateway("remote-agents", runner)
     delays: list[float] = []
 
@@ -25,7 +48,6 @@ async def test_fixed_key_sequence_is_sent_as_ordered_events(monkeypatch) -> None
         delays.append(value)
 
     monkeypatch.setattr("remote_agents.adapters.tmux.gateway.asyncio.sleep", record_delay)
-    session_id = SessionId.new()
 
     await gateway.send_keys(session_id, ("/quit", "Enter", "Enter"))
 
