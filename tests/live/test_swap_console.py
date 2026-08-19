@@ -119,6 +119,14 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
         # The agent is still the agent wherever it is being shown: the capture that feeds
         # readiness, trust and quiet-watching reads it through the console (Sub-plan 1).
         assert MARKER in await console.gateway.capture(agent_session)
+        # And the copyable attach command names where the pane is being shown, not the window
+        # it started in — the Stage 1 gate's carried obligation, proved against real hosting
+        # rather than against a decoded string. Naming `ra-<uuid>:` here would hand the owner
+        # a command that attaches them to the projects surface with nothing reporting an error.
+        displaced = await console.terminal.copy_attach(agent_session)
+        assert displaced is not None and displaced.endswith("-t ra-console:"), (
+            f"a displaced agent's attach command does not follow it: {displaced}"
+        )
 
         await console.composer.show_projects()
 
@@ -126,6 +134,10 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
         assert await console.home_panes(agent_session) == [agent], "the agent did not go home"
         assert {"ra-console", f"ra-{agent_session}"} <= await console.sessions()
         assert MARKER in await console.gateway.capture(agent_session)
+        home = await console.terminal.copy_attach(agent_session)
+        assert home is not None and home.endswith(f"-t ra-{agent_session}:"), (
+            f"an agent back home is not attached at home: {home}"
+        )
     finally:
         await console.teardown()
 

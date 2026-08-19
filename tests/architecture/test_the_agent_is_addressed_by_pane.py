@@ -61,14 +61,25 @@ _CODEC_MAY_NAME_A_SESSION = {
         "it stamps the pane at launch, when the session has exactly one and there is no pane "
         "id yet to name — `-p` against the session target reaches that single pane"
     ),
-    "attach_argv": (
-        "**owed a decision, not settled.** Attaching is how an owner reaches an agent, so by "
-        "the rule above it should name a pane — but a tmux client attaches to a session, and "
-        "what a displaced agent's attach should name (its home, or the console showing it) is "
-        "a design question DEC-021's read-only attach has to answer. Recorded in DEC-038 and "
-        "gated on the swap composer's Stage 1: no pane displacement ships before it is closed"
+    "attach_host_target": (
+        "**settled at the swap composer's Stage 1 gate, and this is the answer.** Attaching "
+        "is how an owner reaches an agent, so by the rule above it should name a pane — but a "
+        "tmux client attaches to a *session*, so a pane id cannot be the answer here the way "
+        "it is for capture, send-keys and destruction. It names the session **showing** the "
+        "pane instead: the console while that agent is displayed, its own session otherwise, "
+        "and a second managed session while a crossed pane waits to be unwound. The target is "
+        "resolved from the same fresh observation that decides liveness, so it cannot name "
+        "where the agent used to be. Recorded as DEC-039, re-scoping DEC-021"
     ),
-    "switch_client_args": "the same question, for the in-server route; moves with attach_argv",
+    "switch_client_args": (
+        "**the in-server route, and deliberately NOT following the host.** It moves the "
+        "already-attached client, and the only client this can be is one inside the console — "
+        "where a displayed agent is a pane of the window the client is already on, so there is "
+        "nowhere to switch it to. Under the swap model the console reaches an agent by "
+        "`ConsoleComposer.show`, which exchanges panes rather than switching sessions, and "
+        "Sub-plan 3 is what wires that in place of this route. Until then nothing displaces a "
+        "pane in production, which is the condition DEC-039 records"
+    ),
     "link_window_args": "links a whole window into the console; the window is what it names",
     "window_session_mark_args": "marks the source window, which is the object a link shares",
 }
@@ -150,14 +161,15 @@ def _codec_builders_naming_a_session() -> set[str]:
 
 
 def test_the_codec_builders_naming_a_session_are_enumerated_too() -> None:
-    """Attach is the open one, and pinning it is the point of this test.
+    """Attach was the open one, and closing it is what changed this set.
 
-    The rule above governs the gateway; the codec is where the rest of the argv is built, and
-    `attach_argv` names a session for an operation that plainly does have to reach the agent.
-    That is a gap, not an exemption — so it is listed with what it is waiting on rather than
-    left outside the enumeration, where it would look like nobody had considered it.
+    The rule above governs the gateway; the codec is where the rest of the argv is built. When
+    this enumeration was written, `attach_argv` named a session for an operation that plainly
+    does have to reach the agent, and it was listed as a gap with what it was waiting on rather
+    than left out, where it would have looked unconsidered. It is now `attach_host_target` —
+    a builder whose whole job is deciding *which* session, which is what made the gap closable
+    without pretending a client can attach to a pane.
     """
-
     found = _codec_builders_naming_a_session()
 
     assert found == set(_CODEC_MAY_NAME_A_SESSION), (

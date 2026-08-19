@@ -185,8 +185,41 @@ def pane_mark_args(
     )
 
 
-def attach_argv(session_id: SessionId, *, read_only: bool = False) -> tuple[str, ...]:
+def attach_host_target(session_id: SessionId, host: str | None) -> str:
+    """Return the exact target for attaching to the session *showing* one agent's pane.
+
+    A tmux client attaches to a session, so attach is the one agent-reaching operation that
+    cannot be answered with a pane id the way capture, send-keys and destruction are
+    (DEC-038). It is answered with the session the pane is currently hosted by, which under
+    the swap model is the console while that agent is displayed and its own session
+    otherwise. That is the re-scoping DEC-021's read-only attach needed before any pane
+    displacement could ship: without it a copyable command silently lands the owner in a
+    terminal showing the projects surface, with nothing reporting an error.
+
+    **Closed, like every other target builder.** `host` is text decoded from our own
+    inventory, and the value of a closed shape is precisely that it does not depend on that
+    provenance holding: the console's own name exactly, or a canonical `ra-<uuid>` that
+    `exact_session_target` validates, and nothing else reaches an argv (DEC-001).
+
+    A host equal to the session's own name is not special-cased — it takes the same route and
+    produces the identical target, so the ordinary case cannot drift from the displaced one.
+    A host that is a *different* managed session is honored rather than refused: a crossed
+    pane is the state recovery exists to unwind, and it has to stay reachable while it lasts.
+    """
+    if host is None:
+        return exact_session_target(f"ra-{session_id}")
+    if host == CONSOLE_SESSION_NAME:
+        return console_target()
+    return exact_session_target(host)
+
+
+def attach_argv(
+    session_id: SessionId, *, read_only: bool = False, host: str | None = None
+) -> tuple[str, ...]:
     """Return the exact argument vector that attaches to one managed session.
+
+    `host` names the session currently showing the agent's pane; omitted, the agent is
+    assumed to be at home. See `attach_host_target` for why attach names a session at all.
 
     `read_only` adds tmux's own `-r` and nothing else. It is what a PRESERVED session is
     offered (DEC-021): the pane's output is the thing PRESERVED exists to keep, and refusing
@@ -212,13 +245,15 @@ def attach_argv(session_id: SessionId, *, read_only: bool = False) -> tuple[str,
         "attach-session",
         *(("-r",) if read_only else ()),
         "-t",
-        exact_session_target(f"ra-{session_id}"),
+        attach_host_target(session_id, host),
     )
 
 
-def attach_command(session_id: SessionId, *, read_only: bool = False) -> str:
+def attach_command(
+    session_id: SessionId, *, read_only: bool = False, host: str | None = None
+) -> str:
     """Return the one copyable attach command for a currently verified managed session."""
-    return " ".join(attach_argv(session_id, read_only=read_only))
+    return " ".join(attach_argv(session_id, read_only=read_only, host=host))
 
 
 def console_target() -> str:

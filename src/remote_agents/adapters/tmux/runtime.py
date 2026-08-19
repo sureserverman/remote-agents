@@ -380,12 +380,22 @@ class TmuxTerminal:
 
         The recheck itself is unchanged and still the point: this answers from a fresh
         observation rather than from the record, so a pane that has gone since the row was
-        drawn still yields nothing.
+        drawn still yields nothing — **and it is what makes the host trustworthy**. The pane
+        moves; an attach command built from anything older than the observation that produced
+        it would name where the agent used to be shown.
+
+        **The command names the session showing the pane**, which is the console while this
+        agent is displayed there and its own session otherwise. `host_session` comes from the
+        same decoded pane the liveness check above reads, so the two cannot disagree. Attach
+        is the one agent-reaching operation that cannot name a pane — a tmux client attaches
+        to a session — so this is what "follow the agent" means for it (DEC-021, re-scoped).
         """
         observation = await self.inspect(session_id)
         if observation is None or not (observation.live or observation.preserved):
             return None
-        return attach_command(session_id, read_only=not observation.live)
+        return attach_command(
+            session_id, read_only=not observation.live, host=observation.host_session
+        )
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
