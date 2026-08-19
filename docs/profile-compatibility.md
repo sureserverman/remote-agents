@@ -33,15 +33,24 @@ Use the dedicated managed socket only. Never run the equivalent command without
 `-L remote-agents`, and replace the placeholder with the complete generated session ID.
 
 ```bash
-# Read-only inventory of managed sessions.
-tmux -L remote-agents list-panes -a -F '#{session_name} #{pane_dead} #{@remote_agents_id}'
+# Read-only inventory of managed sessions. `#{pane_id}` is the address the commands below
+# use: a session name resolves to whichever pane occupies that window, which stops being the
+# agent's the moment the console is showing it.
+tmux -L remote-agents list-panes -a -F '#{pane_id} #{session_name} #{pane_dead} #{@remote_agents_id}'
 
 # Inspect one exact managed pane; its UUID must match the stored session record.
-tmux -L remote-agents capture-pane -p -t ra-<uuid>:
+tmux -L remote-agents capture-pane -p -t %<pane-id>
 
-# Remove one exact session only after verifying its ownership metadata and preserved output.
-tmux -L remote-agents kill-session -t ra-<uuid>:
+# Remove one exact pane only after verifying its ownership metadata and preserved output.
+tmux -L remote-agents kill-pane -t %<pane-id>
 ```
+
+**Address the pane, not the session.** These commands named `ra-<uuid>:` until 2026-08-19.
+That is a *window* target, and tmux resolves it to whatever pane is in that window now — so
+with the console displaying an agent, `capture-pane` reads the wrong screen and, worse,
+`kill-session` does not reach the agent at all: a window linked into another session is not
+closed by killing the session it came from, so the command exits 0, the session name
+disappears, and the agent keeps running. Take the pane id from the inventory above and use it.
 
 If SQLite is unavailable or a profile reports `BLOCKED`, do not issue a mutation from the
 service. Preserve the database files and use only the read-only inventory/capture commands

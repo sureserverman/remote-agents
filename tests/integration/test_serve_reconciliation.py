@@ -321,7 +321,9 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
         assert HOOK_SOURCED_PROFILES, "a frozenset that emptied would make this test vacuous"
-        hooked = {profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES}
+        hooked = {
+            profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES
+        }
         watched = await _running(store, "codex")
         terminal = CapturingTerminal()
         watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)

@@ -310,10 +310,9 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     )
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.
-    assert [button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]] == [
-        "• Sessions",
-        "Launch",
-    ]
+    assert [
+        button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]
+    ] == ["• Sessions", "Launch"]
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
@@ -1855,7 +1854,9 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     session_id = str(record.session_id)
     _spool(spool, session_id, stamp="000001")
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
-    _spool(spool, session_id, event="Notification", reason="permission_prompt", stamp="000003")
+    _spool(
+        spool, session_id, event="Notification", reason="permission_prompt", stamp="000003"
+    )
 
     await _watch_quiet_once(
         ServiceComposition(
