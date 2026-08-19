@@ -23,13 +23,28 @@ failure degrades to a log line, and the composer writes no record and touches no
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 
+from remote_agents.application.commands import (
+    CleanupCommand,
+    ForceStopCommand,
+    GracefulStopCommand,
+)
 from remote_agents.application.console import ConsoleComposer
-from remote_agents.domain.models import SessionId
+from remote_agents.application.services import SessionService
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
+from remote_agents.domain.state_machine import LifecycleEvent
 from remote_agents.ports.console import HostedPane
-from remote_agents.ports.terminal import TerminalTargetMissing
+from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
 
 _A = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _B = SessionId.parse("11234567-89ab-cdef-0123-456789abcdef")
@@ -356,3 +371,231 @@ async def test_an_arrangement_missing_either_end_exchanges_nothing(missing: str)
     await composer(console).show(_A)
 
     assert console.swaps == []
+
+
+class _StopStore:
+    """The narrow slice of the session store the two stop paths touch."""
+
+    def __init__(self, record: SessionRecord) -> None:
+        self.record = record
+        self.events: list[LifecycleEvent] = []
+
+    async def get(self, session_id: SessionId) -> SessionRecord | None:
+        return self.record if session_id == self.record.session_id else None
+
+    async def record_event(self, session_id: SessionId, event: LifecycleEvent) -> SessionRecord:
+        self.events.append(event)
+        return self.record
+
+
+class _StopTerminal:
+    """A terminal that logs the order of what it was asked to do."""
+
+    def __init__(self, order: list[str], *, preserved: bool = True) -> None:
+        self.order = order
+        self.preserved = preserved
+
+    async def graceful_stop(self, session_id: SessionId, profile_id: ProfileId):
+        self.order.append("graceful_stop")
+        return TerminalObservation(session_id, live=False, preserved=self.preserved)
+
+    async def cleanup(self, session_id: SessionId) -> None:
+        self.order.append("cleanup")
+
+    async def force_stop(self, session_id: SessionId):
+        self.order.append("force_stop")
+        return TerminalObservation(session_id, live=False, preserved=False)
+
+
+def _running(
+    session_id: SessionId, state: SessionState = SessionState.RUNNING
+) -> SessionRecord:
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("opaque", "claude", "regular", 1),
+        state,
+        datetime.now(UTC),
+    )
+
+
+def _stop_service(
+    order: list[str],
+    *,
+    hide=None,
+    preserved: bool = True,
+    state: SessionState = SessionState.RUNNING,
+) -> SessionService:
+    return SessionService(
+        _StopStore(_running(_A, state)),
+        _StopTerminal(order, preserved=preserved),
+        hide_in_console=hide,
+    )
+
+
+async def test_a_graceful_stop_sends_the_shown_agent_home_before_the_pane_is_destroyed() -> None:
+    """The destruction is `cleanup`, and the exchange has to precede it.
+
+    Destroying first kills a pane sitting in the console's own window: under the three-pane
+    design that leaves a dead pane where the projects surface belongs, and in a window holding
+    only that pane it takes the console session with it, because tmux drops a window's session
+    along with its last pane. Either way the owner is left looking at the wreckage of the
+    session they just ended.
+
+    Not at the *top* of the stop, deliberately. A graceful stop that times out leaves the
+    session running, and hiding it then would pull the agent out of view for a stop that did
+    not happen.
+    """
+    order: list[str] = []
+
+    async def hide(session_id: SessionId) -> None:
+        order.append(f"hide:{session_id}")
+
+    await _stop_service(order, hide=hide).graceful_stop(
+        GracefulStopCommand(_A, ProfileId("claude"))
+    )
+
+    assert order == ["graceful_stop", f"hide:{_A}", "cleanup"], order
+
+
+async def test_a_graceful_stop_that_times_out_leaves_the_agent_on_screen() -> None:
+    """Nothing was destroyed, so nothing should be hidden — the session is still running."""
+    order: list[str] = []
+
+    async def hide(session_id: SessionId) -> None:
+        order.append(f"hide:{session_id}")
+
+    await _stop_service(order, hide=hide, preserved=False).graceful_stop(
+        GracefulStopCommand(_A, ProfileId("claude"))
+    )
+
+    assert order == ["graceful_stop"], order
+
+
+async def test_a_force_stop_sends_the_shown_agent_home_before_the_kill() -> None:
+    order: list[str] = []
+
+    async def hide(session_id: SessionId) -> None:
+        order.append(f"hide:{session_id}")
+
+    await _stop_service(order, hide=hide).force_stop(ForceStopCommand(_A))
+
+    assert order == [f"hide:{_A}", "force_stop"], order
+
+
+async def test_a_stop_composed_without_a_console_destroys_exactly_as_it_always_did() -> None:
+    """The capability is optional, so a host that wires nothing keeps the old contract."""
+    order: list[str] = []
+
+    await _stop_service(order).graceful_stop(GracefulStopCommand(_A, ProfileId("claude")))
+
+    assert order == ["graceful_stop", "cleanup"], order
+
+
+async def test_a_console_that_cannot_be_moved_never_stops_a_stop() -> None:
+    """DEC-006, at the one place it would be most tempting to let presentation win.
+
+    A broken console must cost the owner the tab bar, never a stop. The exchange is attempted
+    and its failure is swallowed here rather than in the composer alone, because this method
+    is the one that must not raise: a stop that failed because a *display* could not be
+    rearranged would be exactly the coupling the decision forbids.
+    """
+    order: list[str] = []
+
+    async def hide(session_id: SessionId) -> None:
+        order.append("hide-failed")
+        raise TerminalTargetMissing("managed target is gone: %3")
+
+    await _stop_service(order, hide=hide).force_stop(ForceStopCommand(_A))
+
+    assert order == ["hide-failed", "force_stop"], order
+
+
+async def test_hiding_a_session_the_console_is_not_showing_issues_no_swap_for_that_stop() -> None:
+    """The narrowing that keeps one session's stop from disturbing another's view."""
+    console = RecordingConsole(
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True), _home(_B, "%4", _B))
+    )
+
+    await composer(console).hide(_B)
+
+    assert console.swaps == []
+
+
+async def test_hiding_the_session_that_is_shown_brings_the_surface_back_when_it_stops() -> None:
+    console = RecordingConsole(
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True), _home(_B, "%4", _B))
+    )
+
+    await composer(console).hide(_A)
+
+    assert console.swaps == [("%1", "%3")]
+
+
+async def test_a_console_that_never_answers_cannot_hold_up_a_force_stop() -> None:
+    """The one that makes this a DEC-006 question rather than a tidiness one.
+
+    `AsyncTmuxRunner.run` awaits `process.communicate()` with no timeout — a hazard DEC-030
+    already names in this codebase — so a wedged tmux server makes every console round trip
+    block forever. Put an unbounded one between `VERIFIED_FORCE_STOP` and the kill, and a
+    force stop on a runaway agent never reaches the agent: the per-session lock stays held,
+    and every other composer operation queues behind the same `_links` lock. A stop whose
+    forward progress depends on a *display* answering is exactly the coupling DEC-036
+    forbids, and this diff is what introduced the await.
+
+    So the wait is bounded where the lifecycle guarantee lives, not only where the
+    presentation one does. Asserted by a hook that never resolves.
+    """
+    order: list[str] = []
+    never = asyncio.Event()
+
+    async def hide(session_id: SessionId) -> None:
+        order.append("hide-hung")
+        await never.wait()
+
+    await asyncio.wait_for(
+        _stop_service(order, hide=hide).force_stop(ForceStopCommand(_A)), timeout=10
+    )
+
+    assert order == ["hide-hung", "force_stop"], (
+        f"the kill did not happen after the console failed to answer: {order}"
+    )
+
+
+async def test_a_console_that_never_answers_cannot_hold_up_a_graceful_stops_cleanup() -> None:
+    """The same bound on the other destructive path, where the pane still needs removing."""
+    order: list[str] = []
+    never = asyncio.Event()
+
+    async def hide(session_id: SessionId) -> None:
+        order.append("hide-hung")
+        await never.wait()
+
+    await asyncio.wait_for(
+        _stop_service(order, hide=hide).graceful_stop(GracefulStopCommand(_A, ProfileId("claude"))),
+        timeout=10,
+    )
+
+    assert order == ["graceful_stop", "hide-hung", "cleanup"], order
+
+
+async def test_discarding_a_preserved_pane_also_steps_the_console_aside_before_the_stop() -> None:
+    """The third destructive path, missed by this task's first draft.
+
+    `cleanup` removes a pane through the same terminal call `graceful_stop` uses, and it is
+    offered from PRESERVED — the state whose pane is still worth showing (DEC-021/DEC-039),
+    and which Sub-plan 3 will let the owner display. Every docstring in this task claimed
+    "every stop path" while one path destroyed a pane without asking the console to move.
+    Found by Tier-1 review; unreachable today only because `show` has no production caller.
+    """
+    order: list[str] = []
+
+    async def hide(session_id: SessionId) -> None:
+        order.append(f"hide:{session_id}")
+
+    await _stop_service(order, hide=hide, state=SessionState.PRESERVED).cleanup(
+        CleanupCommand(_A)
+    )
+
+    assert order == [f"hide:{_A}", "cleanup"], order

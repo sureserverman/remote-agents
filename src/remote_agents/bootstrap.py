@@ -748,6 +748,7 @@ def local_context(config, connection, paths: ProductionPaths):
     open_in_console = None
     console_sync = None
     console_flash = None
+    hide_in_console = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
         # Hosted by a client on our own server: opening a session focuses its console tab
         # (the composer falls back to a direct client switch), tabs are reconciled on
@@ -779,9 +780,16 @@ def local_context(config, connection, paths: ProductionPaths):
 
         console_sync = composer.sync
         console_flash = composer.flash
+        # The stop paths ask the console to step out of the way before a pane is destroyed.
+        # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
+        # contract it has always had, and the bot — a different process with no composer —
+        # leaves a dead pane the next sync detects and clears.
+        hide_in_console = composer.hide
 
     return TuiContext(
-        launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
+        launcher=SessionService(
+            SQLiteSessionStore(connection), runtime.terminal, hide_in_console=hide_in_console
+        ),
         creator=_project_creator(config),
         profiles=tuple(
             # A reason only travels with an *unavailable* profile. `ProfileCompatibility`

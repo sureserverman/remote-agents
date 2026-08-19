@@ -233,6 +233,28 @@ class ConsoleComposer:
                 "returning the projects surface failed; the console still shows an agent"
             )
 
+    async def hide(self, session_id: SessionId) -> None:
+        """Return the surface to the slot, but only if *this* session is the one shown.
+
+        `show_projects` narrowed to one session, and the narrowing is the whole point: a stop
+        must not rearrange the console when it is showing somebody else. Asking for the
+        surface unconditionally would yank whatever the owner is looking at back to the
+        projects list because an unrelated session happened to end.
+
+        Called before a stop destroys a pane, so the console is never asked to lose a pane
+        sitting in its own window. Degrades like everything else here — a console that cannot
+        be moved costs the owner the arrangement, never the stop (DEC-006).
+        """
+        try:
+            async with self._links:
+                arrangement = await self._console.pane_arrangement()
+                slot = _left_slot(arrangement)
+                if slot is None or slot.session_id != session_id:
+                    return
+                await self._send_home(arrangement, slot)
+        except Exception:
+            _LOG.exception("the console could not be returned to the projects surface")
+
     async def _send_home(self, arrangement: tuple[HostedPane, ...], slot: HostedPane) -> bool:
         """Exchange the slot's agent with the console's own surface, wherever it is parked."""
         parked = _surface(arrangement)

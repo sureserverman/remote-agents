@@ -257,5 +257,35 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
             "bare swap-pane did not make the target position active — the contrast -d exists for"
         )
         assert run("display-message", "-p", "-t", bare_right, "#{pane_active}").strip() == "0"
+
+        # Claim 13 (DEC-036, and the swap model's sharpest accepted cost): killing the console
+        # while an agent is displayed **destroys that agent's process**, and the agent's own
+        # session survives without it. A displaced pane physically lives in the console's
+        # window, so `kill-session -t ra-console` takes it; `remain-on-exit` does not help,
+        # because that governs a process *exiting*, not tmux killing the pane out from under
+        # it. The session name outliving the process is what makes it dangerous rather than
+        # merely destructive: reconciliation sees a session, so nothing reports a loss.
+        #
+        # DEC-036 documents killing the console as the safe recovery for a stuck console. Under
+        # the swap model that is no longer true, which is why this is pinned here rather than
+        # described: the supersede has to record it, the runbook has to stop recommending it,
+        # and no start-time recovery can undo it.
+        run("new-session", "-d", "-s", "doomed-console", "-c", str(tmp_path))
+        run("split-window", "-d", "-t", "doomed-console:", "-c", str(tmp_path))
+        run("new-session", "-d", "-s", "doomed-agent", "-c", str(tmp_path))
+        displayed = run("list-panes", "-t", "doomed-agent:", "-F", "#{pane_id}").strip()
+        run("set-option", "-p", "-t", displayed, "remain-on-exit", "on")
+        displayed_pid = run("display-message", "-p", "-t", displayed, "#{pane_pid}").strip()
+        doomed_slot = run("list-panes", "-t", "doomed-console:", "-F", "#{pane_id}").split()[0]
+        run("swap-pane", "-d", "-s", displayed, "-t", doomed_slot)
+
+        run("kill-session", "-t", "doomed-console:")
+
+        alive = run("list-sessions", "-F", "#{session_name}").split()
+        assert "doomed-agent" in alive, "the agent's session did not survive"
+        assert not Path(f"/proc/{displayed_pid}").exists(), (
+            "killing the console left the displayed agent running — if tmux ever changes this, "
+            "the accepted cost recorded against the swap model no longer applies"
+        )
     finally:
         subprocess.run((*base, "kill-server"), check=False, capture_output=True)
