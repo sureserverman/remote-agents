@@ -129,10 +129,12 @@ _THEME = "textual-dark"
 # below is what ties this list back to the registry.
 _POSITIONS = (
     "DASHBOARD",
-    # The console's three pane positions. SESSIONS is already here, shared with the sessions
-    # list the combined dashboard pushes — the pane subclasses it and composes the same body,
-    # so one baseline covers both renders. PROJECTS and FEED are the two the panes add.
+    # The console's three pane positions, each with a baseline of its own. `SESSIONS_PANE`
+    # subclasses the sessions screen and composes the same body, but its status says
+    # something different because Enter means something different there — so one shared
+    # baseline would have covered one of the two renders while appearing to cover both.
     "PROJECTS",
+    "SESSIONS_PANE",
     "FEED",
     "PROJECT_CHOOSER",
     "PROFILES",
@@ -373,13 +375,22 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     """
     if step == "DASHBOARD":
         return None
-    if step in {"PROJECTS", "FEED"}:
+    if step in {"PROJECTS", "SESSIONS_PANE", "FEED"}:
         # The console's pane positions, pushed. In production each is the *resting* screen of
         # its own pane process, which this app is not — what the baseline is for is the render,
         # and the render is a property of the screen.
-        from remote_agents.adapters.tui.screens import FeedScreen, ProjectsPaneScreen
+        from remote_agents.adapters.tui.screens import (
+            FeedScreen,
+            ProjectsPaneScreen,
+            SessionsPaneScreen,
+        )
 
-        await app.push_screen(ProjectsPaneScreen() if step == "PROJECTS" else FeedScreen())
+        panes = {
+            "PROJECTS": ProjectsPaneScreen,
+            "SESSIONS_PANE": SessionsPaneScreen,
+            "FEED": FeedScreen,
+        }
+        await app.push_screen(panes[step]())
         await pilot.pause()
         return None
     if step in {"PROJECT_CHOOSER", "PROFILES", "REVIEW"}:

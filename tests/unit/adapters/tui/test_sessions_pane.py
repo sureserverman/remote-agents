@@ -98,7 +98,7 @@ async def test_enter_on_a_row_issues_one_show_and_the_pane_stays() -> None:
 
         assert shown == [str(_SESSION)]
         assert app.is_running, "opening a session never ends the pane that opened it"
-        assert position(app) == "SESSIONS"
+        assert position(app) == "SESSIONS_PANE"
 
 
 async def test_enter_opens_the_row_the_cursor_is_on_not_the_first_one() -> None:
@@ -251,4 +251,39 @@ async def test_a_show_that_fails_leaves_the_pane_running_and_says_so() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert app.is_running
-        assert position(app) == "SESSIONS"
+        assert position(app) == "SESSIONS_PANE"
+
+
+async def test_the_status_names_what_enter_actually_does_here() -> None:
+    """Inherited, both sentences described the *dashboard's* keys.
+
+    Found by driving the real pane at the Stage 1 gate: it read "Select one for detail",
+    which is what Enter means on the sessions screen the dashboard pushes and not what it
+    means here. A status that names the wrong key is a false sentence, and it is the kind
+    only a live drive shows.
+    """
+    from textual.widgets import Static
+
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        status = str(app.screen.query_one("#status", Static).content)
+        assert "Enter opens one" in status
+        assert "d for its detail" in status
+        assert "Select one for detail" not in status
+
+
+async def test_an_empty_pane_does_not_offer_an_escape_it_does_not_have() -> None:
+    """This pane is its process's resting position, so escape at rest is inert.
+
+    The inherited sentence sent the owner to a project list that does not exist in this
+    process — a dead end dressed as an instruction.
+    """
+    from textual.widgets import Static
+
+    app = SessionsPane(_context(()))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        status = str(app.screen.query_one("#status", Static).content)
+        assert "escape" not in status.lower()
+        assert "project list" not in status

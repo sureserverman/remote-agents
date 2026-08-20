@@ -95,6 +95,13 @@ class SessionsScreen(ChoiceScreen):
     can_refresh = True
     crumb = "Sessions"
 
+    #: What this position tells the owner a row does, and where an empty list sends them.
+    #: Class attributes rather than literals at the call site because the console's sessions
+    #: *pane* means something different by Enter and has nowhere to escape to — and a status
+    #: describing the other surface's keys is a false sentence, not a cosmetic one.
+    listing_status = "{count} managed session(s). Select one for detail."
+    empty_status = "No managed sessions. Press escape to return to the project list."
+
     def __init__(self) -> None:
         super().__init__()
         self._auto: Timer | None = None
@@ -291,9 +298,9 @@ class SessionsScreen(ChoiceScreen):
             return
         if not records:
             self.show_choices(())
-            self.set_status("No managed sessions. Press escape to return to the project list.")
+            self.set_status(self.empty_status)
             return
-        self.set_status(f"{len(records)} managed session(s). Select one for detail.")
+        self.set_status(self.listing_status.format(count=len(records)))
         rows = tuple((str(record.session_id), session_row(record)) for record in records)
         if not keep_cursor:
             self.show_choices(rows)
@@ -347,7 +354,18 @@ class SessionsPaneScreen(SessionsScreen):
     Every mutating action is behind `d`.
     """
 
-    position = "SESSIONS"
+    #: Its own name, not `SESSIONS`. It shares the sessions screen's body and inherits its
+    #: machinery, but its status now says something different — because Enter here means
+    #: something different — so a single committed baseline could only cover one of the two
+    #: renders while appearing to cover both.
+    position = "SESSIONS_PANE"
+
+    #: Enter opens rather than describes here, and this pane *is* its process's resting
+    #: position — so there is no project list to escape to and escape at rest is inert.
+    #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
+    #: the real pane at the Stage 1 gate, which is the only place a false status shows.
+    listing_status = "{count} managed session(s). Enter opens one, d for its detail."
+    empty_status = "No managed sessions on this host. Launching one starts it here."
 
     BINDINGS = [
         # Hidden from the footer for the reason the dashboard's copy is: the bar is shared
