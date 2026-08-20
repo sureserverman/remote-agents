@@ -445,3 +445,48 @@ async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_p
     finally:
         connection.close()
         await console.teardown()
+
+
+async def test_interruption_a_tabbed_agent_left_displayed_still_recovers(tmp_path: Path) -> None:
+    """The ordinary crash state, on a console that has done what production does.
+
+    `sync` links a tab for every live session, and a linked window is one window in two
+    sessions — so tmux lists its panes twice and the console-side row carries no host. A
+    recovery that believed that row saw the surface as "hosted by nobody", refused the
+    one-exchange fix as though it would create a crossing, and told the owner about "session
+    None's window". Sticky, too: the next `sync` early-returns because the slot's session is
+    still live, so the same false refusal repeats forever.
+
+    None of the six drives in this file linked a tab before displaying an agent, and no unit
+    arrangement had a duplicate row, which is the gap that hid it. This drive does what
+    production does, in the order production does it.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+
+    console = live_console(tmp_path)
+    try:
+        await console.build(tmp_path)
+        surface = await console.slot_pane()
+        # Chosen to sort after the literal "console": tmux lists sessions alphabetically, so
+        # this is what puts the tab's duplicate row *before* the pane's own listing. With a
+        # random id the drive reproduces the defect only about a quarter of the time.
+        agent_session = await console.start(
+            SessionId.parse("faaaaaaa-0000-0000-0000-000000000002")
+        )
+        await console.gateway.link_session_window(agent_session)
+        await console.composer.show(agent_session)
+        assert await console.slot_pane() != surface, "the agent was not displayed"
+
+        # A fresh composer, standing in for the restarted console process.
+        restarted = ConsoleComposer(console.gateway, ("sleep", "600"), tmp_path)
+        report = await restarted.settle()
+
+        assert report.settled, f"a tabbed agent left displayed did not recover: {report}"
+        assert await console.slot_pane() == surface, "the projects surface did not come back"
+        assert await console.home_panes(agent_session) == [
+            pane for pane in await console.home_panes(agent_session)
+        ]
+        assert MARKER in await console.gateway.capture(agent_session), "the agent was disturbed"
+    finally:
+        await console.teardown()

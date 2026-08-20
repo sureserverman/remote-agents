@@ -679,9 +679,14 @@ async def test_a_new_console_disowns_a_surface_mark_left_by_one_that_was_destroy
         (_slot("%5"), _feed("%6"), _orphaned(_A, "%0"))
     )
 
-    await composer(console).settle()
+    report = await composer(console).settle()
 
     assert console.marked == ["%5"], "the new console deferred to a dead console's mark"
+    # Disowning is not cleaning up: the old surface process is still running and is the only
+    # thing keeping its host session alive. Reported once, because the previous start's honest
+    # "the console is a pane short" was otherwise followed by silence forever after.
+    assert any(str(_A) in note for note in report.blocked), report.blocked
+    assert report.settled, "the console's own arrangement is at rest; the leak is not about it"
 
 
 async def test_a_surface_parked_during_a_live_display_is_still_left_alone() -> None:
@@ -693,3 +698,38 @@ async def test_a_surface_parked_during_a_live_display_is_still_left_alone() -> N
     await composer(console).settle()
 
     assert console.marked == []
+
+
+async def test_a_console_whose_window_is_not_index_zero_is_still_found() -> None:
+    """`set -g base-index 1` is common, and the server reads the owner's `~/.tmux.conf`.
+
+    Hardcoded to window 0, `_left_slot` found no console panes at all — and every caller read
+    that as rest. On such a host the surface was never marked, `show` silently did nothing,
+    and `recover` answered `settled=True` unconditionally, including over a console somebody
+    had displaced by hand. A state that is merely unlikely still has to be named; this one was
+    not even reachable.
+    """
+    console = RecordingConsole(
+        (
+            HostedPane(None, True, 1, 0, "%1", None, True),
+            HostedPane(None, True, 1, 1, "%2", None, False),
+            HostedPane(_A, False, 1, 0, "%3", _A, False),
+        )
+    )
+
+    report = await composer(console).recover()
+
+    assert report.settled and console.swaps == []
+
+    displaced = RecordingConsole(
+        (
+            HostedPane(None, True, 1, 0, "%3", _A, False),
+            HostedPane(None, True, 1, 1, "%2", None, False),
+            HostedPane(_A, False, 1, 0, "%1", None, True),
+        )
+    )
+
+    moved = await composer(displaced).recover()
+
+    assert displaced.swaps == [("%1", "%3")], "a console at base-index 1 could not be recovered"
+    assert moved.settled

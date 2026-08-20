@@ -59,8 +59,16 @@ class RecoveryReport:
     """
 
     moved: tuple[str, ...]
+
     blocked: tuple[str, ...]
+    """What recovery could not put right, in words meant for the owner rather than a log.
+
+    Not the complement of `moved`: it also carries things that need a *person* rather than an
+    exchange — an orphaned session left holding a dead console's surface, say — which is why a
+    report can be `settled` and still have entries here."""
+
     settled: bool
+    """Whether the console's own arrangement is at rest. Says nothing about `blocked`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,14 +133,21 @@ class ConsoleComposer:
         caller can tell the owner what could not be put right; discarding it is what makes an
         unsettled console a log-file secret.
         """
+        adopted: tuple[str, ...] = ()
         try:
-            await self._adopt_surface()
+            adopted = await self._adopt_surface()
         except Exception:
             _LOG.exception("the console surface could not be marked; recovery may not find it")
         report = await self.recover()
         for note in report.moved:
             _LOG.info("console recovery: %s", note)
-        return report
+        for note in adopted:
+            _LOG.warning("console: %s", note)
+        # Carried in `blocked` rather than flipping `settled`: the console's own arrangement
+        # genuinely is at rest, and saying otherwise would make every later start report a
+        # problem the console cannot fix. `blocked` is what the owner is shown, which is the
+        # point — `settled` is about the arrangement, `blocked` is about what needs a person.
+        return RecoveryReport(report.moved, (*report.blocked, *adopted), settled=report.settled)
 
     async def sync(self, records: tuple[SessionRecord, ...]) -> None:
         """Link a tab per live session, unlink tabs whose session is gone; idempotent.
@@ -149,12 +164,15 @@ class ConsoleComposer:
                 linked = {owner for _, owner in windows if owner is not None}
                 for session_id in live - linked:
                     await self._console.link_session_window(session_id)
-            # Outside the lock, and safe for a structural reason rather than a lucky one:
-            # unlinking only ever touches console windows above index 0 (the codec refuses
-            # 0), while `show`/`show_projects` only ever exchange panes *within* window 0.
-            # The two mechanisms cannot meet. Said here because the lock's own docstring
-            # speaks of link decisions and is silent about unlink, which cost one reader a
-            # full trace to re-derive.
+            # Outside the lock, and safe for a structural reason rather than a lucky one —
+            # though not the one first written here. The original claim was that exchanges
+            # only ever touch panes *within* the console's own window, which is false: an
+            # exchange always has one end in an agent's own window, and under the tab model
+            # that window may itself be linked into the console. What actually holds is that
+            # tmux refuses to unlink a window living in only one session, so unlinking can
+            # never remove the window an exchange is working in. Corrected because a reader
+            # who checks a stated reason and finds it wrong has to re-derive the real one —
+            # exactly what this comment exists to save them.
             for index, owner in windows:
                 if owner is not None and owner not in live:
                     await self._unlink_quietly(index)
@@ -207,7 +225,11 @@ class ConsoleComposer:
                 await self._console.swap_panes(step.source, step.target)
                 _LOG.info("console: %s", step.note)
         for note in blocked:
-            _LOG.warning("console: %s", note)
+            # Debug, not warning: `sync` runs on the surface's own refresh timer, so a console
+            # that is permanently a pane short would otherwise repeat the same line for as
+            # long as it is open. `settle` reports the same state once, at start, where the
+            # owner can act on it.
+            _LOG.debug("console: %s", note)
 
     async def open(self, session_id: SessionId) -> None:
         """Focus one session: its tab if it has or can get one, a direct switch if not.
@@ -327,7 +349,7 @@ class ConsoleComposer:
         await self._console.swap_panes(parked.pane_id, slot.pane_id)
         return True
 
-    async def _adopt_surface(self) -> None:
+    async def _adopt_surface(self) -> tuple[str, ...]:
         """Mark the left slot as the console's surface, once, for a console that lacks one.
 
         One mechanism serving two cases, which is why it lives here rather than in
@@ -359,19 +381,24 @@ class ConsoleComposer:
         arrangement = await self._console.pane_arrangement()
         marked = [pane for pane in arrangement if pane.surface]
         if any(pane.on_console for pane in marked):
-            return
+            return ()
         if any(not _is_orphaned_surface(arrangement, pane) for pane in marked):
-            return
+            return ()
         slot = _left_slot(arrangement)
         if slot is None or slot.session_id is not None:
-            return
-        if marked:
-            _LOG.warning(
-                "a surface mark from a console that no longer exists is stranded in session "
-                "%s's window; this console is marking its own",
-                marked[0].host,
-            )
+            return ()
         await self._console.mark_console_surface(slot.pane_id)
+        # Disowning is not cleaning up. The stranded pane is still running the old console's
+        # dashboard, and it is the only thing keeping its host session alive — so a session
+        # with no agent in it, and a process nobody is looking at, outlive this repair. That is
+        # the owner's to clear, which means the owner has to be told: reported once here rather
+        # than left as the log line it was, where the previous start's honest "the console is a
+        # pane short" was followed by silence.
+        return tuple(
+            f"a projects surface from a console that no longer exists is still running in "
+            f"session ra-{pane.host}, which has no agent; kill that session to clear it"
+            for pane in marked
+        )
 
     async def recover(self) -> RecoveryReport:
         """Return the console to its resting arrangement, and say what happened.
@@ -428,8 +455,11 @@ class ConsoleComposer:
                             "some panes are still not where they belong",
                         )
         except Exception:
-            _LOG.exception("console recovery failed; the arrangement is left as it was found")
-            return RecoveryReport((), (), settled=False)
+            _LOG.exception("console recovery failed part-way; what it had moved is kept")
+            # `moved` is kept deliberately. A pass that made three exchanges and then lost the
+            # server has moved three panes, and reporting nothing would be the same error this
+            # type exists to prevent, pointing the other way.
+            return RecoveryReport(tuple(moved), blocked, settled=False)
         for note in blocked:
             _LOG.warning("console recovery could not act: %s", note)
         return RecoveryReport(tuple(moved), blocked, settled=settled)
@@ -466,12 +496,21 @@ def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
     """The console's left slot: lowest pane index in its own window 0, or None.
 
     Read as a position on every call rather than remembered, because that is the one thing
-    an exchange changes about it. Window 0 is named explicitly: under the tab model the
-    console also hosts linked windows whose panes belong to their sessions, and the current
-    window is whichever one the owner is looking at.
+    an exchange changes about it. The console's own window is found by being the lowest it
+    has rather than by being number zero — under the tab model the console also hosts linked
+    windows, and those are appended above it whatever the server's `base-index` is.
     """
-    console_panes = [pane for pane in arrangement if pane.on_console and pane.window_index == 0]
-    return min(console_panes, key=lambda pane: pane.pane_index, default=None)
+    console_panes = [pane for pane in arrangement if pane.on_console]
+    if not console_panes:
+        return None
+    # The console's **first** window, not window 0. The dedicated server is started without
+    # `-f`, so it reads the owner's `~/.tmux.conf` — and under the common `set -g base-index 1`
+    # the console's own window is index 1. Hardcoded to 0, this found no panes at all, which
+    # every caller then read as "at rest": the surface was never marked, `show` silently did
+    # nothing, and `recover` answered `settled` unconditionally, including over a console
+    # somebody had displaced by hand. Taking the lowest index the console actually has is
+    # right under either setting, and tabs cannot undercut it because `link-window` appends.
+    return min(console_panes, key=lambda pane: (pane.window_index, pane.pane_index))
 
 
 def _pane_of(arrangement: tuple[HostedPane, ...], session_id: SessionId) -> HostedPane | None:
@@ -491,11 +530,16 @@ def _surface(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
     Still `None` for a console that predates the mark and is caught displaced. Nothing safe
     can be inferred there, and `recover` reports that rather than guessing.
 
-    **Two marked panes is also `None`**, on the same principle its sibling `_crossed_unwind`
-    applies: with more than one candidate, `next(...)` would be choosing by listing order,
-    which DEC-038 names as the wrong basis and which a draft of destruction once used to kill
-    an operator's pane. The docstring's whole selling point is being *exactly* one; a function
-    that silently took the first would not be delivering that, only claiming it.
+    **Two genuinely different marked panes is also `None`**, on the same principle its sibling
+    `_crossed_unwind` applies: with more than one candidate, `next(...)` would be choosing by
+    listing order, which DEC-038 names as the wrong basis and which a draft of destruction once
+    used to kill an operator's pane.
+
+    Two *rows* for one pane is a different thing and is not ambiguity — a linked window is
+    listed under both its sessions — and it is resolved before this function sees it, by
+    `pane_arrangement` keeping the listing under the pane's own session. It has to be resolved
+    there rather than here: a console-side duplicate reports no host, and this function
+    preferring it made recovery believe a pane at home was being shown by the console.
     """
     marked = [pane for pane in arrangement if pane.surface]
     on_console = [pane for pane in marked if pane.on_console]
@@ -637,8 +681,9 @@ def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, t
         )
     return None, (
         f"the console's projects surface is parked in session {surface.host}'s window and the "
-        "pane it was exchanged with no longer exists, so there is nothing to trade it back "
-        "for; the console is a pane short and needs restarting",
+        "console's left slot holds a pane of its own, so trading the surface back would exile "
+        "that pane; nothing was moved. If the displayed agent was stopped by the other "
+        "surface, the console is a pane short and needs restarting",
     )
 
 

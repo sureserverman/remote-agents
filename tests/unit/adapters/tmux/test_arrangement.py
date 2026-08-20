@@ -158,3 +158,52 @@ async def test_a_broken_server_is_raised_rather_than_reported_as_nothing_being_s
 
     with pytest.raises(RuntimeError):
         await gateway(runner).pane_arrangement()
+
+
+async def test_a_linked_windows_duplicate_row_is_resolved_to_the_home_listing() -> None:
+    """A tab makes tmux list one pane twice, and only one of the two rows is the truth.
+
+    `link-window` puts one window in two sessions, so `list-panes -a` emits its panes under
+    both names. The console-side row says `on_console` with **no host**, because the console
+    is not a managed session — and a caller that took that row would believe the pane is being
+    shown by the console when it is really sitting at home with a tab pointing at it.
+
+    That is DEC-039's defect exactly, one layer down: `inventory` already resolves it by
+    keeping the listing under the pane's own session, and this read has to do the same or the
+    two disagree about where a pane is. The consequence when they did: recovery refused the
+    ordinary crash state and told the owner about "session None's window".
+    """
+    # The id sorts **after** the literal "console", so tmux emits the tab's duplicate row
+    # first and a first-row-wins dedup takes it. Written with a low-sorting id this test
+    # passed against the broken code, because the home row happened to arrive first — the
+    # same alphabetical trap DEC-039 records one layer down.
+    high = SessionId.parse("faaaaaaa-0000-0000-0000-000000000001")
+    runner = RecordingRunner(
+        output=(
+            f"ra-console|0|0|%2|2|{high}|\n"
+            "ra-console|1|0|%0|||surface\n"
+            f"ra-{high}|0|0|%0|||surface\n"
+        )
+    )
+
+    arrangement = await gateway(runner).pane_arrangement()
+
+    assert sorted(pane.pane_id for pane in arrangement) == ["%0", "%2"], arrangement
+    surface = next(pane for pane in arrangement if pane.surface)
+    assert surface.host == high and not surface.on_console, (
+        f"the tab's duplicate row won over the pane's own listing: {surface}"
+    )
+
+
+async def test_a_pane_the_console_actually_holds_keeps_its_console_listing() -> None:
+    """The other side: a displaced agent is listed under the console once, and that is home.
+
+    Preferring the non-console row must not become "never believe the console" — a pane the
+    console is genuinely holding has no other row to prefer.
+    """
+    runner = RecordingRunner(output=f"ra-console|0|0|%2|2|{_A}|\n")
+
+    arrangement = await gateway(runner).pane_arrangement()
+
+    assert len(arrangement) == 1
+    assert arrangement[0].on_console and arrangement[0].session_id == _A

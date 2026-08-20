@@ -382,6 +382,9 @@ class TmuxGateway:
         it does — which is why this is `list-panes -a` and not a console-scoped read, and why
         it deliberately keeps the console's own view that `inventory` drops as noise.
 
+        Deduplicated per **pane**, where `inventory` dedups per **session** — different
+        questions over the same duplicate rows, resolved by the same rule (see below).
+
         Presentation, never evidence. `inventory` is what reconciliation reads: it decodes
         identity, dedups per session, and quarantines anything ambiguous (DEC-020). This one
         reports position and hosting with no policy at all, and a line it cannot decode is
@@ -401,15 +404,28 @@ class TmuxGateway:
             if _reports_absent_server(str(error)):
                 return ()
             raise
-        arrangement: list[HostedPane] = []
+        arrangement: dict[str, HostedPane] = {}
         for line in output.splitlines():
             if not line:
                 continue
             try:
-                arrangement.append(HostedPane(*parse_arrangement(line)))
+                pane = HostedPane(*parse_arrangement(line))
             except ValueError:
                 continue
-        return tuple(arrangement)
+            # One row per pane, keeping the listing under the pane's **own** session.
+            #
+            # A linked window lives in two sessions, so tmux emits its panes twice — once
+            # under `ra-<uuid>`, once under `ra-console`. The console-side row reports no host
+            # at all, because the console is not a managed session, so a caller taking it
+            # believes the pane is being *shown by the console* when it is really sitting at
+            # home with a tab pointing at it. That is DEC-039's rule one layer down: a pane
+            # still listed under its own session is at home, whatever else links its window,
+            # and `inventory` already resolves the same duplicate the same way. Left to
+            # disagree, the two reads answer differently about where the same pane is.
+            seen = arrangement.get(pane.pane_id)
+            if seen is None or (seen.on_console and not pane.on_console):
+                arrangement[pane.pane_id] = pane
+        return tuple(arrangement.values())
 
     async def mark_console_surface(self, pane_id: str) -> None:
         """Mark one pane as the console's projects surface, so an exchange cannot lose it.
