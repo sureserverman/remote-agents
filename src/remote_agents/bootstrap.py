@@ -780,7 +780,10 @@ def local_context(config, connection, paths: ProductionPaths):
             # an already-running console is a re-entry rather than a start. What it could not
             # put right is told to the owner here, at the same front door: an unsettled
             # console reported only to a log is not reported.
-            settled = asyncio.run(composer.settle())
+            # `$TMUX_PANE` is this process's own pane. Passed so `settle` can refuse when the
+            # dashboard is running somewhere other than the console's left slot: hosting is
+            # decided by the socket name, which is true of every pane on this server.
+            settled = asyncio.run(composer.settle(os.environ.get("TMUX_PANE")))
             for note in settled.blocked:
                 print(f"The console could not be fully restored: {note}", file=sys.stderr)
 

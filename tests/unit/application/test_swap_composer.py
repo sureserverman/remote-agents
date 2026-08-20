@@ -23,6 +23,7 @@ failure degrades to a log line, and the composer writes no record and touches no
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 
 import pytest
@@ -279,14 +280,19 @@ async def test_a_console_with_no_marked_surface_still_refuses_rather_than_guessi
     assert console.swaps == []
 
 
-async def test_a_broken_console_degrades_to_a_log_line_and_never_raises() -> None:
+async def test_a_broken_console_degrades_to_a_log_line_and_never_raises(caplog) -> None:
+    """Both halves of the name, because "never raises" alone passes for a method that does
+    nothing at all — and the log line is the only trace a degraded console leaves."""
     console = RecordingConsole(
         (_slot("%1"), _feed("%2"), _home(_A, "%3", _A)),
         error=TerminalTargetMissing("managed target is gone: %3"),
     )
 
-    await composer(console).show(_A)
-    await composer(console).show_projects()
+    with caplog.at_level(logging.ERROR, logger="remote_agents.application.console"):
+        await composer(console).show(_A)
+        await composer(console).show_projects()
+
+    assert caplog.records, "a console failure left no trace at all"
 
 
 async def test_a_second_call_waits_for_the_first_rather_than_interleaving_its_exchanges() -> None:

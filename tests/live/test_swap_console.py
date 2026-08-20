@@ -58,9 +58,10 @@ class LiveConsole:
         """A console shaped like the real one: a surface pane and a second pane beside it.
 
         **Built through `ensure` and `settle`, not through `create_console`.** That pair is
-        the composer's own start path
-        is what marks the left slot as the projects surface, and every exchange here depends on
-        that mark to find the surface again. Built by calling the gateway directly, the fixture
+        the composer's own start path, and `settle` is what marks the left slot as the projects
+        surface — every exchange here depends on that mark to find it again.
+
+        Built by calling the gateway directly, the fixture
         produced a console the production code would never produce — an unmarked surface — and
         three drives in this file failed the moment the surface stopped being inferred from
         absence of identity. A live fixture that skips the path production takes is a fixture
@@ -475,8 +476,9 @@ async def test_interruption_a_tabbed_agent_left_displayed_still_recovers(tmp_pat
             SessionId.parse("faaaaaaa-0000-0000-0000-000000000002")
         )
         await console.gateway.link_session_window(agent_session)
+        agent_pane = (await console.home_panes(agent_session))[0]
         await console.composer.show(agent_session)
-        assert await console.slot_pane() != surface, "the agent was not displayed"
+        assert await console.slot_pane() == agent_pane, "the agent was not displayed"
 
         # A fresh composer, standing in for the restarted console process.
         restarted = ConsoleComposer(console.gateway, ("sleep", "600"), tmp_path)
@@ -484,9 +486,9 @@ async def test_interruption_a_tabbed_agent_left_displayed_still_recovers(tmp_pat
 
         assert report.settled, f"a tabbed agent left displayed did not recover: {report}"
         assert await console.slot_pane() == surface, "the projects surface did not come back"
-        assert await console.home_panes(agent_session) == [
-            pane for pane in await console.home_panes(agent_session)
-        ]
+        assert await console.home_panes(agent_session) == [agent_pane], (
+            "the agent's pane did not go back to its own window"
+        )
         assert MARKER in await console.gateway.capture(agent_session), "the agent was disturbed"
     finally:
         await console.teardown()

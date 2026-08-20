@@ -654,22 +654,49 @@ process, and treat `doctor --profiles`, which probes when it is run, as the curr
 ## Console recovery
 
 The console — the `ra-console` tmux session the bare `remote-agents` command enters — is
-presentation only, and that is the whole recovery story: **killing it never touches a
-session.** A console that is stuck, stale, or showing tabs that disagree with reality is
-rebuilt from scratch:
+presentation only: it writes no record, and every failure inside it costs you the display and
+nothing else.
+
+**What ships today.** Opening a session still gives it a window of its own, and while that is
+so, killing the console is safe exactly as it always was:
 
 ```bash
 tmux -L remote-agents kill-session -t ra-console
 remote-agents
 ```
 
-Every managed session survives the kill (the tabs are `link-window` shares, and a window
-dies only with its last link, which the home session always holds). The fresh console
-re-links a tab per live session on its first reload. If the console cannot be prepared at
-all, the bare command says so and exits non-zero; `remote-agents doctor` reports whether
-this host's tmux supports the console's window contract, and `remote-agents tui` still
-runs the dashboard directly in the current terminal, where opening a session falls back
-to the exec-attach handoff.
+**What changes when the console starts displaying agents by exchange.** The design this branch
+builds shows an agent by **swapping** it into the console's left pane, so the sessions list and
+the feed can stay beside it; the projects surface goes to live in that agent's own window until
+it is swapped back (DEC-040). The machinery is in place — the exchange, the start-time
+recovery, and the stop handling below — but nothing in the shipped surface displays an agent
+that way yet. That arrives with the console's final stage, and **from that point the command
+above is no longer safe while an agent is displayed**: a displayed pane physically lives in the
+console's window, so `kill-session -t ra-console` destroys the agent's process along with it,
+and the agent's session name survives without it, so nothing looks obviously wrong at a glance.
+`remain-on-exit` does not save it — that governs a process exiting, not tmux killing the pane
+out from under it.
+
+**What recovery can and cannot do.** When the dashboard process starts, it returns each pane to
+where it belongs, logging what it moved and printing what it could not put right. Some states it can only
+report, because `swap-pane` trades panes rather than moving one: if a displayed agent's pane was
+destroyed (a stop from Telegram, say), the projects surface is stranded in that session's window
+and trading it back would exile one of the console's own panes. The console says it is a pane
+short and asks to be restarted, and names any defunct `ra-<uuid>` still holding an old surface,
+which you can kill by hand.
+
+Note that *re-attaching* is not restarting: running `remote-agents` while the console already
+exists attaches a second client to the running dashboard, and does not re-run that repair.
+
+If the console cannot be prepared at all, the bare command says so and exits non-zero;
+`remote-agents doctor` reports whether this host's tmux supports the console's window contract,
+and `remote-agents tui` still runs the dashboard directly in the current terminal, where opening
+a session falls back to the exec-attach handoff.
+
+**Attaching to a session while it is displayed.** The copyable attach command follows the pane,
+so it names the console while that agent is shown there (DEC-039). A session target you type
+yourself does not: `attach-session -t ra-<uuid>` is a *window* target, and while that agent is
+displayed its window holds the projects surface instead.
 
 ## Local recovery without Telegram
 

@@ -82,7 +82,7 @@ class RecordingConsole:
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """A console already at rest: its left slot holds the marked projects surface.
 
-        Answered rather than omitted, because `ensure` now repairs a missing surface mark and
+        Answered rather than omitted, because `settle` repairs a missing surface mark and
         a double that raised here would have that repair swallowed — leaving these tests
         green on an exception rather than on the behaviour they name.
         """

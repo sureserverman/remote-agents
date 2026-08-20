@@ -733,3 +733,106 @@ async def test_a_console_whose_window_is_not_index_zero_is_still_found() -> None
 
     assert displaced.swaps == [("%1", "%3")], "a console at base-index 1 could not be recovered"
     assert moved.settled
+
+
+async def test_a_surface_out_of_position_inside_the_console_is_put_back_at_any_base_index() -> None:
+    """The third shape `_slot_unwind` enumerates, which had no test at either window index.
+
+    Both panes belong to the console; they are simply the wrong way round, so reordering them
+    exiles nothing and is always safe. Written against a literal window 0, the branch sent a
+    console at `set -g base-index 1` down the report-and-restart path instead — telling the
+    operator a pane had been destroyed when none had.
+    """
+    for window in (0, 1):
+        console = RecordingConsole(
+            (
+                HostedPane(None, True, window, 0, "%2", None, False),
+                HostedPane(None, True, window, 1, "%1", None, True),
+            )
+        )
+
+        report = await composer(console).recover()
+
+        assert console.swaps == [("%1", "%2")], f"base-index {window}: {console.swaps}"
+        assert report.settled and report.blocked == (), f"base-index {window}: {report}"
+        assert "out of position" in report.moved[0]
+
+
+async def test_an_agent_mis_parked_elsewhere_in_the_console_is_not_reported_as_rest() -> None:
+    """A pane can be in the wrong place inside the console, not only in the slot.
+
+    `_crossed_panes` looks for a pane hosted by a *managed* session that is not its own, and a
+    console-hosted row has no host at all — so an agent swapped into one of the console's
+    **other** panes was invisible to it, while `_slot_unwind` only ever inspects the slot.
+    Between them they answered rest over a console holding somebody's agent in its feed
+    position, with one of the console's own panes exiled into that agent's window.
+
+    Reachable the same way the managed-to-managed crossing is: by hand, with `swap-pane`
+    against a console pane that is not the slot. The composer cannot produce it — every
+    exchange it makes has the slot on one end — which is exactly the argument that was made
+    for the crossing this function already covers.
+
+    Recovered rather than merely reported, which is one better than the finding asked for:
+    the agent's own window holds the console pane it was exchanged with, so trading them back
+    puts each where it belongs and exiles nothing.
+    """
+    console = RecordingConsole(
+        (
+            _slot("%0", surface=True),
+            HostedPane(None, True, 0, 1, "%2", _A, False),
+            _home(_A, "%1", None),
+        )
+    )
+
+    report = await composer(console).recover()
+
+    assert console.swaps == [("%2", "%1")], console.swaps
+    assert _at_rest(console), "the mis-parked agent was not returned to its own window"
+    assert report.settled and len(report.moved) == 1, report
+    assert str(_A) in report.moved[0]
+
+
+async def test_sending_an_agent_home_never_puts_it_in_a_third_sessions_window() -> None:
+    """`_send_home` must refuse exactly what `_slot_unwind` refuses, for the same reason.
+
+    It swapped the slot against the surface wherever the surface happened to be. With the
+    surface parked in a *third* session's window — the state `_slot_unwind` reports as blocked
+    rather than exchanging — that put the displayed agent's live pane into that third session's
+    window. `show`, `show_projects` and `hide` all route through it, and `hide` is wired into
+    every stop path, so the refusal has to live in the shared method rather than only in the
+    caller that already knew.
+    """
+    console = RecordingConsole(
+        (_slot("%3", _A), _feed("%2"), _home(_B, "%1", None, surface=True), _home(_A, "%4", None))
+    )
+
+    await composer(console).show_projects()
+
+    assert console.swaps == [], "the surface was traded from a third session's window"
+    crossed = [
+        pane
+        for pane in console.arrangement
+        if pane.session_id is not None and pane.host is not None and pane.host != pane.session_id
+    ]
+    assert crossed == []
+
+
+async def test_only_the_process_in_the_left_slot_may_settle_the_console() -> None:
+    """"Hosted by the console" is true of every pane on this server, which is not the same
+    thing as being the console's surface.
+
+    `hosting_mode` decides by socket name, so a second console pane, an operator's hand-split,
+    or an agent's own pane all report `CONSOLE` — and any of them running the dashboard would
+    have called the start-only repair, evicting an agent the owner is reading in the real
+    console. The process knows which pane it is; the check uses that rather than the socket.
+    """
+    console = RecordingConsole((_slot("%1", surface=True), _feed("%2"), _home(_A, "%3", _A)))
+
+    refused = await composer(console).settle("%2")
+
+    assert (refused.moved, refused.blocked, refused.settled) == ((), (), False)
+    assert console.marked == [], "a process outside the left slot repaired the console"
+
+    allowed = await composer(console).settle("%1")
+
+    assert allowed.settled, "the process in the left slot was refused"

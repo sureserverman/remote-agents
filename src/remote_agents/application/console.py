@@ -114,8 +114,17 @@ class ConsoleComposer:
             return False
         return True
 
-    async def settle(self) -> RecoveryReport:
+    async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
         """Mark the surface if it is unmarked, then return the console to rest. **Start only.**
+
+        `resident_pane` is the caller's own pane — `$TMUX_PANE` — and it is checked rather
+        than trusted. "Hosted by the console" is decided by the socket name, which is true of
+        *every* pane on this server: a second console pane, an operator's hand-split, or an
+        agent's own. Any of them running the dashboard would call this, and the repair below
+        would evict an agent the owner is reading in the real console. Only the process
+        sitting in the left slot is the console's surface, and only it may settle the console.
+        Passed `None`, the check is skipped — which is what the tests that drive the composer
+        directly want, and what a caller that genuinely cannot know its pane gets.
 
         Separate from `ensure` because the two have different callers and only one of them is
         a start. `ensure` makes the console *exist* and is called by anything that needs it to
@@ -133,6 +142,14 @@ class ConsoleComposer:
         caller can tell the owner what could not be put right; discarding it is what makes an
         unsettled console a log-file secret.
         """
+        if resident_pane is not None:
+            slot = _left_slot(await self._console.pane_arrangement())
+            if slot is None or slot.pane_id != resident_pane:
+                _LOG.debug(
+                    "not settling: this process is in pane %s, not the console's left slot",
+                    resident_pane,
+                )
+                return RecoveryReport((), (), settled=False)
         adopted: tuple[str, ...] = ()
         try:
             adopted = await self._adopt_surface()
@@ -338,8 +355,31 @@ class ConsoleComposer:
             _LOG.exception("the console could not be returned to the projects surface")
 
     async def _send_home(self, arrangement: tuple[HostedPane, ...], slot: HostedPane) -> bool:
-        """Exchange the slot's agent with the console's own surface, wherever it is parked."""
+        """Exchange the slot's agent with the console's own surface — only where that is safe.
+
+        "Wherever it is parked" was the first version and it was wrong in exactly the way
+        `_slot_unwind` refuses to be: with the surface parked in a *third* session's window,
+        the exchange puts the displayed agent's live pane into that third session. `show`,
+        `show_projects` and `hide` all route through here, and `hide` is wired into every stop
+        path, so the refusal belongs in the shared method rather than in the one caller that
+        already knew about it.
+
+        Safe on exactly the two shapes `_slot_unwind` names: the surface parked in the slot
+        agent's own window (each pane goes where it belongs), or the surface still inside the
+        console's own window (reordering exiles nothing).
+        """
         parked = _surface(arrangement)
+        if parked is not None and not (
+            parked.host == slot.session_id
+            or (parked.on_console and parked.window_index == slot.window_index)
+        ):
+            _LOG.warning(
+                "the projects surface is parked in session %s's window, not %s's; exchanging "
+                "them would put the shown agent in a third session's window",
+                parked.host,
+                slot.session_id,
+            )
+            return False
         if parked is None:
             _LOG.warning(
                 "the pane displaced by %s is not identifiable; leaving the console as it is",
@@ -573,17 +613,33 @@ def _is_orphaned_surface(arrangement: tuple[HostedPane, ...], surface: HostedPan
 
 
 def _crossed_panes(arrangement: tuple[HostedPane, ...]) -> tuple[HostedPane, ...]:
-    """Every pane hosted by a *managed* session that is not the one it belongs to.
+    """Every agent's pane sitting somewhere it does not belong, other than the console's slot.
 
-    The state the composer cannot produce — each exchange it makes has the console's slot on
-    one end — but tmux used by hand can, and the one that leaves two sessions answering for
-    each other's pane. A console-hosted pane is not crossed: that is the ordinary displayed
-    agent, and `_slot_unwind` is what deals with it.
+    Two shapes, and the second was missed for the same reason it is easy to miss: a
+    console-hosted row carries **no host at all**, because the console is not a managed
+    session, so a filter written about `host` cannot see it.
+
+    - Hosted by a *managed* session that is not its own — two sessions answering for each
+      other's pane.
+    - Hosted by the console, but **not in the left slot**. The slot is where a displayed agent
+      belongs and `_slot_unwind` deals with that; anywhere else in the console window is an
+      agent parked in the feed's position, with one of the console's own panes exiled into
+      that agent's window in exchange. Answered as rest until the close-out evaluator swapped
+      one there by hand and watched `settled=True` come back.
+
+    Neither is reachable from the composer, which always has the slot on one end of every
+    exchange. Both are reachable with `swap-pane` by hand, which is the argument that put the
+    first shape here in the first place.
     """
+    slot = _left_slot(arrangement)
     return tuple(
         pane
         for pane in arrangement
-        if pane.session_id is not None and pane.host is not None and pane.host != pane.session_id
+        if pane.session_id is not None
+        and (
+            (pane.host is not None and pane.host != pane.session_id)
+            or (pane.on_console and slot is not None and pane.pane_id != slot.pane_id)
+        )
     )
 
 
@@ -630,8 +686,13 @@ def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, t
 
     - **The slot holds an agent and the surface is parked in that agent's own window.** The
       ordinary crash state. Each pane goes exactly where it belongs, so this is always safe.
-    - **The slot and the surface are both the console's own panes**, merely out of order.
-      Reordering inside one window exiles nothing.
+    - **The slot and the surface are both in the console's own window**, merely out of order.
+      Reordering inside one window exiles nothing. Compared against the slot's *own* window
+      index rather than against zero: the server reads the owner's `~/.tmux.conf`, and under
+      `set -g base-index 1` a literal `== 0` sent this trivially fixable console down the
+      report-and-restart path instead — telling the operator a pane had been destroyed when
+      none had. The same assumption `_left_slot` had already been repaired for, surviving one
+      branch further down.
     - **Anything else** is reported, not exchanged. `swap-pane` cannot move a pane home on its
       own; it trades. So exchanging when the slot holds a console pane sends *that* pane out
       into a window it does not belong in — the console ends one pane shorter, the defunct
@@ -663,7 +724,7 @@ def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, t
             ),
             (),
         )
-    if slot.session_id is None and surface.on_console and surface.window_index == 0:
+    if slot.session_id is None and surface.on_console and surface.window_index == slot.window_index:
         return (
             _Unwind(
                 surface.pane_id,

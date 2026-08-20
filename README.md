@@ -158,16 +158,25 @@ uv run --locked remote-agents
 ```
 
 With no arguments, `remote-agents` enters the **console**: a tmux session named
-`ra-console` on the project's own server, whose window 0 is the dashboard — projects on
-the left, the running sessions and the notifications feed on the right — and whose other
-windows are tabs, one per live managed session, linked and unlinked as sessions come and
-go. Opening a session from the dashboard focuses its tab; `F12` returns to the dashboard
-from any tab (a binding installed on the project's own tmux server only — your own tmux
-configuration is never touched). Run from inside the console it says so instead of
-nesting; run from inside somebody else's tmux it prints the attach command instead.
-Killing the console at any time is safe: it is presentation only, and every managed
-session survives it. Every command with arguments is the CLI exactly as before — `serve`,
-`doctor`, `add-project`, and the rest are unchanged.
+`ra-console` on the project's own server, whose window is the dashboard — projects on the
+left, the running sessions and the notifications feed on the right. `F12` reaches the
+dashboard (a binding installed on the project's own tmux server only — your own tmux
+configuration is never touched). Run from inside the console it says so instead of nesting;
+run from inside somebody else's tmux it prints the attach command instead. Opening a session
+gives it a window of its own, and killing the console is safe: it is presentation only, and
+every managed session survives it.
+
+That last sentence is what changes next. The console is being reshaped to show an agent by
+**swapping** it into the dashboard's left pane, so that — once the window is split into three
+— the sessions list and the feed stay on screen beside it; the projects surface goes to live
+in that agent's own window until it is swapped back (DEC-040). The exchange, the start-time
+recovery and the lifecycle handling are in place; the three-pane layout and opening a session
+from the sessions pane land with the console's final stage. **From that point, killing the
+console while an agent is displayed destroys that agent's process**, because its pane is
+physically in the console's window — see the operator runbook.
+
+Every command with arguments is the CLI exactly as before — `serve`, `doctor`,
+`add-project`, and the rest are unchanged.
 
 The dashboard itself, in or out of the console, is:
 
