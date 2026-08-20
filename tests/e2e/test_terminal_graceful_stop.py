@@ -20,6 +20,6 @@ async def test_graceful_stop_preserves_then_explicit_cleanup_removes_the_pane(tm
         assert await terminal.inspect(session_id) is None
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass

@@ -85,14 +85,16 @@ def test_every_kind_says_something_distinct() -> None:
     one thing while the service knows another."""
     rendered = {
         other: render_activity(
-            _group(_activity(
-                other,
-                confidence=(
-                    ActivityConfidence.INFERRED
-                    if other is ActivityKind.QUIET
-                    else ActivityConfidence.REPORTED
-                ),
-            )),
+            _group(
+                _activity(
+                    other,
+                    confidence=(
+                        ActivityConfidence.INFERRED
+                        if other is ActivityKind.QUIET
+                        else ActivityConfidence.REPORTED
+                    ),
+                )
+            ),
             display=DISPLAY,
             open_session=OPEN,
         ).text
@@ -191,11 +193,13 @@ def test_quiet_renders_the_same_moment_whatever_offset_it_arrived_in() -> None:
     """An observation is an instant; two spellings of one instant must not read as two."""
     elsewhere = OBSERVED.astimezone(timezone(timedelta(hours=5, minutes=30)))
     message = render_activity(
-        _group(_activity(
-            ActivityKind.QUIET,
-            confidence=ActivityConfidence.INFERRED,
-            observed_at=elsewhere,
-        )),
+        _group(
+            _activity(
+                ActivityKind.QUIET,
+                confidence=ActivityConfidence.INFERRED,
+                observed_at=elsewhere,
+            )
+        ),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -206,11 +210,13 @@ def test_quiet_never_renders_agent_text_even_if_a_caller_supplies_it() -> None:
     """Nothing said this. A quiet report that carried a parting sentence would present the
     last thing on the screen as a statement the agent chose to make."""
     message = render_activity(
-        _group(_activity(
-            ActivityKind.QUIET,
-            detail="I have completed the migration.",
-            confidence=ActivityConfidence.INFERRED,
-        )),
+        _group(
+            _activity(
+                ActivityKind.QUIET,
+                detail="I have completed the migration.",
+                confidence=ActivityConfidence.INFERRED,
+            )
+        ),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -633,8 +639,7 @@ async def test_a_refused_send_leaves_the_message_the_owner_already_had() -> None
     clock.advance(121)
     # A second kind, because only news the owner has not been alerted to is *sent* at all.
     assert (
-        await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "two", clock.moment)])
-        == 0
+        await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "two", clock.moment)]) == 0
     )
 
     assert _messages(view) == 1, "a failed send took away the message the owner had"
@@ -944,12 +949,7 @@ def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -
     not do is drop four observations and look like a complete account of the session.
     """
     message = render_activity(
-        _group(
-            *(
-                _activity(ActivityKind.COMPLETED, detail=f"Step {index}.")
-                for index in range(7)
-            )
-        ),
+        _group(*(_activity(ActivityKind.COMPLETED, detail=f"Step {index}.") for index in range(7))),
         display=DISPLAY,
         open_session=OPEN,
     )

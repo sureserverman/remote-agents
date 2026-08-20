@@ -1,12 +1,14 @@
-"""Opt-in composer journey against real tmux: tabs live, sessions never depend on them.
+"""Opt-in composer journey against real tmux: the exchange works, sessions never depend on it.
 
-Stage 1's live file proves the raw window operations; this one proves the *composer's*
-journey over them on a disposable socket: ensure creates the console running a dashboard
-command, sync links a live session's tab and reconciles it away when the session ends,
-open focuses the tab (select-window is headless-safe — no attached client exists in CI,
-so the switch-client fallback is exactly the branch that must NOT be taken here), and
-killing the console leaves the managed session observable — DEC-006 proven one layer up
-from where Stage 1 proved it.
+This proves the *composer's* journey on a disposable socket: `ensure` creates the console,
+`open` exchanges the agent's pane into the left slot and sends the projects surface to live
+in the agent's own window, `show_projects` brings it back, and killing the console leaves the
+managed session observable — DEC-006, one layer up from where the raw operations prove it.
+
+**It used to be a journey about tabs**, because that is how the console used to show a
+session: link its window in, select it, unlink it when the session ended. That mechanism
+retired with Sub-plan 3's Task 2.4, and the questions it was really asking — does the console
+reach the agent, and does the session survive the console — are the ones asked here now.
 
 The managed session is fabricated (options set by hand) rather than launched through an
 agent profile: what is under test is window composition, and real launches carry their
@@ -32,6 +34,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.console import ConsolePaneSlot
 
 
 def _record(session_id: SessionId, state: SessionState) -> SessionRecord:
@@ -53,7 +56,16 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
     socket = f"remote-agents-test-{session_id.value.hex}"
     runner = AsyncTmuxRunner()
     gateway = TmuxGateway(socket, runner)
-    composer = ConsoleComposer(gateway, ("sleep", "600"), tmp_path)
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        tmp_path,
+        projects_command=("true",),
+        # The real shape: three panes. `sleep` stands in for the surfaces, which are driven
+        # for real in `test_three_pane_console.py` — what this file is about is the
+        # composer's journey over them.
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
     base = ("tmux", "-L", socket)
     try:
         assert await composer.ensure() is True
@@ -63,30 +75,48 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
 
         name = f"ra-{session_id}"
         await runner.run(*base, "new-session", "-d", "-s", name, "sleep", "600")
+        # Pane-scoped, schema 2 — DEC-038. A session-scoped mark names no pane, so such a
+        # session is manageable but cannot be *displayed* by exchange, which is exactly what
+        # this journey drives. The fixture carried the schema-1 shape from before that
+        # decision and the marks went on the session; it silently produced a session the
+        # composer could not show, and the exchange assertions below then had nothing to find.
+        agent_pane = (
+            await runner.run(*base, "list-panes", "-t", f"={name}:", "-F", "#{pane_id}")
+        ).strip()
         for option, value in (
-            ("@remote_agents_schema", "1"),
+            ("@remote_agents_schema", "2"),
             ("@remote_agents_id", str(session_id)),
             ("@remote_agents_project_id", "qualification"),
             ("@remote_agents_profile", "claude"),
         ):
-            await runner.run(*base, "set-option", "-t", f"{name}:", option, value)
+            await runner.run(*base, "set-option", "-p", "-t", agent_pane, option, value)
 
-        await composer.sync((_record(session_id, SessionState.RUNNING),))
-        windows = dict(await gateway.console_windows())
-        assert session_id in windows.values(), "a live session's tab must exist after sync"
+        # Showing a session is an exchange now, not a tab. The console's left slot ends up
+        # holding the agent's own pane, and the projects surface goes to live in the agent's
+        # window until it is swapped back.
+        arrangement = await gateway.pane_arrangement()
+        surface = next(pane for pane in arrangement if pane.surface)
+        assert any(pane.session_id == session_id for pane in arrangement), (
+            "the fabricated session carries no pane identity, so nothing could display it"
+        )
 
-        # open() must take the tab route: select-window works headless, and the
-        # switch-client fallback would fail here with "no current client" — so reaching
-        # the end of open() without an exception IS the proof the tab route was taken.
         await composer.open(session_id)
 
-        # jump home is the same select, aimed at the dashboard
-        await gateway.select_console_window(0)
+        after = await gateway.pane_arrangement()
+        displayed = next(pane for pane in after if pane.on_console and pane.pane_index == 0)
+        assert displayed.pane_id == agent_pane, "the agent was not shown"
+        parked = next(pane for pane in after if pane.pane_id == surface.pane_id)
+        assert parked.host == session_id, "the surface did not go to the agent's window"
 
-        await composer.sync((_record(session_id, SessionState.ENDED),))
-        assert session_id not in dict(await gateway.console_windows()).values()
+        # The route back — what the projects key runs.
+        await composer.show_projects()
+        home = await gateway.pane_arrangement()
+        assert next(
+            pane for pane in home if pane.on_console and pane.pane_index == 0
+        ).pane_id == surface.pane_id, "the projects surface did not come back"
 
-        await composer.sync((_record(session_id, SessionState.RUNNING),))
+        # DEC-006, re-proved under the swap model: with nothing displayed, killing the
+        # console leaves the session alive and observable.
         await runner.run(*base, "kill-session", "-t", "ra-console")
         inventory = await gateway.inventory()
         assert [pane.session_id for pane in inventory.managed] == [session_id]

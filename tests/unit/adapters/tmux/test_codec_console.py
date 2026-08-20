@@ -20,18 +20,11 @@ import pytest
 
 from remote_agents.adapters.tmux.codec import (
     CONSOLE_SESSION_NAME,
-    CONSOLE_WINDOW_FORMAT,
     console_target,
+    console_zoom_args,
     display_message_args,
     exact_session_target,
-    link_window_args,
-    list_console_windows_args,
-    parse_console_window,
-    select_window_args,
-    switch_client_args,
-    switch_client_console_args,
-    unlink_window_args,
-    window_session_mark_args,
+    switch_client_argv,
 )
 from remote_agents.domain.models import SessionId
 
@@ -50,47 +43,24 @@ def test_console_target_is_the_exact_session_form() -> None:
     assert console_target() == "ra-console:"
 
 
-def test_link_window_appends_the_source_session_into_the_console() -> None:
-    assert link_window_args(_SESSION) == (
-        "link-window",
-        "-d",
-        "-s",
-        _EXACT,
-        "-t",
-        "ra-console:",
-    )
 
 
-def test_window_session_mark_is_window_scoped_on_the_source() -> None:
-    assert window_session_mark_args(_SESSION) == (
-        "set-option",
-        "-w",
-        "-t",
-        _EXACT,
-        "@remote_agents_window_session",
-        str(_SESSION),
-    )
 
 
-def test_unlink_names_one_console_window_and_refuses_the_dashboard() -> None:
-    assert unlink_window_args(3) == ("unlink-window", "-t", "ra-console:3")
-    with pytest.raises(ValueError):
-        unlink_window_args(0)
-    with pytest.raises(ValueError):
-        unlink_window_args(-1)
+def test_the_exec_handoff_switches_to_the_agents_own_session() -> None:
+    """The one switch route left, and the caller it serves is not the console.
 
+    `switch_client_args` — the in-server route the console used to reach an agent — went with
+    the tab mechanism (Task 2.4). DEC-039 had already recorded why it could not survive the
+    swap model: a session target resolves to whatever occupies the vacated window, so it
+    lands the owner on the projects surface rather than on the agent. This one runs on a host
+    that composed no console at all, where nothing has been exchanged and the session named
+    is the agent's own.
+    """
+    argv = switch_client_argv(_SESSION)
 
-def test_select_window_reaches_the_dashboard_and_any_tab() -> None:
-    assert select_window_args(0) == ("select-window", "-t", "ra-console:0")
-    assert select_window_args(2) == ("select-window", "-t", "ra-console:2")
-    with pytest.raises(ValueError):
-        select_window_args(-1)
-
-
-def test_switch_client_targets_are_generated_never_free_text() -> None:
-    assert switch_client_args(_SESSION) == ("switch-client", "-t", _EXACT)
-    assert switch_client_console_args() == ("switch-client", "-t", "ra-console:")
-
+    assert argv[:3] == ("tmux", "-L", "remote-agents")
+    assert argv[3:] == ("switch-client", "-t", _EXACT)
 
 def test_display_message_carries_one_status_line_literally() -> None:
     """`-l` pins literal rendering: without it tmux format-expands the message, and
@@ -111,31 +81,17 @@ def test_display_message_carries_one_status_line_literally() -> None:
         display_message_args("two\nlines")
 
 
-def test_console_window_listing_and_decode_round_trip() -> None:
-    assert list_console_windows_args() == (
-        "list-windows",
-        "-t",
-        "ra-console:",
-        "-F",
-        CONSOLE_WINDOW_FORMAT,
-    )
-    assert parse_console_window(f"4|{_SESSION}") == (4, _SESSION)
-    assert parse_console_window("0|") == (0, None)
 
 
-@pytest.mark.parametrize("line", ["", "x|y", "1", "not-int|01234567-89ab-cdef-0123-456789abcdef"])
-def test_console_window_decode_refuses_ambiguity(line: str) -> None:
-    with pytest.raises(ValueError):
-        parse_console_window(line)
+def test_the_zoom_probe_asks_whether_anything_is_hiding_the_feed() -> None:
+    """What replaced the current-window read once the console had exactly one window.
 
+    That read was the tab model's proxy for "the owner is looking at the dashboard". With one
+    window it answers 0 forever, so the status flash it guarded could never fire again — a
+    rule whose premise had been deleted. The question now is whether a zoomed pane is hiding
+    the feed, and the format is this module's own fixed text.
+    """
+    argv = console_zoom_args()
 
-def test_the_current_window_probe_prints_the_console_sessions_index() -> None:
-    from remote_agents.adapters.tmux.codec import current_console_window_args
-
-    assert current_console_window_args() == (
-        "display-message",
-        "-p",
-        "-t",
-        "ra-console:",
-        "#{window_index}",
-    )
+    assert argv[:4] == ("display-message", "-p", "-t", console_target())
+    assert argv[4] == "#{window_zoomed_flag}|#{pane_id}"

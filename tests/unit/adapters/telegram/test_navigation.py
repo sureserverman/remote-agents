@@ -460,9 +460,7 @@ def _sessions_counts_boundary(states: list[SessionState]) -> PrivateBotBoundary:
         )
         for index, state in enumerate(states)
     ]
-    return PrivateBotBoundary(
-        OWNER, CHAT, catalogue=(PROJECT,), launcher=_ManyLauncher(records)
-    )
+    return PrivateBotBoundary(OWNER, CHAT, catalogue=(PROJECT,), launcher=_ManyLauncher(records))
 
 
 @pytest.mark.asyncio

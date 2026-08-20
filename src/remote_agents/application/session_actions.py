@@ -57,6 +57,7 @@ from typing import Protocol
 from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.ports.terminal import GRACEFUL_TIMEOUT, OWNERSHIP_LOST, UNKNOWN_SESSION
 
 _LOG = logging.getLogger(__name__)
 
@@ -296,9 +297,10 @@ def trust_available(record: _RemoteControllable, observed: TrustState) -> bool:
     return record.profile_id in TRUST_ANSWERABLE and observed is TrustState.AWAITING
 
 
-UNKNOWN_SESSION = "unknown_session"
-GRACEFUL_TIMEOUT = "graceful_timeout"
-OWNERSHIP_LOST = "ownership_lost"
+# Re-exported, not redefined: the vocabulary lives on `ports.terminal` beside the `detail`
+# field it populates, so a terminal adapter can name what it observed without importing the
+# application. Every existing importer keeps working through this name.
+__all__ = ["GRACEFUL_TIMEOUT", "OWNERSHIP_LOST", "UNKNOWN_SESSION"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,10 +411,14 @@ end and the row does go away — so what was wrong was never the outcome, only t
 surfaces reported "Force stopped X" over a kill nobody observed.
 
 Read it with DEC-017's accepted cost 1 in hand: `VERIFIED_FORCE_STOP` is still written to the
-durable history whether or not `kill-session` ran, so the audit log cannot tell these apart and
-only this sentence carries the distinction. That asymmetry with DEC-006 — graceful fails closed
-on an unresolved profile, force does not fail closed on an unresolved pane — is recorded and
-deliberate, not an oversight to be "restored".
+durable history whether or not a kill ran, so the audit log cannot tell these apart and only
+this sentence carries the distinction. (It said "`kill-session`" until force stop moved onto
+the pane; the destructive call is now `kill-pane` for anything with a decoded pane, and the
+accepted cost is unchanged by which verb reaches tmux.)
+
+That asymmetry with DEC-006 — graceful fails closed on an unresolved
+profile, force does not fail closed on an unresolved pane — is recorded and deliberate, not
+an oversight to be "restored".
 """
 
 

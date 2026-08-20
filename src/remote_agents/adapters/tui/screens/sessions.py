@@ -95,6 +95,17 @@ class SessionsScreen(ChoiceScreen):
     can_refresh = True
     crumb = "Sessions"
 
+    #: What this position tells the owner a row does, and where an empty list sends them.
+    #: Class attributes rather than literals at the call site because the console's sessions
+    #: *pane* means something different by Enter and has nowhere to escape to — and a status
+    #: describing the other surface's keys is a false sentence, not a cosmetic one.
+    listing_status = "{count} managed session(s). Select one for detail."
+    empty_status = "No managed sessions. Press escape to go back."
+    # "…to return to the project list" until the console's panes existed. This screen is
+    # pushed, so escape is always real here — but the position it returns to is the
+    # *pusher's* resting one, which in a feed or sessions pane process is not a project
+    # list. Naming the key without naming a place is true on every surface that pushes it.
+
     def __init__(self) -> None:
         super().__init__()
         self._auto: Timer | None = None
@@ -291,9 +302,9 @@ class SessionsScreen(ChoiceScreen):
             return
         if not records:
             self.show_choices(())
-            self.set_status("No managed sessions. Press escape to return to the project list.")
+            self.set_status(self.empty_status)
             return
-        self.set_status(f"{len(records)} managed session(s). Select one for detail.")
+        self.set_status(self.listing_status.format(count=len(records)))
         rows = tuple((str(record.session_id), session_row(record)) for record in records)
         if not keep_cursor:
             self.show_choices(rows)
@@ -324,6 +335,70 @@ class SessionsScreen(ChoiceScreen):
             # this before `choose` is reached; the branch is here because `choose` is also
             # called directly, and because a screen should be able to answer for its own rows.
             await self.tui.go_back()
+            return
+        await self.tui.show_detail(key)
+
+
+class SessionsPaneScreen(SessionsScreen):
+    """The console's right-top pane: the same list, where Enter opens instead of describing.
+
+    The one pane that stays on screen while an agent occupies the left slot, so it is the
+    only place the owner can reach back from — which is why Enter here means *exchange this
+    agent into the left pane* rather than *tell me about it*. The detail, where every stop,
+    inspect, rename and Remote Control affordance lives, moves to `d`, so DEC-007's full
+    action set is one key away rather than gone.
+
+    That pairing is not new: the combined dashboard's sessions region has meant exactly this
+    since it gained one. What changes is that the list is now a screen of its own, in a
+    process of its own, and inherits every one of `SessionsScreen`'s stale-read guards
+    unchanged.
+
+    The resting cursor stays on a non-mutating row (DEC-007, BL-004) and this pane satisfies
+    that by what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
+    Every mutating action is behind `d`.
+    """
+
+    #: Its own name, not `SESSIONS`. It shares the sessions screen's body and inherits its
+    #: machinery, but its status now says something different — because Enter here means
+    #: something different — so a single committed baseline could only cover one of the two
+    #: renders while appearing to cover both.
+    position = "SESSIONS_PANE"
+
+    #: Enter opens rather than describes here, and this pane *is* its process's resting
+    #: position — so there is no project list to escape to and escape at rest is inert.
+    #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
+    #: the real pane at the Stage 1 gate, which is the only place a false status shows.
+    listing_status = "{count} managed session(s). Enter opens one, d for its detail."
+    empty_status = "No managed sessions on this host. Launching one starts it here."
+    read_failure_route = "Ctrl+R re-reads this screen."
+
+    BINDINGS = [
+        # Hidden from the footer for the reason the dashboard's copy is: the bar is shared
+        # with every inherited binding, and the key only means something while a row is
+        # highlighted. The status line says so where it is true.
+        Binding("d", "session_detail", "Session detail", show=False),
+    ]
+
+    async def choose(self, key: str) -> None:
+        """Enter exchanges the chosen agent into the left slot; Back still goes back.
+
+        Routed through the app's one open seam, so hosting decides what opening means — the
+        exchange under the console, the exec handoff in a bare terminal — and this screen
+        never has to know which it got.
+        """
+        if key == _BACK:
+            await self.tui.go_back()
+            return
+        await self.tui._open_or_leave(key)
+
+    async def action_session_detail(self) -> None:
+        """`d` on the highlighted row opens today's detail screen, unchanged."""
+        choices = self.query_one("#choices", OptionList)
+        index = choices.highlighted
+        if index is None or choices.option_count <= index:
+            return
+        key = choices.get_option_at_index(index).id
+        if key is None or key == _BACK:
             return
         await self.tui.show_detail(key)
 

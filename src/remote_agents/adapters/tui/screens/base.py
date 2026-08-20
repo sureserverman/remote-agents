@@ -66,6 +66,12 @@ class ChoiceScreen(Screen[None]):
     #: screen rather than mapped in the test so that adding a screen and forgetting its
     #: baseline is a missing name here, not a silently uncovered position there.
     position = ""
+    #: How a failed read tells the owner where to go from here. Declared per screen because
+    #: it names a *key* and a *position*, and both depend on where this screen is sitting: a
+    #: pushed flow can escape back, while a screen that is its own process's resting position
+    #: cannot — `go_back` refuses on the last screen, so the sentence would name an inert key
+    #: and a place that does not exist in that process. Overridden by the console's panes.
+    read_failure_route = "Press escape to return to the project list."
     #: Whether this position has anything to re-read, i.e. whether Refresh means something
     #: here. Declared beside `refresh_contents` rather than inferred from whether the hook is
     #: overridden, because Task 1.2 has to ask this question from `check_action` — before any

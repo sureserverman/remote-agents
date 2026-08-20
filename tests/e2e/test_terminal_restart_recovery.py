@@ -64,7 +64,7 @@ async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_
         assert (await store.get(session_id)).state is SessionState.ENDED
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -92,7 +92,7 @@ async def test_reconciliation_quarantines_a_trusted_live_session_without_a_datab
         )
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -139,7 +139,7 @@ async def test_an_adopted_session_can_actually_be_force_stopped_through_the_real
         ], "the pane must actually be gone, not merely marked gone"
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 
@@ -195,7 +195,7 @@ async def test_trusted_tmux_inspection_is_available_without_a_database(tmp_path)
         assert observations[0].profile_id == ProfileId("fake")
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
 

@@ -107,6 +107,6 @@ async def test_an_idle_agent_pane_settles_enough_for_quiet_to_be_detected(
         )
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass

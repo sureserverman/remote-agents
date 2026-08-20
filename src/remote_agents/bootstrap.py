@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
@@ -51,7 +52,7 @@ from remote_agents.adapters.telegram.service import (
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
-from remote_agents.adapters.tmux.codec import attach_argv
+from remote_agents.adapters.tmux.codec import attach_argv, switch_client_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import (
     build_launch_profile,
@@ -59,6 +60,15 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.adapters.tui import PANE_NAMES
+from remote_agents.application.console import RecoveryReport
+
+if TYPE_CHECKING:
+    # Annotations only. The terminal's own modules are imported inside the functions that
+    # need them, so `serve` never loads the terminal library and a failure in it cannot
+    # reach the bot — naming them here would undo that.
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.conversations import ConversationService
@@ -353,6 +363,17 @@ def main(
     add_project_parser.add_argument("--name", required=True)
     tui_parser = subcommands.add_parser("tui")
     tui_parser.add_argument("--config", type=Path)
+    # One process per tmux pane: a Textual app owns a terminal, and the console is three
+    # panes side by side. `choices` is what refuses an unknown name — before anything is
+    # composed, rather than after a database is opened for a surface that does not exist.
+    pane_parser = subcommands.add_parser("pane")
+    pane_parser.add_argument("name", choices=sorted(PANE_NAMES))
+    pane_parser.add_argument("--config", type=Path)
+    # What the console's projects key runs. It exists because a tmux key cannot do this
+    # itself: tmux can select a window, but it cannot read our pane marks and work out which
+    # exchange brings the surface home. Not a surface — it arranges panes and exits.
+    console_parser = subcommands.add_parser("console")
+    console_parser.add_argument("action", choices=("projects",))
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
@@ -471,39 +492,12 @@ def main(
         return 0
     if arguments.command == "tui":
         from remote_agents.adapters.tui.app import run_local_terminal
-        from remote_agents.adapters.tui.attach import attach_to
 
-        paths = ProductionPaths.for_home(Path.home())
-        try:
-            config = _private_state_config(arguments.config or paths.config_path, paths)
-        except ConfigError as error:
-            print(error, file=sys.stderr)
-            return 1
-        paths.ensure_directories()
-        # Migrations and the pre-migration backup run once, on a real connection that is
-        # closed before the surface starts; the surface itself works over a per-operation
-        # lease and holds no database handle between operations. This is the stated answer
-        # to the question DEC-023 recorded as open (superseding it — recorded at the
-        # console-surface plan's close-out): the surface may now be long-lived beside
-        # attached sessions, and what keeps DEC-005's two-writer story simple is no longer
-        # "the terminal exec'd away", it is that the terminal's handle exists only inside a
-        # single store operation. The README states the reworded guarantee.
-        paths.open_database(open_database, migrations=MIGRATIONS).close()
-        connection = leased_connection(config.database_path)
-        request = None
-        try:
-            request = run_local_terminal(local_context(config, connection, paths))
-        except Exception:
-            _LOG.exception("the local terminal surface failed")
-            print(
-                "The terminal surface failed. Any session it started is listed by:\n"
-                "tmux -L remote-agents list-sessions",
-                file=sys.stderr,
-            )
-            return 1
-        finally:
-            connection.close()
-        return attach_to(request)
+        return _run_surface(arguments.config, run_local_terminal, "the local terminal surface")
+    if arguments.command == "pane":
+        return _enter_pane(arguments.name, arguments.config)
+    if arguments.command == "console":
+        return _console_arrange(arguments.action)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -657,11 +651,17 @@ def _enter_console(
     """Enter the console: ensure it exists and become its client, honoring the hosting.
 
     The bare invocation's whole meaning. A client already on our server is told it is
-    already there (F12 reaches the dashboard); a foreign tmux client gets the command
-    printed rather than a nested client; a bare shell ensures the console — window 0
-    running `remote-agents tui` — and execs the attach, exactly the handoff shape a
-    ready launch has always used. An exec that cannot happen prints the same command
+    already there, and told what the one root key does — this line said "F12 returns to the
+    dashboard" until Sub-plan 3, which was the tab model's answer and named a surface the
+    console does not run; a foreign tmux client gets the command printed rather than a nested
+    client; a bare shell ensures the console — one window of three panes, running
+    `remote-agents pane projects|sessions|feed` — and execs the attach, exactly the handoff
+    shape a ready launch has always used. An exec that cannot happen prints the same command
     and exits non-zero, so the console is never lost behind a silent failure.
+
+    "Window 0 running `remote-agents tui`" until Sub-plan 3, which is what a single-pane
+    console was. `_console_composer` supplies a command per pane now, so that is no longer
+    the shape this builds.
     """
     from remote_agents.adapters.tmux.codec import console_attach_argv
     from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
@@ -670,7 +670,7 @@ def _enter_console(
     mode = hosting_mode(values)
     command = " ".join(console_attach_argv())
     if mode is HostingMode.CONSOLE:
-        print("Already in the console. F12 returns to the dashboard.")
+        print("Already in the console. F12 shows the projects pane.")
         return 0
     if mode is HostingMode.FOREIGN:
         print(
@@ -679,14 +679,7 @@ def _enter_console(
         )
         return 0
     if ensure_console is None:
-        from remote_agents.application.console import ConsoleComposer
-
-        composer = ConsoleComposer(
-            TmuxGateway("remote-agents", AsyncTmuxRunner()),
-            (sys.executable, "-m", "remote_agents", "tui"),
-            Path.home(),
-        )
-        ensure_console = composer.ensure
+        ensure_console = _console_composer().ensure
     if not asyncio.run(ensure_console()):
         print(
             "The console could not be prepared. Check tmux on this host, or run: "
@@ -701,6 +694,169 @@ def _enter_console(
         print(f"Could not attach automatically. Attach with:\n{command}", file=sys.stderr)
         return 1
     return 0
+
+
+#: What the console's projects key runs — this program, asking for the surface back.
+def _projects_command() -> tuple[str, ...]:
+    """The argv the projects binding runs, built from this interpreter rather than a name.
+
+    `sys.executable -m remote_agents` and not the bare `remote-agents` script, for the reason
+    `create_console` already builds its dashboard command that way: the console is started
+    from whatever interpreter the owner installed this into, and a root binding that assumed
+    a console script on `PATH` would work on the developer's host and fail on a pipx install.
+    """
+    return (sys.executable, "-m", "remote_agents", "console", "projects")
+
+
+def _console_composer(gateway=None, home: Path | None = None):
+    """Build the one console composer shape, so three call sites cannot drift apart.
+
+    They already had: `_enter_console`, `_console_arrange` and `local_context` each construct
+    one, and only the last has a gateway of its own to reuse. What must not differ between
+    them is the dashboard command, the projects command and the home directory — a composer
+    that disagreed with its siblings about any of those would install a binding running a
+    different program, or create a console somewhere else.
+    """
+    from remote_agents.application.console import ConsoleComposer
+    from remote_agents.ports.console import ConsolePaneSlot
+
+    return ConsoleComposer(
+        gateway if gateway is not None else TmuxGateway("remote-agents", AsyncTmuxRunner()),
+        (sys.executable, "-m", "remote_agents", "tui"),
+        home if home is not None else Path.home(),
+        projects_command=_projects_command(),
+        # One process per pane. Which entry point each pane runs is composition policy, the
+        # same as which entry point *is* the dashboard, so it is decided here rather than
+        # spelled inside the composer that arranges them.
+        pane_commands={
+            slot: (sys.executable, "-m", "remote_agents", "pane", name)
+            for slot, name in (
+                (ConsolePaneSlot.PROJECTS, "projects"),
+                (ConsolePaneSlot.SESSIONS, "sessions"),
+                (ConsolePaneSlot.FEED, "feed"),
+            )
+        },
+    )
+
+
+def _console_arrange(action: str) -> int:
+    """Rearrange the console's panes and exit — the operator's route back from an agent.
+
+    Deliberately not a surface: it holds no database handle, renders nothing, and its whole
+    life is one exchange. It is presentation like everything else the composer does, so a
+    failure here is a log line and a non-zero exit, never a session's problem (DEC-006).
+    """
+    if action != "projects":  # pragma: no cover - argparse `choices` is the real guard
+        print(f"unknown console action: {action}", file=sys.stderr)
+        return 1
+    asyncio.run(_console_composer().show_projects())
+    return 0
+
+
+def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None:
+    """Run the console's start-only repair and carry its report to the surface, or nothing.
+
+    A named seam for two reasons. First, what it replaced was a `print` to stderr, and a
+    `print` here is erased microseconds later when Textual takes the alternate screen —
+    invisible for the entire session it describes; naming the hand-over lets a test assert
+    that nothing reaches either stream, which is the actual defect.
+
+    Second, **it must not be able to take the surface down**, and that is not free.
+    `settle`'s own try block starts *after* it reads the pane arrangement, so a tmux hiccup
+    there escapes it — and uncaught, it would reach `_run_surface`'s handler and exit instead
+    of starting a degraded surface. DEC-040 restates the rule this protects: every composer
+    method degrades to a log line, and a console that cannot be settled is still a console.
+    Found by a Tier-2 review, which also noted the plan had promised this guarantee and never
+    built it.
+    """
+    try:
+        return asyncio.run(composer.settle(resident_pane))
+    except Exception:
+        _LOG.exception("the console could not be settled; the surface starts anyway")
+        return None
+
+
+def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
+    """What "open this session" means under console hosting: an exchange of panes.
+
+    A named seam rather than a closure inside `local_context`, so the wiring can be asserted
+    against the executed capability instead of against bootstrap's source text — a substring
+    check for the same wiring once matched the *service* composition too, and deleting it
+    from the local one left the suite green (`tests/integration/test_tui_bootstrap.py`).
+
+    `show` and not `open`: DEC-039's accepted cost 1 names this replacement by hand. A tmux
+    client attaches to a *session*, so the switch route lands wherever the vacated window
+    ends up rather than on the agent; under the swap model the console reaches an agent by
+    exchanging its left pane, which follows the pane whatever is hosting it (DEC-040).
+    """
+
+    async def open_in_console(session_id: str) -> None:
+        await composer.show(SessionId.parse(session_id))
+
+    return open_in_console
+
+
+def _run_surface(
+    config_path: Path | None,
+    runner: Callable[[TuiContext], AttachRequest | None],
+    label: str,
+) -> int:
+    """Compose the local surface over the private store, run it, and honor what it hands back.
+
+    One body, two entry points — `tui`'s combined dashboard and `pane`'s single-pane
+    surface — because everything except *which surface runs* is identical: the same
+    confinement check, the same migration, the same lease, the same failure message, the
+    same attach handoff. Written twice, the copies had already started to drift within one
+    stage, which is what a Tier-2 review caught.
+
+    Migrations and the pre-migration backup run once, on a real connection that is closed
+    before the surface starts; the surface itself works over a per-operation lease and holds
+    no database handle between operations (DEC-035). That is the stated answer to the
+    question DEC-023 recorded as open, superseded at the console-surface plan's close-out:
+    the surface may now be long-lived beside attached sessions, and what keeps DEC-005's
+    two-writer story simple is no longer "the terminal exec'd away", it is that the
+    terminal's handle exists only inside a single store operation. The README states the
+    reworded guarantee.
+
+    Three pane processes start together and each runs this. They serialize on SQLite's write
+    lock under the busy timeout `open_database` sets, and a migration already applied is a
+    version read — so the concurrency is the two-writer story the bot and the surface already
+    told, at one more writer.
+    """
+    from remote_agents.adapters.tui.attach import attach_to
+
+    paths = ProductionPaths.for_home(Path.home())
+    try:
+        config = _private_state_config(config_path or paths.config_path, paths)
+    except ConfigError as error:
+        print(error, file=sys.stderr)
+        return 1
+    paths.ensure_directories()
+    paths.open_database(open_database, migrations=MIGRATIONS).close()
+    connection = leased_connection(config.database_path)
+    request = None
+    try:
+        request = runner(local_context(config, connection, paths))
+    except Exception:
+        _LOG.exception("%s failed", label)
+        print(
+            f"{label.capitalize()} failed. Any session it started is listed by:\n"
+            "tmux -L remote-agents list-sessions",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        connection.close()
+    return attach_to(request, switch_argv=switch_client_argv)
+
+
+def _enter_pane(name: str, config_path: Path | None = None) -> int:
+    """Compose and run one console pane surface — the same composition `tui` runs."""
+    from remote_agents.adapters.tui.panes import run_pane_surface
+
+    return _run_surface(
+        config_path, lambda context: run_pane_surface(name, context), f"the {name} pane"
+    )
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):
@@ -748,40 +904,53 @@ def local_context(config, connection, paths: ProductionPaths):
     open_in_console = None
     console_sync = None
     console_flash = None
+    hide_in_console = None
+    console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
-        # Hosted by a client on our own server: opening a session focuses its console tab
-        # (the composer falls back to a direct client switch), tabs are reconciled on
-        # every sessions reload, and the surface stays alive. Everywhere else both fields
-        # stay None and the surface keeps the exec-attach contract untouched. ensure()
-        # runs before the app starts so the common failure is met here first and logged;
-        # the capabilities are then wired regardless — deliberately, because under console
-        # hosting an exec-attach would cost the dashboard its own process (attach.py), so
-        # a degraded console keeps retrying quietly per pass rather than re-routing opens
-        # through exec.
-        from remote_agents.application.console import ConsoleComposer
-
-        composer = ConsoleComposer(
-            runtime.gateway,
-            (sys.executable, "-m", "remote_agents", "tui"),
-            paths.home,
-        )
+        # Hosted by a client on our own server: opening a session **exchanges** its pane into
+        # the console's left slot, every sessions reload notices what the other writer did to
+        # whatever is displayed, and the surface stays alive. Everywhere else these fields
+        # stay None and the surface keeps the exec-attach contract untouched. ensure() runs
+        # before the app starts so the common failure is met here first and logged; the
+        # capabilities are then wired regardless — deliberately, because under console hosting
+        # an exec-attach would cost the surface its own process (attach.py), so a degraded
+        # console keeps retrying quietly per pass rather than re-routing opens through exec.
+        composer = _console_composer(runtime.gateway, paths.home)
         if not asyncio.run(composer.ensure()):
             # Wiring continues regardless (see above), but the operator hears about it
             # here once, at the surface's front door, not only in per-pass debug logs.
-            print(
-                "The console could not be prepared; sessions open by direct switch and "
-                "no tab bar will appear. See the log, or run: remote-agents doctor",
-                file=sys.stderr,
+            console_recovery = RecoveryReport(
+                (),
+                (
+                    "the console could not be prepared — check tmux on this host, "
+                    "or run: remote-agents doctor",
+                ),
+                settled=False,
             )
+        else:
+            # The start-only repair, run by the process that *is* the console's window and by
+            # nothing else — `_enter_console`'s throwaway composer must not, because entering
+            # an already-running console is a re-entry rather than a start. What it could not
+            # put right is told to the owner here, at the same front door: an unsettled
+            # console reported only to a log is not reported.
+            # `$TMUX_PANE` is this process's own pane. Passed so `settle` can refuse when the
+            # dashboard is running somewhere other than the console's left slot: hosting is
+            # decided by the socket name, which is true of every pane on this server.
+            console_recovery = _console_notes(composer, os.environ.get("TMUX_PANE"))
 
-        async def open_in_console(session_id: str) -> None:
-            await composer.open(SessionId.parse(session_id))
-
+        open_in_console = _console_opener(composer)
         console_sync = composer.sync
         console_flash = composer.flash
+        # The stop paths ask the console to step out of the way before a pane is destroyed.
+        # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
+        # contract it has always had, and the bot — a different process with no composer —
+        # leaves a dead pane the next sync detects and clears.
+        hide_in_console = composer.hide
 
     return TuiContext(
-        launcher=SessionService(SQLiteSessionStore(connection), runtime.terminal),
+        launcher=SessionService(
+            SQLiteSessionStore(connection), runtime.terminal, hide_in_console=hide_in_console
+        ),
         creator=_project_creator(config),
         profiles=tuple(
             # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
@@ -811,6 +980,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # would starve the phone's notifications (see Task 5.2's correction note).
         activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
         console_flash=console_flash,
+        console_recovery=console_recovery,
     )
 
 
@@ -858,7 +1028,7 @@ def _console_features_available(working_directory: Path) -> bool:
     from remote_agents.adapters.tmux.feature_probe import probe_features
 
     try:
-        return probe_features(working_directory).window_linkable
+        return probe_features(working_directory).panes_splittable
     except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
         return False
 

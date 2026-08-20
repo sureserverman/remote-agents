@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -45,6 +46,19 @@ from remote_agents.ports.terminal import TerminalObservation, TerminalPort
 
 _LOG = logging.getLogger(__name__)
 
+#: How long a stop will wait for the console to step out of the way before destroying anyway.
+#: Short on purpose, and for DEC-030's reason applied to a different caller: a console that has
+#: not answered in this long is wedged, and waiting on it is how a display takes a stop with it.
+#: The cost of giving up early is a dead pane left in the console's slot, which the next sync
+#: clears; the cost of waiting is an agent that cannot be stopped.
+#:
+#: Abandoning is not killing: `wait_for` cancels the await, and the tmux subprocess underneath
+#: is left to finish on its own — so a swap begun before the timeout may still land after the
+#: destructive call. Accepted on DEC-030's precedent, which makes the same trade for the same
+#: unbounded-`communicate` hazard; the console is presentation, and a late exchange leaves a
+#: misplaced pane the next sync clears rather than anything a session depends on.
+_CONSOLE_HIDE_TIMEOUT_SECONDS = 2.0
+
 #: What each non-preserving graceful stop is recorded as in the durable history (DEC-022).
 #: Enumerated rather than "`unknown_session`, else a timeout", because the two are different
 #: claims about the same field and an `else` makes the weaker one a silent default. The
@@ -84,10 +98,16 @@ class SessionService:
         terminal: TerminalPort,
         *,
         locks: SessionLocks | None = None,
+        hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._terminal = terminal
         self._locks = locks or SessionLocks()
+        # Optional, on DEC-007's widening pattern: a host that wires nothing keeps the
+        # destruction contract exactly as it was. Wired, it is called immediately before a
+        # pane is destroyed, so the console is never asked to lose a pane standing in its own
+        # window — which under the swap model is where a displayed agent lives.
+        self._hide_in_console = hide_in_console
 
     async def launch(self, command: LaunchCommand) -> SessionRecord:
         async with self._locks.operation():
@@ -344,6 +364,7 @@ class SessionService:
                 await self._store.record_event(command.session_id, event)
                 return observation
             await self._store.record_event(command.session_id, LifecycleEvent.PANE_EXITED)
+            await self._leave_the_console(command.session_id)
             await self._terminal.cleanup(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
             return observation
@@ -370,6 +391,12 @@ class SessionService:
                     "discards a preserved pane, and there is none to discard here"
                 )
             transition(record.state, LifecycleEvent.CLEANUP_CONFIRMED)
+            # The third destructive path, and the one the first draft of this task missed.
+            # It removes a pane through the same call `graceful_stop` uses, and it is offered
+            # from PRESERVED — a state whose pane is still shown (DEC-021/DEC-039), and which
+            # Sub-plan 3 will let the owner display. "Every stop path" has to include the one
+            # that only discards.
+            await self._leave_the_console(command.session_id)
             await self._terminal.cleanup(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.CLEANUP_CONFIRMED)
 
@@ -418,9 +445,47 @@ class SessionService:
                     "ambiguous, so nothing here identifies what would be killed"
                 )
             transition(record.state, LifecycleEvent.VERIFIED_FORCE_STOP)
+            await self._leave_the_console(command.session_id)
             observation = await self._terminal.force_stop(command.session_id)
             await self._store.record_event(command.session_id, LifecycleEvent.VERIFIED_FORCE_STOP)
             return observation
+
+    async def _leave_the_console(self, session_id: SessionId) -> None:
+        """Put the projects surface back if this session is the one being displayed.
+
+        Immediately before the destructive call, and never at the top of a stop: a graceful
+        stop that times out leaves the session running, and hiding it then would pull the
+        agent out of view for a stop that did not happen.
+
+        **Failure is swallowed here, not only in the composer.** This is the method that must
+        not raise: a stop that failed because a *display* could not be rearranged is precisely
+        the coupling DEC-006 forbids, and a broken console is supposed to cost the owner the
+        arrangement and nothing else. The composer already degrades; this is the belt to that
+        braces, placed where the lifecycle guarantee lives rather than where the presentation
+        one does.
+
+        **And the wait is bounded, which is the half that swallowing exceptions does not
+        cover.** `AsyncTmuxRunner.run` awaits `process.communicate()` with no timeout — the
+        hazard DEC-030 already names in this codebase — so a wedged tmux server makes a
+        console round trip block rather than fail. An unbounded await here sits between
+        `VERIFIED_FORCE_STOP` and the kill: the force stop on a runaway agent would never
+        reach it, the per-session lock would stay held, and every other composer operation
+        would queue behind the same `_links` lock. "Degrades to nothing" has to mean *within
+        a bounded time*, or a display that merely stops answering takes a stop with it.
+        """
+        if self._hide_in_console is None:
+            return
+        try:
+            await asyncio.wait_for(
+                self._hide_in_console(session_id), timeout=_CONSOLE_HIDE_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            _LOG.warning(
+                "the console did not answer within %ss; stopping without rearranging it",
+                _CONSOLE_HIDE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            _LOG.exception("the console could not be rearranged before the stop; stopping anyway")
 
     async def _require_session(self, session_id: SessionId) -> SessionRecord:
         record = await self._store.get(session_id)

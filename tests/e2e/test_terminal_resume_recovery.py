@@ -89,6 +89,6 @@ async def test_restarted_terminal_recovers_a_resumed_session_from_exact_tmux_own
         assert (await store.get(session_id)).state is SessionState.RUNNING
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass

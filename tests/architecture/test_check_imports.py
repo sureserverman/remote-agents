@@ -1,8 +1,34 @@
-"""Tests for the import-boundary checker itself."""
+"""The import-boundary checker, and the source tree it is supposed to be checking.
+
+The synthetic-tree tests below prove the checker can *recognise* a violation. Until the
+first test in this file existed, nothing ever pointed it at `src/` — so ARCH-02 was a rule
+with a detector, a CLI, and no caller, and three real violations had accumulated under it
+(an adapter importing the application's stop vocabulary, the tui adapter importing the tmux
+codec, and the console composer importing the tmux codec's console name). A gate that is
+never run is indistinguishable from a gate that passes, which is the whole of why it is
+here rather than in a CI file nobody in this repo has.
+"""
 
 from pathlib import Path
 
 from check_imports import find_violations
+
+_SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src"
+
+
+def test_the_real_source_tree_observes_its_own_boundaries() -> None:
+    """ARCH-02 over `src/` itself — the caller the checker never had.
+
+    Every layer rule the checker encodes is enforced here or nowhere: `domain` imports only
+    `domain`, `application` only inward, `ports` only `domain`/`ports`, an adapter only its
+    own family plus `domain`/`ports` (a driver adapter also `application`/`config`), and the
+    composition roots are the enumerated exception (DEC-001, DEC-015).
+    """
+    violations = find_violations(_SOURCE_ROOT)
+
+    assert violations == [], "\n".join(
+        ["the source tree crosses a forbidden boundary:", *(v.render() for v in violations)]
+    )
 
 
 def write_module(source_root: Path, relative_path: str, content: str) -> None:

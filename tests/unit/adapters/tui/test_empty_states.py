@@ -154,6 +154,13 @@ def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source()
     assert emptiable == {
         "DashboardScreen",
         "SessionsScreen",
+        # The console's three pane positions, added with the three-pane surface. Each reads
+        # a runtime-variable source, which is the predicate this set is derived from: the
+        # projects pane the catalogue, the sessions pane the store, the feed pane the
+        # durable observation table.
+        "ProjectsPaneScreen",
+        "SessionsPaneScreen",
+        "FeedScreen",
         "ResumeConversationsScreen",
         "ResumeProjectsScreen",
         "ResumeProfilesScreen",

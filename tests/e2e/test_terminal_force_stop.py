@@ -17,6 +17,6 @@ async def test_force_stop_removes_only_a_currently_owned_exact_session(tmp_path)
         assert await terminal.inspect(session_id) is None
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass

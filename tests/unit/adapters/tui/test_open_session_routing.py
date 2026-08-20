@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.attach import HostingMode, attach_to, hosting_mode
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -60,12 +61,32 @@ def test_hosting_mode_reads_the_tmux_socket_not_just_its_presence() -> None:
     assert hosting_mode(_FOREIGN) is HostingMode.FOREIGN
     # A malformed TMUX value is somebody's tmux, never ours: refuse to nest.
     assert hosting_mode({"TMUX": "garbage"}) is HostingMode.FOREIGN
+    # A disposable server a live test made is **not** console hosting, and this assertion is
+    # the scar. It was briefly the opposite, to let a live test drive a pane surface's keypress
+    # into a composer — and because the composition root hardcodes that composer's server to
+    # the production socket, surfaces inside a *test* console drove the owner's **real** one:
+    # panes split into their live console window, a root binding installed on their server.
+    # `is_our_socket` (the gateway's rule) and console hosting are two questions; only one of
+    # them may be answered by a name a test can choose.
+    assert (
+        hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-test-abc123,42,0"})
+        is HostingMode.FOREIGN
+    ), "a disposable test server must never be treated as the console"
+    assert (
+        hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-lookalike,42,0"})
+        is HostingMode.FOREIGN
+    ), "only the exact production name is the console"
 
 
 def test_bare_shell_execs_the_attach_command_unchanged() -> None:
     calls: list[tuple[str, tuple[str, ...]]] = []
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
-    code = attach_to(request, environment={}, exec_argv=lambda p, a: calls.append((p, a)))
+    code = attach_to(
+        request,
+        switch_argv=switch_client_argv,
+        environment={},
+        exec_argv=lambda p, a: calls.append((p, a)),
+    )
     assert code == 0
     assert calls == [("tmux", request.argv)]
 
@@ -73,7 +94,12 @@ def test_bare_shell_execs_the_attach_command_unchanged() -> None:
 def test_our_own_client_switches_instead_of_nesting() -> None:
     calls: list[tuple[str, tuple[str, ...]]] = []
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
-    code = attach_to(request, environment=_OURS, exec_argv=lambda p, a: calls.append((p, a)))
+    code = attach_to(
+        request,
+        switch_argv=switch_client_argv,
+        environment=_OURS,
+        exec_argv=lambda p, a: calls.append((p, a)),
+    )
     assert code == 0
     assert calls == [
         (
@@ -88,6 +114,7 @@ def test_a_foreign_client_is_still_refused_with_the_command_printed() -> None:
     request = AttachRequest(_SESSION, ("tmux", "-L", "remote-agents", "attach-session"))
     code = attach_to(
         request,
+        switch_argv=switch_client_argv,
         environment=_FOREIGN,
         exec_argv=lambda p, a: pytest.fail("a foreign client must never exec"),
         report=reported.append,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from remote_agents.adapters.tmux.codec import PANE_FORMAT
+from remote_agents.adapters.tmux.codec import PANE_FORMAT, exact_session_target
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
@@ -38,7 +38,7 @@ def pane_line(session_id: SessionId, *, schema: str = "1") -> str:
 
 async def test_inventory_uses_only_the_configured_socket_and_quarantines_bad_tags() -> None:
     session_id = SessionId.new()
-    runner = RecordingRunner(f"{pane_line(session_id)}\n{pane_line(SessionId.new(), schema='2')}\n")
+    runner = RecordingRunner(f"{pane_line(session_id)}\n{pane_line(SessionId.new(), schema='3')}\n")
     gateway = TmuxGateway("remote-agents", runner)
 
     inventory = await gateway.inventory()
@@ -55,16 +55,19 @@ def test_gateway_rejects_default_or_untrusted_socket_before_runner_use(socket: s
         TmuxGateway(socket, RecordingRunner())
 
 
-async def test_gateway_refuses_forbidden_or_prefix_mutations_before_subprocess() -> None:
-    runner = RecordingRunner()
-    gateway = TmuxGateway("remote-agents", runner)
+async def test_a_name_that_is_not_a_managed_session_never_reaches_a_subprocess() -> None:
+    """The half of the old `mutate` guard that still has something to guard.
 
-    with pytest.raises(ValueError, match="forbidden"):
-        await gateway.mutate("kill-server", "ra-any")
-    with pytest.raises(ValueError, match="managed session"):
-        await gateway.mutate("kill-session", "ra-prefix")
-
-    assert runner.calls == []
+    `mutate` took a verb and a target as free text, so it needed a closed allow-list for
+    both. It is gone: every operation is a named method taking a typed `SessionId`, so a
+    forbidden verb has nowhere to be written and a malformed name cannot be constructed. What
+    remains worth asserting is the codec's own refusal, which is what the typing rests on —
+    a name that is not a canonical managed session is rejected before any argv is built.
+    """
+    with pytest.raises(ValueError, match="canonical UUID"):
+        exact_session_target("ra-prefix")
+    with pytest.raises(ValueError, match="start with ra-"):
+        exact_session_target("prefix")
 
 
 async def test_gateway_never_exposes_resume_arguments_to_the_tmux_command_boundary(

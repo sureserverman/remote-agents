@@ -215,3 +215,71 @@ def test_the_local_context_wires_the_two_stage_four_capabilities(
         assert context.capture_redactions == ()
     finally:
         connection.close()
+
+
+# --- The pane surfaces compose exactly as `tui` does (Sub-plan 3, Stage 1) -------------
+#
+# Added at the Stage 1 gate. Both reviews found the same hole from opposite directions:
+# `_enter_pane` was a hand-copied twin of the `tui` branch that no test ever drove, so the
+# lease and the confinement were true by reading rather than by test, and the two copies had
+# already begun to drift inside one stage. They are one body now, and these drive it.
+
+
+def test_a_pane_refuses_a_database_outside_the_private_state_directory(
+    home: Path, paths: ProductionPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pane surface shares the service's store, so it inherits the same confinement."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    config_path = _config_file(home, paths, database=tmp_path / "elsewhere.sqlite3")
+
+    assert main(["pane", "projects", "--config", str(config_path)]) == 1
+
+
+def test_a_pane_runs_over_a_lease_and_leaves_no_handle_behind(
+    home: Path, paths: ProductionPaths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-035, driven rather than read: the handle exists inside a store operation only.
+
+    Three pane processes over one SQLite file is the whole premise of the three-pane console,
+    and it is sound because none of them holds a standing connection. This runs a real pane
+    entry point with the surface replaced by a probe, and asks the composed context what kind
+    of connection it got.
+    """
+    from remote_agents.adapters.sqlite.database import LeasedConnection
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    config_path = _config_file(home, paths)
+    seen: list[TuiContext] = []
+
+    def probe(context: TuiContext):
+        seen.append(context)
+        return None
+
+    from remote_agents.adapters.tui import panes
+
+    monkeypatch.setattr(panes, "run_pane_surface", lambda name, context: probe(context))
+    assert main(["pane", "sessions", "--config", str(config_path)]) == 0
+
+    assert len(seen) == 1
+    store = seen[0].launcher._store  # type: ignore[attr-defined]
+    assert isinstance(store._connection, LeasedConnection), (
+        "a pane surface must reach the store through the per-operation lease"
+    )
+
+
+def test_a_pane_that_fails_says_where_its_sessions_are_and_exits_nonzero(
+    home: Path, paths: ProductionPaths, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A surface that dies must not take the owner's route to its sessions with it."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    config_path = _config_file(home, paths)
+
+    from remote_agents.adapters.tui import panes
+
+    def explode(name, context):
+        raise RuntimeError("the surface died")
+
+    monkeypatch.setattr(panes, "run_pane_surface", explode)
+    assert main(["pane", "feed", "--config", str(config_path)]) == 1
+    assert "tmux -L remote-agents list-sessions" in capsys.readouterr().err

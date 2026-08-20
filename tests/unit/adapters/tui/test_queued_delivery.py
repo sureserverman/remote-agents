@@ -338,9 +338,7 @@ async def test_two_queued_enters_on_a_conversation_start_exactly_one_session() -
     app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app.push_screen(
-            ResumeConversationsScreen(_PROJECT, "claude", _conversation_page())
-        )
+        await app.push_screen(ResumeConversationsScreen(_PROJECT, "claude", _conversation_page()))
         await settle(app, pilot)
         assert position(app) == "RESUME_CONVERSATIONS", f"the push landed on {position(app)}"
 
@@ -418,9 +416,7 @@ async def test_quit_during_the_leaving_window_keeps_the_resumed_attach_request()
     app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await app.push_screen(
-            ResumeConversationsScreen(_PROJECT, "claude", _conversation_page())
-        )
+        await app.push_screen(ResumeConversationsScreen(_PROJECT, "claude", _conversation_page()))
         await settle(app, pilot)
         await app.screen.choose(str(_conversation().summary.reference))
         assert app._leaving, "the resume did not reach `_leave`"

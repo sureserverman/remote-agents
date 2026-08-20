@@ -23,7 +23,12 @@ from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.private_directory import open_private_directory
-from remote_agents.ports.terminal import TerminalObservation, TerminalTargetMissing
+from remote_agents.ports.terminal import (
+    GRACEFUL_TIMEOUT,
+    UNKNOWN_SESSION,
+    TerminalObservation,
+    TerminalTargetMissing,
+)
 
 _REMOTE_CONTROL_ENABLE_WAIT_SECONDS = 3
 _REMOTE_CONTROL_MENU_WAIT_SECONDS = 1
@@ -245,23 +250,50 @@ class TmuxTerminal:
     async def graceful_stop(
         self, session_id: SessionId, profile_id: ProfileId
     ) -> TerminalObservation:
-        """Send a known profile sequence only after rechecking current trusted ownership."""
+        """Send a known profile sequence only after rechecking current trusted ownership.
+
+        **A pane that is not live is a stop that was never sent** (DEC-022), and saying so is
+        the whole reason this checks liveness before typing rather than after. tmux answers
+        `send-keys` at a dead pane with exit 0 and no effect (Claim 10), so an unchecked stop
+        into a pane that had already died out of band — an OOM kill, a crash, anything between
+        the last reconciliation pass and the owner pressing Stop — would find `preserved` true
+        on its very first poll, because it was true before any key was sent, and report a
+        graceful exit this service did not cause. The record then reads
+        GRACEFUL_STOP_REQUESTED → PANE_EXITED → CLEANUP_CONFIRMED: a history asserting a
+        sequence that never left the host.
+        """
         profile = self._resolved_profile(session_id, profile_id)
         observation = await self.inspect(session_id)
         if profile is None or observation is None or observation.profile_id != profile_id:
             return TerminalObservation(
-                session_id, live=False, preserved=False, detail="unknown_session"
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
             )
-        await self._gateway.send_keys(session_id, profile.graceful_keys)
+        if not observation.live:
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+            )
+        try:
+            await self._gateway.send_keys(session_id, profile.graceful_keys)
+        except TerminalTargetMissing:
+            # The pane went while the sequence was in flight. Reported as never-sent, which
+            # *understates* — a key may well have landed. **DEC-038 accepted cost 2** records
+            # this, because it is the case DEC-022 did not enumerate and a code comment is not
+            # where an accepted inaccuracy in the durable history belongs. Understating is the
+            # side to err on: the alternative claims a graceful exit this service can no
+            # longer show it caused. Before this, the typed error escaped the use case
+            # entirely, after GRACEFUL_STOP_REQUESTED was already written, and the record stuck at
+            # STOP_REQUESTED behind a generic "stop failed" — the one outcome DEC-022 exists
+            # to replace with an event that names its cause.
+            return TerminalObservation(
+                session_id, live=False, preserved=False, detail=UNKNOWN_SESSION
+            )
         deadline = asyncio.get_running_loop().time() + self._startup_timeout
         while asyncio.get_running_loop().time() < deadline:
             observation = await self.inspect(session_id)
             if observation is not None and observation.preserved:
                 return observation
             await asyncio.sleep(0.01)
-        return TerminalObservation(
-            session_id, live=True, preserved=False, detail="graceful_timeout"
-        )
+        return TerminalObservation(session_id, live=True, preserved=False, detail=GRACEFUL_TIMEOUT)
 
     async def confirm_ready(
         self, session_id: SessionId, profile_id: ProfileId
@@ -293,7 +325,7 @@ class TmuxTerminal:
         case that most needs to succeed.
         """
         try:
-            await self._gateway.mutate("kill-session", f"ra-{session_id}")
+            await self._gateway.destroy(session_id)
         except TerminalTargetMissing:
             pass
         self._session_profiles.pop(session_id, None)
@@ -306,7 +338,7 @@ class TmuxTerminal:
             return TerminalObservation(
                 session_id, live=False, preserved=False, detail="ownership_lost"
             )
-        await self._gateway.mutate("kill-session", f"ra-{session_id}")
+        await self._gateway.destroy(session_id)
         self._session_profiles.pop(session_id, None)
         (self._gateway.intent_directory / f"{session_id}.json").unlink(missing_ok=True)
         return TerminalObservation(session_id, live=False, preserved=False)
@@ -325,6 +357,12 @@ class TmuxTerminal:
                     pane.preserved,
                     project_id=pane.project_id,
                     profile_id=pane.profile_id,
+                    # Answered here as fully as `managed_observations` answers it, from the
+                    # same decoded pane. `None` on this field is the port's way of saying a
+                    # terminal cannot track hosting at all; one adapter filling it on one path
+                    # and leaving it empty on another would make the same value mean two
+                    # things, and a caller could not tell which.
+                    host_session=pane.session_name,
                 )
         return None
 
@@ -342,12 +380,29 @@ class TmuxTerminal:
 
         The recheck itself is unchanged and still the point: this answers from a fresh
         observation rather than from the record, so a pane that has gone since the row was
-        drawn still yields nothing.
+        drawn still yields nothing — **and it is what makes the host trustworthy**. The pane
+        moves; an attach command built from anything older than the observation that produced
+        it would name where the agent used to be shown.
+
+        **The command names the session showing the pane**, which is the console while this
+        agent is displayed there and its own session otherwise. Attach is the one
+        agent-reaching operation that cannot name a pane — a tmux client attaches to a
+        session — so this is what "follow the agent" means for it (DEC-021, re-scoped).
+
+        `host_session` is a property of the *listing*, not of the pane, and the difference
+        cost a real defect: tmux lists a linked window's pane under every session linked to
+        it, in alphabetical order, so `inventory`'s dedup was choosing the host by whether a
+        session's random id sorted before or after "console". A session that had never moved
+        got `ra-console:`. `inventory` now keeps the home listing whenever one exists, so a
+        pane is reported as hosted elsewhere only when nothing lists it under its own name —
+        which is what displaced actually means.
         """
         observation = await self.inspect(session_id)
         if observation is None or not (observation.live or observation.preserved):
             return None
-        return attach_command(session_id, read_only=not observation.live)
+        return attach_command(
+            session_id, read_only=not observation.live, host=observation.host_session
+        )
 
     async def remote_control(
         self, session_id: SessionId, desired_state: RemoteControlState
@@ -423,6 +478,7 @@ class TmuxTerminal:
                 pane.preserved,
                 project_id=pane.project_id,
                 profile_id=pane.profile_id,
+                host_session=pane.session_name,
             )
             for pane in inventory.managed
         )

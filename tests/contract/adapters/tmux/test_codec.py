@@ -36,10 +36,23 @@ def test_codec_parses_only_the_pinned_management_schema() -> None:
     assert "#{@remote_agents_schema}" in PANE_FORMAT
 
 
-@pytest.mark.parametrize("schema", ("", "2", "unversioned"))
+@pytest.mark.parametrize("schema", ("", "3", "unversioned"))
 def test_codec_rejects_missing_or_unknown_tag_schemas(schema: str) -> None:
     with pytest.raises(ValueError, match="schema"):
         parse_pane(pane_line(schema=schema))
+
+
+@pytest.mark.parametrize("schema", ("1", "2"))
+def test_codec_decodes_both_pinned_schemas(schema: str) -> None:
+    """The decodable set is exactly two, and closed.
+
+    Schema 2 stopped being an unknown version when identity moved onto the pane, so this
+    pins *which* versions decode rather than leaving the boundary to be inferred from the
+    rejection list — the shape that let `2` sit in that list as an example of "unknown"
+    while it was becoming the current one.
+    """
+    session_id = SessionId.new()
+    assert parse_pane(pane_line(session_id=session_id, schema=schema)).session_id == session_id
 
 
 def test_codec_rejects_untrusted_name_or_invalid_identifier() -> None:

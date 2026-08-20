@@ -63,6 +63,6 @@ async def test_claude_remote_control_toggle_on_an_exact_disposable_managed_pane(
         assert disabled_state is RemoteControlState.INACTIVE
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass

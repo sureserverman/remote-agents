@@ -145,6 +145,8 @@ class RecordingGateway:
             tuple(
                 ManagedPane(
                     f"ra-{session_id}",
+                    f"%{index}",
+                    True,
                     session_id,
                     project_id,
                     profile_id,
@@ -152,7 +154,7 @@ class RecordingGateway:
                     session_id not in self.preserved,
                     session_id in self.preserved,
                 )
-                for session_id, (project_id, profile_id) in self.panes.items()
+                for index, (session_id, (project_id, profile_id)) in enumerate(self.panes.items())
             ),
             (),
         )
@@ -164,13 +166,16 @@ class RecordingGateway:
         self.keys.append((session_id, keys))
         self.preserved.add(session_id)
 
-    async def mutate(self, verb: str, target: str) -> None:
-        """Model `kill-session`, which is how a graceful stop retires the pane it exited."""
-        self.mutations.append((verb, target))
-        for session_id in list(self.panes):
-            if target == f"ra-{session_id}":
-                del self.panes[session_id]
-                self.preserved.discard(session_id)
+    async def destroy(self, session_id: SessionId) -> None:
+        """Model the pane kill, which is how a graceful stop retires the pane it exited.
+
+        Recorded as `("kill-pane", …)` because that is what the real gateway now issues:
+        a session target destroys whichever pane occupies that window, which stops being
+        the agent's the moment anything hosts it elsewhere.
+        """
+        self.mutations.append(("kill-pane", f"ra-{session_id}"))
+        self.panes.pop(session_id, None)
+        self.preserved.discard(session_id)
 
 
 def _terminal(gateway: RecordingGateway, executable: Path) -> TmuxTerminal:
@@ -212,7 +217,7 @@ async def test_a_second_terminal_can_gracefully_stop_what_the_first_launched(
 
         assert stopped.preserved, "the other surface resolved no profile and sent no keys"
         assert gateway.keys and gateway.keys[0][0] == launched.session_id
-        assert gateway.mutations == [("kill-session", f"ra-{launched.session_id}")]
+        assert gateway.mutations == [("kill-pane", f"ra-{launched.session_id}")]
         final = await service.list_sessions()
         assert [record.state for record in final] == [SessionState.ENDED]
     finally:

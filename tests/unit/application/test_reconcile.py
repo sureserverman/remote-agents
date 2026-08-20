@@ -409,3 +409,131 @@ async def test_asking_whether_a_session_is_busy_does_not_mint_a_lock_for_it() ->
 
     assert locks.session_is_busy(session_id) is False
     assert locks._locks == {}
+
+
+# --- Pane provenance (Stage 3) ---------------------------------------------------------
+#
+# Reconciliation writes lifecycle state on a timer, so what it can and cannot see decides
+# whether a live session survives a pass. Under the swap console a pane can be *hosted* by
+# a session that is not its own, and the failure to avoid is reading that as absence: a
+# displaced agent is running, not gone, and ending its record would be this service
+# retiring a session nobody stopped.
+
+
+def observed(session_id: SessionId, *, host: str | None = None, live: bool = True):
+    return TerminalObservation(
+        session_id,
+        live,
+        not live,
+        project_id=ProjectId("opaque-editor"),
+        profile_id=ProfileId("claude"),
+        host_session=host if host is not None else f"ra-{session_id}",
+    )
+
+
+def running_record(session_id: SessionId) -> SessionRecord:
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque-editor"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("opaque-editor", "claude", "displaced", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+def test_a_displaced_pane_reconciles_to_running_not_to_gone() -> None:
+    """Identity decides, location does not. The pane is in the console; the agent is fine."""
+    session_id = SessionId.new()
+
+    results = reconcile((running_record(session_id),), (observed(session_id, host="ra-console"),))
+
+    assert [(item.state, item.reason) for item in results] == [
+        (SessionState.RUNNING, "terminal_live")
+    ]
+
+
+def test_a_displaced_pane_and_a_home_pane_reconcile_identically() -> None:
+    """The host is provenance, never a lifecycle input — if it changed the verdict, moving a
+    pane would move a session's state, which is the coupling this whole sub-plan removes."""
+    session_id = SessionId.new()
+    record = running_record(session_id)
+
+    at_home = reconcile((record,), (observed(session_id),))
+    displaced = reconcile((record,), (observed(session_id, host="ra-console"),))
+
+    assert [(r.state, r.reason) for r in at_home] == [(r.state, r.reason) for r in displaced]
+
+
+def test_an_absent_pane_still_ends_the_record() -> None:
+    """The other half, and the one that must not be weakened while making room for the
+    first: no observation at all is still evidence that the session is over."""
+    session_id = SessionId.new()
+
+    results = reconcile((running_record(session_id),), ())
+
+    assert [(item.state, item.reason) for item in results] == [
+        (SessionState.ENDED, "terminal_missing")
+    ]
+
+
+def test_an_unmarked_console_pane_produces_no_observation_at_all() -> None:
+    """Asserted where it is decided rather than here: `inventory` drops a console line that
+    carries no managed mark, so it never becomes a `TerminalObservation` and cannot be
+    reconciled into anything. This test pins the consequence — an empty observation set for
+    a console-only server leaves an empty result — so a future widening of that drop shows
+    up as a reconciliation change rather than only as an inventory one."""
+    assert reconcile((), ()) == ()
+
+
+def test_a_displaced_pane_with_no_record_is_adopted_the_same_as_a_home_one() -> None:
+    """DEC-020's adopted orphan, and location plays no part in it.
+
+    The pane is trustworthy because it carries its own mark, which is true wherever it is
+    hosted — so being found in the console neither helps nor hinders adoption.
+
+    **The host is not persisted, and an earlier name for this test said it was.** Nothing on
+    `SessionRecord` or `OrphanProvenance` can hold it, and `_save_trusted_orphan` writes
+    neither; `host_session` lives only for the length of a pass. Naming a test for a
+    guarantee the code does not make is worse than having no test, because the next reader
+    counts it as coverage — so this one is named for what it checks, and the absence is
+    stated rather than left to be discovered.
+    """
+    session_id = SessionId.new()
+
+    results = reconcile((), (observed(session_id, host="ra-console"),))
+
+    assert [(item.state, item.reason) for item in results] == [
+        (SessionState.ORPHANED, "unknown_session")
+    ]
+
+
+def test_reconciliation_never_reads_the_host_at_all() -> None:
+    """Structural, and a supplement rather than the guarantee itself.
+
+    `host_session` is provenance. The moment a lifecycle decision consults it, moving a pane
+    moves a session's state — a displaced agent could reconcile to something other than what
+    a home one does, which is precisely the coupling pane addressing was introduced to
+    remove.
+
+    What this catches is the literal identifier appearing in the module, which is how the
+    coupling would most likely arrive. What it cannot catch is the same coupling under
+    another name — a `getattr`, or host-derived data carried through `detail` — and it would
+    fire falsely on a comment that merely mentions the field. The real guarantee is the
+    verdict comparison above; this is the cheap tripwire in front of it, and saying so is the
+    difference between a supplement and a false floor.
+    """
+    import pathlib
+
+    source = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "src"
+        / "remote_agents"
+        / "application"
+        / "reconcile.py"
+    ).read_text(encoding="utf-8")
+
+    assert "host_session" not in source, (
+        "reconcile.py now reads host_session. It is provenance for a reader, not evidence "
+        "for a decision: a session's state must not depend on which window is showing it."
+    )

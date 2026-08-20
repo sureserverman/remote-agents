@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from remote_agents.application.console import RecoveryReport
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject
@@ -54,11 +55,11 @@ class TuiContext:
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
     conversations: ConversationService | None = None
     # The console capabilities, same widening pattern as the two above: when the
-    # composition root determines the surface is hosted by a client on our own tmux
-    # server, opening a session means focusing its console tab (falling back to a client
-    # switch) and the surface stays alive, while `console_sync` reconciles tabs against a
-    # fresh session read wherever the surface reloads its list. Hosts wiring neither keep
-    # the exec-attach contract exactly as it was.
+    # composition root determines the surface is hosted by a client on our own tmux server,
+    # opening a session **exchanges** that agent's pane into the console's left slot and the
+    # surface stays alive, while `console_sync` notices what the other writer did to whatever
+    # is displayed, wherever the surface reloads its list. Hosts wiring neither keep the
+    # exec-attach contract exactly as it was.
     open_in_console: Callable[[str], Awaitable[None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
     # The feed capability: a bounded newest-first read of the durable activity table.
@@ -68,6 +69,13 @@ class TuiContext:
     # One line on the tmux status bar when the feed gains news — wired only under console
     # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
     console_flash: Callable[[str], Awaitable[None]] | None = None
+    # What the console's start-only repair did and could not do, carried to the surface
+    # rather than printed. The composition root runs `settle()` before Textual starts, so a
+    # `print` there is erased by the alternate screen microseconds later — invisible for the
+    # whole session it describes. Only the process resident in the console's left slot gets a
+    # report with anything in it; every other pane is refused by `settle`'s own guard and
+    # receives an empty one.
+    console_recovery: RecoveryReport | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

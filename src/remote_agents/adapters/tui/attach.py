@@ -18,9 +18,9 @@ import os
 from collections.abc import Callable, Mapping
 from enum import Enum
 
-from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.tmux_server import SOCKET_NAME
 
 
 class HostingMode(Enum):
@@ -35,15 +35,29 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
     """Classify the hosting from `$TMUX`, by socket rather than by mere presence.
 
     tmux sets `TMUX` to `socket_path,server_pid,session_id`; the socket's basename is the
-    server's `-L` name, and only our own name means switching is possible. Anything set but
-    unreadable is classified as foreign, because the safe answer to "whose client is this?"
-    when the evidence is garbled is "not ours".
+    server's `-L` name, and only the **production** name means the console is reachable.
+    Anything set but unreadable is classified as foreign, because the safe answer to "whose
+    client is this?" when the evidence is garbled is "not ours".
+
+    **Deliberately stricter than `is_our_socket`, which the gateway uses.** That predicate
+    also accepts a `remote-agents-test-` socket, so a live test can have a disposable server,
+    and reusing it here looked like removing a duplicate. It is not the same question. A
+    surface that calls itself CONSOLE goes on to build a `ConsoleComposer`, and the
+    composition root hardcodes that composer's server to `remote-agents` — so widening this
+    made a surface inside a *disposable* console drive the owner's **real** one: panes split
+    into their live console window, a root binding installed on their server, the start-time
+    repair run against it. That happened here, and the final gate's evaluator found it by
+    reading the running system rather than any test catching it.
+
+    So this stays narrow until the composer's server stops being hardcoded. The cost is a
+    known gap, named in `tests/live/test_three_pane_console.py`: no live test can drive a pane
+    surface's own keypress into a composer, because no pane surface can be given a test one.
     """
     value = environment.get("TMUX")
     if not value:
         return HostingMode.BARE
     socket_path = value.split(",", 1)[0]
-    if os.path.basename(socket_path) == "remote-agents" and os.path.sep in socket_path:
+    if os.path.basename(socket_path) == SOCKET_NAME and os.path.sep in socket_path:
         return HostingMode.CONSOLE
     return HostingMode.FOREIGN
 
@@ -51,6 +65,7 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
 def attach_to(
     request: AttachRequest | None,
     *,
+    switch_argv: Callable[[SessionId], tuple[str, ...]],
     environment: Mapping[str, str] | None = None,
     exec_argv: Callable[[str, tuple[str, ...]], None] = os.execvp,
     report: Callable[[str], None] = print,
@@ -61,6 +76,14 @@ def attach_to(
     exec the codec-built `switch-client` — the client moves, nothing nests. Foreign tmux:
     refused, command printed, session never lost. An exec that cannot happen prints the
     same command and exits non-zero.
+
+    `switch_argv` is **injected rather than imported**, and required rather than defaulted.
+    This module used to import the tmux codec directly, which is a driving adapter reaching
+    across into another adapter family — forbidden by ARCH-02, and undetected because
+    nothing ran the checker against `src/`. The composition root is the one place allowed to
+    know both sides, so it supplies the builder; the argv is still codec-built, which is what
+    DEC-001 actually requires. No default, because a default would have to be that same
+    import wearing a keyword.
     """
     if request is None:
         return 0
@@ -80,7 +103,7 @@ def attach_to(
         )
         return 0
     argv = (
-        switch_client_argv(SessionId.parse(request.session_id))
+        switch_argv(SessionId.parse(request.session_id))
         if mode is HostingMode.CONSOLE
         else request.argv
     )

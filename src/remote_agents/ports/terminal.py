@@ -22,6 +22,20 @@ class TerminalTargetMissing(RuntimeError):
     """
 
 
+#: The `detail` values a terminal adapter may set on an observation that reports no pane.
+#:
+#: They live on the port because they are the vocabulary of the boundary itself: the adapter
+#: is the only thing that can tell these apart, and the application is the only thing that
+#: decides what each one means to the owner (`application/session_actions` renders them,
+#: `application/services` maps them to lifecycle events). Defined in the application, they
+#: made a terminal adapter import the application to say what it had observed — ARCH-02's
+#: inward rule inverted for three string constants, and the reason `check_imports` finds
+#: nothing to complain about now.
+UNKNOWN_SESSION = "unknown_session"
+GRACEFUL_TIMEOUT = "graceful_timeout"
+OWNERSHIP_LOST = "ownership_lost"
+
+
 @dataclass(frozen=True, slots=True)
 class TerminalObservation:
     session_id: SessionId
@@ -30,6 +44,19 @@ class TerminalObservation:
     detail: str = ""
     project_id: ProjectId | None = None
     profile_id: ProfileId | None = None
+
+    host_session: str | None = None
+    """Which terminal session is *showing* this pane, when the terminal can say.
+
+    Provenance, never a lifecycle input. A pane can be hosted by a session that is not its
+    own — the console displays an agent by taking its pane — and the point of recording that
+    is so a reader can tell "displaced" from "gone" without inferring it. Reconciliation must
+    keep deciding on identity alone: if the host changed a verdict, moving a pane would move
+    a session's state, which is the coupling pane addressing exists to remove.
+
+    `None` from any terminal that does not track hosting, which keeps the port honest about
+    what it can answer rather than inventing a default that reads as fact.
+    """
 
 
 class TerminalPort(Protocol):

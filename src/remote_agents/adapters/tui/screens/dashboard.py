@@ -1,11 +1,16 @@
 """The resting position: projects on the left, sessions and notifications on the right.
 
+Two screens live here. `ProjectsPaneScreen` is the projects position with the Launch-or-Resume
+chooser in front of the wizard — the console's **left pane** in its entirety, and the base the
+dashboard builds on. `DashboardScreen` is that plus the two right-hand regions, which is what
+a bare terminal running `remote-agents tui` still shows.
+
 `DashboardScreen` subclasses the projects picker rather than replacing it, so the filter,
 its debounce, the catalogue refresh, and the never-empty stack guarantee are inherited —
 what this module adds is the shape: a right-hand column showing the running sessions
-(reloaded on reveal and on the same 10-second cadence the sessions list uses, which also
-keeps console tabs reconciled, since `load_sessions` is the sync choke point) and the
-notifications feed pane (a placeholder until the durable activity feed lands).
+(reloaded on reveal and on the same 10-second cadence the sessions list uses, which is also
+where the console notices what the other writer did, since `load_sessions` is the sync choke
+point) and the notifications feed pane, which reads the durable activity table.
 
 The two lists share the base class's one row-selection handler; session rows carry a
 namespaced key (`session:<id>`) so `choose` can route without a second dispatch chain.
@@ -29,13 +34,12 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from remote_agents.adapters.tui.context import FEED_LIMIT
-from remote_agents.adapters.tui.model import _BACK, LaunchSelection, age, session_row
+from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.feed import NO_NOTIFICATIONS, FeedRegion
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.ports.agent_activity import ActivityKind
 
 _LOG = logging.getLogger(__name__)
 
@@ -43,24 +47,97 @@ _SESSION_KEY_PREFIX = "session:"
 _SESSIONS_AUTO_REFRESH = 10.0
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
-#: The feed pane's one line when nothing has been observed — its DEC-009 answer.
-_NO_NOTIFICATIONS = "No notifications yet."
-#: A glance, not an archive — the number itself is shared with the reader's LIMIT.
-_FEED_LIMIT = FEED_LIMIT
-
-#: One line of owner-facing words per observation kind. Local to this pane on purpose:
-#: the bot's sentences live in its own adapter and carry chat conventions (grouping,
-#: standing messages) a glanceable feed line has no use for.
-_KIND_WORDS = {
-    ActivityKind.COMPLETED: "the agent has finished its work",
-    ActivityKind.LIMIT_REACHED: "the agent hit a usage limit",
-    ActivityKind.OUTPUT_LIMIT: "the response hit its output ceiling",
-    ActivityKind.NEEDS_ANSWER: "the agent is waiting for an answer",
-    ActivityKind.QUIET: "the pane has gone quiet",
-}
 
 
-class DashboardScreen(ProjectsScreen):
+class ProjectsPaneScreen(ProjectsScreen):
+    """The projects position with the chooser in front of the wizard — the console's left pane.
+
+    The projects picker on its own sends a chosen project straight into the agent list. This
+    screen is the one that asks the Launch-or-Resume question first (DEC-033: navigation over
+    flows both surfaces already have, never a new wizard step), and it exists as its own class
+    because two surfaces need exactly that behavior: the console's **left pane**, which is its
+    whole content, and the combined dashboard, which adds the two right-hand regions on top.
+
+    `DashboardScreen` therefore subclasses *this* rather than `ProjectsScreen`. The alternative
+    — each surface routing a chosen project itself — is one behavior written twice, and the two
+    copies would only have to disagree once.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: What the console's start-only repair could not put right, held so it can be
+        #: restated after every redraw — see `_restate_blocked`.
+        self._blocked: tuple[str, ...] = ()
+
+    async def populate(self) -> None:
+        await super().populate()
+        self._report_console_recovery()
+
+    def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
+        super().render_projects(query, keep_focus=keep_focus)
+        self._restate_blocked()
+
+    def _report_console_recovery(self) -> None:
+        """Tell the owner what the console's start-time repair did, and what it could not.
+
+        The two halves get different destinations because they are different facts, and this
+        surface already has a rule for each. `moved` is something that already happened and is
+        finished — a confirmation, which `announce` puts in a toast. `blocked` is what needs a
+        *person*; anything the owner must keep belongs in the status line, which is the rule
+        the attach command is already handled by.
+
+        Before this, neither reached them at all: `moved` was logged at INFO with no logging
+        configured anywhere in `src/`, and `blocked` was printed to stderr in the instant
+        before Textual took the alternate screen.
+        """
+        report = self.services.console_recovery
+        if report is None:
+            return
+        for note in report.moved:
+            self.tui.announce(f"The console was restored: {note}", severity="information")
+        self._blocked = tuple(report.blocked)
+        self._restate_blocked()
+
+    def _restate_blocked(self) -> None:
+        """Put the blocked notes back after a redraw, because the condition still holds.
+
+        `render_projects` writes the ordinary status on every fill, so a note set once would
+        be gone by the first refresh — and unlike a failed read, this is not a stale fact that
+        a redraw supersedes. Nothing in this process is going to fix it.
+        """
+        if not self._blocked:
+            return
+        # An f-string rather than a concatenation, and the difference is not style: the
+        # status-region sweep reads this call's first argument out of the AST to check that a
+        # severity-coloured status carries words of its own, and a `BinOp` is a shape it
+        # cannot read — so it reports it as colour with no words, correctly.
+        notes = " · ".join(self._blocked)
+        self.set_status(
+            f"The console could not be fully restored: {notes}",
+            severity="warning",
+        )
+
+    #: This pane is its own process's resting position, so escape here is inert and there is
+    #: no other position in the process to return to.
+    read_failure_route = "Ctrl+R re-reads this screen."
+
+    async def choose(self, key: str) -> None:
+        """A project row opens the chooser.
+
+        The selection is deliberately not touched here: only Launch commits to a fresh one, so
+        backing out of the chooser must leave nothing behind. Opening is not a stop, so the
+        resting-cursor discipline (DEC-007) is untouched — no row here mutates anything.
+        """
+        project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
+        if project is None:
+            self.announce(
+                "That project is no longer available. Refresh and try again.", severity="warning"
+            )
+            return
+        await self.advance_to(ProjectChooserScreen(project))
+
+
+class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     """Three panes, one resting position; everything the projects picker was, plus sight."""
 
     position = "DASHBOARD"
@@ -85,12 +162,6 @@ class DashboardScreen(ProjectsScreen):
         self._sessions_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
-        #: The newest observation already rendered, and whether any read has completed.
-        #: The first read is history whatever it holds — it renders (or primes an empty
-        #: pane) without flashing; everything after a primed read that moves the head is
-        #: news, including the first row a fresh database ever gains.
-        self._feed_head: tuple[str, str, object] | None = None
-        self._feed_primed = False
 
     def compose(self) -> ComposeResult:
         """The base body, re-arranged: same ids, so every inherited method still lands.
@@ -110,7 +181,7 @@ class DashboardScreen(ProjectsScreen):
                     sessions = OptionList(id="sessions-pane", markup=False)
                     sessions.border_title = "Sessions — enter opens, d for detail"
                     yield sessions
-                    feed = Static("No notifications yet.", id="feed-pane", markup=False)
+                    feed = Static(NO_NOTIFICATIONS, id="feed-pane", markup=False)
                     feed.border_title = "Notifications"
                     yield feed
             with VerticalScroll(id="output-pane"):
@@ -120,25 +191,17 @@ class DashboardScreen(ProjectsScreen):
         yield Footer()
 
     async def choose(self, key: str) -> None:
-        """A project row opens the chooser; a session row opens the session itself.
+        """A session row opens the session itself; anything else is a project row.
 
-        The chooser is navigation, not a wizard step (DEC-033): the selection is not yet
-        touched here, because only Launch commits to a fresh one — backing out of the
-        chooser must leave nothing behind. A session row routes through the app's one
-        open seam, so hosting decides what opening means — a console tab, or the exec
-        handoff — and this screen never has to know. Opening is not a stop: the resting
-        cursor discipline (DEC-007) is untouched because no row here mutates anything.
+        A session row routes through the app's one open seam, so hosting decides what
+        opening means — an exchange, or the exec handoff — and this screen never has to
+        know. The project half is `ProjectsPaneScreen.choose`, unchanged and shared with the
+        console's left pane rather than copied into it.
         """
         if key.startswith(_SESSION_KEY_PREFIX):
             await self.tui._open_or_leave(key.removeprefix(_SESSION_KEY_PREFIX))
             return
-        project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
-        if project is None:
-            self.announce(
-                "That project is no longer available. Refresh and try again.", severity="warning"
-            )
-            return
-        await self.advance_to(ProjectChooserScreen(project))
+        await super().choose(key)
 
     async def action_session_detail(self) -> None:
         """`d` on the highlighted session row opens today's detail screen unchanged.
@@ -159,8 +222,13 @@ class DashboardScreen(ProjectsScreen):
     async def populate(self) -> None:
         await super().populate()
         if self.services.open_in_console is not None:
-            # Task 3.3's promise: the jump-home key is documented where the owner rests.
-            self.sub_title = "F12 returns to this dashboard"
+            # The console's one root key, documented where the owner rests. It said "F12
+            # returns to this dashboard", which was true of the tab model and is not true
+            # now: F12 brings the console's **projects pane** back to the left slot, and
+            # this combined dashboard is a different surface that a console never runs.
+            # Under console hosting it is still worth naming, because the key is bound on
+            # this server and will act whatever surface is looking at it.
+            self.sub_title = "F12 shows the console's projects pane"
         await self._reload_sessions_pane()
         self._sessions_timer = self.set_interval(
             _SESSIONS_AUTO_REFRESH, self._auto_reload_sessions
@@ -186,7 +254,7 @@ class DashboardScreen(ProjectsScreen):
         # Resuming is also the moment the pane is most likely stale: the flow that just
         # popped may have launched or stopped a session, and the return path lands here
         # without passing the reveal hook. Waiting out the timer left the owner reading
-        # "No sessions are running." for up to ten seconds beside a console tab that
+        # "No sessions are running." for up to ten seconds beside a session that
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
 
@@ -245,48 +313,6 @@ class DashboardScreen(ProjectsScreen):
                 if pane.get_option_at_index(index).id == held_id:
                     pane.highlighted = index
                     break
-
-    async def _reload_feed(self) -> None:
-        """Render the newest observations, or the placeholder — never an exception.
-
-        A reader of the durable table via the composition's capability, and only that:
-        the feed never drains the spool, because consuming spool files would starve the
-        phone's notifications. Text an agent produced reaches a `markup=False` Static,
-        so it is displayed, never interpreted.
-        """
-        reader = self.services.activity_feed
-        pane = self.query_one("#feed-pane", Static)
-        if reader is None:
-            return
-        try:
-            activities = await reader()
-        except Exception:
-            _LOG.exception("the notifications feed could not be read")
-            return
-        if not activities:
-            pane.update(_NO_NOTIFICATIONS)
-            # An empty first read still primes the news detector: the first row that
-            # ever arrives after this is genuine news, not history, and must flash.
-            self._feed_primed = True
-            return
-        lines = []
-        for activity in activities[:_FEED_LIMIT]:
-            words = _KIND_WORDS.get(activity.kind, activity.kind.value)
-            detail = f" — {activity.detail}" if activity.detail else ""
-            lines.append(f"{age(activity.observed_at)} · {words}{detail}")
-        pane.update("\n".join(lines))
-
-        newest = activities[0]
-        head = (newest.session_id, newest.kind.value, newest.observed_at)
-        arrived = self._feed_primed and head != self._feed_head
-        self._feed_head = head
-        self._feed_primed = True
-        flash = self.services.console_flash
-        if arrived and flash is not None:
-            try:
-                await flash(_KIND_WORDS.get(newest.kind, newest.kind.value))
-            except Exception:
-                _LOG.exception("the status flash failed; the feed row is the record")
 
 
 class ProjectChooserScreen(ChoiceScreen):

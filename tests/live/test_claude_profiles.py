@@ -68,7 +68,7 @@ async def test_claude_profile_live_lifecycle(
         assert await terminal.inspect(session_id) is None
     finally:
         try:
-            await gateway.mutate("kill-session", f"ra-{session_id}")
+            await gateway.destroy(session_id)
         except RuntimeError:
             pass
         shutil.rmtree(project_path)
