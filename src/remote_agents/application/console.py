@@ -265,7 +265,7 @@ class ConsoleComposer:
                 )
         return True
 
-    async def _build_panes(self) -> None:
+    async def _build_panes(self) -> tuple[str, ...]:
         """Bring the console window up to its declared layout, adding only what is missing.
 
         Works from **marks**, not positions. Position answers which pane is the left slot —
@@ -289,9 +289,18 @@ class ConsoleComposer:
         - **A parent must be a pane in the console window.** The projects surface parked in an
           agent's window is a valid parent by mark and a terrible one in fact — splitting off
           it would put a console pane inside the agent's session.
+
+        Returns what it cannot put right, in the owner's words. Today that is one thing: a
+        **duplicated slot**. Two panes claiming to be the sessions list is not a state this
+        method can reach on its own, but it is reachable — the lock is per-process, and every
+        pane surface calls `ensure` at start, so two overlapping callers reading the same
+        stale arrangement can each split for the same missing slot. It is reported rather
+        than repaired because repairing means killing a pane, and a pane this composer did
+        not certainly create is not its to kill. Found by the final gate's evaluator, on a
+        console that had five panes in it.
         """
         if not self._pane_commands:
-            return
+            return ()
         arrangement = await self._console.pane_arrangement()
         rebuilt = False
         # Every marked pane, wherever it is being hosted — see the first rule above.
@@ -341,6 +350,17 @@ class ConsoleComposer:
                 console_slot=spec.slot.value,
             )
 
+        duplicated = sorted(
+            slot.value
+            for slot in ConsolePaneSlot
+            if sum(
+                1
+                for pane in arrangement
+                if pane.on_console and pane.console_slot == slot.value
+            )
+            > 1
+        )
+
         # Only after an actual rebuild, and that condition is the point. A rebuilt pane
         # inherits the shape of whatever it was split from, not the shape it is meant to
         # have — kill the projects pane and the one that replaces it is a box in the corner
@@ -363,6 +383,11 @@ class ConsoleComposer:
                         if spec.slot is ConsolePaneSlot.FEED
                     ),
                 )
+        return tuple(
+            f"the console has more than one {slot} pane; nothing here removes one, so kill "
+            f"the console and run `remote-agents` again to rebuild it"
+            for slot in duplicated
+        )
 
     async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
         """Mark the surface if it is unmarked, then return the console to rest. **Start only.**
@@ -402,7 +427,7 @@ class ConsoleComposer:
                 return RecoveryReport((), (), settled=False)
         adopted: tuple[str, ...] = ()
         try:
-            adopted = await self._adopt_surface()
+            adopted = (*await self._build_panes(), *await self._adopt_surface())
         except Exception:
             _LOG.exception("the console surface could not be marked; recovery may not find it")
         report = await self.recover()

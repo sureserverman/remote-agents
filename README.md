@@ -173,8 +173,17 @@ stays visible the whole time.
 
 **Killing the console while an agent is displayed destroys that agent's process**, because
 its pane is physically in the console's window (DEC-040). With nothing displayed, killing the
-console is safe and every managed session survives it. The console rebuilds any of its three
-panes whose process dies, including its own projects surface.
+console is safe and every managed session survives it.
+
+If a pane's process dies, the console rebuilds exactly that one — including its own projects
+surface — **on the next `remote-agents`**, not the moment it happens. Nothing watches the
+panes; a pane that dies mid-session stays dead until you run the command again.
+
+**Upgrading:** a console that was already running before this version keeps running whatever
+it was. It is a tmux session, so it outlives the code that made it, and `remote-agents` will
+attach to it rather than replace it. To get the three-pane console, kill it once —
+`tmux -L remote-agents kill-session -t ra-console` with nothing displayed — and run
+`remote-agents` again. Your managed sessions are not in that session and survive it.
 
 ### Keys the console takes
 

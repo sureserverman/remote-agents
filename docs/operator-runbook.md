@@ -721,8 +721,31 @@ save it: that governs a process exiting, not tmux killing the pane out from unde
 
 **If a pane's process dies**, the console rebuilds exactly that pane on the next start, and puts
 the window back in its proportions afterwards — including its own projects surface, which is
-split back in beside the sessions pane. An ordinary start does *not* resize anything, so a
-layout you adjusted by hand survives.
+split back in beside the sessions pane. "On the next start" is literal: nothing watches the
+panes, so a pane that dies mid-session stays dead until `remote-agents` runs again. An ordinary
+start does *not* resize anything, so a layout you adjusted by hand survives.
+
+**Upgrading an already-running console.** A console is a tmux session, so it outlives the code
+that built it: after deploying this version, `remote-agents` attaches to whatever console is
+already there rather than replacing it. On a host upgrading from the tab-model console that
+means a left pane still running the combined dashboard, possibly with old linked windows
+attached — which is *adopted* as the projects slot rather than rebuilt, because the composer
+cannot tell a surface it made from one an older version made. Kill it once, with nothing
+displayed, and run the command again:
+
+```bash
+tmux -L remote-agents kill-session -t ra-console
+remote-agents
+```
+
+Managed sessions do not live in that session and survive it.
+
+**If the console ends up with two panes claiming the same slot**, it says so in the projects
+pane's status line and asks to be restarted. Nothing removes the extra automatically: a pane
+the composer cannot be sure it created is not its to kill. The fix is the same two commands
+above. This is reachable because every pane process calls the same start-time repair and the
+lock between them is per-process; it has been observed once, on a console being driven by
+tests at the same time as by hand.
 
 **What recovery can and cannot do.** When the dashboard process starts, it returns each pane to
 where it belongs, logging what it moved and printing what it could not put right. Some states it can only

@@ -450,6 +450,34 @@ async def test_a_console_already_at_rest_is_never_resized_underneath_the_owner()
     assert named(console, "normalize_console_layout") == []
 
 
+async def test_a_duplicated_pane_slot_is_reported_rather_than_left_silent() -> None:
+    """Two panes claiming the same slot is reachable, and nothing here removes one.
+
+    The composer's lock is per-process and every pane surface calls `ensure` at start, so two
+    overlapping callers reading the same stale arrangement can each split for the same
+    missing slot. The final gate's evaluator found a console with five panes in it that way.
+    Repair would mean killing a pane this composer cannot be sure it created, so it says so
+    instead — on the surface, where `settle`'s blocked notes are rendered.
+    """
+    doubled = (
+        *_three_pane_console(),
+        HostedPane(
+            host=None,
+            on_console=True,
+            window_index=0,
+            pane_index=3,
+            pane_id="%7",
+            session_id=None,
+            console_slot=ConsolePaneSlot.SESSIONS.value,
+        ),
+    )
+    console = RecordingConsole(arrangement=doubled)
+    report = await _composer(console).settle()
+
+    assert any("more than one sessions pane" in note for note in report.blocked), report.blocked
+    assert named(console, "split_console_pane") == [], "reporting is not repairing"
+
+
 # --- The key budget (Sub-plan 3, Task 2.1) --------------------------------------------
 #
 # Every root binding is a key the agent can never receive, on every session, forever. That
