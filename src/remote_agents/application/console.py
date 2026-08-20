@@ -24,11 +24,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePort, HostedPane
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsolePaneSlot,
+    ConsolePort,
+    HostedPane,
+)
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _LOG = logging.getLogger(__name__)
@@ -36,6 +42,49 @@ _LOG = logging.getLogger(__name__)
 #: Root-table key that returns the client to the dashboard window from any tab. A root
 #: binding costs every pane this key, so it is a function key nothing curated uses.
 JUMP_HOME_KEY = "F12"
+
+
+@dataclass(frozen=True, slots=True)
+class ConsolePane:
+    """One of the console's three panes: what it is, what runs in it, and where it goes."""
+
+    slot: ConsolePaneSlot
+    #: Which console pane this one splits off when it has to be built.
+    splits_from: ConsolePaneSlot
+    vertical: bool
+    #: The share of the pane being split that the **new** pane takes, which is what `-l N%`
+    #: means to tmux. Probed on 3.4: at 200x50 these give 119/80 columns and 33/16 rows.
+    percent: int
+    #: Whether the new pane goes before its target rather than after.
+    before: bool = False
+    #: Whether this pane may **adopt** the console's existing unmarked pane instead of being
+    #: split. True for exactly one: the pane the window is created with, which is unmarked at
+    #: that moment and is also what a console predating the slot marks consists of.
+    adopts_the_created_pane: bool = False
+
+
+#: The console window, declared once. Projects left at ~60% of the width, sessions right-top
+#: at two thirds of the remaining height, feed right-bottom under it.
+#:
+#: The feed splits off the **sessions** pane rather than the projects pane, and that is not
+#: interchangeable: splitting the left one twice would put the feed underneath projects and
+#: leave the sessions list running the full height of the right-hand column.
+CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
+    ConsolePane(
+        ConsolePaneSlot.PROJECTS,
+        # Normally the pane the window was created with, which it adopts. `splits_from` is
+        # the *rebuild* route, for the console whose projects process died while the other
+        # two panes lived: there is nothing to its left, so it is split off the sessions
+        # pane with `-b` to land back on the correct side.
+        ConsolePaneSlot.SESSIONS,
+        vertical=False,
+        percent=60,
+        before=True,
+        adopts_the_created_pane=True,
+    ),
+    ConsolePane(ConsolePaneSlot.SESSIONS, ConsolePaneSlot.PROJECTS, vertical=False, percent=40),
+    ConsolePane(ConsolePaneSlot.FEED, ConsolePaneSlot.SESSIONS, vertical=True, percent=33),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +182,7 @@ class ConsoleComposer:
         working_directory: Path,
         *,
         projects_command: tuple[str, ...] = (),
+        pane_commands: Mapping[ConsolePaneSlot, tuple[str, ...]] | None = None,
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
     ) -> None:
         self._console = console
@@ -142,6 +192,11 @@ class ConsoleComposer:
         # which entry point *is* the dashboard is — so it arrives the same way rather than
         # being spelled inside the adapter that runs it.
         self._projects_command = projects_command
+        # One command per pane. Absent, `ensure` builds the **one-pane** console it always
+        # built, running `dashboard_command` — which is still a real shape (a bare terminal
+        # running the combined dashboard) and is what every caller that predates the layout
+        # gets. Production supplies all three.
+        self._pane_commands = dict(pane_commands or {})
         self._bindings = bindings
         # One lock over every link decision. sync() derives its to-link set from a windows
         # snapshot, and open() links on a miss — two awaited round-trips apart, so without
@@ -150,12 +205,28 @@ class ConsoleComposer:
         self._links = asyncio.Lock()
 
     async def ensure(self) -> bool:
-        """Make the console exist with the binding installed; say whether it is usable."""
+        """Make the console exist, with its panes and its keys; say whether it is usable.
+
+        Idempotent, and it has to be: a second terminal running `remote-agents` calls this
+        against a console that already exists, and so does every start after the first. What
+        that costs is a read — the arrangement — because "does this console have its three
+        panes" cannot be answered by whether the *session* exists.
+
+        A missing pane is rebuilt off a pane that is still there. What is **not** rebuilt is a
+        slot that is only apparently missing: while an agent is displayed, the projects
+        surface is alive and parked in that agent's own window, so it is found there rather
+        than built a second time — and a console reduced to nothing but a displayed agent has
+        no console-side pane to split from at all, which `recover` reports rather than
+        guessing at.
+        """
         try:
-            if not await self._console.console_exists():
-                await self._console.create_console(
-                    self._dashboard_command, self._working_directory
-                )
+            async with self._links:
+                if not await self._console.console_exists():
+                    first = self._pane_commands.get(
+                        ConsolePaneSlot.PROJECTS, self._dashboard_command
+                    )
+                    await self._console.create_console(first, self._working_directory)
+                await self._build_panes()
             for binding in self._bindings:
                 command = (
                     self._projects_command
@@ -167,6 +238,80 @@ class ConsoleComposer:
             _LOG.exception("the console could not be ensured; the surface degrades")
             return False
         return True
+
+    async def _build_panes(self) -> None:
+        """Bring the console window up to its declared layout, adding only what is missing.
+
+        Works from **marks**, not positions. Position answers which pane is the left slot —
+        the question an exchange asks — and it cannot answer which pane is *missing*, because
+        a console down to two panes has two positions and three candidates. A Tier-1 review
+        found what that costs: reading the leftmost survivor as "the created pane, simply
+        unmarked" re-marked a live **sessions** pane as the projects surface whenever the
+        projects pane was the one that died, losing the surface permanently and silently.
+        Only a pane carrying no mark at all may be adopted.
+
+        Three rules make the rest of it fall out:
+
+        - **A slot is present if any pane anywhere carries its mark**, not just a pane in the
+          console. While an agent is displayed the projects surface is alive and parked in
+          that agent's own window, so looking only at the console would report it missing and
+          build a second one beside the agent.
+        - **Only the console's own unmarked left-slot pane is adopted.** That is the pane the
+          window was created with, and it is also what a console predating the marks consists
+          of. A pane carrying an agent's identity is never adopted, and neither is an
+          operator's hand-split pane sitting somewhere other than the slot.
+        - **A parent must be a pane in the console window.** The projects surface parked in an
+          agent's window is a valid parent by mark and a terrible one in fact — splitting off
+          it would put a console pane inside the agent's session.
+        """
+        if not self._pane_commands:
+            return
+        arrangement = await self._console.pane_arrangement()
+        # Every marked pane, wherever it is being hosted — see the first rule above.
+        by_slot = {pane.console_slot: pane for pane in arrangement if pane.console_slot}
+        left = _left_slot(arrangement)
+        adoptable = (
+            left
+            if left is not None and left.console_slot is None and left.session_id is None
+            else None
+        )
+        for spec in CONSOLE_LAYOUT:
+            command = self._pane_commands.get(spec.slot)
+            if command is None or spec.slot.value in by_slot:
+                continue
+            if spec.adopts_the_created_pane and adoptable is not None:
+                await self._console.mark_console_slot(adoptable.pane_id, spec.slot)
+                by_slot[spec.slot.value] = adoptable
+                adoptable = None
+                continue
+            parent = by_slot.get(spec.splits_from.value)
+            if parent is None or not parent.on_console:
+                # Nothing console-side to split from. Either the neighbour is missing too, or
+                # it is the surface parked in an agent's window. `recover` reports such a
+                # console rather than this method guessing at it.
+                continue
+            pane_id = await self._console.split_console_pane(
+                parent.pane_id,
+                command,
+                self._working_directory,
+                vertical=spec.vertical,
+                percent=spec.percent,
+                before=spec.before,
+            )
+            await self._console.mark_console_slot(pane_id, spec.slot)
+            # Enough of a pane for the next iteration to split off. `pane_index` is
+            # deliberately not synthesized: nothing downstream of this loop reads it, every
+            # later call re-reads the arrangement from tmux, and a made-up index that looked
+            # authoritative is how a future reader starts depending on it.
+            by_slot[spec.slot.value] = HostedPane(
+                host=None,
+                on_console=True,
+                window_index=parent.window_index,
+                pane_index=-1,
+                pane_id=pane_id,
+                session_id=None,
+                console_slot=spec.slot.value,
+            )
 
     async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
         """Mark the surface if it is unmarked, then return the console to rest. **Start only.**
@@ -481,7 +626,7 @@ class ConsoleComposer:
         slot = _left_slot(arrangement)
         if slot is None or slot.session_id is not None:
             return ()
-        await self._console.mark_console_surface(slot.pane_id)
+        await self._console.mark_console_slot(slot.pane_id, ConsolePaneSlot.PROJECTS)
         # Disowning is not cleaning up. The stranded pane is still running the old console's
         # dashboard, and it is the only thing keeping its host session alive — so a session
         # with no agent in it, and a process nobody is looking at, outlive this repair. That is

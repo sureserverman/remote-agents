@@ -23,7 +23,11 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.console import ConsoleBindingAction, HostedPane
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsolePaneSlot,
+    HostedPane,
+)
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _RUNNING = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -48,10 +52,13 @@ class RecordingConsole:
         *,
         exists: bool = True,
         windows: tuple[tuple[int, SessionId | None], ...] = ((0, None),),
+        arrangement: tuple[HostedPane, ...] | None = None,
         error: Exception | None = None,
     ) -> None:
         self.exists = exists
         self.windows = windows
+        self._arrangement = arrangement
+        self._next_pane = 90
         self.error = error
         self.active_window: int | None = 2
         self.calls: list[tuple] = []
@@ -69,6 +76,64 @@ class RecordingConsole:
         self.calls.append(("create_console", command, cwd))
         self._raise_if_armed()
         self.exists = True
+        self._arrangement = (
+            HostedPane(
+                host=None,
+                on_console=True,
+                window_index=0,
+                pane_index=0,
+                pane_id="%0",
+                session_id=None,
+            ),
+        )
+
+    async def split_console_pane(
+        self,
+        target_pane: str,
+        command: tuple[str, ...],
+        cwd: Path,
+        *,
+        vertical: bool,
+        percent: int,
+        before: bool = False,
+    ) -> str:
+        self._raise_if_armed()
+        self._next_pane += 1
+        pane_id = f"%{self._next_pane}"
+        self.calls.append(
+            (
+                "split_console_pane",
+                target_pane,
+                command,
+                cwd,
+                vertical,
+                percent,
+                pane_id,
+                before,
+            )
+        )
+        return pane_id
+
+    async def mark_console_slot(self, pane_id: str, slot) -> None:
+        self.calls.append(("mark_console_slot", pane_id, slot))
+        self._raise_if_armed()
+        self._arrangement = tuple(
+            (
+                HostedPane(
+                    host=pane.host,
+                    on_console=pane.on_console,
+                    window_index=pane.window_index,
+                    pane_index=pane.pane_index,
+                    pane_id=pane.pane_id,
+                    session_id=pane.session_id,
+                    surface=pane.surface,
+                    console_slot=slot.value,
+                )
+                if pane.pane_id == pane_id
+                else pane
+            )
+            for pane in (self._arrangement or ())
+        )
 
     async def install_console_binding(
         self, key: str, action, command: tuple[str, ...] = ()
@@ -90,11 +155,9 @@ class RecordingConsole:
         """
         self.calls.append(("pane_arrangement",))
         self._raise_if_armed()
-        return (HostedPane(None, True, 0, 0, "%0", None, True),)
-
-    async def mark_console_surface(self, pane_id: str) -> None:
-        self.calls.append(("mark_console_surface", pane_id))
-        self._raise_if_armed()
+        if self._arrangement is not None:
+            return self._arrangement
+        return (HostedPane(None, True, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value),)
 
     async def link_session_window(self, session_id: SessionId) -> None:
         self.calls.append(("link_session_window", session_id))
@@ -126,10 +189,40 @@ class RecordingConsole:
 #: What the projects key runs. The composition root supplies the real one; this is its shape.
 _PROJECTS_COMMAND = ("remote-agents", "console", "projects")
 
+#: One command per pane, exactly as the composition root supplies them.
+_PANE_COMMANDS = {
+    ConsolePaneSlot.PROJECTS: ("remote-agents", "pane", "projects"),
+    ConsolePaneSlot.SESSIONS: ("remote-agents", "pane", "sessions"),
+    ConsolePaneSlot.FEED: ("remote-agents", "pane", "feed"),
+}
+
+
+def _three_pane_console() -> tuple[HostedPane, ...]:
+    """The console at rest: projects left, sessions right-top, feed right-bottom."""
+    return tuple(
+        HostedPane(
+            host=None,
+            on_console=True,
+            window_index=0,
+            pane_index=index,
+            pane_id=f"%{index}",
+            session_id=None,
+            surface=slot is ConsolePaneSlot.PROJECTS,
+            console_slot=slot.value,
+        )
+        for index, slot in enumerate(
+            (ConsolePaneSlot.PROJECTS, ConsolePaneSlot.SESSIONS, ConsolePaneSlot.FEED)
+        )
+    )
+
 
 def _composer(console: RecordingConsole) -> ConsoleComposer:
     return ConsoleComposer(
-        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=_PROJECTS_COMMAND
+        console,
+        ("remote-agents", "tui"),
+        Path("/tmp"),
+        projects_command=_PROJECTS_COMMAND,
+        pane_commands=_PANE_COMMANDS,
     )
 
 
@@ -145,6 +238,150 @@ async def test_ensure_creates_the_console_only_when_it_is_missing() -> None:
     present = RecordingConsole(exists=True)
     assert await _composer(present).ensure() is True
     assert named(present, "create_console") == []
+
+
+# --- The console window is three panes (Sub-plan 3, Task 2.2) -------------------------
+#
+# A Textual app owns a terminal, so the three regions are three processes in three tmux
+# panes. `ensure` is what builds that window, and it has to be idempotent against a console
+# that already has it — a second `remote-agents` in a second terminal calls `ensure` too, and
+# a fourth pane appearing because someone opened a second client would be a defect nobody
+# would attribute to this method.
+
+
+async def test_ensure_builds_three_panes_in_the_declared_proportions() -> None:
+    console = RecordingConsole(exists=False)
+    await _composer(console).ensure()
+
+    assert named(console, "create_console") == [
+        ("create_console", _PANE_COMMANDS[ConsolePaneSlot.PROJECTS], Path("/tmp"))
+    ]
+    splits = named(console, "split_console_pane")
+    assert [(call[2], call[4], call[5]) for call in splits] == [
+        (_PANE_COMMANDS[ConsolePaneSlot.SESSIONS], False, 40),
+        (_PANE_COMMANDS[ConsolePaneSlot.FEED], True, 33),
+    ]
+    # The feed splits off the *sessions* pane, not the projects pane: splitting the left one
+    # again would put the feed under projects and leave the sessions pane full height.
+    assert splits[0][1] == "%0", "the sessions pane splits off the left slot"
+    assert splits[1][1] == splits[0][6], "the feed splits off the pane sessions just made"
+
+
+async def test_ensure_marks_every_pane_it_builds_with_the_slot_it_is() -> None:
+    """Found by what it *is*, never by where it sits — DEC-040's rule for the surface,
+    applied to all three. Position cannot say which pane is missing once one is gone."""
+    console = RecordingConsole(exists=False)
+    await _composer(console).ensure()
+
+    assert [call[2] for call in named(console, "mark_console_slot")] == [
+        ConsolePaneSlot.PROJECTS,
+        ConsolePaneSlot.SESSIONS,
+        ConsolePaneSlot.FEED,
+    ]
+
+
+async def test_re_ensure_adds_no_fourth_pane() -> None:
+    console = RecordingConsole(arrangement=_three_pane_console())
+    await _composer(console).ensure()
+
+    assert named(console, "create_console") == []
+    assert named(console, "split_console_pane") == []
+
+
+async def test_a_console_missing_one_pane_regains_exactly_that_one() -> None:
+    """Its process died, or a displayed agent's pane was killed with the console around it."""
+    without_feed = tuple(
+        pane for pane in _three_pane_console() if pane.console_slot != ConsolePaneSlot.FEED.value
+    )
+    console = RecordingConsole(arrangement=without_feed)
+    await _composer(console).ensure()
+
+    splits = named(console, "split_console_pane")
+    assert len(splits) == 1, "exactly the missing one"
+    assert splits[0][2] == _PANE_COMMANDS[ConsolePaneSlot.FEED]
+    assert splits[0][1] == "%1", "and off the pane it belongs beside"
+
+
+async def test_a_displayed_agent_does_not_make_the_console_build_a_second_surface() -> None:
+    """The projects surface is not missing while an agent is displayed — it is *parked*.
+
+    An exchange puts the agent's pane in the console's left slot and sends the surface to
+    live in that agent's own window, carrying its mark with it. A check that looked only at
+    the console would see no pane claiming the projects slot and split a second surface in
+    beside the agent, leaving the owner with two and the original still parked elsewhere.
+    """
+    projects = ConsolePaneSlot.PROJECTS.value
+    displayed = tuple(
+        pane for pane in _three_pane_console() if pane.console_slot != projects
+    ) + (
+        HostedPane(
+            host=None,
+            on_console=True,
+            window_index=0,
+            pane_index=0,
+            pane_id="%9",
+            session_id=_RUNNING,
+        ),
+        # The surface, parked in the displayed agent's own window, still marked.
+        HostedPane(
+            host=_RUNNING,
+            on_console=False,
+            window_index=0,
+            pane_index=0,
+            pane_id="%0",
+            session_id=None,
+            surface=True,
+            console_slot=projects,
+        ),
+    )
+    console = RecordingConsole(arrangement=displayed)
+    await _composer(console).ensure()
+
+    assert named(console, "split_console_pane") == []
+    assert named(console, "mark_console_slot") == []
+
+
+async def test_a_dead_projects_pane_is_rebuilt_rather_than_stolen_from_its_neighbour() -> None:
+    """The Critical a Tier-1 review found, pinned.
+
+    When the projects pane is the one that dies, the leftmost survivor is the *sessions*
+    pane. Reading it as "the pane the window was created with, simply unmarked" re-marked a
+    live sessions pane as the projects surface — losing the surface permanently, with no
+    exception and no log line, and leaving a pane labelled `surface` still running the
+    sessions program. Only an unmarked pane may be adopted; a marked one is rebuilt beside.
+    """
+    projects = ConsolePaneSlot.PROJECTS.value
+    survivors = tuple(pane for pane in _three_pane_console() if pane.console_slot != projects)
+    console = RecordingConsole(arrangement=survivors)
+    await _composer(console).ensure()
+
+    marked = named(console, "mark_console_slot")
+    assert [call[1] for call in marked] != ["%1"], "the sessions pane must keep its own mark"
+    splits = named(console, "split_console_pane")
+    assert len(splits) == 1
+    assert splits[0][2] == _PANE_COMMANDS[ConsolePaneSlot.PROJECTS]
+    assert splits[0][1] == "%1", "split off the sessions pane, the only one left to split from"
+    assert splits[0][7] is True, "and *before* it, or the surface lands on the wrong side"
+    assert [call[2] for call in marked] == [ConsolePaneSlot.PROJECTS]
+
+
+async def test_a_console_reduced_to_a_displayed_agent_is_reported_rather_than_rebuilt() -> None:
+    """Both right panes gone and the surface parked: nothing console-side to split from.
+
+    The parked surface is a valid parent by mark and a terrible one in fact — splitting off
+    it would put a console pane inside the agent's own session.
+    """
+    console = RecordingConsole(
+        arrangement=(
+            HostedPane(None, True, 0, 0, "%9", _RUNNING),
+            HostedPane(
+                _RUNNING, False, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value
+            ),
+        )
+    )
+    await _composer(console).ensure()
+
+    assert named(console, "split_console_pane") == []
 
 
 # --- The key budget (Sub-plan 3, Task 2.1) --------------------------------------------

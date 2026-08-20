@@ -16,6 +16,28 @@ from typing import Protocol, runtime_checkable
 from remote_agents.domain.models import SessionId
 
 
+class ConsolePaneSlot(Enum):
+    """Which of the console's three panes a pane is — by what it *is*, not where it sits.
+
+    Position answers "which pane is the left slot", which is the question an exchange asks.
+    It cannot answer "which pane is missing", because a console down to two panes has two
+    positions and three candidates. So each pane carries its slot as a pane-scoped mark, the
+    same mechanism and the same reason as the projects surface's own (DEC-040): a pane is
+    found by what it is, and an exchange carries the mark with it.
+
+    `PROJECTS` keeps the value `surface`, which is what the mark already held when it named
+    only one pane. That is a wire value, so a console already running on this host keeps
+    decoding after an upgrade. Renaming it would strand such a console rather than damage it:
+    its projects pane carries a mark, so nothing would adopt it, and nothing would rebuild
+    beside it either — the slot would simply read as missing forever. A free compatibility win
+    for the cost of one member whose name and value differ.
+    """
+
+    PROJECTS = "surface"
+    SESSIONS = "sessions"
+    FEED = "feed"
+
+
 class ConsoleBindingAction(Enum):
     """What one console root binding does — a closed set, not a description.
 
@@ -99,6 +121,18 @@ class HostedPane:
     not an answer there — an operator's split makes two of those. Marked, it is exactly one.
     """
 
+    console_slot: str | None = None
+    """Which of the console's three panes this is, by its own mark, or None for anything else.
+
+    Declared last because the adapter builds this dataclass positionally from one listing
+    line, so field order here *is* the wire order there.
+
+    A string rather than a `ConsolePaneSlot` on purpose: the value is decoded from a tmux
+    option this process did not necessarily write. A console left running from an older
+    version, or one a future version marks differently, has to decode as "not a slot I know"
+    rather than raise in the middle of parsing a listing every caller depends on.
+    """
+
 
 @runtime_checkable
 class ConsolePort(Protocol):
@@ -107,6 +141,17 @@ class ConsolePort(Protocol):
     async def console_exists(self) -> bool: ...
 
     async def create_console(self, dashboard_command: tuple[str, ...], cwd: Path) -> None: ...
+
+    async def split_console_pane(
+        self,
+        target_pane: str,
+        command: tuple[str, ...],
+        cwd: Path,
+        *,
+        vertical: bool,
+        percent: int,
+        before: bool = False,
+    ) -> str: ...
 
     async def install_console_binding(
         self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
@@ -130,4 +175,4 @@ class ConsolePort(Protocol):
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
 
-    async def mark_console_surface(self, pane_id: str) -> None: ...
+    async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...

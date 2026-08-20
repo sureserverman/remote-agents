@@ -106,7 +106,7 @@ class RecordingConsole:
     async def install_console_binding(self, key: str, action, command=()) -> None:
         return None
 
-    async def mark_console_surface(self, pane_id: str) -> None:
+    async def mark_console_slot(self, pane_id: str, slot=None) -> None:
         self.marked.append(pane_id)
         self.arrangement = tuple(
             HostedPane(

@@ -289,3 +289,22 @@ def test_the_projects_key_runs_this_interpreter_rather_than_a_name_on_path() -> 
     command = bootstrap._projects_command()
     assert command[0] == sys.executable
     assert command[1:] == ("-m", "remote_agents", "console", "projects")
+
+
+def test_the_composition_gives_the_console_one_command_per_pane() -> None:
+    """Without this the console builds the one-pane window it always built.
+
+    Asserted against the composed object rather than bootstrap's source text, and it is the
+    check that would have caught the shape the plan's own carried-in note complains about:
+    `create_console` making a single pane while everything downstream assumed three.
+    """
+    import sys
+
+    from remote_agents.ports.console import ConsolePaneSlot
+
+    composer = bootstrap._console_composer(gateway=object(), home=None)
+    commands = composer._pane_commands
+    assert set(commands) == set(ConsolePaneSlot)
+    for slot, command in commands.items():
+        assert command[0] == sys.executable
+        assert command[1:] == ("-m", "remote_agents", "pane", slot.name.lower())

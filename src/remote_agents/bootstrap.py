@@ -712,12 +712,24 @@ def _console_composer(gateway=None, home: Path | None = None):
     different program, or create a console somewhere else.
     """
     from remote_agents.application.console import ConsoleComposer
+    from remote_agents.ports.console import ConsolePaneSlot
 
     return ConsoleComposer(
         gateway if gateway is not None else TmuxGateway("remote-agents", AsyncTmuxRunner()),
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
+        # One process per pane. Which entry point each pane runs is composition policy, the
+        # same as which entry point *is* the dashboard, so it is decided here rather than
+        # spelled inside the composer that arranges them.
+        pane_commands={
+            slot: (sys.executable, "-m", "remote_agents", "pane", name)
+            for slot, name in (
+                (ConsolePaneSlot.PROJECTS, "projects"),
+                (ConsolePaneSlot.SESSIONS, "sessions"),
+                (ConsolePaneSlot.FEED, "feed"),
+            )
+        },
     )
 
 

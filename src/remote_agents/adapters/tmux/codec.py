@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import ConsoleBindingAction
+from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
 
 _DELIMITER = "|"
 
@@ -492,8 +493,10 @@ def parse_console_window(line: str) -> tuple[int, SessionId | None]:
     return (index, SessionId.parse(raw_session))
 
 
-def console_slot_mark_args(pane_id: str) -> tuple[str, ...]:
-    """Return the argv suffix that marks one pane as the console's projects surface.
+def console_slot_mark_args(
+    pane_id: str, slot: ConsolePaneSlot = ConsolePaneSlot.PROJECTS
+) -> tuple[str, ...]:
+    """Return the argv suffix that marks one pane as one of the console's three.
 
     `-p`, for the same reason identity is pane-scoped: the mark has to travel with the pane
     an exchange sends into an agent's window, because finding it there again is the entire
@@ -505,7 +508,69 @@ def console_slot_mark_args(pane_id: str) -> tuple[str, ...]:
     splits the agent's window: two candidates, no way to choose, and a console with no route
     back to its own surface.
     """
-    return ("set-option", "-p", "-t", exact_pane_target(pane_id), CONSOLE_SLOT_OPTION, SURFACE_SLOT)
+    return (
+        "set-option",
+        "-p",
+        "-t",
+        exact_pane_target(pane_id),
+        CONSOLE_SLOT_OPTION,
+        slot.value,
+    )
+
+
+def split_console_pane_args(
+    target_pane: str,
+    command: tuple[str, ...],
+    cwd: Path,
+    *,
+    vertical: bool,
+    percent: int,
+    before: bool = False,
+) -> tuple[str, ...]:
+    """Return the argv suffix that splits one console pane and runs a command in the new one.
+
+    `-l <percent>%` rather than `-p <percent>`: **tmux 3.4 removed `-p`**, and it fails with
+    `size missing` rather than falling back to a default — probed on a disposable socket
+    rather than read off the manual, because a layout that silently came out even would look
+    like a rounding difference rather than a rejected flag. `-l` sizes the **new** pane, which
+    is what the percentages in the layout mean. Measured at 200x50: `-l 40%` gives 119 and 80
+    columns, and `-l 33%` on the right-hand pane gives 33 and 16 rows.
+
+    `-d` keeps focus where it was. Without it every split makes its own new pane current, so
+    building the window would leave the owner's keyboard resting in the feed.
+
+    `-P -F '#{pane_id}'` makes tmux name the pane it just created. The alternative — list the
+    window afterwards and take the last row — is a guess the moment anything else splits, and
+    the id is what the next split and the slot mark both need.
+
+    `-b` puts the new pane **before** its target rather than after. It exists for one case:
+    rebuilding the projects pane after its process died. That pane is normally the one the
+    window was created with, so there is nothing to its left to split off — the only pane
+    left to split from is the sessions pane to its right, and without `-b` the rebuilt
+    surface would appear on the wrong side of the console.
+    """
+    if not command:
+        raise ValueError("a console pane needs a command to run")
+    if not 1 <= percent <= 99:
+        raise ValueError("a console pane split takes a percentage strictly inside 0 and 100")
+    if not cwd.is_absolute() or not cwd.is_dir():
+        raise ValueError("console working directory must be an existing absolute directory")
+    return (
+        "split-window",
+        "-v" if vertical else "-h",
+        "-d",
+        *(("-b",) if before else ()),
+        "-t",
+        exact_pane_target(target_pane),
+        "-l",
+        f"{percent}%",
+        "-c",
+        str(cwd),
+        "-P",
+        "-F",
+        "#{pane_id}",
+        *command,
+    )
 
 
 def list_arrangement_args() -> tuple[str, ...]:
@@ -522,7 +587,7 @@ def list_arrangement_args() -> tuple[str, ...]:
 
 def parse_arrangement(
     line: str,
-) -> tuple[SessionId | None, bool, int, int, str, SessionId | None, bool]:
+) -> tuple[SessionId | None, bool, int, int, str, SessionId | None, bool, str | None]:
     """Decode one line into (host, on console, window, position, pane, identity, surface).
 
     Two decodings, and keeping them apart is the whole job. **Host** comes from the session
@@ -561,7 +626,16 @@ def parse_arrangement(
         except ValueError:
             host = None
     identity = pane_owned_identity(schema, raw_id)
-    return host, on_console, window_index, pane_index, pane_id, identity, slot == SURFACE_SLOT
+    return (
+        host,
+        on_console,
+        window_index,
+        pane_index,
+        pane_id,
+        identity,
+        slot == SURFACE_SLOT,
+        slot or None,
+    )
 
 
 def is_console_view(line: str) -> bool:

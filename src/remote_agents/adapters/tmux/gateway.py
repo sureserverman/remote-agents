@@ -28,6 +28,7 @@ from remote_agents.adapters.tmux.codec import (
     parse_console_window,
     parse_pane,
     select_window_args,
+    split_console_pane_args,
     swap_pane_args,
     switch_client_args,
     switch_client_console_args,
@@ -35,7 +36,11 @@ from remote_agents.adapters.tmux.codec import (
     window_session_mark_args,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import ConsoleBindingAction, HostedPane
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsolePaneSlot,
+    HostedPane,
+)
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -411,8 +416,40 @@ class TmuxGateway:
                 arrangement[pane.pane_id] = pane
         return tuple(arrangement.values())
 
-    async def mark_console_surface(self, pane_id: str) -> None:
-        """Mark one pane as the console's projects surface, so an exchange cannot lose it.
+    async def split_console_pane(
+        self,
+        target_pane: str,
+        command: tuple[str, ...],
+        cwd: Path,
+        *,
+        vertical: bool,
+        percent: int,
+        before: bool = False,
+    ) -> str:
+        """Split one console pane, run a command in the new one, and answer with its id.
+
+        The id comes back from tmux itself (`-P -F`) rather than from a listing afterwards:
+        the composer needs it for the next split and for the slot mark, and taking "the last
+        pane in the window" would be a guess the moment anything else splits concurrently.
+        """
+        try:
+            output = await self._runner.run(
+                *self._base_argv(),
+                *split_console_pane_args(
+                    target_pane, command, cwd, vertical=vertical, percent=percent, before=before
+                ),
+            )
+        except RuntimeError as error:
+            # Typed like every other single-target console operation: the pane being split can
+            # vanish between the composer deciding to split it and the call landing.
+            raise _target_missing_or(error, target_pane) from error
+        pane_id = output.strip()
+        if not pane_id.startswith("%"):
+            raise RuntimeError(f"tmux did not name the pane it created: {output!r}")
+        return pane_id
+
+    async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None:
+        """Mark one pane as one of the console's three, so an exchange cannot lose track of it.
 
         Idempotent by nature — setting the same option to the same value twice is one state —
         so a caller may run it on every start without checking. What it must never be given
@@ -420,7 +457,7 @@ class TmuxGateway:
         can see the whole arrangement, and is not re-litigated here.
         """
         try:
-            await self._runner.run(*self._base_argv(), *console_slot_mark_args(pane_id))
+            await self._runner.run(*self._base_argv(), *console_slot_mark_args(pane_id, slot))
         except RuntimeError as error:
             raise _target_missing_or(error, pane_id) from error
 

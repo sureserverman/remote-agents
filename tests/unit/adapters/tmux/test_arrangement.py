@@ -42,7 +42,7 @@ def gateway(runner: RecordingRunner) -> TmuxGateway:
 
 
 def test_a_displaced_agent_reads_as_hosted_by_the_console_and_owned_by_itself() -> None:
-    host, on_console, window, position, pane, identity, surface = parse_arrangement(
+    host, on_console, window, position, pane, identity, surface, slot = parse_arrangement(
         f"ra-console|0|0|%2|2|{_A}|"
     )
 
@@ -64,7 +64,7 @@ def test_the_pane_it_displaced_reads_as_hosted_by_that_session_and_owned_by_nobo
     agent's own window — and its empty identity is what stops it being mistaken for the
     agent by anything that looks for one.
     """
-    host, on_console, _window, _position, pane, identity, surface = parse_arrangement(
+    host, on_console, _window, _position, pane, identity, surface, _slot = parse_arrangement(
         f"ra-{_A}|0|0|%1|||surface"
     )
 
@@ -75,7 +75,7 @@ def test_the_pane_it_displaced_reads_as_hosted_by_that_session_and_owned_by_nobo
 
 def test_an_inherited_schema_one_mark_is_hosting_and_never_identity() -> None:
     """tmux reports the session's mark on every pane in its window; only schema 2 is the pane's."""
-    host, _on_console, _window, _position, _pane, identity, _surface = parse_arrangement(
+    host, _on_console, _window, _position, _pane, identity, _surface, _slot = parse_arrangement(
         f"ra-{_A}|0|1|%9|1|{_A}|"
     )
 
@@ -84,7 +84,7 @@ def test_an_inherited_schema_one_mark_is_hosting_and_never_identity() -> None:
 
 
 def test_a_pane_in_nobodys_managed_window_has_neither_a_host_nor_the_console() -> None:
-    host, on_console, _window, _position, _pane, identity, _surface = parse_arrangement(
+    host, on_console, _window, _position, _pane, identity, _surface, _slot = parse_arrangement(
         "scratch|0|0|%4|||"
     )
 
@@ -129,7 +129,7 @@ async def test_the_gateway_asks_for_every_pane_on_the_server_and_names_no_sessio
     )
     assert arrangement == (
         HostedPane(None, True, 0, 0, "%2", _A, False),
-        HostedPane(_A, False, 0, 0, "%1", None, True),
+        HostedPane(_A, False, 0, 0, "%1", None, True, "surface"),
     )
 
 
