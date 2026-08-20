@@ -741,11 +741,13 @@ remote-agents
 Managed sessions do not live in that session and survive it.
 
 **If the console ends up with two panes claiming the same slot**, it says so in the projects
-pane's status line and asks to be restarted. Nothing removes the extra automatically: a pane
-the composer cannot be sure it created is not its to kill. The fix is the same two commands
-above. This is reachable because every pane process calls the same start-time repair and the
-lock between them is per-process; it has been observed once, on a console being driven by
-tests at the same time as by hand.
+pane's status line and asks to be restarted — but, like the pane rebuild above, **only at a
+start**. A duplicate that appears while the console is already up is silent until
+`remote-agents` runs again, which is also when it would be noticed. Nothing removes the extra
+automatically: a pane the composer cannot be sure it created is not its to kill, so the fix is
+the same two commands above. It is reachable because every pane process runs the same
+start-time repair and the lock between them is per-process, so two callers reading the same
+stale arrangement can each split for the same missing slot.
 
 **What recovery can and cannot do.** When the dashboard process starts, it returns each pane to
 where it belongs, logging what it moved and printing what it could not put right. Some states it can only

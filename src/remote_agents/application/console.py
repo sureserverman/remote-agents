@@ -390,7 +390,7 @@ class ConsoleComposer:
         )
 
     async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
-        """Mark the surface if it is unmarked, then return the console to rest. **Start only.**
+        """Complete the console's panes, mark its surface, and return it to rest. **Start only.**
 
         `resident_pane` is the caller's own pane — `$TMUX_PANE` — and it is checked rather
         than trusted. "Hosted by the console" is decided by the socket name, which is true of
@@ -427,9 +427,14 @@ class ConsoleComposer:
                 return RecoveryReport((), (), settled=False)
         adopted: tuple[str, ...] = ()
         try:
+            # Panes first: a console short of one cannot be returned to rest around it, and a
+            # duplicated slot is something only this pass ever notices. Deliberately **not**
+            # under `self._links` — unlike `ensure`'s call — because only the process resident
+            # in the left slot reaches here, so there is one caller by construction rather
+            # than by locking. If that guard is ever relaxed, this needs the lock.
             adopted = (*await self._build_panes(), *await self._adopt_surface())
         except Exception:
-            _LOG.exception("the console surface could not be marked; recovery may not find it")
+            _LOG.exception("the console could not be built or marked; recovery may not find it")
         report = await self.recover()
         for note in report.moved:
             _LOG.info("console recovery: %s", note)
