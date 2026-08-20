@@ -161,15 +161,87 @@ def test_the_pane_command_never_reaches_the_console_entry(monkeypatch: pytest.Mo
     assert bootstrap.main(["pane", "feed"]) == 0
 
 
-def test_tui_still_routes_beside_the_pane_command(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The combined dashboard stays: a bare terminal has one pane, not three."""
+def test_tui_still_routes_beside_the_pane_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The combined dashboard stays: a bare terminal has one pane, not three.
+
+    Driven through `main(["tui"])`, which is the claim. The first version of this test
+    asserted `main(["doctor", "--profiles", "--json"])` — a duplicate of the subcommand test
+    twelve lines up, in which the string `tui` never appeared. It could not have failed if
+    `tui` had stopped routing, which a gate evaluator pointed out.
+    """
+    from remote_agents.adapters.tui.app import run_local_terminal
+
+    routed: list[object] = []
     monkeypatch.setattr(
         bootstrap, "_enter_pane", lambda name, config: pytest.fail("tui is not a pane surface")
     )
     monkeypatch.setattr(
         bootstrap, "_enter_console", lambda: pytest.fail("a subcommand must stay the CLI")
     )
-    assert bootstrap.main(["doctor", "--profiles", "--json"]) == 0
-    assert "profiles" in capsys.readouterr().out
+    monkeypatch.setattr(
+        bootstrap, "_run_surface", lambda config, runner, label: routed.append(runner) or 0
+    )
+    assert bootstrap.main(["tui"]) == 0
+    assert routed == [run_local_terminal], "tui runs the combined dashboard, not a pane"
+
+
+def test_the_pane_command_and_tui_run_the_same_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One composition body, two surfaces — so the confinement, the migration, the lease and
+    the attach handoff cannot drift between them. They were two hand-copied copies, and a
+    Tier-2 review caught them already diverging inside one stage."""
+    labels: list[str] = []
+    monkeypatch.setattr(
+        bootstrap, "_run_surface", lambda config, runner, label: labels.append(label) or 0
+    )
+    assert bootstrap.main(["tui"]) == 0
+    assert bootstrap.main(["pane", "feed"]) == 0
+    assert labels == ["the local terminal surface", "the feed pane"]
+
+
+async def test_an_unknown_pane_name_is_refused_by_the_surface_too() -> None:
+    """The argparse `choices` is the outer guard; the composition refuses on its own too.
+
+    Both are real: `main` is not the only caller, and a surface that trusted its argument
+    would compose a database and a catalogue before discovering there is nothing to run.
+    """
+    from remote_agents.adapters.tui.panes import run_pane_surface
+
+    with pytest.raises(ValueError, match="unknown console pane"):
+        run_pane_surface("nonsense", object())  # type: ignore[arg-type]
+
+
+async def test_the_pane_runner_seam_receives_the_surface_the_name_selects() -> None:
+    from remote_agents.adapters.tui.panes import FeedPane, SessionsPane, run_pane_surface
+
+    seen: list[type] = []
+    for name, expected in (("sessions", SessionsPane), ("feed", FeedPane)):
+        run_pane_surface(name, object(), runner=lambda surface, context: seen.append(surface))  # type: ignore[arg-type]
+        assert seen[-1] is expected
+
+
+def test_the_composition_root_does_not_load_the_terminal_library() -> None:
+    """`serve` must never import Textual, so a failure in it cannot reach the bot.
+
+    That invariant became load-bearing when `PANE_NAMES` moved into `adapters.tui` so the
+    argument parser could name the panes without importing what a pane *is*. Nothing enforced
+    it; a gate evaluator verified it by hand and said so.
+
+    A subprocess rather than an inspection of `sys.modules`, because by the time this test
+    runs the whole test session has already imported Textual for other reasons.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys; import remote_agents.bootstrap; "
+        "print('textual' in sys.modules or any(m.startswith('textual.') for m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "False", (
+        "importing the composition root pulled in Textual; `serve` now loads the terminal "
+        "library it is meant to be isolated from"
+    )

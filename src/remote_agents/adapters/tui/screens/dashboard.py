@@ -117,6 +117,10 @@ class ProjectsPaneScreen(ProjectsScreen):
             severity="warning",
         )
 
+    #: This pane is its own process's resting position, so escape here is inert and there is
+    #: no other position in the process to return to.
+    read_failure_route = "Ctrl+R re-reads this screen."
+
     async def choose(self, key: str) -> None:
         """A project row opens the chooser.
 

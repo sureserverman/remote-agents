@@ -100,7 +100,11 @@ class SessionsScreen(ChoiceScreen):
     #: *pane* means something different by Enter and has nowhere to escape to — and a status
     #: describing the other surface's keys is a false sentence, not a cosmetic one.
     listing_status = "{count} managed session(s). Select one for detail."
-    empty_status = "No managed sessions. Press escape to return to the project list."
+    empty_status = "No managed sessions. Press escape to go back."
+    # "…to return to the project list" until the console's panes existed. This screen is
+    # pushed, so escape is always real here — but the position it returns to is the
+    # *pusher's* resting one, which in a feed or sessions pane process is not a project
+    # list. Naming the key without naming a place is true on every surface that pushes it.
 
     def __init__(self) -> None:
         super().__init__()
@@ -366,6 +370,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
     listing_status = "{count} managed session(s). Enter opens one, d for its detail."
     empty_status = "No managed sessions on this host. Launching one starts it here."
+    read_failure_route = "Ctrl+R re-reads this screen."
 
     BINDINGS = [
         # Hidden from the footer for the reason the dashboard's copy is: the bar is shared

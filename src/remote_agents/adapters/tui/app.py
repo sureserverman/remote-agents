@@ -325,6 +325,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         finally:
             self._busy = False
+        # "the projects position" is this *app's* resting position, whatever that is: the
+        # method unwinds to stack depth 1 and only re-renders when what it finds is a
+        # projects screen. On the console's sessions and feed panes the resting position is
+        # the pane itself, so this unwinds any pushed flow and leaves the pane in front —
+        # which is what "the pane the owner opened from stays visible" means there.
         self.return_to_projects()
 
     def announce(self, message: str, *, severity: SeverityLevel = "error") -> None:
@@ -1016,7 +1021,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         target = screen if screen is not None else self.body
         if target is None or not target.showing:
             return
-        target.show_choices(((_BACK, "Back"),))
+        # The Back row is offered only where backing out is a thing that happens. On a screen
+        # that is its own process's resting position — every console pane — `go_back` refuses
+        # to pop, so the row is a key that does nothing, drawn at the moment the owner most
+        # needs the screen to be honest.
+        target.show_choices(((_BACK, "Back"),) if len(self.screen_stack) > 1 else ())
         # **The status states the failure, it does not merely point at the exit.** It read
         # "Press escape to return to the project list." — a sentence that reports nothing —
         # while the *why* went to a toast that expires after 20 seconds. A gate evaluator
@@ -1028,8 +1037,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # The severity is honest here for the same reason it is refused on a bare navigation
         # instruction: these words name the condition, so an owner under NO_COLOR reads it
         # from the sentence and the colour only makes it quicker to find.
+        route = target.read_failure_route
         target.set_status(
-            "The managed sessions could not be read. Press escape to return to the project list.",
+            f"The managed sessions could not be read. {route}",
             severity="error",
         )
         target.announce(f"The managed sessions could not be read: {error}")

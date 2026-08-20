@@ -23,8 +23,8 @@ from remote_agents.adapters.tui import PANE_NAMES
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import AttachRequest
-from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.dashboard import ProjectsPaneScreen
+from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen
 
 

@@ -140,6 +140,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     can_refresh = True
     crumb = "Notifications"
     status = "What the agents on this host were last observed doing."
+    read_failure_route = "Ctrl+R re-reads this screen."
 
     #: The same cadence the sessions pane keeps: one glance-level surface, one interval.
     _FEED_AUTO_REFRESH = 10.0

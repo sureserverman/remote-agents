@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
@@ -45,7 +46,6 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.tui import PANE_NAMES
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
@@ -60,6 +60,15 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.adapters.tui import PANE_NAMES
+from remote_agents.application.console import RecoveryReport
+
+if TYPE_CHECKING:
+    # Annotations only. The terminal's own modules are imported inside the functions that
+    # need them, so `serve` never loads the terminal library and a failure in it cannot
+    # reach the bot — naming them here would undo that.
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.conversations import ConversationService
@@ -478,39 +487,8 @@ def main(
         return 0
     if arguments.command == "tui":
         from remote_agents.adapters.tui.app import run_local_terminal
-        from remote_agents.adapters.tui.attach import attach_to
 
-        paths = ProductionPaths.for_home(Path.home())
-        try:
-            config = _private_state_config(arguments.config or paths.config_path, paths)
-        except ConfigError as error:
-            print(error, file=sys.stderr)
-            return 1
-        paths.ensure_directories()
-        # Migrations and the pre-migration backup run once, on a real connection that is
-        # closed before the surface starts; the surface itself works over a per-operation
-        # lease and holds no database handle between operations. This is the stated answer
-        # to the question DEC-023 recorded as open (superseding it — recorded at the
-        # console-surface plan's close-out): the surface may now be long-lived beside
-        # attached sessions, and what keeps DEC-005's two-writer story simple is no longer
-        # "the terminal exec'd away", it is that the terminal's handle exists only inside a
-        # single store operation. The README states the reworded guarantee.
-        paths.open_database(open_database, migrations=MIGRATIONS).close()
-        connection = leased_connection(config.database_path)
-        request = None
-        try:
-            request = run_local_terminal(local_context(config, connection, paths))
-        except Exception:
-            _LOG.exception("the local terminal surface failed")
-            print(
-                "The terminal surface failed. Any session it started is listed by:\n"
-                "tmux -L remote-agents list-sessions",
-                file=sys.stderr,
-            )
-            return 1
-        finally:
-            connection.close()
-        return attach_to(request, switch_argv=switch_client_argv)
+        return _run_surface(arguments.config, run_local_terminal, "the local terminal surface")
     if arguments.command == "pane":
         return _enter_pane(arguments.name, arguments.config)
     if arguments.command == "serve":
@@ -712,16 +690,27 @@ def _enter_console(
     return 0
 
 
-def _console_notes(report: RecoveryReport) -> RecoveryReport:
-    """Carry the console's start-time report to the surface instead of printing it.
+def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None:
+    """Run the console's start-only repair and carry its report to the surface, or nothing.
 
-    A named seam and an identity function, which is the whole point: what it replaced was a
-    `print` to stderr, and a `print` here is erased microseconds later when Textual takes the
-    alternate screen — invisible for the entire session it describes. Naming the hand-over
-    lets a test assert that nothing is written to either stream, which is the actual defect;
-    asserting the surface renders it is a different test on the other side of the seam.
+    A named seam for two reasons. First, what it replaced was a `print` to stderr, and a
+    `print` here is erased microseconds later when Textual takes the alternate screen —
+    invisible for the entire session it describes; naming the hand-over lets a test assert
+    that nothing reaches either stream, which is the actual defect.
+
+    Second, **it must not be able to take the surface down**, and that is not free.
+    `settle`'s own try block starts *after* it reads the pane arrangement, so a tmux hiccup
+    there escapes it — and uncaught, it would reach `_run_surface`'s handler and exit instead
+    of starting a degraded surface. DEC-040 restates the rule this protects: every composer
+    method degrades to a log line, and a console that cannot be settled is still a console.
+    Found by a Tier-2 review, which also noted the plan had promised this guarantee and never
+    built it.
     """
-    return report
+    try:
+        return asyncio.run(composer.settle(resident_pane))
+    except Exception:
+        _LOG.exception("the console could not be settled; the surface starts anyway")
+        return None
 
 
 def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
@@ -744,21 +733,34 @@ def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
     return open_in_console
 
 
-def _enter_pane(name: str, config_path: Path | None = None) -> int:
-    """Compose and run one console pane surface over its own per-operation lease.
+def _run_surface(
+    config_path: Path | None,
+    runner: Callable[[TuiContext], AttachRequest | None],
+    label: str,
+) -> int:
+    """Compose the local surface over the private store, run it, and honor what it hands back.
 
-    The same composition `tui` runs, resting on one pane's position instead of the combined
-    dashboard's. Each of the three pane processes holds its own lease and no standing handle
-    (DEC-035), which is what makes three writers over one SQLite file the story the bot and
-    the surface already told rather than a new one.
+    One body, two entry points — `tui`'s combined dashboard and `pane`'s single-pane
+    surface — because everything except *which surface runs* is identical: the same
+    confinement check, the same migration, the same lease, the same failure message, the
+    same attach handoff. Written twice, the copies had already started to drift within one
+    stage, which is what a Tier-2 review caught.
 
-    Migrations run here exactly as they do for `tui`, and for the same reason: a pane may be
-    the first thing ever run on this host. Three panes starting together serialize on
-    SQLite's write lock under the busy timeout `open_database` sets, and a migration already
-    applied is a version read.
+    Migrations and the pre-migration backup run once, on a real connection that is closed
+    before the surface starts; the surface itself works over a per-operation lease and holds
+    no database handle between operations (DEC-035). That is the stated answer to the
+    question DEC-023 recorded as open, superseded at the console-surface plan's close-out:
+    the surface may now be long-lived beside attached sessions, and what keeps DEC-005's
+    two-writer story simple is no longer "the terminal exec'd away", it is that the
+    terminal's handle exists only inside a single store operation. The README states the
+    reworded guarantee.
+
+    Three pane processes start together and each runs this. They serialize on SQLite's write
+    lock under the busy timeout `open_database` sets, and a migration already applied is a
+    version read — so the concurrency is the two-writer story the bot and the surface already
+    told, at one more writer.
     """
     from remote_agents.adapters.tui.attach import attach_to
-    from remote_agents.adapters.tui.panes import run_pane_surface
 
     paths = ProductionPaths.for_home(Path.home())
     try:
@@ -771,11 +773,11 @@ def _enter_pane(name: str, config_path: Path | None = None) -> int:
     connection = leased_connection(config.database_path)
     request = None
     try:
-        request = run_pane_surface(name, local_context(config, connection, paths))
+        request = runner(local_context(config, connection, paths))
     except Exception:
-        _LOG.exception("the %s pane surface failed", name)
+        _LOG.exception("%s failed", label)
         print(
-            f"The {name} pane failed. Any session it started is listed by:\n"
+            f"{label.capitalize()} failed. Any session it started is listed by:\n"
             "tmux -L remote-agents list-sessions",
             file=sys.stderr,
         )
@@ -783,6 +785,15 @@ def _enter_pane(name: str, config_path: Path | None = None) -> int:
     finally:
         connection.close()
     return attach_to(request, switch_argv=switch_client_argv)
+
+
+def _enter_pane(name: str, config_path: Path | None = None) -> int:
+    """Compose and run one console pane surface — the same composition `tui` runs."""
+    from remote_agents.adapters.tui.panes import run_pane_surface
+
+    return _run_surface(
+        config_path, lambda context: run_pane_surface(name, context), f"the {name} pane"
+    )
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):
@@ -842,7 +853,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # hosting an exec-attach would cost the dashboard its own process (attach.py), so
         # a degraded console keeps retrying quietly per pass rather than re-routing opens
         # through exec.
-        from remote_agents.application.console import ConsoleComposer, RecoveryReport
+        from remote_agents.application.console import ConsoleComposer
 
         composer = ConsoleComposer(
             runtime.gateway,
@@ -852,15 +863,13 @@ def local_context(config, connection, paths: ProductionPaths):
         if not asyncio.run(composer.ensure()):
             # Wiring continues regardless (see above), but the operator hears about it
             # here once, at the surface's front door, not only in per-pass debug logs.
-            console_recovery = _console_notes(
-                RecoveryReport(
-                    (),
-                    (
-                        "the console could not be prepared — check tmux on this host, "
-                        "or run: remote-agents doctor",
-                    ),
-                    settled=False,
-                )
+            console_recovery = RecoveryReport(
+                (),
+                (
+                    "the console could not be prepared — check tmux on this host, "
+                    "or run: remote-agents doctor",
+                ),
+                settled=False,
             )
         else:
             # The start-only repair, run by the process that *is* the console's window and by
@@ -871,9 +880,7 @@ def local_context(config, connection, paths: ProductionPaths):
             # `$TMUX_PANE` is this process's own pane. Passed so `settle` can refuse when the
             # dashboard is running somewhere other than the console's left slot: hosting is
             # decided by the socket name, which is true of every pane on this server.
-            console_recovery = _console_notes(
-                asyncio.run(composer.settle(os.environ.get("TMUX_PANE")))
-            )
+            console_recovery = _console_notes(composer, os.environ.get("TMUX_PANE"))
 
         open_in_console = _console_opener(composer)
         console_sync = composer.sync

@@ -287,3 +287,36 @@ async def test_an_empty_pane_does_not_offer_an_escape_it_does_not_have() -> None
         status = str(app.screen.query_one("#status", Static).content)
         assert "escape" not in status.lower()
         assert "project list" not in status
+
+
+async def test_a_failed_read_does_not_send_the_owner_somewhere_that_is_not_there() -> None:
+    """The failure path kept the sentence the gate commit fixed everywhere else.
+
+    `report_store_failure` renders onto the screen whose read failed. On this pane that
+    screen is the process's resting position: `go_back` refuses to pop the last screen, so
+    "Press escape to return to the project list" named an inert key and a position that does
+    not exist in this process — and it drew a Back row that could not go back, at the moment
+    the surface most needed to be honest. Found by the Stage 1 gate evaluator.
+    """
+    from textual.widgets import OptionList, Static
+
+    class _Failing(_Launcher):
+        async def list_sessions(self):
+            raise RuntimeError("store contended")
+
+    app = SessionsPane(_context((), launcher=_Failing(())))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        # Through the screen's own reload, which is the path that catches and reports.
+        await app.screen.reload()
+        await pilot.pause()
+
+        status = str(app.screen.query_one("#status", Static).content)
+        assert "could not be read" in status, "the failure must still be named"
+        assert "escape" not in status.lower()
+        assert "project list" not in status
+        assert "Ctrl+R" in status
+
+        choices = app.screen.query_one("#choices", OptionList)
+        rows = [str(option.prompt) for option in choices.options]
+        assert "Back" not in rows, "a Back row that cannot go back is a key that does nothing"

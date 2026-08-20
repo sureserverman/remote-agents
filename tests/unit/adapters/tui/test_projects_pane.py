@@ -264,6 +264,20 @@ async def test_a_pane_with_no_console_recovery_behind_it_says_nothing_extra() ->
         assert "Choose a project" in str(app.screen.query_one("#status", Static).content)
 
 
+class _Settling:
+    def __init__(self, report: RecoveryReport | None = None, error: Exception | None = None):
+        self._report = report
+        self._error = error
+        self.panes: list[str | None] = []
+
+    async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
+        self.panes.append(resident_pane)
+        if self._error is not None:
+            raise self._error
+        assert self._report is not None
+        return self._report
+
+
 def test_the_composition_hands_the_recovery_report_over_instead_of_printing_it(capsys) -> None:
     """The channel itself: `settle`'s report is carried to the surface, not to stderr.
 
@@ -274,8 +288,26 @@ def test_the_composition_hands_the_recovery_report_over_instead_of_printing_it(c
     from remote_agents.bootstrap import _console_notes
 
     report = _recovered(moved=("a",), blocked=("b",))
-    carried = _console_notes(report)
+    composer = _Settling(report)
+    carried = _console_notes(composer, "%7")
     captured = capsys.readouterr()
     assert carried is report
+    assert composer.panes == ["%7"], "settle is asked about *this* process's own pane"
     assert "b" not in captured.err, "a blocked note printed here is erased before it is read"
     assert "b" not in captured.out
+
+
+def test_a_recovery_that_raises_leaves_the_surface_to_start_anyway(capsys) -> None:
+    """A console that cannot be settled is still a console (DEC-040).
+
+    `settle` reads the pane arrangement *before* its own try block, so a tmux hiccup there
+    escapes it — and uncaught, it reaches the composition's failure handler and exits instead
+    of starting a degraded surface. The plan promised this guarantee and it was never built;
+    a Tier-2 review found the gap.
+    """
+    from remote_agents.bootstrap import _console_notes
+
+    composer = _Settling(error=RuntimeError("tmux went away mid-arrangement"))
+    assert _console_notes(composer, "%7") is None
+    captured = capsys.readouterr()
+    assert "tmux went away" not in captured.err

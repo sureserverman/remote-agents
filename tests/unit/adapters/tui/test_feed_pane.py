@@ -24,8 +24,8 @@ import pytest
 from textual.widgets import Static
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.panes import FeedPane
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.panes import FeedPane
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.projects import ProjectIdentity
@@ -180,3 +180,25 @@ async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_loa
         await app.screen._reload_feed()
         await pilot.pause()
         assert len(flashes) == 1, "an unchanged feed must not flash again"
+
+
+@_SURFACES
+async def test_the_feed_is_bounded_rather_than_an_archive(surface) -> None:
+    """"A glance, not an archive" was asserted in prose and never driven.
+
+    The reader LIMITs and the render slices, both at `FEED_LIMIT` — but every test here fed
+    two rows, so a bound of twenty and a bound of two thousand were indistinguishable.
+    """
+    from remote_agents.adapters.tui.context import FEED_LIMIT
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return tuple(
+            _activity(ActivityKind.COMPLETED, minutes_ago=minute)
+            for minute in range(FEED_LIMIT + 7)
+        )
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        text = str(app.screen.query_one("#feed-pane", Static).content)
+        assert len(text.splitlines()) == FEED_LIMIT
