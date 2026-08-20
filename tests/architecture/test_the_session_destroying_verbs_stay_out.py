@@ -33,6 +33,22 @@ _CODEC = (
 #: Verbs that can empty a window, and so destroy the session that window belongs to.
 _SESSION_DESTROYING_VERBS = frozenset({"join-pane", "move-pane", "break-pane"})
 
+#: The tab mechanism, retired with the swap model (Sub-plan 3, Task 2.4).
+#:
+#: Not dangerous the way the set above is — `link-window` destroys nothing. It is kept out
+#: for a different reason: it is a *second* way for the console to show a session, and the two
+#: do not compose. A tab makes tmux list a linked window's panes twice, under both sessions,
+#: which is the duplicate that already produced two live defects — `inventory` reporting a
+#: session at the wrong host (DEC-039's own correction), and `pane_arrangement` choosing the
+#: console-side row so recovery talked about "session None's window" forever. `kill-session`
+#: also cannot close a window linked into another session, which is how force-stopping
+#: recorded ENDED over a still-running agent.
+#:
+#: Here rather than in a gate grep for the same reason as the set above: a grep matches the
+#: prose that explains the retirement, and an argument worth keeping should not have to be
+#: deleted to satisfy a pattern.
+_TAB_VERBS = frozenset({"link-window", "unlink-window"})
+
 
 def _argv_strings() -> set[str]:
     """Every string literal the codec can put into an argv, ignoring docstrings and comments.
@@ -68,6 +84,18 @@ def test_the_codec_never_builds_a_command_that_can_destroy_a_managed_session() -
         "session's window left empty is a session tmux destroys, along with the identity marks "
         "on it — DEC-040's rejected alternative, probed rather than assumed. Exchange panes with "
         "`swap_pane_args` instead, which leaves both windows occupied."
+    )
+
+
+def test_the_codec_never_builds_the_retired_tab_mechanism() -> None:
+    built = _argv_strings() & _TAB_VERBS
+
+    assert built == set(), (
+        f"the codec builds {sorted(built)}, which is the tab mechanism the swap model "
+        "replaced. A linked window is listed under two sessions, so every pane in it is "
+        "reported twice — the duplicate behind DEC-039's host-attribution defect and behind "
+        "a recovery loop that could not name the pane it was moving. Show a session by "
+        "exchanging the console's left pane with `swap_pane_args` instead."
     )
 
 

@@ -430,14 +430,9 @@ async def test_a_permutation_too_large_for_the_bound_says_so_rather_than_looping
 class _SyncingConsole(RecordingConsole):
     """A recording console that also answers the tab half of `sync`."""
 
-    async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
-        return ((0, None),)
 
-    async def link_session_window(self, session_id: SessionId) -> None:
-        return None
 
-    async def unlink_console_window(self, index: int) -> None:
-        return None
+
 
 
 def _record(session_id: SessionId, state: SessionState) -> SessionRecord:

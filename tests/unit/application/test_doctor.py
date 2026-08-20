@@ -132,7 +132,7 @@ def test_console_capability_is_reported_and_never_moves_the_verdict() -> None:
     )
 
     assert report["healthy"] is True
-    assert report["console"] == {"window_linkable": False}
+    assert report["console"] == {"panes_splittable": False}
     assert "tmux_console" not in report["components"]
 
 

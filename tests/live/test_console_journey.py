@@ -71,22 +71,30 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
         ):
             await runner.run(*base, "set-option", "-t", f"{name}:", option, value)
 
-        await composer.sync((_record(session_id, SessionState.RUNNING),))
-        windows = dict(await gateway.console_windows())
-        assert session_id in windows.values(), "a live session's tab must exist after sync"
+        # Showing a session is an exchange now, not a tab. The console's left slot ends up
+        # holding the agent's own pane, and the projects surface goes to live in the agent's
+        # window until it is swapped back.
+        arrangement = await gateway.pane_arrangement()
+        surface = next(pane for pane in arrangement if pane.surface)
+        agent_pane = next(pane for pane in arrangement if pane.session_id == session_id)
 
-        # open() must take the tab route: select-window works headless, and the
-        # switch-client fallback would fail here with "no current client" — so reaching
-        # the end of open() without an exception IS the proof the tab route was taken.
         await composer.open(session_id)
 
-        # jump home is the same select, aimed at the dashboard
-        await gateway.select_console_window(0)
+        after = await gateway.pane_arrangement()
+        displayed = next(pane for pane in after if pane.on_console and pane.pane_index == 0)
+        assert displayed.pane_id == agent_pane.pane_id, "the agent was not shown"
+        parked = next(pane for pane in after if pane.pane_id == surface.pane_id)
+        assert parked.host == session_id, "the surface did not go to the agent's window"
 
-        await composer.sync((_record(session_id, SessionState.ENDED),))
-        assert session_id not in dict(await gateway.console_windows()).values()
+        # The route back — what the projects key runs.
+        await composer.show_projects()
+        home = await gateway.pane_arrangement()
+        assert next(
+            pane for pane in home if pane.on_console and pane.pane_index == 0
+        ).pane_id == surface.pane_id, "the projects surface did not come back"
 
-        await composer.sync((_record(session_id, SessionState.RUNNING),))
+        # DEC-006, re-proved under the swap model: with nothing displayed, killing the
+        # console leaves the session alive and observable.
         await runner.run(*base, "kill-session", "-t", "ra-console")
         inventory = await gateway.inventory()
         assert [pane.session_id for pane in inventory.managed] == [session_id]

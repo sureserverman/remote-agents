@@ -1023,7 +1023,7 @@ def _console_features_available(working_directory: Path) -> bool:
     from remote_agents.adapters.tmux.feature_probe import probe_features
 
     try:
-        return probe_features(working_directory).window_linkable
+        return probe_features(working_directory).panes_splittable
     except Exception:  # noqa: BLE001 — a diagnostic probe reports, it never raises
         return False
 

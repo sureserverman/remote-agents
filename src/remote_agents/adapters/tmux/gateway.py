@@ -15,25 +15,17 @@ from remote_agents.adapters.tmux.codec import (
     console_binding_args,
     console_slot_mark_args,
     console_target,
-    current_console_window_args,
+    console_zoom_args,
     display_message_args,
     exact_pane_target,
     exact_session_target,
     is_console_view,
-    link_window_args,
     list_arrangement_args,
-    list_console_windows_args,
     pane_mark_args,
     parse_arrangement,
-    parse_console_window,
     parse_pane,
-    select_window_args,
     split_console_pane_args,
     swap_pane_args,
-    switch_client_args,
-    switch_client_console_args,
-    unlink_window_args,
-    window_session_mark_args,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
@@ -379,8 +371,8 @@ class TmuxGateway:
         reports position and hosting with no policy at all, and a line it cannot decode is
         dropped rather than quarantined — a malformed line here costs the composer one pane it
         will not move, where in `inventory` it would be a session whose state nobody could
-        explain. An absent server is an empty arrangement for the same reason `console_windows`
-        answers that way: there is nothing being shown.
+        explain. An absent server is an empty arrangement rather than a failure, for the same
+        reason every other console read answers that way: there is nothing being shown.
         """
         try:
             output = await self._runner.run(*self._base_argv(), *list_arrangement_args())
@@ -665,73 +657,29 @@ class TmuxGateway:
             *dashboard_command,
         )
 
-    async def link_session_window(self, session_id: SessionId) -> None:
-        """Mark one managed session's window with its identity, then tab it into the console.
 
-        The mark travels with the shared window object into the console's listing; the link
-        appends at the console's next free index (tmux 3.4, verified). Order matters only in
-        that an unmarked linked window would be a tab `console_windows` cannot attribute.
+
+
+
+
+
+    async def console_zoomed_pane(self) -> str | None:
+        """The pane the console is zoomed onto, or None when it is not zoomed at all.
+
+        None also covers "there is nothing to ask": an absent server and an absent console
+        are both honestly "no pane is hiding the others".
         """
         try:
-            await self._runner.run(*self._base_argv(), *window_session_mark_args(session_id))
-            await self._runner.run(*self._base_argv(), *link_window_args(session_id))
-        except RuntimeError as error:
-            raise _target_missing_or(error, f"ra-{session_id}") from error
-
-    async def unlink_console_window(self, window_index: int) -> None:
-        """Remove one console tab; the codec refuses index 0 so the dashboard cannot go."""
-        try:
-            await self._runner.run(*self._base_argv(), *unlink_window_args(window_index))
-        except RuntimeError as error:
-            raise _target_missing_or(error, f"ra-console:{window_index}") from error
-
-    async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
-        """List (index, owning session) per console window; no console means no windows."""
-        try:
-            output = await self._runner.run(*self._base_argv(), *list_console_windows_args())
-        except RuntimeError as error:
-            message = str(error)
-            if _reports_absent_server(message) or _reports_absent_target(message):
-                return ()
-            raise
-        return tuple(
-            parse_console_window(line) for line in output.splitlines() if line
-        )
-
-    async def select_console_window(self, window_index: int) -> None:
-        """Focus one console window by index, 0 being the dashboard."""
-        try:
-            await self._runner.run(*self._base_argv(), *select_window_args(window_index))
-        except RuntimeError as error:
-            raise _target_missing_or(error, f"ra-console:{window_index}") from error
-
-    async def switch_client_to_session(self, session_id: SessionId) -> None:
-        """Move the attached client to one exact managed session."""
-        try:
-            await self._runner.run(*self._base_argv(), *switch_client_args(session_id))
-        except RuntimeError as error:
-            raise _target_missing_or(error, f"ra-{session_id}") from error
-
-    async def switch_client_to_console(self) -> None:
-        """Move the attached client back to the console session."""
-        try:
-            await self._runner.run(*self._base_argv(), *switch_client_console_args())
-        except RuntimeError as error:
-            raise _target_missing_or(error, "ra-console") from error
-
-    async def console_active_window(self) -> int | None:
-        """The console's current window index, or None when there is nothing to ask."""
-        try:
-            output = await self._runner.run(*self._base_argv(), *current_console_window_args())
+            output = await self._runner.run(*self._base_argv(), *console_zoom_args())
         except RuntimeError as error:
             message = str(error)
             if _reports_absent_server(message) or _reports_absent_target(message):
                 return None
             raise
-        try:
-            return int(output.strip())
-        except ValueError:
+        zoomed, _, pane_id = output.strip().partition("|")
+        if zoomed != "1" or not pane_id.startswith("%"):
             return None
+        return pane_id
 
     async def display_message(self, text: str) -> None:
         """Flash one line on the status bar of whatever window the client is on."""

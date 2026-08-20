@@ -35,7 +35,6 @@ from remote_agents.ports.console import (
     ConsolePort,
     HostedPane,
 )
-from remote_agents.ports.terminal import TerminalTargetMissing
 
 _LOG = logging.getLogger(__name__)
 
@@ -128,10 +127,6 @@ CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
         "of the agent's keys on a second way to do the same thing.",
     ),
 )
-
-#: The states whose sessions have a pane worth a tab. ENDED/FAILED panes may linger as
-#: PRESERVED evidence, but a tab is an invitation to work, not an archive.
-_TAB_STATES = frozenset({SessionState.RUNNING, SessionState.STARTING})
 
 #: How many exchanges `recover` will make before reporting that the console did not settle.
 #: Each pass puts one pane where it belongs, so a console with a handful of agents settles in
@@ -366,35 +361,24 @@ class ConsoleComposer:
         return RecoveryReport(report.moved, (*report.blocked, *adopted), settled=report.settled)
 
     async def sync(self, records: tuple[SessionRecord, ...]) -> None:
-        """Link a tab per live session, unlink tabs whose session is gone; idempotent.
+        """Notice what the other writer did to the session the console is displaying.
 
-        An unattributable tab — index above zero, no owner mark — is left alone: a window
-        somebody created by hand in the console is not this composer's to remove.
+        All that is left of what used to keep a tab per live session. The tabs are gone, and
+        with them the linking and unlinking; what remains is the half that matters under the
+        swap model — the bot is a separate process with no composer (DEC-005), so when it
+        stops the session the console is currently showing, nothing tells the console. This
+        pass is where the console finds out, and `_restore_stale_display` is what puts the
+        projects surface back.
         """
         try:
             live = {
-                record.session_id for record in records if record.state in _TAB_STATES
+                record.session_id
+                for record in records
+                if record.state in {SessionState.RUNNING, SessionState.STARTING}
             }
-            async with self._links:
-                windows = await self._console.console_windows()
-                linked = {owner for _, owner in windows if owner is not None}
-                for session_id in live - linked:
-                    await self._console.link_session_window(session_id)
-            # Outside the lock, and safe for a structural reason rather than a lucky one —
-            # though not the one first written here. The original claim was that exchanges
-            # only ever touch panes *within* the console's own window, which is false: an
-            # exchange always has one end in an agent's own window, and under the tab model
-            # that window may itself be linked into the console. What actually holds is that
-            # tmux refuses to unlink a window living in only one session, so unlinking can
-            # never remove the window an exchange is working in. Corrected because a reader
-            # who checks a stated reason and finds it wrong has to re-derive the real one —
-            # exactly what this comment exists to save them.
-            for index, owner in windows:
-                if owner is not None and owner not in live:
-                    await self._unlink_quietly(index)
             await self._restore_stale_display(live)
         except Exception:
-            _LOG.exception("console tab sync failed; tabs may lag until the next pass")
+            _LOG.exception("the console could not be reconciled; it may lag by one pass")
 
     async def _restore_stale_display(self, live: set[SessionId]) -> None:
         """Bring the surface back when the session it stepped aside for is no longer live.
@@ -448,25 +432,16 @@ class ConsoleComposer:
             _LOG.debug("console: %s", note)
 
     async def open(self, session_id: SessionId) -> None:
-        """Focus one session: its tab if it has or can get one, a direct switch if not.
+        """Show one session in the console — which, under the swap model, *is* `show`.
 
-        The tab is preferred because selecting it keeps the client in the console session,
-        where the tab bar shows every session and the jump-home binding works. The direct
-        switch is the degraded route, not an equal one — but a session the owner asked to
-        open is reached even when the console is broken.
+        Kept as a name rather than folded away because it is what the surface's one open seam
+        calls, and "open this session" is the caller's vocabulary. What it used to mean —
+        link the session's window into the console as a tab, select it, and fall back to
+        switching the client — went with the tab mechanism (DEC-040). The fallback went with
+        it too: DEC-039 recorded that a client switch lands on whatever occupies the vacated
+        window rather than on the agent, so it was never a degraded route to the same place.
         """
-        try:
-            async with self._links:
-                index = await self._tab_index(session_id)
-                if index is None:
-                    await self._console.link_session_window(session_id)
-                    index = await self._tab_index(session_id)
-            if index is not None:
-                await self._console.select_console_window(index)
-                return
-        except Exception:
-            _LOG.exception("opening by tab failed; switching the client directly")
-        await self._console.switch_client_to_session(session_id)
+        await self.show(session_id)
 
     async def show(self, session_id: SessionId) -> None:
         """Put one agent's pane in the console's left slot, sending whoever is there home.
@@ -704,31 +679,35 @@ class ConsoleComposer:
         return RecoveryReport(tuple(moved), blocked, settled=settled)
 
     async def flash(self, text: str) -> None:
-        """One status-bar line for news, suppressed while the owner is looking at it.
+        """One status-bar line for news, suppressed while the feed that carries it is visible.
 
-        The console's current window being 0 means the client rests on the dashboard,
-        where the feed pane already shows the same news — flashing there would say one
-        thing twice on one screen. Failure degrades to silence: the feed row is the
-        durable record, the flash is only a nudge.
+        The rule is the same one it always was — do not say one thing twice on one screen —
+        but its premise changed with the tabs. It used to ask whether the console's current
+        window was 0, meaning the client rested on the dashboard tab; the console has exactly
+        one window now, so that question answers itself and the flash could never fire again.
+
+        Under three panes the feed is on screen beside whatever else the owner is doing, so
+        news is already visible. The one arrangement where it is not is a **zoomed** pane —
+        tmux still draws the status bar there, which is precisely when a one-line nudge earns
+        its place. Failure degrades to silence: the feed row is the durable record.
         """
         try:
-            if await self._console.console_active_window() == 0:
+            zoomed = await self._console.console_zoomed_pane()
+            if zoomed is None:
+                return
+            feed = next(
+                (
+                    pane
+                    for pane in await self._console.pane_arrangement()
+                    if pane.console_slot == ConsolePaneSlot.FEED.value
+                ),
+                None,
+            )
+            if feed is not None and feed.pane_id == zoomed:
                 return
             await self._console.display_message(text)
         except Exception:
             _LOG.exception("the console status flash failed")
-
-    async def _tab_index(self, session_id: SessionId) -> int | None:
-        for index, owner in await self._console.console_windows():
-            if owner == session_id:
-                return index
-        return None
-
-    async def _unlink_quietly(self, index: int) -> None:
-        try:
-            await self._console.unlink_console_window(index)
-        except TerminalTargetMissing:
-            pass  # already gone is exactly what sync wanted
 
 
 def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
@@ -748,7 +727,8 @@ def _left_slot(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
     # every caller then read as "at rest": the surface was never marked, `show` silently did
     # nothing, and `recover` answered `settled` unconditionally, including over a console
     # somebody had displaced by hand. Taking the lowest index the console actually has is
-    # right under either setting, and tabs cannot undercut it because `link-window` appends.
+    # right under either setting. Nothing can undercut it: the console has exactly one window
+    # since the tab mechanism retired, and even before that a linked window was appended.
     return min(console_panes, key=lambda pane: (pane.window_index, pane.pane_index))
 
 

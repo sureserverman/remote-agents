@@ -16,6 +16,23 @@ moves panes belonging to live agent sessions, and the real server has the owner'
 
 from __future__ import annotations
 
+# Two drills were removed here when the tab mechanism retired (Sub-plan 3, Task 2.4), and the
+# coverage they represented is worth naming rather than quietly losing:
+#
+# * `test_a_tabbed_session_that_never_moved_is_attached_at_home` — that a session linked into
+#   the console as a tab, but never displaced, still hands out an attach command naming its
+#   *own* session. It exercised DEC-039's correction: tmux lists a linked window's panes under
+#   both sessions, and `inventory`'s first-wins dedup was choosing by alphabetical order.
+# * `test_interruption_a_tabbed_agent_left_displayed_still_recovers` — the same duplicate seen
+#   by `pane_arrangement` rather than `inventory`, which made recovery talk about "session
+#   None's window" forever.
+#
+# Both needed `link_session_window` to set up, and no code path can produce a linked window
+# any more — the codec cannot build the verb and an architecture test keeps it that way. The
+# *decoding* rule they proved is still enforced, at unit level, where the listing lines are
+# supplied directly rather than produced by a mechanism that no longer exists:
+# `tests/unit/adapters/tmux/test_inventory_console_safety.py` (which session hosts a pane is
+# not decided by alphabetical order) and `tests/unit/adapters/tmux/test_arrangement.py`.
 import os
 from pathlib import Path
 
@@ -179,46 +196,6 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
     finally:
         await console.teardown()
 
-
-async def test_a_tabbed_session_that_never_moved_is_attached_at_home(tmp_path: Path) -> None:
-    """A linked tab is not displacement, and the attach command must not treat it as one.
-
-    `ConsoleComposer.sync` links a window into the console for **every** live session, and
-    tmux then lists that pane twice — once under `ra-<uuid>`, once under `ra-console` — in
-    alphabetical session order. `inventory`'s first-wins dedup was therefore choosing the
-    reported host by whether a session's random id sorted before or after the literal
-    "console", so roughly the quarter beginning `d`, `e` or `f` were reported as hosted by
-    the console while sitting untouched in their own window. `copy_attach` then handed the
-    owner `attach-session -t ra-console:`, which resolves to the console's *current* window.
-
-    No swap is involved, which is what made it worth a live test rather than a unit one: the
-    defect is in what tmux emits and in what order, and only real tmux emits it. The two ids are
-    **chosen, not generated**: they bracket the literal string `console`, one sorting before
-    it and one after. Written first with six random ids, this was a coin flip — only the
-    `d`/`e`/`f` quarter reproduces the defect, so the test would have passed against the
-    broken code roughly three runs in ten. A live test that fails probabilistically is worse
-    than none, because the run that passes is the one that gets believed.
-    """
-    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
-        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
-
-    console = live_console(tmp_path)
-    try:
-        await console.build(tmp_path)
-        tabbed = [
-            await console.start(SessionId.parse("0aaaaaaa-0000-0000-0000-000000000001")),
-            await console.start(SessionId.parse("faaaaaaa-0000-0000-0000-000000000001")),
-        ]
-        for session_id in tabbed:
-            await console.gateway.link_session_window(session_id)
-
-        for session_id in tabbed:
-            command = await console.terminal.copy_attach(session_id)
-            assert command is not None and command.endswith(f"-t ra-{session_id}:"), (
-                f"a tabbed session that never moved is not attached at home: {command}"
-            )
-    finally:
-        await console.teardown()
 
 
 async def test_changing_agents_never_hosts_one_agent_in_the_others_session(
@@ -448,47 +425,3 @@ async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_p
         await console.teardown()
 
 
-async def test_interruption_a_tabbed_agent_left_displayed_still_recovers(tmp_path: Path) -> None:
-    """The ordinary crash state, on a console that has done what production does.
-
-    `sync` links a tab for every live session, and a linked window is one window in two
-    sessions — so tmux lists its panes twice and the console-side row carries no host. A
-    recovery that believed that row saw the surface as "hosted by nobody", refused the
-    one-exchange fix as though it would create a crossing, and told the owner about "session
-    None's window". Sticky, too: the next `sync` early-returns because the slot's session is
-    still live, so the same false refusal repeats forever.
-
-    None of the six drives in this file linked a tab before displaying an agent, and no unit
-    arrangement had a duplicate row, which is the gap that hid it. This drive does what
-    production does, in the order production does it.
-    """
-    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
-        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
-
-    console = live_console(tmp_path)
-    try:
-        await console.build(tmp_path)
-        surface = await console.slot_pane()
-        # Chosen to sort after the literal "console": tmux lists sessions alphabetically, so
-        # this is what puts the tab's duplicate row *before* the pane's own listing. With a
-        # random id the drive reproduces the defect only about a quarter of the time.
-        agent_session = await console.start(
-            SessionId.parse("faaaaaaa-0000-0000-0000-000000000002")
-        )
-        await console.gateway.link_session_window(agent_session)
-        agent_pane = (await console.home_panes(agent_session))[0]
-        await console.composer.show(agent_session)
-        assert await console.slot_pane() == agent_pane, "the agent was not displayed"
-
-        # A fresh composer, standing in for the restarted console process.
-        restarted = ConsoleComposer(console.gateway, ("sleep", "600"), tmp_path)
-        report = await restarted.settle()
-
-        assert report.settled, f"a tabbed agent left displayed did not recover: {report}"
-        assert await console.slot_pane() == surface, "the projects surface did not come back"
-        assert await console.home_panes(agent_session) == [agent_pane], (
-            "the agent's pane did not go back to its own window"
-        )
-        assert MARKER in await console.gateway.capture(agent_session), "the agent was disturbed"
-    finally:
-        await console.teardown()

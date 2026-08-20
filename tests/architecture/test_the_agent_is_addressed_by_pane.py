@@ -71,17 +71,16 @@ _CODEC_MAY_NAME_A_SESSION = {
         "resolved from the same fresh observation that decides liveness, so it cannot name "
         "where the agent used to be. Recorded as DEC-039, re-scoping DEC-021"
     ),
-    "switch_client_args": (
-        "**the in-server route, and deliberately NOT following the host.** It moves the "
-        "already-attached client, and the only client this can be is one inside the console — "
-        "where a displayed agent is a pane of the window the client is already on, so there is "
-        "nowhere to switch it to. Under the swap model the console reaches an agent by "
-        "`ConsoleComposer.show`, which exchanges panes rather than switching sessions, and "
-        "Sub-plan 3 is what wires that in place of this route. Until then nothing displaces a "
-        "pane in production, which is the condition DEC-039 records"
+    "switch_client_argv": (
+        "**the exec handoff, on a host with no console.** Its sibling `switch_client_args` — "
+        "the in-server route the console used to reach an agent — is gone with the tab "
+        "mechanism (Sub-plan 3, Task 2.4), which is the condition DEC-039 recorded as pending: "
+        "under the swap model the console reaches an agent by exchanging panes, so there was "
+        "never a second route to keep. What remains is a different caller. A pane surface that "
+        "composed no console capability hands back an `AttachRequest`, and the session it "
+        "names is the agent's **own** — nothing has been exchanged on such a host, so there is "
+        "no displaced pane for the target to resolve wrongly onto"
     ),
-    "link_window_args": "links a whole window into the console; the window is what it names",
-    "window_session_mark_args": "marks the source window, which is the object a link shares",
 }
 
 

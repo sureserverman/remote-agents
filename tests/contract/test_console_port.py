@@ -56,8 +56,12 @@ def test_the_derivation_finds_the_ports_methods_at_all() -> None:
     """
     methods = _port_methods()
 
-    assert len(methods) >= 10, methods
-    assert {"pane_arrangement", "swap_panes", "console_windows"} <= set(methods)
+    assert len(methods) >= 8, methods
+    # `console_windows` was in this set until the tab mechanism retired (Sub-plan 3, Task
+    # 2.4). What replaced it as the "this port really does describe the console" witness is
+    # the pane vocabulary: the console is one window of three panes now, so splitting and
+    # marking them is what the port is *for*.
+    assert {"pane_arrangement", "swap_panes", "split_console_pane"} <= set(methods)
 
 
 def test_every_port_method_matches_the_gateway_signature_exactly() -> None:

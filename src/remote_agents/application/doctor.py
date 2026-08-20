@@ -115,7 +115,7 @@ def production_doctor(
     # the operator and not worth failing an otherwise healthy deploy over. The stage that
     # makes the console load-bearing is the one entitled to move this into `components`.
     if tmux_console_ready is not None:
-        report["console"] = {"window_linkable": tmux_console_ready}
+        report["console"] = {"panes_splittable": tmux_console_ready}
     if config_drift is not None:
         report["config"] = config_drift
         # A config the code cannot load is not a healthy deploy, whatever else is answering.

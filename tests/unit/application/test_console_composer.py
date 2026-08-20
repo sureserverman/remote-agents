@@ -28,7 +28,6 @@ from remote_agents.ports.console import (
     ConsolePaneSlot,
     HostedPane,
 )
-from remote_agents.ports.terminal import TerminalTargetMissing
 
 _RUNNING = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _STARTING = SessionId.parse("11234567-89ab-cdef-0123-456789abcdef")
@@ -60,7 +59,7 @@ class RecordingConsole:
         self._arrangement = arrangement
         self._next_pane = 90
         self.error = error
-        self.active_window: int | None = 2
+        self.zoomed_pane: str | None = "%0"
         self.calls: list[tuple] = []
 
     def _raise_if_armed(self) -> None:
@@ -141,10 +140,6 @@ class RecordingConsole:
         self.calls.append(("install_console_binding", key, action, command))
         self._raise_if_armed()
 
-    async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
-        self.calls.append(("console_windows",))
-        self._raise_if_armed()
-        return self.windows
 
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """A console already at rest: its left slot holds the marked projects surface.
@@ -159,27 +154,18 @@ class RecordingConsole:
             return self._arrangement
         return (HostedPane(None, True, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value),)
 
-    async def link_session_window(self, session_id: SessionId) -> None:
-        self.calls.append(("link_session_window", session_id))
-        self._raise_if_armed()
-        self.windows = (*self.windows, (len(self.windows), session_id))
 
-    async def unlink_console_window(self, index: int) -> None:
-        self.calls.append(("unlink_console_window", index))
-        self._raise_if_armed()
 
-    async def select_console_window(self, index: int) -> None:
-        self.calls.append(("select_console_window", index))
+
+
+    async def swap_panes(self, source_pane: str, target_pane: str) -> None:
+        self.calls.append(("swap_panes", source_pane, target_pane))
         self._raise_if_armed()
 
-    async def switch_client_to_session(self, session_id: SessionId) -> None:
-        self.calls.append(("switch_client_to_session", session_id))
+    async def console_zoomed_pane(self) -> str | None:
+        self.calls.append(("console_zoomed_pane",))
         self._raise_if_armed()
-
-    async def console_active_window(self) -> int | None:
-        self.calls.append(("console_active_window",))
-        self._raise_if_armed()
-        return self.active_window
+        return self.zoomed_pane
 
     async def display_message(self, text: str) -> None:
         self.calls.append(("display_message", text))
@@ -384,6 +370,50 @@ async def test_a_console_reduced_to_a_displayed_agent_is_reported_rather_than_re
     assert named(console, "split_console_pane") == []
 
 
+# --- The tab mechanism is retired (Sub-plan 3, Task 2.4) ------------------------------
+
+
+async def test_open_exchanges_the_left_pane_and_never_links_a_window() -> None:
+    """`open` *is* `show` now: one meaning for "the console shows this session".
+
+    Under the tab model this linked the session's window into the console and selected it,
+    falling back to switching the client. All three are gone with the mechanism — a tab makes
+    tmux list a linked window's panes twice, and both readers of that listing were caught
+    disagreeing about where a pane was.
+    """
+    agent = HostedPane(None, False, 0, 0, "%7", _RUNNING)
+    console = RecordingConsole(arrangement=(*_three_pane_console(), agent))
+    await _composer(console).open(_RUNNING)
+
+    assert [call[1:] for call in named(console, "swap_panes")] == [("%7", "%0")]
+
+
+async def test_the_composer_has_no_tab_operations_left_to_call() -> None:
+    """The retirement, asserted against the composer rather than against a grep.
+
+    A method that survives with no caller is how a mechanism comes back: the next author
+    finds it, assumes it is supported, and wires it up.
+    """
+    from remote_agents.application.console import ConsoleComposer
+
+    retired = {
+        "link_session_window",
+        "unlink_console_window",
+        "select_console_window",
+        "switch_client_to_session",
+        "console_windows",
+        "console_active_window",
+    }
+    source = Path(ConsoleComposer.__module__.replace(".", "/") + ".py")
+    text = (Path("src") / source).read_text(encoding="utf-8")
+    for name in retired:
+        assert f"self._console.{name}" not in text, f"the composer still calls {name}"
+    # And the port no longer declares them, so this double could not grow them back either.
+    from remote_agents.ports.console import ConsolePort
+
+    assert retired.isdisjoint(vars(ConsolePort)), "the port still declares a retired operation"
+
+
 # --- The key budget (Sub-plan 3, Task 2.1) --------------------------------------------
 #
 # Every root binding is a key the agent can never receive, on every session, forever. That
@@ -453,31 +483,7 @@ async def test_a_binding_that_cannot_be_installed_still_leaves_a_usable_console(
     assert await _composer(console).ensure() is False
 
 
-async def test_sync_links_live_sessions_and_unlinks_gone_ones() -> None:
-    console = RecordingConsole(windows=((0, None), (1, _ENDED)))
-    records = (
-        _record(_RUNNING, SessionState.RUNNING),
-        _record(_STARTING, SessionState.STARTING),
-        _record(_ENDED, SessionState.ENDED),
-    )
-    await _composer(console).sync(records)
-    linked = {call[1] for call in named(console, "link_session_window")}
-    assert linked == {_RUNNING, _STARTING}
-    assert named(console, "unlink_console_window") == [("unlink_console_window", 1)]
 
-
-async def test_sync_is_idempotent_over_an_already_correct_console() -> None:
-    console = RecordingConsole(windows=((0, None), (1, _RUNNING)))
-    await _composer(console).sync((_record(_RUNNING, SessionState.RUNNING),))
-    assert named(console, "link_session_window") == []
-    assert named(console, "unlink_console_window") == []
-
-
-async def test_an_unattributable_tab_is_left_alone() -> None:
-    """A window somebody created by hand carries no mark; it is not ours to remove."""
-    console = RecordingConsole(windows=((0, None), (3, None)))
-    await _composer(console).sync(())
-    assert named(console, "unlink_console_window") == []
 
 
 async def test_a_raising_console_degrades_to_nothing_and_raises_into_no_caller() -> None:
@@ -487,55 +493,27 @@ async def test_a_raising_console_degrades_to_nothing_and_raises_into_no_caller()
     await composer.sync((_record(_RUNNING, SessionState.RUNNING),))  # must not raise
 
 
-async def test_a_gone_tab_during_unlink_is_already_what_sync_wanted() -> None:
-    console = RecordingConsole(windows=((0, None), (2, _ENDED)))
-    console.error = None
 
-    async def unlink(index: int) -> None:
-        console.calls.append(("unlink_console_window", index))
-        raise TerminalTargetMissing("managed target is gone: ra-console:2")
+async def test_flash_is_suppressed_while_the_feed_that_carries_it_is_on_screen() -> None:
+    """Do not say one thing twice on one screen — the same rule, on a premise that still holds.
 
-    console.unlink_console_window = unlink  # type: ignore[method-assign]
-    await _composer(console).sync(())  # must not raise
-
-
-async def test_open_selects_the_linked_tab_so_the_client_stays_in_the_console() -> None:
-    console = RecordingConsole(windows=((0, None), (2, _RUNNING)))
-    await _composer(console).open(_RUNNING)
-    assert named(console, "select_console_window") == [("select_console_window", 2)]
-    assert named(console, "switch_client_to_session") == []
-
-
-async def test_open_links_first_when_the_tab_is_missing() -> None:
-    console = RecordingConsole(windows=((0, None),))
-    await _composer(console).open(_RUNNING)
-    assert len(named(console, "link_session_window")) == 1
-    assert len(named(console, "select_console_window")) == 1
-
-
-async def test_open_falls_back_to_a_direct_switch_when_tabs_fail() -> None:
-    console = RecordingConsole()
-
-    async def windows() -> tuple[tuple[int, SessionId | None], ...]:
-        console.calls.append(("console_windows",))
-        raise RuntimeError("listing failed")
-
-    console.console_windows = windows  # type: ignore[method-assign]
-    await _composer(console).open(_RUNNING)
-    assert named(console, "switch_client_to_session") == [
-        ("switch_client_to_session", _RUNNING)
-    ]
-
-
-async def test_flash_is_suppressed_while_the_owner_is_looking_at_the_dashboard() -> None:
-    """Window 0 means the client rests on the dashboard, where the feed pane already
-    shows the same news — flashing there would say one thing twice on one screen."""
-    console = RecordingConsole()
-    console.active_window = 0
+    It used to ask whether the console's current window was 0, meaning the client rested on
+    the dashboard tab. With the tabs retired the console has exactly one window, so that
+    question answers itself and the flash could never have fired again. Under three panes the
+    feed is beside whatever the owner is doing, so the only arrangement that hides it is a
+    zoomed pane — where tmux still draws the status bar, which is exactly when a one-line
+    nudge earns its place.
+    """
+    console = RecordingConsole(arrangement=_three_pane_console())
+    console.zoomed_pane = None
     await _composer(console).flash("the agent is waiting for an answer")
-    assert named(console, "display_message") == []
+    assert named(console, "display_message") == [], "the feed is visible; it already says this"
 
-    console.active_window = 3
+    console.zoomed_pane = "%2"  # the feed itself, zoomed
+    await _composer(console).flash("the agent is waiting for an answer")
+    assert named(console, "display_message") == [], "still the feed on screen, larger"
+
+    console.zoomed_pane = "%0"  # an agent, or the projects surface, zoomed over the feed
     await _composer(console).flash("the agent is waiting for an answer")
     assert named(console, "display_message") == [
         ("display_message", "the agent is waiting for an answer")
