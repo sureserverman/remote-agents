@@ -20,6 +20,7 @@ from enum import Enum
 
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.tmux_server import is_our_socket
 
 
 class HostingMode(Enum):
@@ -34,15 +35,23 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
     """Classify the hosting from `$TMUX`, by socket rather than by mere presence.
 
     tmux sets `TMUX` to `socket_path,server_pid,session_id`; the socket's basename is the
-    server's `-L` name, and only our own name means switching is possible. Anything set but
+    server's `-L` name, and only our own name means the console is reachable. Anything set but
     unreadable is classified as foreign, because the safe answer to "whose client is this?"
     when the evidence is garbled is "not ours".
+
+    "Our own name" is `ports.tmux_server.is_our_socket`, shared with the gateway's own check
+    rather than spelled again here. The two disagreed until a live journey test tripped over
+    it: the gateway accepts a `remote-agents-test-` socket, this accepted only the production
+    name, so a surface running inside a *test* console called itself foreign, wired no console
+    capability and exec-attached instead of exchanging panes. Two guards, one question, one
+    answer — on a shelf in `ports/`, because ARCH-02 lets an adapter reach `domain` and
+    `ports` and nothing else.
     """
     value = environment.get("TMUX")
     if not value:
         return HostingMode.BARE
     socket_path = value.split(",", 1)[0]
-    if os.path.basename(socket_path) == "remote-agents" and os.path.sep in socket_path:
+    if is_our_socket(os.path.basename(socket_path)) and os.path.sep in socket_path:
         return HostingMode.CONSOLE
     return HostingMode.FOREIGN
 

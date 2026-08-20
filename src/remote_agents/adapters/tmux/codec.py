@@ -24,7 +24,6 @@ _DECODABLE_SCHEMA_VERSIONS = frozenset({_SCHEMA_VERSION, _PANE_SCHEMA_VERSION})
 # non-UUID suffix so `exact_session_target` can never accept it: no lifecycle code path can
 # address the console as a managed session by construction rather than by discipline.
 CONSOLE_SESSION_NAME = "ra-console"
-
 # The console's own surface pane, marked so recovery can find it wherever an exchange parked
 # it. Deliberately *not* one of the four identity options above and not part of that
 # vocabulary: it says "this pane belongs to the console", never "this pane is a session".

@@ -35,6 +35,7 @@ from remote_agents.ports.console import (
     HostedPane,
 )
 from remote_agents.ports.terminal import TerminalTargetMissing
+from remote_agents.ports.tmux_server import is_our_socket
 
 
 class TmuxRunner(Protocol):
@@ -161,7 +162,7 @@ class TmuxGateway:
         *,
         intent_directory: Path = Path("/var/lib/remote-agents/intents"),
     ) -> None:
-        if socket_name != "remote-agents" and not socket_name.startswith("remote-agents-test-"):
+        if not is_our_socket(socket_name):
             raise ValueError("a dedicated socket name is required")
         self._socket_name = socket_name
         self._runner = runner
