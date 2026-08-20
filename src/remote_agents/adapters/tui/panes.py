@@ -24,7 +24,7 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.adapters.tui.screens.feed import FeedScreen
-from remote_agents.adapters.tui.screens.launch import ProjectsScreen
+from remote_agents.adapters.tui.screens.dashboard import ProjectsPaneScreen
 from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 
 
@@ -32,7 +32,7 @@ class ProjectsPane(RemoteAgentsTui):
     """The left pane: the projects catalogue, and the pane an exchange swaps out."""
 
     def get_default_screen(self) -> Screen[None]:
-        return ProjectsScreen()
+        return ProjectsPaneScreen()
 
 
 class SessionsPane(RemoteAgentsTui):

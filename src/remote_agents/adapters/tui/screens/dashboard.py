@@ -1,5 +1,10 @@
 """The resting position: projects on the left, sessions and notifications on the right.
 
+Two screens live here. `ProjectsPaneScreen` is the projects position with the Launch-or-Resume
+chooser in front of the wizard — the console's **left pane** in its entirety, and the base the
+dashboard builds on. `DashboardScreen` is that plus the two right-hand regions, which is what
+a bare terminal running `remote-agents tui` still shows.
+
 `DashboardScreen` subclasses the projects picker rather than replacing it, so the filter,
 its debounce, the catalogue refresh, and the never-empty stack guarantee are inherited —
 what this module adds is the shape: a right-hand column showing the running sessions
@@ -60,7 +65,37 @@ _KIND_WORDS = {
 }
 
 
-class DashboardScreen(ProjectsScreen):
+class ProjectsPaneScreen(ProjectsScreen):
+    """The projects position with the chooser in front of the wizard — the console's left pane.
+
+    The projects picker on its own sends a chosen project straight into the agent list. This
+    screen is the one that asks the Launch-or-Resume question first (DEC-033: navigation over
+    flows both surfaces already have, never a new wizard step), and it exists as its own class
+    because two surfaces need exactly that behavior: the console's **left pane**, which is its
+    whole content, and the combined dashboard, which adds the two right-hand regions on top.
+
+    `DashboardScreen` therefore subclasses *this* rather than `ProjectsScreen`. The alternative
+    — each surface routing a chosen project itself — is one behavior written twice, and the two
+    copies would only have to disagree once.
+    """
+
+    async def choose(self, key: str) -> None:
+        """A project row opens the chooser.
+
+        The selection is deliberately not touched here: only Launch commits to a fresh one, so
+        backing out of the chooser must leave nothing behind. Opening is not a stop, so the
+        resting-cursor discipline (DEC-007) is untouched — no row here mutates anything.
+        """
+        project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
+        if project is None:
+            self.announce(
+                "That project is no longer available. Refresh and try again.", severity="warning"
+            )
+            return
+        await self.advance_to(ProjectChooserScreen(project))
+
+
+class DashboardScreen(ProjectsPaneScreen):
     """Three panes, one resting position; everything the projects picker was, plus sight."""
 
     position = "DASHBOARD"
@@ -120,25 +155,17 @@ class DashboardScreen(ProjectsScreen):
         yield Footer()
 
     async def choose(self, key: str) -> None:
-        """A project row opens the chooser; a session row opens the session itself.
+        """A session row opens the session itself; anything else is a project row.
 
-        The chooser is navigation, not a wizard step (DEC-033): the selection is not yet
-        touched here, because only Launch commits to a fresh one — backing out of the
-        chooser must leave nothing behind. A session row routes through the app's one
-        open seam, so hosting decides what opening means — a console tab, or the exec
-        handoff — and this screen never has to know. Opening is not a stop: the resting
-        cursor discipline (DEC-007) is untouched because no row here mutates anything.
+        A session row routes through the app's one open seam, so hosting decides what
+        opening means — an exchange, or the exec handoff — and this screen never has to
+        know. The project half is `ProjectsPaneScreen.choose`, unchanged and shared with the
+        console's left pane rather than copied into it.
         """
         if key.startswith(_SESSION_KEY_PREFIX):
             await self.tui._open_or_leave(key.removeprefix(_SESSION_KEY_PREFIX))
             return
-        project = next((item for item in self.tui.catalogue if item.opaque_id == key), None)
-        if project is None:
-            self.announce(
-                "That project is no longer available. Refresh and try again.", severity="warning"
-            )
-            return
-        await self.advance_to(ProjectChooserScreen(project))
+        await super().choose(key)
 
     async def action_session_detail(self) -> None:
         """`d` on the highlighted session row opens today's detail screen unchanged.
