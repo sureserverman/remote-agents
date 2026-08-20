@@ -116,7 +116,9 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
     await gateway(runner).install_console_binding(
         "F12", ConsoleBindingAction.SHOW_PROJECTS, projects
     )
-    await gateway(runner).install_console_binding("C-a", ConsoleBindingAction.FOCUS_NEXT_PANE)
+    await gateway(runner).install_console_binding(
+        "C-a", ConsoleBindingAction.SHOW_PROJECTS, projects
+    )
     assert runner.calls == [
         (
             *_BASE,
@@ -126,27 +128,30 @@ async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_k
             "run-shell",
             "/usr/bin/python3 -m remote_agents console projects",
         ),
-        (*_BASE, "bind-key", "-n", "C-a", "select-pane", "-t", ":.+"),
+        (
+            *_BASE,
+            "bind-key",
+            "-n",
+            "C-a",
+            "run-shell",
+            "/usr/bin/python3 -m remote_agents console projects",
+        ),
     ]
     for key in ("", "two words", "a;b", "$(rm)", "péché", "C-", "C-;"):
         with pytest.raises(ValueError):
             await gateway(runner).install_console_binding(
-                key, ConsoleBindingAction.FOCUS_NEXT_PANE
+                key, ConsoleBindingAction.SHOW_PROJECTS, projects
             )
 
 
-async def test_a_binding_whose_action_and_command_disagree_is_refused() -> None:
-    """A projects key with nothing to run, or a focus key carrying a command, is a mistake
-    that would otherwise install a binding that quietly does the wrong thing."""
+async def test_a_projects_binding_with_nothing_to_run_is_refused() -> None:
+    """Not hypothetical: the composer's projects command defaulted to empty for one commit
+    of this branch, and every console built without one failed to come up at all."""
     from remote_agents.ports.console import ConsoleBindingAction
 
     runner = RecordingRunner()
     with pytest.raises(ValueError, match="needs the command"):
         await gateway(runner).install_console_binding("F12", ConsoleBindingAction.SHOW_PROJECTS)
-    with pytest.raises(ValueError, match="takes no command"):
-        await gateway(runner).install_console_binding(
-            "F11", ConsoleBindingAction.FOCUS_NEXT_PANE, ("anything",)
-        )
     assert runner.calls == [], "a refused binding must not reach tmux at all"
 
 

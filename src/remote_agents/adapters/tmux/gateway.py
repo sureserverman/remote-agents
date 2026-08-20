@@ -13,6 +13,7 @@ from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
     console_binding_args,
+    console_layout_args,
     console_slot_mark_args,
     console_target,
     console_zoom_args,
@@ -440,6 +441,18 @@ class TmuxGateway:
             raise RuntimeError(f"tmux did not name the pane it created: {output!r}")
         return pane_id
 
+    async def normalize_console_layout(
+        self, main_percent: int, minor_pane: str, minor_percent: int
+    ) -> None:
+        """Put the console window back in its declared proportions after a rebuild.
+
+        Three calls rather than one because tmux has no single verb for it, and they are
+        ordered: the main width is an option the layout *reads*, so it is set first, and the
+        minor pane is resized last because `select-layout` divides the right column evenly.
+        """
+        for arguments in console_layout_args(main_percent, minor_pane, minor_percent):
+            await self._runner.run(*self._base_argv(), *arguments)
+
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None:
         """Mark one pane as one of the console's three, so an exchange cannot lose track of it.
 
@@ -504,15 +517,19 @@ class TmuxGateway:
         The operation this whole addressing change was ordered around, and the one where
         `kill-session` is not merely imprecise but wrong. Verified on tmux 3.4 (2026-08-19):
         killing a session whose window is **linked into another session** removes the session
-        name, exits 0, and leaves the pane — and the agent in it — running. The shipped
-        console links a window for **every** live session — `ConsoleComposer.sync` does it
-        unconditionally, not only for sessions the owner opened — so `kill-session` reported
-        success while the agent kept going: a record at ENDED over a live process, exactly
-        what DEC-006 forbids. An earlier wording here said "a session the owner had open as a
-        tab", which understated the reach; the close-out evaluator read `sync` and corrected
-        it. That is a bug this method
-        fixes, not only one it prevents. `kill-pane` names the pane object, so it reaches the
-        agent through a link or a swap, and takes nothing else with it.
+        name, exits 0, and leaves the pane — and the agent in it — running. That was a bug
+        this method *fixed* rather than merely prevented: the console of the day linked a
+        window for every live session, so `kill-session` reported success while the agent kept
+        going — a record at ENDED over a live process, exactly what DEC-006 forbids.
+
+        **The console no longer links anything** (Sub-plan 3, Task 2.4 retired the mechanism,
+        and an architecture test keeps the verb out of the codec), so that particular producer
+        of linked windows is gone. The reason to keep naming the pane is not gone with it, and
+        is worth stating so nobody reads the paragraph above as history and simplifies this
+        back: an operator can still link a window by hand, `swap-pane` moves an agent's pane
+        into a window belonging to a session that is not its own, and `kill-pane` is correct
+        under both. It names the pane object, so it reaches the agent wherever it is hosted
+        and takes nothing else with it.
 
         **Which pane, and how much a mark is allowed to say.** A schema-2 mark is the pane's
         own, so it identifies one pane and that pane is killed. A schema-1 mark is

@@ -1,9 +1,12 @@
-"""Presentation-side console operations the application composes tabs over.
+"""Presentation-side console operations the application arranges panes with.
 
-A deliberately separate port from `terminal.py`: everything here is about *showing*
-sessions — a console session, its panes and windows, a client's focus — and none of it may
-ever become something a session's lifecycle depends on (DEC-006). The tmux adapter's
-gateway satisfies this protocol structurally.
+A deliberately separate port from `terminal.py`: everything here is about *showing* sessions
+— the console session, its panes, the keys it binds — and none of it may ever become
+something a session's lifecycle depends on (DEC-006). The tmux adapter's gateway satisfies
+this protocol structurally.
+
+It described "composing tabs" until Sub-plan 3's Task 2.4 retired that mechanism. The
+vocabulary is panes now: split them, mark them with what they are, exchange one for another.
 """
 
 from __future__ import annotations
@@ -42,29 +45,24 @@ class ConsoleBindingAction(Enum):
     """What one console root binding does — a closed set, not a description.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
-    free text (DEC-001). Two members, because the console's whole key budget is two keys.
+    free text (DEC-001).
+
+    **One member, and it used to be two.** A `FOCUS_NEXT_PANE` action bound a second root key
+    to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
+    along with everything else the owner types. That premise is false — tmux intercepts the
+    prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
+    the console's three panes and costs no agent anything. The action is removed rather than
+    left unbound: an unbindable member invites the next author to spend a key on the argument
+    that was just disproved.
     """
 
     SHOW_PROJECTS = "show_projects"
     """Return the projects surface to the console's left slot, wherever an exchange left it.
 
-    It runs *our own program* rather than a tmux command, and that is forced rather than
-    chosen: tmux can select a window by itself, but it cannot read our pane marks and work
-    out which exchange brings the surface home. Under the tab model this key was
-    `select-window 0`, which under the swap model selects the window the owner is already on.
-    """
-
-    FOCUS_NEXT_PANE = "focus_next_pane"
-    """Move focus to the next pane of the current window, cycling.
-
-    One key for three panes: cycling reaches any of them in at most two presses, where a key
-    per pane would spend three of the agent's keys on a second way to do the same thing.
-
-    Pressed outside the console it acts on whatever window that client is on. A managed
-    session's window is usually one pane, where cycling changes nothing — but this project
-    treats an operator's hand-split pane as ordinary, and the surface hands out an attach
-    command for precisely that kind of direct connection, so "a no-op outside the console" is
-    not promised. What is promised is that it only ever moves focus.
+    It runs *our own program* rather than a tmux command, and that much is forced: tmux can
+    select a window by itself, but it cannot read our pane marks and work out which exchange
+    brings the surface home. Under the tab model this key was `select-window 0`, which under
+    the swap model selects the window the owner is already on.
     """
 
 
@@ -166,3 +164,7 @@ class ConsolePort(Protocol):
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
 
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...
+
+    async def normalize_console_layout(
+        self, main_percent: int, minor_pane: str, minor_percent: int
+    ) -> None: ...

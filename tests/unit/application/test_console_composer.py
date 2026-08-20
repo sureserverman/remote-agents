@@ -1,12 +1,15 @@
-"""The console composer keeps tabs equal to live sessions, and never touches lifecycle.
+"""The console composer arranges panes and keys, and never touches lifecycle.
 
-Everything here is presentation over Stage 1's validated operations: `ensure()` makes the
-console exist with the dashboard as window 0 and the jump-home binding installed; `sync()`
-links a tab per RUNNING/STARTING session and unlinks tabs whose session is gone; `open()`
-prefers selecting the linked tab — the client stays in the console session, where the tab
-bar and the jump-home binding mean something — and falls back to a direct client switch.
-The one hard rule is DEC-006's: console failure degrades to nothing, it never raises into
-a path that manages sessions, and the composer never writes a record of any kind.
+Everything here is presentation over validated tmux operations: `ensure()` makes the console
+exist as one window of three marked panes and installs the key budget; `_build_panes` rebuilds
+exactly the pane that died and declines the two states it must not guess at; `open()` shows a
+session by *exchanging* the console's left pane with that agent's own. The one hard rule is
+DEC-006's: console failure degrades to nothing, it never raises into a path that manages
+sessions, and the composer writes no record of any kind.
+
+**This file used to describe tabs** — `sync()` linking one per live session, `open()` selecting
+the linked window and falling back to a client switch. That mechanism retired with Task 2.4;
+what survives of `sync` is noticing what the other writer did to the session on screen.
 """
 
 from __future__ import annotations
@@ -112,6 +115,12 @@ class RecordingConsole:
             )
         )
         return pane_id
+
+    async def normalize_console_layout(
+        self, main_percent: int, minor_pane: str, minor_percent: int
+    ) -> None:
+        self.calls.append(("normalize_console_layout", main_percent, minor_pane, minor_percent))
+        self._raise_if_armed()
 
     async def mark_console_slot(self, pane_id: str, slot) -> None:
         self.calls.append(("mark_console_slot", pane_id, slot))
@@ -414,6 +423,33 @@ async def test_the_composer_has_no_tab_operations_left_to_call() -> None:
     assert retired.isdisjoint(vars(ConsolePort)), "the port still declares a retired operation"
 
 
+async def test_a_rebuild_puts_the_window_back_in_its_declared_proportions() -> None:
+    """A rebuilt pane inherits the shape of what it was split from, not its own.
+
+    Measured on real tmux at the Stage 2 gate: kill the projects pane and the one that
+    replaces it is a 48x16 box in the top-left with the feed running the **full width**
+    beneath both — correct marks, correct side, wrong window. `-b` chooses a side; it cannot
+    undo a layout tree that changed while the pane was missing.
+    """
+    projects = ConsolePaneSlot.PROJECTS.value
+    survivors = tuple(pane for pane in _three_pane_console() if pane.console_slot != projects)
+    console = RecordingConsole(arrangement=survivors)
+    await _composer(console).ensure()
+
+    assert named(console, "normalize_console_layout") == [
+        ("normalize_console_layout", 60, "%2", 33)
+    ]
+
+
+async def test_a_console_already_at_rest_is_never_resized_underneath_the_owner() -> None:
+    """`ensure` runs every time a second terminal opens the console. Normalizing there would
+    undo any resize the owner made on purpose, which is worse than the defect above."""
+    console = RecordingConsole(arrangement=_three_pane_console())
+    await _composer(console).ensure()
+
+    assert named(console, "normalize_console_layout") == []
+
+
 # --- The key budget (Sub-plan 3, Task 2.1) --------------------------------------------
 #
 # Every root binding is a key the agent can never receive, on every session, forever. That
@@ -429,22 +465,23 @@ async def test_ensure_installs_exactly_the_declared_binding_budget() -> None:
     assert installed == [(binding.key, binding.action) for binding in CONSOLE_BINDINGS]
 
 
-async def test_the_binding_budget_is_two_keys_and_every_one_of_them_says_why() -> None:
-    """A third root binding should have to be argued for here, not appear silently.
+async def test_the_binding_budget_is_one_key_and_it_says_why() -> None:
+    """A second root binding should have to be argued for here, not appear silently.
 
-    The plan allows the projects key plus *at most* two for pane focus. Two is what the
-    layout actually needs: one key returns the projects surface to the left slot, and one
-    cycles focus, which reaches any of three panes in at most two presses. A per-pane focus
-    key would be a third key spent on a second way to do the same thing.
+    The plan allowed the projects key plus *at most* two for pane focus. What the layout
+    actually needs is one. A focus key was declared and then removed at the Stage 2 gate: its
+    argument was that a displayed agent consumes the prefix key, which is false — tmux
+    intercepts the prefix in the client, so `prefix + o` already cycles the three panes at no
+    cost to any agent. A key that buys one keystroke over an existing chord does not earn a
+    permanent claim on every agent's keyboard.
     """
-    assert len(CONSOLE_BINDINGS) == 2
-    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 2, "two keys, not one twice"
-    assert len({binding.action for binding in CONSOLE_BINDINGS}) == 2
+    assert len(CONSOLE_BINDINGS) == 1
+    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 1
     for binding in CONSOLE_BINDINGS:
         assert binding.why.strip(), f"{binding.key} is spent forever and does not say why"
 
 
-async def test_the_projects_binding_carries_our_own_command_and_focus_carries_none() -> None:
+async def test_the_projects_binding_carries_our_own_command() -> None:
     """The route back from a displayed agent is a command, because a key cannot exchange panes.
 
     tmux can select a window on its own; it cannot read our pane marks and decide which
@@ -457,7 +494,6 @@ async def test_the_projects_binding_carries_our_own_command_and_focus_carries_no
 
     by_action = {call[2]: call[3] for call in named(console, "install_console_binding")}
     assert by_action[ConsoleBindingAction.SHOW_PROJECTS] == _PROJECTS_COMMAND
-    assert by_action[ConsoleBindingAction.FOCUS_NEXT_PANE] == ()
 
 
 async def test_re_ensure_does_not_stack_the_bindings() -> None:
@@ -473,13 +509,30 @@ async def test_re_ensure_does_not_stack_the_bindings() -> None:
 
 
 async def test_a_binding_that_cannot_be_installed_still_leaves_a_usable_console() -> None:
-    """DEC-006 as it reaches presentation: a missing key costs the owner a key, never a console."""
-    console = RecordingConsole()
+    """A missing key costs the owner a key, never a console.
+
+    This test's name said so while its assertion said `ensure() is False` — and `False` is
+    what `_enter_console` reads as "the console could not be prepared", so it refused to
+    attach to a console whose three panes were built and running. Found by the Stage 2 gate
+    evaluator, which noticed the name and the assertion contradicting each other.
+    """
+    console = RecordingConsole(arrangement=_three_pane_console())
 
     async def refuse(key, action, command=()):
         raise RuntimeError("tmux refused the bind")
 
     console.install_console_binding = refuse  # type: ignore[method-assign]
+    assert await _composer(console).ensure() is True
+
+
+async def test_a_console_that_cannot_be_built_is_still_a_failure() -> None:
+    """The other side of the line above: panes are the console, keys are a convenience."""
+    console = RecordingConsole(exists=False)
+
+    async def refuse(command, cwd):
+        raise RuntimeError("tmux refused the new-session")
+
+    console.create_console = refuse  # type: ignore[method-assign]
     assert await _composer(console).ensure() is False
 
 

@@ -145,7 +145,9 @@ class RecordingConsole:
 
 
 def composer(console: RecordingConsole) -> ConsoleComposer:
-    return ConsoleComposer(console, ("dashboard",), Path("/tmp"))
+    return ConsoleComposer(
+        console, ("dashboard",), Path("/tmp"), projects_command=("projects",)
+    )
 
 
 def _at_rest(console: RecordingConsole) -> bool:

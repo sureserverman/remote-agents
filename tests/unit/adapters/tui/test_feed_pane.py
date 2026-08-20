@@ -202,3 +202,18 @@ async def test_the_feed_is_bounded_rather_than_an_archive(surface) -> None:
         await pilot.pause()
         text = str(app.screen.query_one("#feed-pane", Static).content)
         assert len(text.splitlines()) == FEED_LIMIT
+
+
+async def test_the_feed_pane_offers_no_flows_at_all() -> None:
+    """It advertised "Add project" and honoured it, pushing the project wizard into the
+    notifications pane — where escape returns to a feed. The narrowest, most read-only
+    surface in the console offers nothing that starts a session."""
+    app = FeedPane(_context(None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        offered = set(app.screen.active_bindings)
+        assert {"ctrl+n", "ctrl+o", "ctrl+s"}.isdisjoint(offered), offered
+
+        await app.action_add_project()
+        await pilot.pause()
+        assert app.screen.position == "FEED", "a declined flow must not move the pane"

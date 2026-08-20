@@ -146,8 +146,9 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
         column = sessions[3] + feed[3] + 1
         assert 0.28 <= feed[3] / column <= 0.40, (sessions, feed)
 
-        # The key budget, installed on this socket and nowhere else.
+        # The key budget — one key — installed on this socket and nowhere else.
         keys = await _run("tmux", "-L", console_socket, "list-keys", "-T", "root")
+        assert len(CONSOLE_BINDINGS) == 1
         for binding in CONSOLE_BINDINGS:
             assert f" {binding.key} " in keys, f"{binding.key} is not bound: {keys}"
 
@@ -161,21 +162,17 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
             "the console must rest on the projects pane, not on whatever was split last"
         )
 
-        focus_key = next(
-            binding.key
-            for binding in CONSOLE_BINDINGS
-            if binding.action is ConsoleBindingAction.FOCUS_NEXT_PANE
-        )
-        await _type(host_socket, focus_key)
-        second = await _active_pane(console_socket)
-        assert second != by_slot["surface"].pane_id, "the focus key moved nothing"
-        await _type(host_socket, focus_key)
-        third = await _active_pane(console_socket)
-        assert third not in {by_slot["surface"].pane_id, second}, "the focus key does not cycle"
-        await _type(host_socket, focus_key)
-        assert await _active_pane(console_socket) == by_slot["surface"].pane_id, (
-            "three presses over three panes must come back to where they started"
-        )
+        # Focus moves on tmux's own prefix chord, which is why the console spends no key on
+        # it. The claim that a displayed agent swallows the prefix is false — tmux intercepts
+        # it in the *client*, before any key reaches the pane — and this is where that is
+        # proved rather than asserted, because it is the whole argument for a one-key budget.
+        seen = [by_slot["surface"].pane_id]
+        for _ in range(3):
+            await _type(host_socket, "C-b")
+            await _type(host_socket, "o")
+            seen.append(await _active_pane(console_socket))
+        assert len(set(seen[:3])) == 3, f"prefix+o did not reach all three panes: {seen}"
+        assert seen[3] == seen[0], f"three presses over three panes must cycle back: {seen}"
     finally:
         for socket in (host_socket, console_socket):
             try:
@@ -219,7 +216,7 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
                 "from remote_agents.application.console import ConsoleComposer;"
                 "from pathlib import Path;"
                 f"c=ConsoleComposer(TmuxGateway('{console_socket}',AsyncTmuxRunner()),"
-                f"('sleep','600'),Path('{tmp_path}'));"
+                f"('sleep','600'),Path('{tmp_path}'),projects_command=('true',));"
                 "asyncio.run(c.show_projects())",
             ),
             pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},

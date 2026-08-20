@@ -311,3 +311,17 @@ def test_a_recovery_that_raises_leaves_the_surface_to_start_anyway(capsys) -> No
     assert _console_notes(composer, "%7") is None
     captured = capsys.readouterr()
     assert "tmux went away" not in captured.err
+
+
+async def test_the_projects_pane_keeps_the_two_flows_that_begin_with_a_project() -> None:
+    """Add project and Resume both start by choosing one, and this is where that happens.
+
+    Not "Sessions": that pane is beside this one, and once an agent is displayed this pane is
+    not on screen at all.
+    """
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        offered = set(app.screen.active_bindings)
+        assert "ctrl+n" in offered, offered
+        assert "ctrl+s" not in offered, offered

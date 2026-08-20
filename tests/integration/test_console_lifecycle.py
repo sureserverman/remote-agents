@@ -130,7 +130,9 @@ async def test_opening_a_session_exchanges_it_into_the_consoles_left_pane() -> N
             HostedPane(None, False, 0, 0, "%7", _SESSION),
         )
     )
-    composer = ConsoleComposer(console, ("remote-agents", "tui"), Path("/tmp"))
+    composer = ConsoleComposer(
+        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+    )
     launcher = _Launcher([_record(SessionState.RUNNING)])
     app = RemoteAgentsTui(_context(launcher, composer))
 
@@ -158,7 +160,9 @@ async def test_a_reload_notices_the_session_the_other_writer_stopped() -> None:
             HostedPane(_SESSION, False, 0, 0, "%0", None, True, "surface"),
         )
     )
-    composer = ConsoleComposer(console, ("remote-agents", "tui"), Path("/tmp"))
+    composer = ConsoleComposer(
+        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=("true",)
+    )
     launcher = _Launcher([_record(SessionState.ENDED)])
     app = RemoteAgentsTui(_context(launcher, composer))
 

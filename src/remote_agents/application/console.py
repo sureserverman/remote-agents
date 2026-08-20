@@ -1,23 +1,25 @@
-"""Keep the console's tabs equal to the live sessions, and never touch lifecycle.
+"""Show one agent beside the console's own panes, and never touch lifecycle.
 
-The one exception allowed out of here is `open`'s last-resort direct switch, and its
-documented catcher is the surface's `_open_or_leave`, which treats it as presentation —
-announce and stay — never as lifecycle.
+The composer is pure presentation policy over `ConsolePort`: what the console window is
+made of (three panes — projects, sessions, feed), how a session is shown (its pane is
+**exchanged** into the left slot, and whatever was there goes to live in that agent's own
+window until it is swapped back), how an interrupted arrangement is returned to rest, and
+which root keys the console spends.
 
-The composer is pure presentation policy over `ConsolePort`: which sessions deserve a tab
-(RUNNING and STARTING — the ones with a pane worth reaching), when a tab goes (its session
-is no longer live), and how a session is opened (select its tab, so the client stays in
-the console session where the tab bar and the jump-home binding mean something; fall back
-to a direct client switch when tabs cannot be resolved).
+**It used to be about tabs.** A session was shown by linking its window into the console as
+a tab; that mechanism retired with Sub-plan 3's Task 2.4, along with `sync`'s linking half,
+`open`'s tab route and the direct client switch behind it. `open` is `show` now. An
+architecture test keeps the verbs out of the codec so the mechanism cannot return quietly.
 
-Two rules are load-bearing. **Console failure degrades, never dictates** — `ensure` and
-`sync` catch, log, and return, and `open`'s tab route does the same before falling back
-to a direct client switch; that final switch is the one call allowed to raise out of
-here, because "the session could not be reached at all" is the caller's to announce.
-Nothing that escapes is ever treated as lifecycle: a broken console costs the owner the
-tab bar, never a launch, a stop, or a record (DEC-006 applied to presentation). And
-**the composer writes no records** — it reads the caller's session projections and
-mutates only windows.
+Two rules are load-bearing. **Console failure degrades, never dictates** — every method here
+catches, logs and returns, and nothing that escapes is ever treated as lifecycle: a broken
+console costs the owner the arrangement, never a launch, a stop, or a record (DEC-006 applied
+to presentation). And **the composer writes no records** — it reads the caller's session
+projections and moves panes.
+
+The one thing the swap model added to that bargain is written down rather than discovered:
+presentation now holds a pane a session's process lives in, so killing the console takes the
+agent it is displaying with it (DEC-040's first accepted cost).
 """
 
 from __future__ import annotations
@@ -38,8 +40,9 @@ from remote_agents.ports.console import (
 
 _LOG = logging.getLogger(__name__)
 
-#: Root-table key that returns the client to the dashboard window from any tab. A root
-#: binding costs every pane this key, so it is a function key nothing curated uses.
+#: The one root-table key the console takes. It brings the projects surface back to the left
+#: slot; under the tab model it selected the dashboard window instead. A root binding costs
+#: every agent this key, so it is a function key nothing curated uses.
 JUMP_HOME_KEY = "F12"
 
 
@@ -102,29 +105,32 @@ class ConsoleBinding:
     """
 
 
-#: The console's whole key budget. Two keys, declared here and installed from `ensure` alone.
+#: The console's whole key budget: **one** root-table key.
 #:
-#: The size is the decision. A third would need to be argued for against the same cost the
-#: first two pay, which is why the test that pins this set asserts its *length* and not only
-#: its contents — a set that can grow silently is not a budget.
+#: The size is the decision, and this set got smaller at the Stage 2 gate rather than larger.
+#: It held a second key, F11, for cycling pane focus, argued on the premise that "the
+#: displayed agent consumes the prefix key along with everything else the owner types". That
+#: premise is false, and the gate evaluator proved it before this code did: tmux intercepts
+#: the prefix **in the client**, before any key reaches the pane, so `prefix + o` already
+#: cycles the console's three panes at no cost to any agent. The repo already contained the
+#: contradiction — the README tells the owner to detach with `Ctrl-b d` from inside this very
+#: console. A key that buys one keystroke over an existing chord is not worth taking from
+#: every agent on the server forever, so it is not taken.
 CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
     ConsoleBinding(
         JUMP_HOME_KEY,
         ConsoleBindingAction.SHOW_PROJECTS,
-        "The owner's only route back from a displayed agent. With an agent's pane in the "
-        "left slot, every key the owner types goes to that agent, so without a root key "
-        "there is no way to ask for the projects surface at all — the console could swap an "
-        "agent in and never swap it out. Inherited from the tab model, where it meant "
-        "select-window 0; under the swap model that selects the window the owner is already "
+        "The route back from a displayed agent, and the one console operation tmux cannot "
+        "perform by itself: bringing the surface home is an exchange chosen from our own "
+        "pane marks, so the key has to run our program. That much forces a binding; it does "
+        "not force a *root* binding, and the choice is deliberate rather than necessary. A "
+        "prefix binding would cost no agent anything and work identically for an owner who "
+        "knows their prefix. This is root because the way back is the one thing that must "
+        "not require remembering configuration: under the swap model an agent fills the pane "
+        "the owner was working in, which is exactly when a console looks stuck. One key, on "
+        "one server, stated as the cost it is. Inherited from the tab model, where it meant "
+        "select-window 0 — under the swap model that selects the window the owner is already "
         "on, so the key survives and its action does not.",
-    ),
-    ConsoleBinding(
-        "F11",
-        ConsoleBindingAction.FOCUS_NEXT_PANE,
-        "Three panes need keyboard focus to move between them, and the displayed agent "
-        "consumes the prefix key along with everything else the owner types. One cycling key "
-        "reaches any of the three in at most two presses; a key per pane would spend three "
-        "of the agent's keys on a second way to do the same thing.",
     ),
 )
 
@@ -168,7 +174,7 @@ class _Unwind:
 
 
 class ConsoleComposer:
-    """Create, reconcile, and focus the console's tabs; degrade to nothing on failure."""
+    """Build the console's panes, show one agent in the left slot; degrade on failure."""
 
     def __init__(
         self,
@@ -176,7 +182,7 @@ class ConsoleComposer:
         dashboard_command: tuple[str, ...],
         working_directory: Path,
         *,
-        projects_command: tuple[str, ...] = (),
+        projects_command: tuple[str, ...],
         pane_commands: Mapping[ConsolePaneSlot, tuple[str, ...]] | None = None,
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
     ) -> None:
@@ -186,6 +192,16 @@ class ConsoleComposer:
         # Which entry point returns the projects surface is composition policy, exactly as
         # which entry point *is* the dashboard is — so it arrives the same way rather than
         # being spelled inside the adapter that runs it.
+        #
+        # **Required, with no default**, and that is worth the churn it cost. It defaulted to
+        # `()` for one release of this branch, and the console it produced could not be
+        # ensured at all: `console_binding_args` refuses a projects binding with nothing to
+        # run, so `ensure` raised, caught its own exception, and returned False. Every unit
+        # test passed, because the composer helper supplied a command; six live tests failed,
+        # because they did not. A console with no way back from a displayed agent is not a
+        # degraded console, it is a trap — so it is not constructible.
+        if not projects_command:
+            raise ValueError("a console needs the command that returns its projects surface")
         self._projects_command = projects_command
         # One command per pane. Absent, `ensure` builds the **one-pane** console it always
         # built, running `dashboard_command` — which is still a real shape (a bare terminal
@@ -193,10 +209,12 @@ class ConsoleComposer:
         # gets. Production supplies all three.
         self._pane_commands = dict(pane_commands or {})
         self._bindings = bindings
-        # One lock over every link decision. sync() derives its to-link set from a windows
-        # snapshot, and open() links on a miss — two awaited round-trips apart, so without
-        # the lock a launch completing during a periodic sync could link the same session
-        # twice (two tabs, one owner; self-healing on the session's end, but visible).
+        # One lock over every arrangement decision. Each of them reads the arrangement and
+        # then acts on it, two or more awaited round-trips apart, so two overlapping callers
+        # can both decide against the same stale reading: `ensure` splitting a fourth pane for
+        # a slot the other call is already building, or `show` exchanging against a slot that
+        # has since been vacated. It was named `_links` when the decisions were about linking
+        # windows, and the name has outlived the mechanism.
         self._links = asyncio.Lock()
 
     async def ensure(self) -> bool:
@@ -222,16 +240,29 @@ class ConsoleComposer:
                     )
                     await self._console.create_console(first, self._working_directory)
                 await self._build_panes()
-            for binding in self._bindings:
-                command = (
-                    self._projects_command
-                    if binding.action is ConsoleBindingAction.SHOW_PROJECTS
-                    else ()
-                )
-                await self._console.install_console_binding(binding.key, binding.action, command)
         except Exception:
             _LOG.exception("the console could not be ensured; the surface degrades")
             return False
+        # Bindings after, and **outside** the answer this returns. A key that will not install
+        # costs the owner that key; it does not cost them the console, whose three panes are
+        # by now built and running. Inside the try above it did: `ensure` answered False, and
+        # `_enter_console` reads False as "could not be prepared" and refuses to attach — so a
+        # console standing perfectly well went unreachable because one `bind-key` failed.
+        # Caught by the Stage 2 gate evaluator, against a test whose *name* already said this
+        # was the intended behaviour while its assertion said the opposite.
+        for binding in self._bindings:
+            command = (
+                self._projects_command
+                if binding.action is ConsoleBindingAction.SHOW_PROJECTS
+                else ()
+            )
+            try:
+                await self._console.install_console_binding(binding.key, binding.action, command)
+            except Exception:
+                _LOG.exception(
+                    "the console key %s could not be installed; the console stands without it",
+                    binding.key,
+                )
         return True
 
     async def _build_panes(self) -> None:
@@ -262,6 +293,7 @@ class ConsoleComposer:
         if not self._pane_commands:
             return
         arrangement = await self._console.pane_arrangement()
+        rebuilt = False
         # Every marked pane, wherever it is being hosted — see the first rule above.
         by_slot = {pane.console_slot: pane for pane in arrangement if pane.console_slot}
         left = _left_slot(arrangement)
@@ -294,6 +326,7 @@ class ConsoleComposer:
                 before=spec.before,
             )
             await self._console.mark_console_slot(pane_id, spec.slot)
+            rebuilt = True
             # Enough of a pane for the next iteration to split off. `pane_index` is
             # deliberately not synthesized: nothing downstream of this loop reads it, every
             # later call re-reads the arrangement from tmux, and a made-up index that looked
@@ -307,6 +340,29 @@ class ConsoleComposer:
                 session_id=None,
                 console_slot=spec.slot.value,
             )
+
+        # Only after an actual rebuild, and that condition is the point. A rebuilt pane
+        # inherits the shape of whatever it was split from, not the shape it is meant to
+        # have — kill the projects pane and the one that replaces it is a box in the corner
+        # with the feed running the full width beneath, which the Stage 2 gate evaluator
+        # measured on real tmux. Normalizing on *every* `ensure` would fix that and undo any
+        # resize the owner made on purpose, on a call that happens every time a second
+        # terminal runs `remote-agents`.
+        if rebuilt:
+            feed = by_slot.get(ConsolePaneSlot.FEED.value)
+            projects = next(
+                (spec for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS), None
+            )
+            if feed is not None and feed.on_console and projects is not None:
+                await self._console.normalize_console_layout(
+                    projects.percent,
+                    feed.pane_id,
+                    next(
+                        spec.percent
+                        for spec in CONSOLE_LAYOUT
+                        if spec.slot is ConsolePaneSlot.FEED
+                    ),
+                )
 
     async def settle(self, resident_pane: str | None = None) -> RecoveryReport:
         """Mark the surface if it is unmarked, then return the console to rest. **Start only.**

@@ -25,10 +25,6 @@ _DECODABLE_SCHEMA_VERSIONS = frozenset({_SCHEMA_VERSION, _PANE_SCHEMA_VERSION})
 # address the console as a managed session by construction rather than by discipline.
 CONSOLE_SESSION_NAME = "ra-console"
 
-# Window-index-to-owning-session mapping for the console. The mark below is set
-# *window-scoped* on the source (see `window_session_mark_args`) because a linked window is
-# one shared object: a window option travels with it into the console's listing, while the
-
 # The console's own surface pane, marked so recovery can find it wherever an exchange parked
 # it. Deliberately *not* one of the four identity options above and not part of that
 # vocabulary: it says "this pane belongs to the console", never "this pane is a session".
@@ -325,10 +321,10 @@ def console_binding_args(
     is bound. That is why the key is validated here rather than trusted, and why the *set* of
     them is declared in one place in the application layer rather than accumulated.
 
-    The two actions differ in shape, and the mismatch is refused rather than ignored:
-    `SHOW_PROJECTS` needs a command to run and `FOCUS_NEXT_PANE` must not carry one, so a
-    caller that passes the wrong pair gets a `ValueError` instead of a binding that quietly
-    does nothing.
+    A `SHOW_PROJECTS` binding with nothing to run is refused rather than installed as a key
+    that quietly does nothing — which is not hypothetical: the composer's projects command
+    defaulted to empty for one commit of this branch, and every console built without one
+    failed to come up at all.
 
     **Two escapes, for two interpreters, and missing either one is a defect.** `run-shell`
     takes a single shell string rather than an argv, so the command is joined with
@@ -357,22 +353,13 @@ def console_binding_args(
         raise ValueError(
             "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
         )
-    if action is ConsoleBindingAction.SHOW_PROJECTS:
-        if not command:
-            raise ValueError("the projects binding needs the command that returns the surface")
-        # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:
-        # doubling first would let shlex quote the escape we just added.
-        return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
-    if command:
-        raise ValueError(f"{action.value} takes no command; tmux does this one on its own")
-    # `:.+` is "the next pane of the current window", cycling at the end. Relative to whatever
-    # window the client pressing the key is on — the console's when it matters, and otherwise
-    # a managed session's own window, where it moves focus if that window has more than one
-    # pane. That is not nothing: this project treats an operator's hand-split pane as ordinary
-    # (see `inventory`'s inherited-mark handling), and the surface hands out an attach command
-    # for exactly that kind of direct connection. Harmless — focus moves, nothing else — but
-    # "a no-op outside the console" would be a false claim, so it is not made.
-    return ("bind-key", "-n", key, "select-pane", "-t", ":.+")
+    if action is not ConsoleBindingAction.SHOW_PROJECTS:  # pragma: no cover - one member
+        raise ValueError(f"no argv is built for {action.value}")
+    if not command:
+        raise ValueError("the projects binding needs the command that returns the surface")
+    # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:
+    # doubling first would let shlex quote the escape we just added.
+    return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
 
 
 
@@ -467,6 +454,31 @@ def console_slot_mark_args(
         exact_pane_target(pane_id),
         CONSOLE_SLOT_OPTION,
         slot.value,
+    )
+
+
+def console_layout_args(main_percent: int, minor_pane: str, minor_percent: int):
+    """Return the three argv suffixes that put the console window back in its proportions.
+
+    Needed only after a **rebuild**, and only because a rebuilt pane inherits the shape of
+    whatever it was split from rather than the shape it is meant to have. Measured on tmux
+    3.4 at 80x24: when the projects pane dies its space goes to the right-hand column, so
+    splitting the sessions pane to bring it back leaves projects a 48x16 box in the top-left
+    and the feed running the *full width* underneath both — correct marks, correct side, and
+    the wrong window. `-b` puts the pane on the right side of the sessions pane; it cannot
+    undo a layout tree that changed while the pane was missing.
+
+    So the tree is rebuilt rather than nudged. `main-vertical` is exactly this layout — one
+    full-height pane on the left, the rest stacked on the right — and it divides the right
+    column *evenly*, which is why the feed is resized afterwards. Same probe, after both:
+    47x24, 32x16 and 32x7, which is what a fresh build produces.
+    """
+    if not 1 <= main_percent <= 99 or not 1 <= minor_percent <= 99:
+        raise ValueError("a console layout takes percentages strictly inside 0 and 100")
+    return (
+        ("set-window-option", "-t", console_target(), "main-pane-width", f"{main_percent}%"),
+        ("select-layout", "-t", console_target(), "main-vertical"),
+        ("resize-pane", "-t", exact_pane_target(minor_pane), "-y", f"{minor_percent}%"),
     )
 
 

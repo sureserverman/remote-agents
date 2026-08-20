@@ -34,6 +34,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.console import ConsolePaneSlot
 
 
 def _record(session_id: SessionId, state: SessionState) -> SessionRecord:
@@ -55,7 +56,16 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
     socket = f"remote-agents-test-{session_id.value.hex}"
     runner = AsyncTmuxRunner()
     gateway = TmuxGateway(socket, runner)
-    composer = ConsoleComposer(gateway, ("sleep", "600"), tmp_path)
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        tmp_path,
+        projects_command=("true",),
+        # The real shape: three panes. `sleep` stands in for the surfaces, which are driven
+        # for real in `test_three_pane_console.py` — what this file is about is the
+        # composer's journey over them.
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
     base = ("tmux", "-L", socket)
     try:
         assert await composer.ensure() is True
@@ -65,26 +75,36 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
 
         name = f"ra-{session_id}"
         await runner.run(*base, "new-session", "-d", "-s", name, "sleep", "600")
+        # Pane-scoped, schema 2 — DEC-038. A session-scoped mark names no pane, so such a
+        # session is manageable but cannot be *displayed* by exchange, which is exactly what
+        # this journey drives. The fixture carried the schema-1 shape from before that
+        # decision and the marks went on the session; it silently produced a session the
+        # composer could not show, and the exchange assertions below then had nothing to find.
+        agent_pane = (
+            await runner.run(*base, "list-panes", "-t", f"={name}:", "-F", "#{pane_id}")
+        ).strip()
         for option, value in (
-            ("@remote_agents_schema", "1"),
+            ("@remote_agents_schema", "2"),
             ("@remote_agents_id", str(session_id)),
             ("@remote_agents_project_id", "qualification"),
             ("@remote_agents_profile", "claude"),
         ):
-            await runner.run(*base, "set-option", "-t", f"{name}:", option, value)
+            await runner.run(*base, "set-option", "-p", "-t", agent_pane, option, value)
 
         # Showing a session is an exchange now, not a tab. The console's left slot ends up
         # holding the agent's own pane, and the projects surface goes to live in the agent's
         # window until it is swapped back.
         arrangement = await gateway.pane_arrangement()
         surface = next(pane for pane in arrangement if pane.surface)
-        agent_pane = next(pane for pane in arrangement if pane.session_id == session_id)
+        assert any(pane.session_id == session_id for pane in arrangement), (
+            "the fabricated session carries no pane identity, so nothing could display it"
+        )
 
         await composer.open(session_id)
 
         after = await gateway.pane_arrangement()
         displayed = next(pane for pane in after if pane.on_console and pane.pane_index == 0)
-        assert displayed.pane_id == agent_pane.pane_id, "the agent was not shown"
+        assert displayed.pane_id == agent_pane, "the agent was not shown"
         parked = next(pane for pane in after if pane.pane_id == surface.pane_id)
         assert parked.host == session_id, "the surface did not go to the agent's window"
 

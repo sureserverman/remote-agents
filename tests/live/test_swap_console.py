@@ -68,7 +68,9 @@ class LiveConsole:
         self.terminal = TmuxTerminal(
             self.gateway, {_PROJECT: home}, {_PROFILE: probe_profile()}, startup_timeout=15
         )
-        self.composer = ConsoleComposer(self.gateway, ("sleep", "600"), home)
+        self.composer = ConsoleComposer(
+            self.gateway, ("sleep", "600"), home, projects_command=("true",)
+        )
         self.home = home
 
     async def build(self, home: Path) -> None:

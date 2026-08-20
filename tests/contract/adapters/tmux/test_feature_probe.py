@@ -212,9 +212,11 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
 
         # Claim 11 (gateway.py::destroy): the fact the whole destruction rewrite rests on.
         # `kill-session` on a session whose window is linked into another removes the session
-        # name, exits 0, and leaves the pane and its process running. The shipped console
-        # links a window per live session, so this was a stop reporting success over a live
-        # agent — the DEC-006 outcome — and it is why destruction names a pane.
+        # name, exits 0, and leaves the pane and its process running. The console of the day
+        # linked a window per live session, so this was a stop reporting success over a live
+        # agent — the DEC-006 outcome — and it is why destruction names a pane. The console
+        # links nothing now (Sub-plan 3, Task 2.4), but the tmux fact is unchanged and an
+        # operator can still link a window by hand, so the claim is still worth pinning.
         run("new-session", "-d", "-s", "linked-home", "-c", str(tmp_path))
         run("new-session", "-d", "-s", "linked-host", "-c", str(tmp_path))
         run("link-window", "-d", "-s", "linked-home:", "-t", "linked-host:")

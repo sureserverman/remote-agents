@@ -29,7 +29,15 @@ from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen
 
 
 class ProjectsPane(RemoteAgentsTui):
-    """The left pane: the projects catalogue, and the pane an exchange swaps out."""
+    """The left pane: the projects catalogue, and the pane an exchange swaps out.
+
+    The two flows that begin with a project — registering one, and reopening a saved
+    conversation — belong here, because this is where a project is chosen. Not "Sessions":
+    the sessions pane is beside this one, and once an agent is displayed this pane is not
+    even on screen.
+    """
+
+    flows = frozenset({"add_project", "resume"})
 
     def get_default_screen(self) -> Screen[None]:
         return ProjectsPaneScreen()
@@ -41,14 +49,27 @@ class SessionsPane(RemoteAgentsTui):
     The sessions pane is the swap controller deliberately — it is the one pane that stays
     visible while an agent occupies the left slot, so it is the only place the owner can
     reach back from.
+
+    It offers no app-level flow. Every one of them starts by choosing a project, which is the
+    pane next door; pushing the launch wizard in here would bury the list this pane exists to
+    keep in sight.
     """
+
+    flows = frozenset()
 
     def get_default_screen(self) -> Screen[None]:
         return SessionsPaneScreen()
 
 
 class FeedPane(RemoteAgentsTui):
-    """The right-bottom pane: the durable notifications feed, newest first (DEC-037)."""
+    """The right-bottom pane: the durable notifications feed, newest first (DEC-037).
+
+    The narrowest surface in the console, and a read-only one: it offers no flow at all.
+    Inheriting them, it advertised "Add project" and honoured it — pushing the project
+    wizard into the notifications pane, where escape returns to a feed.
+    """
+
+    flows = frozenset()
 
     def get_default_screen(self) -> Screen[None]:
         return FeedScreen()

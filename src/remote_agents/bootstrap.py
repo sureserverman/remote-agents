@@ -651,11 +651,15 @@ def _enter_console(
     """Enter the console: ensure it exists and become its client, honoring the hosting.
 
     The bare invocation's whole meaning. A client already on our server is told it is
-    already there (F12 reaches the dashboard); a foreign tmux client gets the command
-    printed rather than a nested client; a bare shell ensures the console — window 0
-    running `remote-agents tui` — and execs the attach, exactly the handoff shape a
-    ready launch has always used. An exec that cannot happen prints the same command
+    already there; a foreign tmux client gets the command printed rather than a nested
+    client; a bare shell ensures the console — one window of three panes, running
+    `remote-agents pane projects|sessions|feed` — and execs the attach, exactly the handoff
+    shape a ready launch has always used. An exec that cannot happen prints the same command
     and exits non-zero, so the console is never lost behind a silent failure.
+
+    "Window 0 running `remote-agents tui`" until Sub-plan 3, which is what a single-pane
+    console was. `_console_composer` supplies a command per pane now, so that is no longer
+    the shape this builds.
     """
     from remote_agents.adapters.tmux.codec import console_attach_argv
     from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
@@ -901,15 +905,14 @@ def local_context(config, connection, paths: ProductionPaths):
     hide_in_console = None
     console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
-        # Hosted by a client on our own server: opening a session focuses its console tab
-        # (the composer falls back to a direct client switch), tabs are reconciled on
-        # every sessions reload, and the surface stays alive. Everywhere else both fields
-        # stay None and the surface keeps the exec-attach contract untouched. ensure()
-        # runs before the app starts so the common failure is met here first and logged;
-        # the capabilities are then wired regardless — deliberately, because under console
-        # hosting an exec-attach would cost the dashboard its own process (attach.py), so
-        # a degraded console keeps retrying quietly per pass rather than re-routing opens
-        # through exec.
+        # Hosted by a client on our own server: opening a session **exchanges** its pane into
+        # the console's left slot, every sessions reload notices what the other writer did to
+        # whatever is displayed, and the surface stays alive. Everywhere else these fields
+        # stay None and the surface keeps the exec-attach contract untouched. ensure() runs
+        # before the app starts so the common failure is met here first and logged; the
+        # capabilities are then wired regardless — deliberately, because under console hosting
+        # an exec-attach would cost the surface its own process (attach.py), so a degraded
+        # console keeps retrying quietly per pass rather than re-routing opens through exec.
         composer = _console_composer(runtime.gateway, paths.home)
         if not asyncio.run(composer.ensure()):
             # Wiring continues regardless (see above), but the operator hears about it

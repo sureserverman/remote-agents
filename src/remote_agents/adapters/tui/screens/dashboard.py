@@ -8,9 +8,9 @@ a bare terminal running `remote-agents tui` still shows.
 `DashboardScreen` subclasses the projects picker rather than replacing it, so the filter,
 its debounce, the catalogue refresh, and the never-empty stack guarantee are inherited —
 what this module adds is the shape: a right-hand column showing the running sessions
-(reloaded on reveal and on the same 10-second cadence the sessions list uses, which also
-keeps console tabs reconciled, since `load_sessions` is the sync choke point) and the
-notifications feed pane (a placeholder until the durable activity feed lands).
+(reloaded on reveal and on the same 10-second cadence the sessions list uses, which is also
+where the console notices what the other writer did, since `load_sessions` is the sync choke
+point) and the notifications feed pane, which reads the durable activity table.
 
 The two lists share the base class's one row-selection handler; session rows carry a
 namespaced key (`session:<id>`) so `choose` can route without a second dispatch chain.
@@ -249,7 +249,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # Resuming is also the moment the pane is most likely stale: the flow that just
         # popped may have launched or stopped a session, and the return path lands here
         # without passing the reveal hook. Waiting out the timer left the owner reading
-        # "No sessions are running." for up to ten seconds beside a console tab that
+        # "No sessions are running." for up to ten seconds beside a session that
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
 

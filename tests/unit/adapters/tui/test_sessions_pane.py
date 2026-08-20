@@ -320,3 +320,24 @@ async def test_a_failed_read_does_not_send_the_owner_somewhere_that_is_not_there
         choices = app.screen.query_one("#choices", OptionList)
         rows = [str(option.prompt) for option in choices.options]
         assert "Back" not in rows, "a Back row that cannot go back is a key that does nothing"
+
+
+async def test_the_pane_offers_no_flow_that_starts_by_choosing_a_project() -> None:
+    """Carried from the Stage 1 gate: every pane inherited the whole app's bindings.
+
+    All three flows — add project, resume, sessions — begin by choosing a project, which is
+    the pane next door. Pushing the launch wizard in here would bury the list this pane
+    exists to keep in sight, and "Sessions" is a key for reaching a list that is already on
+    screen. Hidden *and* declined: this surface's rule is that a footer entry may only be
+    hidden where the action it names already refuses to run.
+    """
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        offered = set(app.screen.active_bindings)
+        assert {"ctrl+n", "ctrl+o", "ctrl+s"}.isdisjoint(offered), offered
+
+        await app.action_add_project()
+        await app.action_sessions()
+        await pilot.pause()
+        assert position(app) == "SESSIONS_PANE", "a declined flow must not move the pane"

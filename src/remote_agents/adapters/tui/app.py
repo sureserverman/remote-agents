@@ -181,6 +181,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Binding("ctrl+q", "quit", "Quit", tooltip="Leave the terminal surface"),
     ]
 
+    #: Which app-level flows this surface offers, by action name.
+    #:
+    #: The combined dashboard offers all three, and did so when it was the only surface.
+    #: A console *pane* is a process of its own that inherits these bindings, so without this
+    #: the feed pane advertised and honoured "Add project" — pushing the project wizard into
+    #: the notifications pane, where escape returns to a feed. Carried from the Stage 1 gate
+    #: to the key budget task and answered here: a pane offers the flows it owns.
+    #:
+    #: Read by `offers`, which both `check_action` and each action consult — one predicate,
+    #: because `ChoiceScreen.check_action`'s own rule is that a footer entry may only be
+    #: hidden where the action it names already declines to run.
+    flows: frozenset[str] = frozenset({"add_project", "resume", "sessions"})
+
+    def offers(self, action: str) -> bool:
+        """Whether this surface offers one of the app-level flows."""
+        return action in self.flows
+
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
@@ -211,6 +228,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         else gets the permissive default, which is the honest answer for a screen this app did
         not write.
         """
+        # The surface's own answer comes first: a flow this pane does not offer is hidden
+        # wherever it is, and the action that names it declines to run for the same reason.
+        if action in {"add_project", "resume", "sessions"} and not self.offers(action):
+            return False
         try:
             screen = self.screen
         except ScreenStackError:
@@ -669,7 +690,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         await super().action_quit()
 
     async def action_add_project(self) -> None:
-        if not self.busy:
+        if self.offers("add_project") and not self.busy:
             await self.show_areas()
 
     async def show_areas(self) -> None:
@@ -677,7 +698,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_sessions(self) -> None:
         """Show every managed session, including ones this process never launched."""
-        if self.busy:
+        if self.busy or not self.offers("sessions"):
             return
         await self.show_sessions()
 
@@ -705,7 +726,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
-        if self.busy or self._services.conversations is None:
+        if self.busy or not self.offers("resume") or self._services.conversations is None:
             return
         await self.switch_flow(ResumeProjectsScreen())
 
@@ -1064,13 +1085,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Order is whatever the store returns; nothing here sorts, and the row's age column
         is what tells the owner how old a session is.
 
-        Console-hosted, this is also where tabs track reality. Opens link their own tab,
-        and everything else catches up when the sessions list is next loaded — its reveal,
-        Ctrl+R, or the 10s auto-refresh. That is a stated latency, not an accident: a stop
-        issued from the detail screen leaves its tab standing until the list is next
-        shown, because this method is deliberately the only sync schedule there is. The
-        sync degrades to nothing on failure by its own contract; a broken console never
-        costs this list.
+        Console-hosted, this is also where the console catches up with the *other* writer.
+        The bot has no composer (DEC-005), so a session it stops while the console is
+        displaying that session goes unnoticed until something reads the list — this
+        method's reveal, Ctrl+R, or the 10s auto-refresh — and then the projects surface is
+        put back. That is a stated latency, not an accident: this is deliberately the only
+        sync schedule there is. A stop issued from *this* surface does not wait for it; the
+        stop paths step the console aside before destroying a pane. The sync degrades to
+        nothing on failure by its own contract; a broken console never costs this list.
+
+        It used to reconcile a tab per live session, which is what "sync" named. That
+        mechanism retired with Sub-plan 3's Task 2.4.
         """
         await self._services.launcher.refresh_readiness()
         records = await self.read_sessions()
