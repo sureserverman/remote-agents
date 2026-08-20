@@ -23,7 +23,12 @@ from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
 )
-from remote_agents.adapters.tui.screens.dashboard import DashboardScreen, ProjectChooserScreen
+from remote_agents.adapters.tui.screens.dashboard import (
+    DashboardScreen,
+    ProjectChooserScreen,
+    ProjectsPaneScreen,
+)
+from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.launch import (
     ProfilesScreen,
     ReviewScreen,
@@ -42,6 +47,7 @@ from remote_agents.adapters.tui.screens.sessions import (
     InspectScreen,
     RenameScreen,
     SessionDetailScreen,
+    SessionsPaneScreen,
     SessionsScreen,
 )
 
@@ -49,6 +55,9 @@ from remote_agents.adapters.tui.screens.sessions import (
 #: repainted in place any more, so this registry is the whole surface.
 ALL_SCREENS = (
     DashboardScreen,
+    ProjectsPaneScreen,
+    SessionsPaneScreen,
+    FeedScreen,
     ProjectChooserScreen,
     ProfilesScreen,
     ReviewScreen,
@@ -74,9 +83,11 @@ __all__ = [
     "InspectScreen",
     "NameScreen",
     "DashboardScreen",
+    "FeedScreen",
     "ProfilesScreen",
     "ProjectChooserScreen",
     "ProjectReviewScreen",
+    "ProjectsPaneScreen",
     "RemoteControlConfirmModal",
     "RenameScreen",
     "ResumeConversationsScreen",
@@ -84,5 +95,6 @@ __all__ = [
     "ResumeProjectsScreen",
     "ReviewScreen",
     "SessionDetailScreen",
+    "SessionsPaneScreen",
     "SessionsScreen",
 ]

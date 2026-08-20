@@ -129,6 +129,11 @@ _THEME = "textual-dark"
 # below is what ties this list back to the registry.
 _POSITIONS = (
     "DASHBOARD",
+    # The console's three pane positions. SESSIONS is already here, shared with the sessions
+    # list the combined dashboard pushes — the pane subclasses it and composes the same body,
+    # so one baseline covers both renders. PROJECTS and FEED are the two the panes add.
+    "PROJECTS",
+    "FEED",
     "PROJECT_CHOOSER",
     "PROFILES",
     "REVIEW",
@@ -367,6 +372,15 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     otherwise — a modal is not a position the driver can simply arrive at and leave.
     """
     if step == "DASHBOARD":
+        return None
+    if step in {"PROJECTS", "FEED"}:
+        # The console's pane positions, pushed. In production each is the *resting* screen of
+        # its own pane process, which this app is not — what the baseline is for is the render,
+        # and the render is a property of the screen.
+        from remote_agents.adapters.tui.screens import FeedScreen, ProjectsPaneScreen
+
+        await app.push_screen(ProjectsPaneScreen() if step == "PROJECTS" else FeedScreen())
+        await pilot.pause()
         return None
     if step in {"PROJECT_CHOOSER", "PROFILES", "REVIEW"}:
         # Through the screens' own handlers, so the baseline captures what the navigation

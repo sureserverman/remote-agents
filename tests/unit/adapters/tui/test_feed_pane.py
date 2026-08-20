@@ -1,4 +1,11 @@
-"""The notifications pane renders the durable feed: newest first, bounded, inert text.
+"""The notifications feed renders newest first, bounded, inert — on both of its surfaces.
+
+Every assertion here runs twice: once against the feed **region** inside the combined
+dashboard, which is what `remote-agents tui` still shows in a bare terminal, and once
+against the standalone feed **pane**, which is the console's right-bottom process. The two
+share one implementation (`screens/feed.py`'s `FeedRegion`), and parametrizing rather than
+copying is what keeps that true — a render that drifted on one surface would have to fail
+here on the other.
 
 The pane is a reader of `agent_activity` (via the composition's `activity_feed`
 capability) and nothing else — it never drains the spool, because consuming spool files
@@ -13,9 +20,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from textual.widgets import Static
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
+from remote_agents.adapters.tui.panes import FeedPane
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -64,14 +73,23 @@ def _context(feed=None) -> TuiContext:
     )
 
 
-async def test_the_feed_renders_newest_first_from_the_capability() -> None:
+#: The two surfaces the feed renders on. `RemoteAgentsTui` rests on the dashboard, whose
+#: feed is one region of three; `FeedPane` rests on the feed and nothing else. Both draw
+#: into a `#feed-pane` Static, which is what lets one set of assertions cover both.
+_SURFACES = pytest.mark.parametrize(
+    "surface", (RemoteAgentsTui, FeedPane), ids=("dashboard-region", "standalone-pane")
+)
+
+
+@_SURFACES
+async def test_the_feed_renders_newest_first_from_the_capability(surface) -> None:
     async def feed() -> tuple[AgentActivity, ...]:
         return (
             _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="May I push?"),
             _activity(ActivityKind.COMPLETED, minutes_ago=5),
         )
 
-    app = RemoteAgentsTui(_context(feed))
+    app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#feed-pane", Static)
@@ -80,49 +98,54 @@ async def test_the_feed_renders_newest_first_from_the_capability() -> None:
         assert text.index("May I push?") < text.index("finished"), "newest renders first"
 
 
-async def test_an_absent_capability_keeps_the_placeholder() -> None:
-    app = RemoteAgentsTui(_context(None))
+@_SURFACES
+async def test_an_absent_capability_keeps_the_placeholder(surface) -> None:
+    app = surface(_context(None))
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#feed-pane", Static)
         assert "No notifications yet." in str(pane.content)
 
 
-async def test_an_empty_feed_says_so_rather_than_going_blank() -> None:
+@_SURFACES
+async def test_an_empty_feed_says_so_rather_than_going_blank(surface) -> None:
     async def feed() -> tuple[AgentActivity, ...]:
         return ()
 
-    app = RemoteAgentsTui(_context(feed))
+    app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
         assert "No notifications yet." in str(app.screen.query_one("#feed-pane", Static).content)
 
 
-async def test_hostile_text_is_rendered_inert() -> None:
+@_SURFACES
+async def test_hostile_text_is_rendered_inert(surface) -> None:
     async def feed() -> tuple[AgentActivity, ...]:
         return (
             _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=0, detail="[link=https://x][bold]t[/"),
         )
 
-    app = RemoteAgentsTui(_context(feed))
+    app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
         text = str(app.screen.query_one("#feed-pane", Static).content)
         assert "[link=" in text, "markup must be displayed, never interpreted"
 
 
-async def test_a_raising_feed_keeps_the_pane_and_the_dashboard_standing() -> None:
+@_SURFACES
+async def test_a_raising_feed_keeps_the_pane_and_its_surface_standing(surface) -> None:
     async def feed() -> tuple[AgentActivity, ...]:
         raise RuntimeError("store contended")
 
-    app = RemoteAgentsTui(_context(feed))
+    app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.is_running
         assert "No notifications yet." in str(app.screen.query_one("#feed-pane", Static).content)
 
 
-async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_load() -> None:
+@_SURFACES
+async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_load(surface) -> None:
     """The first load is history, not news — replaying it onto the status line would
     flash the owner for things they were already told. After that, one flash per batch
     that actually contains something new, and silence for an unchanged feed."""
@@ -140,7 +163,7 @@ async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_loa
     from dataclasses import replace
 
     context = replace(_context(feed), console_flash=flash)
-    app = RemoteAgentsTui(context)
+    app = surface(context)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert flashes == [], "history must not flash"

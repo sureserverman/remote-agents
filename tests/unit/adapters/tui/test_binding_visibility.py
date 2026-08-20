@@ -139,12 +139,14 @@ def _arrangements():
     from remote_agents.adapters.tui.screens import (
         AreasScreen,
         DashboardScreen,
+        FeedScreen,
         ForceConfirmModal,
         InspectScreen,
         NameScreen,
         ProfilesScreen,
         ProjectChooserScreen,
         ProjectReviewScreen,
+        ProjectsPaneScreen,
         RemoteControlConfirmModal,
         RenameScreen,
         ResumeConversationsScreen,
@@ -152,6 +154,7 @@ def _arrangements():
         ResumeProjectsScreen,
         ReviewScreen,
         SessionDetailScreen,
+        SessionsPaneScreen,
         SessionsScreen,
     )
     from remote_agents.domain.remote_control import RemoteControlState
@@ -171,6 +174,12 @@ def _arrangements():
         NameScreen: lambda: NameScreen("infra"),
         ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
         SessionsScreen: SessionsScreen,
+        # The console's three pane positions, pushed for the same reason the back-path
+        # suite pushes them: this app rests on the dashboard, and what is asked of them
+        # here is what their footer advertises, which is a property of the screen.
+        ProjectsPaneScreen: ProjectsPaneScreen,
+        SessionsPaneScreen: SessionsPaneScreen,
+        FeedScreen: FeedScreen,
         SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
         RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),
         InspectScreen: lambda: InspectScreen("some output"),
