@@ -1,12 +1,14 @@
-"""Opt-in composer journey against real tmux: tabs live, sessions never depend on them.
+"""Opt-in composer journey against real tmux: the exchange works, sessions never depend on it.
 
-Stage 1's live file proves the raw window operations; this one proves the *composer's*
-journey over them on a disposable socket: ensure creates the console running a dashboard
-command, sync links a live session's tab and reconciles it away when the session ends,
-open focuses the tab (select-window is headless-safe — no attached client exists in CI,
-so the switch-client fallback is exactly the branch that must NOT be taken here), and
-killing the console leaves the managed session observable — DEC-006 proven one layer up
-from where Stage 1 proved it.
+This proves the *composer's* journey on a disposable socket: `ensure` creates the console,
+`open` exchanges the agent's pane into the left slot and sends the projects surface to live
+in the agent's own window, `show_projects` brings it back, and killing the console leaves the
+managed session observable — DEC-006, one layer up from where the raw operations prove it.
+
+**It used to be a journey about tabs**, because that is how the console used to show a
+session: link its window in, select it, unlink it when the session ended. That mechanism
+retired with Sub-plan 3's Task 2.4, and the questions it was really asking — does the console
+reach the agent, and does the session survive the console — are the ones asked here now.
 
 The managed session is fabricated (options set by hand) rather than launched through an
 agent profile: what is under test is window composition, and real launches carry their
