@@ -774,6 +774,15 @@ def local_context(config, connection, paths: ProductionPaths):
                 "no tab bar will appear. See the log, or run: remote-agents doctor",
                 file=sys.stderr,
             )
+        else:
+            # The start-only repair, run by the process that *is* the console's window and by
+            # nothing else — `_enter_console`'s throwaway composer must not, because entering
+            # an already-running console is a re-entry rather than a start. What it could not
+            # put right is told to the owner here, at the same front door: an unsettled
+            # console reported only to a log is not reported.
+            settled = asyncio.run(composer.settle())
+            for note in settled.blocked:
+                print(f"The console could not be fully restored: {note}", file=sys.stderr)
 
         async def open_in_console(session_id: str) -> None:
             await composer.open(SessionId.parse(session_id))

@@ -51,6 +51,12 @@ _LOG = logging.getLogger(__name__)
 #: not answered in this long is wedged, and waiting on it is how a display takes a stop with it.
 #: The cost of giving up early is a dead pane left in the console's slot, which the next sync
 #: clears; the cost of waiting is an agent that cannot be stopped.
+#:
+#: Abandoning is not killing: `wait_for` cancels the await, and the tmux subprocess underneath
+#: is left to finish on its own — so a swap begun before the timeout may still land after the
+#: destructive call. Accepted on DEC-030's precedent, which makes the same trade for the same
+#: unbounded-`communicate` hazard; the console is presentation, and a late exchange leaves a
+#: misplaced pane the next sync clears rather than anything a session depends on.
 _CONSOLE_HIDE_TIMEOUT_SECONDS = 2.0
 
 #: What each non-preserving graceful stop is recorded as in the durable history (DEC-022).

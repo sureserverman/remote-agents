@@ -48,6 +48,27 @@ def test_feature_probe_uses_a_disposable_socket_and_exact_target(tmp_path: Path)
     assert result.window_linkable is True
 
 
+def _reaped(pid: str, *, within: float = 10.0) -> bool:
+    """Whether a pid has stopped running, polled — and a zombie counts as stopped.
+
+    A bare `/proc/<pid>` check races: tmux noticing the exit and the parent reaping the child
+    are not the same instant, and in between the directory still exists. `tests/support/
+    live_probe.py` documents that race and exists to replace the naive check; this is its
+    synchronous twin, because a contract test has no event loop to await one in.
+    """
+    deadline = time.monotonic() + within
+    status = Path(f"/proc/{pid}/stat")
+    while time.monotonic() < deadline:
+        try:
+            state = status.read_text().rsplit(")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            return True
+        if state == "Z":
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path) -> None:
     socket = f"remote-agents-test-{uuid.uuid4().hex}"
     base = ("tmux", "-L", socket)
@@ -283,7 +304,7 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
 
         alive = run("list-sessions", "-F", "#{session_name}").split()
         assert "doomed-agent" in alive, "the agent's session did not survive"
-        assert not Path(f"/proc/{displayed_pid}").exists(), (
+        assert _reaped(displayed_pid), (
             "killing the console left the displayed agent running — if tmux ever changes this, "
             "the accepted cost recorded against the swap model no longer applies"
         )

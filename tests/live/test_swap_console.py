@@ -22,9 +22,18 @@ from pathlib import Path
 import pytest
 from live_probe import MARKER, probe_profile, process_gone
 
+from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.application.commands import (
+    ForceStopCommand,
+    GracefulStopCommand,
+    LaunchCommand,
+)
 from remote_agents.application.console import ConsoleComposer
+from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 _PROFILE = ProfileId("probe")
@@ -48,7 +57,8 @@ class LiveConsole:
     async def build(self, home: Path) -> None:
         """A console shaped like the real one: a surface pane and a second pane beside it.
 
-        **Built through `ensure`, not through `create_console`.** The composer's own start path
+        **Built through `ensure` and `settle`, not through `create_console`.** That pair is
+        the composer's own start path
         is what marks the left slot as the projects surface, and every exchange here depends on
         that mark to find the surface again. Built by calling the gateway directly, the fixture
         produced a console the production code would never produce — an unmarked surface — and
@@ -62,6 +72,7 @@ class LiveConsole:
         Every drive here therefore runs against a console that has more than the slot.
         """
         assert await self.composer.ensure(), "the console could not be prepared"
+        assert (await self.composer.settle()).settled, "the console did not start at rest"
         await self.runner.run(*self.base, "split-window", "-d", "-t", "ra-console:", "sleep", "600")
         marked = [pane for pane in await self.gateway.pane_arrangement() if pane.surface]
         assert len(marked) == 1, (
@@ -89,6 +100,13 @@ class LiveConsole:
             (line.split("|") for line in panes.splitlines() if line),
             key=lambda field: int(field[0]),
         )[1]
+
+    async def console_panes(self) -> list[str]:
+        """Every pane the console's own window 0 currently holds, in position order."""
+        panes = await self.runner.run(
+            *self.base, "list-panes", "-t", "ra-console:0", "-F", "#{pane_id}"
+        )
+        return [line.strip() for line in panes.splitlines() if line.strip()]
 
     async def home_panes(self, session_id: SessionId) -> list[str]:
         panes = await self.runner.run(
@@ -252,10 +270,20 @@ async def test_interruption_the_other_writer_kills_the_shown_agents_pane(tmp_pat
     """A second process ends the session while the console is displaying it.
 
     Standing in for the bot, which is a different process with no composer and so cannot ask
-    the console to step aside the way a local stop does (DEC-005). It kills the pane; the
-    console is left displaying the result and nothing tells it. What must then be true is that
-    the *next* sync notices and brings the projects surface back, and that the console — whose
-    own window just lost a pane — is still there to bring it back to.
+    the console to step aside the way a local stop does (DEC-005). It kills the pane, and
+    because a displayed pane physically lives in the console's window, the console loses a
+    pane with it — while the projects surface is left in the now-agentless session's window.
+
+    **The console cannot buy that surface back, and must not try.** `swap-pane` trades rather
+    than moves, so exchanging the stranded surface with whatever tmux shifted into the slot
+    would send *that* console pane out into the defunct session — one pane shorter each time,
+    with the defunct session kept alive holding it. So what is asserted is the honest outcome:
+    the panes the console still has stay its own, the exchange does not happen, and nothing
+    reports rest.
+
+    An earlier version of this test asserted the exchange as success and checked only that the
+    slot held the surface and the console still existed. It passed while the console was being
+    dismantled a pane at a time, which is the shape of a test agreeing with a bug.
     """
     if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
         pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
@@ -267,17 +295,22 @@ async def test_interruption_the_other_writer_kills_the_shown_agents_pane(tmp_pat
         agent_session = await console.start()
         await console.composer.show(agent_session)
         assert await console.slot_pane() != surface, "the agent was not displayed"
+        before = set(await console.console_panes())
 
-        # The other writer, reaching the agent by pane id wherever it is hosted (Sub-plan 1).
         result = await console.terminal.force_stop(agent_session)
         assert not result.live, f"the other writer's stop did not land: {result.detail}"
 
         await console.composer.sync(())
 
-        assert await console.slot_pane() == surface, (
-            "the console kept showing a session the other writer had already ended"
+        remaining = set(await console.console_panes())
+        assert remaining <= before, f"the console gained a pane it did not own: {remaining}"
+        assert surface not in remaining, (
+            "the surface was traded back into the console, which exiles one of its own panes"
         )
         assert await console.gateway.console_exists() is True, "the console did not survive"
+        assert not (await console.composer.recover()).settled, (
+            "a console whose surface is stranded outside it reported rest"
+        )
     finally:
         await console.teardown()
 
@@ -294,10 +327,17 @@ async def test_interruption_killing_the_console_destroys_the_agent_it_was_showin
     killing the pane out from under it. Probed and pinned as Claim 12's neighbour.
 
     What makes it dangerous rather than merely destructive is the asymmetry asserted below:
-    the agent's **session survives without its agent**, so nothing reports a loss and
-    reconciliation still sees a session. That is why DEC-036's documented "killing ra-console
-    is always safe" no longer holds under this model, and why the runbook has to stop saying
-    it (Stage 3). No start-time recovery can undo this — the process is gone.
+    the agent's **session name survives without its agent** — and what keeps it alive is the
+    console's own projects surface, still parked in that window. So `list-sessions` shows a
+    session that has nothing in it but our dashboard. Reconciliation is *not* fooled, which
+    the assertions below check rather than assume: no pane decodes for that identity any more,
+    so `inspect` answers `None` and the record is ended honestly. The cost is the agent's
+    process, not the record — and a stranded surface, which is the state `recover` reports and
+    cannot fix.
+
+    That is why DEC-036's documented "killing ra-console is always safe" no longer holds under
+    this model, and why the runbook has to stop saying it (Stage 3). No start-time recovery
+    can undo it — the process is gone.
 
     Asserted here so that if tmux ever changes, the recorded accepted cost is re-examined
     rather than quietly outliving its reason.
@@ -332,4 +372,76 @@ async def test_interruption_killing_the_console_destroys_the_agent_it_was_showin
             "an agent destroyed with the console still reports as an observable session"
         )
     finally:
+        await console.teardown()
+
+
+async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_path: Path) -> None:
+    """Sub-plans 1 and 2 together: the addressing proven through the composer's choreography.
+
+    Sub-plan 1 already proves every pane-following operation reaches an agent displaced by a
+    raw `swap-pane`. What is unproven until here is the same thing when the displacement was
+    made by the **composer**, and — the half `doctor --history` actually reads — that the
+    durable history of such a stop says what happened.
+
+    That distinction is the whole of DEC-022 and DEC-038's third accepted cost. A stop that
+    silently missed the agent does not raise; it writes `graceful_stop_never_sent` or
+    `graceful_stop_timed_out` and leaves the agent running. So the assertion is on the events,
+    not on an exception: `pane_exited` then `cleanup_confirmed` is the record of a stop that
+    reached the agent, and it is exactly what the owner reads back.
+
+    `doctor --history` itself is a database read with no tmux in it, so what is exercised here
+    is the store it prints from, composed as production composes it.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+
+    console = live_console(tmp_path)
+    connection = open_database(tmp_path / "sessions.sqlite3", migrations=MIGRATIONS)
+    try:
+        await console.build(tmp_path)
+        surface = await console.slot_pane()
+        store = SQLiteSessionStore(connection)
+        service = SessionService(store, console.terminal, hide_in_console=console.composer.hide)
+
+        graceful = await service.launch(
+            LaunchCommand(_PROJECT, _PROFILE, idempotency_key="graceful-displaced")
+        )
+        await console.terminal.confirm_ready(graceful.session_id, _PROFILE)
+        graceful_pane = (await console.home_panes(graceful.session_id))[0]
+        await console.composer.show(graceful.session_id)
+        assert await console.slot_pane() == graceful_pane, "the agent was not displayed"
+
+        await service.graceful_stop(GracefulStopCommand(graceful.session_id, _PROFILE))
+
+        events = [event.event_type for event in await store.events(graceful.session_id)]
+        assert "pane_exited" in events and "cleanup_confirmed" in events, events
+        assert not any("never_sent" in event or "timed_out" in event for event in events), (
+            f"the stop of a displaced agent recorded a failure it did not have: {events}"
+        )
+        assert await console.slot_pane() == surface, (
+            "the console kept showing the session it had just stopped"
+        )
+
+        forced = await service.launch(
+            LaunchCommand(_PROJECT, _PROFILE, idempotency_key="forced-displaced")
+        )
+        await console.terminal.confirm_ready(forced.session_id, _PROFILE)
+        forced_pane = (await console.home_panes(forced.session_id))[0]
+        forced_pid = (
+            await console.runner.run(
+                *console.base, "display-message", "-p", "-t", forced_pane, "#{pane_pid}"
+            )
+        ).strip()
+        await console.composer.show(forced.session_id)
+
+        await service.force_stop(ForceStopCommand(forced.session_id))
+
+        assert await process_gone(forced_pid), "a force stop on a displaced agent left it running"
+        forced_events = [event.event_type for event in await store.events(forced.session_id)]
+        assert "verified_force_stop" in forced_events, forced_events
+        assert await console.gateway.console_exists() is True, (
+            "stopping a displayed agent took the console with it"
+        )
+    finally:
+        connection.close()
         await console.teardown()

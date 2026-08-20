@@ -104,23 +104,35 @@ class ConsoleComposer:
         except Exception:
             _LOG.exception("the console could not be ensured; the surface degrades")
             return False
-        # Both of these run *after* the verdict and cannot change it. A console whose surface
-        # cannot be marked, or whose arrangement cannot be unwound, is still a console: the
-        # tab bar works, sessions open, the binding is installed. Answering "unusable" for a
-        # repair that is itself a fallback would take the whole surface down with it.
-        #
-        # `recover` belongs here and nowhere else on this path: `ensure` is console *start*,
-        # which is the one moment the resting arrangement is unambiguously the right one
-        # because nothing has been shown yet. Called from the periodic `sync` instead, it
-        # would evict an agent the owner is deliberately looking at.
+        return True
+
+    async def settle(self) -> RecoveryReport:
+        """Mark the surface if it is unmarked, then return the console to rest. **Start only.**
+
+        Separate from `ensure` because the two have different callers and only one of them is
+        a start. `ensure` makes the console *exist* and is called by anything that needs it to
+        — including a second terminal re-entering an already-running console, which is not a
+        start at all. `recover`'s whole premise is that nothing has been displayed yet, so
+        running it on a re-entry would evict an agent the owner in the other terminal is
+        deliberately looking at, reported as a log line and nothing else. Folded into `ensure`
+        that is exactly what happened.
+
+        So this belongs to the process that is *resident in the console's window* — the one
+        for which "console start" is true — and to nothing else.
+
+        Neither half can fail a caller: a console whose surface cannot be marked, or whose
+        arrangement cannot be unwound, is still a console. The report is returned so the
+        caller can tell the owner what could not be put right; discarding it is what makes an
+        unsettled console a log-file secret.
+        """
         try:
             await self._adopt_surface()
-            report = await self.recover()
-            for note in report.moved:
-                _LOG.info("console recovery: %s", note)
         except Exception:
-            _LOG.exception("the console could not be returned to rest; it may show an agent")
-        return True
+            _LOG.exception("the console surface could not be marked; recovery may not find it")
+        report = await self.recover()
+        for note in report.moved:
+            _LOG.info("console recovery: %s", note)
+        return report
 
     async def sync(self, records: tuple[SessionRecord, ...]) -> None:
         """Link a tab per live session, unlink tabs whose session is gone; idempotent.
@@ -169,17 +181,33 @@ class ConsoleComposer:
         The refusal is what makes this safe to run on every reload: a slot holding a **live**
         displayed session is left alone. Without it the console would yank itself back to the
         projects list under an owner who was reading an agent.
+
+        **The rule itself is `_slot_unwind`'s, not a second copy of it.** This method decides
+        only the one thing that is its own: whether the slot's occupant is still *live*, which
+        `recover` never has to ask because at start nothing is legitimately displayed. What
+        counts as rest, and which arrangements can be exchanged away without exiling a pane,
+        is one rule with one home — written twice, the copies drifted, and the copy here was
+        the one that would trade a console pane away into a defunct session.
+
+        **Read, decide and act under one lock hold**, like every other method here that moves
+        a pane. Deciding outside it and swapping inside is a stale read, and the stale answer
+        is not merely useless — it is dangerous: `show` can complete in the gap, after which
+        the two remembered pane ids name entirely different places, and swapping them blindly
+        puts a **live agent's pane into another session's window**. From there a stop of that
+        other session destroys its window and takes the displaced agent with it. The pane ids
+        this method holds are only true for as long as nothing else is exchanging.
         """
-        arrangement = await self._console.pane_arrangement()
-        surface = _surface(arrangement)
-        if surface is None or (surface.on_console and surface.window_index == 0):
-            return
-        slot = _left_slot(arrangement)
-        if slot is None or (slot.session_id is not None and slot.session_id in live):
-            return
         async with self._links:
-            await self._console.swap_panes(surface.pane_id, slot.pane_id)
-        _LOG.info("the console was showing a session that has ended; the surface is back")
+            arrangement = await self._console.pane_arrangement()
+            slot = _left_slot(arrangement)
+            if slot is not None and slot.session_id is not None and slot.session_id in live:
+                return
+            step, blocked = _slot_unwind(arrangement)
+            if step is not None:
+                await self._console.swap_panes(step.source, step.target)
+                _LOG.info("console: %s", step.note)
+        for note in blocked:
+            _LOG.warning("console: %s", note)
 
     async def open(self, session_id: SessionId) -> None:
         """Focus one session: its tab if it has or can get one, a direct switch if not.
@@ -308,11 +336,19 @@ class ConsoleComposer:
         was introduced gets the same repair on its next start. Narrow, because the wrong guess
         is expensive:
 
-        - **Nothing is marked anywhere** is the precondition. A surface parked in an agent's
-          window by an exchange is still a marked surface, so a console merely *showing* an
-          agent is left alone. Looking only at the console would find an apparently unmarked
-          slot and mark the displaced agent as the surface — after which recovery would swap
-          the agent out as though it were the console's own pane.
+        - **No mark that still belongs to a living console** is the precondition. A surface
+          parked in an agent's window by an exchange is still a marked surface, so a console
+          merely *showing* an agent is left alone. Looking only at the console would find an
+          apparently unmarked slot and mark the displaced agent as the surface — after which
+          recovery would swap the agent out as though it were the console's own pane.
+        - **An orphaned mark is disowned rather than deferred to.** The mark outlives the
+          console that made it: kill a console while an agent is displayed and the old surface
+          pane stays in that agent's window — indeed it is what keeps that defunct session
+          alive. A fresh console that treated it as "something is already marked" would never
+          mark its own slot, and `show_projects` would later swap that stranger's pane in
+          while exiling a live agent into the defunct session. Told apart by what the host
+          window holds: a surface parked during a live display sits in a window that still has
+          its agent, while an orphan's host has no managed pane at all.
         - **The slot must hold no identity.** The same protection, checked rather than
           inferred from the first, because the two stop coinciding the moment anything else
           marks a surface.
@@ -321,11 +357,20 @@ class ConsoleComposer:
         That state is legacy-only, and `recover` reports it rather than guessing at it.
         """
         arrangement = await self._console.pane_arrangement()
-        if any(pane.surface for pane in arrangement):
+        marked = [pane for pane in arrangement if pane.surface]
+        if any(pane.on_console for pane in marked):
+            return
+        if any(not _is_orphaned_surface(arrangement, pane) for pane in marked):
             return
         slot = _left_slot(arrangement)
         if slot is None or slot.session_id is not None:
             return
+        if marked:
+            _LOG.warning(
+                "a surface mark from a console that no longer exists is stranded in session "
+                "%s's window; this console is marking its own",
+                marked[0].host,
+            )
         await self._console.mark_console_surface(slot.pane_id)
 
     async def recover(self) -> RecoveryReport:
@@ -445,8 +490,42 @@ def _surface(arrangement: tuple[HostedPane, ...]) -> HostedPane | None:
 
     Still `None` for a console that predates the mark and is caught displaced. Nothing safe
     can be inferred there, and `recover` reports that rather than guessing.
+
+    **Two marked panes is also `None`**, on the same principle its sibling `_crossed_unwind`
+    applies: with more than one candidate, `next(...)` would be choosing by listing order,
+    which DEC-038 names as the wrong basis and which a draft of destruction once used to kill
+    an operator's pane. The docstring's whole selling point is being *exactly* one; a function
+    that silently took the first would not be delivering that, only claiming it.
     """
-    return next((pane for pane in arrangement if pane.surface), None)
+    marked = [pane for pane in arrangement if pane.surface]
+    on_console = [pane for pane in marked if pane.on_console]
+    if len(on_console) == 1:
+        # A mark the console is actually holding beats one stranded elsewhere, which is how a
+        # console that has re-marked its own slot stops deferring to a dead console's orphan.
+        return on_console[0]
+    candidates = on_console or marked
+    if len(candidates) != 1:
+        if candidates:
+            _LOG.warning(
+                "%d panes claim to be the console surface; refusing to choose", len(candidates)
+            )
+        return None
+    return candidates[0]
+
+
+def _is_orphaned_surface(arrangement: tuple[HostedPane, ...], surface: HostedPane) -> bool:
+    """Whether a surface mark belongs to a console that no longer exists.
+
+    A mark is pane-scoped, so it survives the console that set it. The one thing that tells a
+    stranded mark from a surface legitimately parked by an exchange is the window it sits in:
+    a live display leaves the surface in the window of a session that **still has its agent**,
+    while a destroyed console leaves it in a window holding nothing managed at all.
+    """
+    if surface.on_console:
+        return False
+    if surface.host is None:
+        return True
+    return not any(pane.session_id == surface.host for pane in arrangement)
 
 
 def _crossed_panes(arrangement: tuple[HostedPane, ...]) -> tuple[HostedPane, ...]:
@@ -494,24 +573,72 @@ def _crossed_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None
 
 
 def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, tuple[str, ...]]:
-    """Bring the projects surface back to the left slot, if an agent is sitting in it."""
+    """Put the projects surface back in the left slot, or say why it cannot be.
+
+    **Rest is "the surface is in the slot", never "no agent is in the slot".** The two agree
+    right up to the case that matters: when the displayed agent's pane is *destroyed* rather
+    than moved — the other writer's force stop — tmux shifts one of the console's own panes
+    into position 0. A rule written about the slot's occupant then sees nothing wrong while
+    the surface sits in a defunct session's window, and answers `settled`. That is worse than
+    silence, because `settled` is the one field a caller trusts.
+
+    Which leaves three shapes, and only two of them can be exchanged away:
+
+    - **The slot holds an agent and the surface is parked in that agent's own window.** The
+      ordinary crash state. Each pane goes exactly where it belongs, so this is always safe.
+    - **The slot and the surface are both the console's own panes**, merely out of order.
+      Reordering inside one window exiles nothing.
+    - **Anything else** is reported, not exchanged. `swap-pane` cannot move a pane home on its
+      own; it trades. So exchanging when the slot holds a console pane sends *that* pane out
+      into a window it does not belong in — the console ends one pane shorter, the defunct
+      session is kept alive holding it, and repeating the sequence shaves the console again.
+      Exchanging when the surface is parked in some *third* session's window would push the
+      slot's agent into a stranger's window: a crossing, created by the very thing meant to
+      remove crossings.
+    """
     slot = _left_slot(arrangement)
-    if slot is None or slot.session_id is None:
+    if slot is None:
         return None, ()
     surface = _surface(arrangement)
     if surface is None:
+        if slot.session_id is None:
+            return None, ()
         return None, (
             f"the console is showing session {slot.session_id} and no pane carries the surface "
             "mark, so the projects surface could not be brought back",
         )
-    return (
-        _Unwind(
-            surface.pane_id,
-            slot.pane_id,
-            f"session {slot.session_id} was left in the console and was sent home; the "
-            "projects surface is back in the left slot",
-        ),
-        (),
+    if surface.pane_id == slot.pane_id:
+        return None, ()
+    if slot.session_id is not None and surface.host == slot.session_id:
+        return (
+            _Unwind(
+                surface.pane_id,
+                slot.pane_id,
+                f"session {slot.session_id} was left in the console and was sent home; the "
+                "projects surface is back in the left slot",
+            ),
+            (),
+        )
+    if slot.session_id is None and surface.on_console and surface.window_index == 0:
+        return (
+            _Unwind(
+                surface.pane_id,
+                slot.pane_id,
+                "the projects surface was out of position inside the console and was moved "
+                "back to the left slot",
+            ),
+            (),
+        )
+    if slot.session_id is not None:
+        return None, (
+            f"the console is showing session {slot.session_id} while the projects surface is "
+            f"parked in session {surface.host}'s window; exchanging them would put the shown "
+            "agent in a third session's window, so nothing was moved",
+        )
+    return None, (
+        f"the console's projects surface is parked in session {surface.host}'s window and the "
+        "pane it was exchanged with no longer exists, so there is nothing to trade it back "
+        "for; the console is a pane short and needs restarting",
     )
 
 
