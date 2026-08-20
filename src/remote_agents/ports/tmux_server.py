@@ -1,17 +1,22 @@
-"""Which tmux server this project owns, by name — the one fact two adapters must share.
+"""Which tmux server this project owns, by name.
 
-A three-line module, and the reason it lives in `ports/` rather than in the tmux codec is a
-rule the codec itself cannot satisfy. `hosting_mode` (the terminal adapter) classifies the
-server a surface is running inside; `TmuxGateway` (the tmux adapter) refuses to talk to a
-server that is not ours. Same question, two adapter families — and ARCH-02 lets an adapter
-import `domain` and `ports` and nothing else, so this is the only shelf both can reach.
+`TmuxGateway` refuses to talk to a server that is not ours, and it has always accepted two:
+the production socket, and a `remote-agents-test-` name so a live test can have a disposable
+one. That is this module's whole subject.
 
-They disagreed until a live journey test tripped over it. The gateway has always accepted the
-production socket **and** a `remote-agents-test-` name, which is how every live file gets a
-disposable server; `hosting_mode` accepted only the production name. So a surface running
-inside a *test* console classified itself as hosted by a foreign tmux, wired no console
-capability, and exec-attached instead of exchanging panes — which meant no live test could
-exercise the console-hosted surface at all, and the first one that tried is what found it.
+**What it deliberately does not decide is whether a *surface* is hosted by the console.**
+`hosting_mode` asks a different question with the same words, and answering it from here was a
+real defect rather than a tidy-up. A surface that calls itself console-hosted goes on to build
+a `ConsoleComposer`, and the composition root hardcodes that composer's server to the
+production socket — so a surface running inside a *disposable* console classified itself as
+CONSOLE and then drove the owner's real one: splitting panes into their live console window,
+installing a root binding on their server, and running the start-time repair against it. That
+happened, on the machine this was written on, and it was found by the final gate's evaluator
+reading the artifact rather than by any test.
+
+The rule that follows: **`hosting_mode` stays strict** — CONSOLE means the production socket
+and nothing else — until the composer's server stops being hardcoded. Two questions, two
+answers, and the narrower one is the one attached to a live tmux server.
 """
 
 from __future__ import annotations
@@ -24,5 +29,5 @@ TEST_SOCKET_PREFIX = "remote-agents-test-"
 
 
 def is_our_socket(socket_name: str) -> bool:
-    """Whether a tmux server name is one this project owns."""
+    """Whether a tmux server name is one this project's **gateway** may address."""
     return socket_name == SOCKET_NAME or socket_name.startswith(TEST_SOCKET_PREFIX)

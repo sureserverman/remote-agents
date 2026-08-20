@@ -651,7 +651,9 @@ def _enter_console(
     """Enter the console: ensure it exists and become its client, honoring the hosting.
 
     The bare invocation's whole meaning. A client already on our server is told it is
-    already there; a foreign tmux client gets the command printed rather than a nested
+    already there, and told what the one root key does — this line said "F12 returns to the
+    dashboard" until Sub-plan 3, which was the tab model's answer and named a surface the
+    console does not run; a foreign tmux client gets the command printed rather than a nested
     client; a bare shell ensures the console — one window of three panes, running
     `remote-agents pane projects|sessions|feed` — and execs the attach, exactly the handoff
     shape a ready launch has always used. An exec that cannot happen prints the same command
@@ -668,7 +670,7 @@ def _enter_console(
     mode = hosting_mode(values)
     command = " ".join(console_attach_argv())
     if mode is HostingMode.CONSOLE:
-        print("Already in the console. F12 returns to the dashboard.")
+        print("Already in the console. F12 shows the projects pane.")
         return 0
     if mode is HostingMode.FOREIGN:
         print(

@@ -20,7 +20,7 @@ from enum import Enum
 
 from remote_agents.adapters.tui.app import AttachRequest
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.tmux_server import is_our_socket
+from remote_agents.ports.tmux_server import SOCKET_NAME
 
 
 class HostingMode(Enum):
@@ -35,23 +35,29 @@ def hosting_mode(environment: Mapping[str, str]) -> HostingMode:
     """Classify the hosting from `$TMUX`, by socket rather than by mere presence.
 
     tmux sets `TMUX` to `socket_path,server_pid,session_id`; the socket's basename is the
-    server's `-L` name, and only our own name means the console is reachable. Anything set but
-    unreadable is classified as foreign, because the safe answer to "whose client is this?"
-    when the evidence is garbled is "not ours".
+    server's `-L` name, and only the **production** name means the console is reachable.
+    Anything set but unreadable is classified as foreign, because the safe answer to "whose
+    client is this?" when the evidence is garbled is "not ours".
 
-    "Our own name" is `ports.tmux_server.is_our_socket`, shared with the gateway's own check
-    rather than spelled again here. The two disagreed until a live journey test tripped over
-    it: the gateway accepts a `remote-agents-test-` socket, this accepted only the production
-    name, so a surface running inside a *test* console called itself foreign, wired no console
-    capability and exec-attached instead of exchanging panes. Two guards, one question, one
-    answer — on a shelf in `ports/`, because ARCH-02 lets an adapter reach `domain` and
-    `ports` and nothing else.
+    **Deliberately stricter than `is_our_socket`, which the gateway uses.** That predicate
+    also accepts a `remote-agents-test-` socket, so a live test can have a disposable server,
+    and reusing it here looked like removing a duplicate. It is not the same question. A
+    surface that calls itself CONSOLE goes on to build a `ConsoleComposer`, and the
+    composition root hardcodes that composer's server to `remote-agents` — so widening this
+    made a surface inside a *disposable* console drive the owner's **real** one: panes split
+    into their live console window, a root binding installed on their server, the start-time
+    repair run against it. That happened here, and the final gate's evaluator found it by
+    reading the running system rather than any test catching it.
+
+    So this stays narrow until the composer's server stops being hardcoded. The cost is a
+    known gap, named in `tests/live/test_three_pane_console.py`: no live test can drive a pane
+    surface's own keypress into a composer, because no pane surface can be given a test one.
     """
     value = environment.get("TMUX")
     if not value:
         return HostingMode.BARE
     socket_path = value.split(",", 1)[0]
-    if is_our_socket(os.path.basename(socket_path)) and os.path.sep in socket_path:
+    if os.path.basename(socket_path) == SOCKET_NAME and os.path.sep in socket_path:
         return HostingMode.CONSOLE
     return HostingMode.FOREIGN
 

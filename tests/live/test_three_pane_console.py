@@ -299,11 +299,14 @@ async def test_each_pane_surface_renders_its_own_content_in_the_console(
             slot: (
                 "env",
                 f"HOME={home}",
-                "uv",
-                "run",
-                "--project",
-                str(Path(__file__).resolve().parents[2]),
-                "remote-agents",
+                # The venv's interpreter directly, **not** `uv run`. Three surfaces start at
+                # once, and three concurrent `uv run` invocations contend on uv's own lock:
+                # one loses, exits, and tmux closes its pane, so the console comes up two
+                # panes and the test fails somewhere unrelated. Reproduced twice before it
+                # was diagnosed — a single `uv run` of the same command is perfectly fine.
+                str(Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python3"),
+                "-m",
+                "remote_agents",
                 "pane",
                 slot.name.lower(),
             )
@@ -342,16 +345,29 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
     sessions list and the feed stay on screen beside it; an observation lands in the feed
     *while the agent is in front*; the session is stopped; the projects surface comes back.
 
-    **What is driven by keypress and what is driven by call, stated rather than implied.**
-    The exchange and the route back are driven as keys through a real attached client,
-    because that is the part this sub-plan built and the part no headless test can reach.
-    The **launch** is not: a launch runs a real agent binary, and the flow from the projects
-    pane down into `SessionService.launch` is already driven against a real agent by
-    `test_add_project_and_tui_journey.py`. Repeating it here would start a second real agent
-    to prove something that file already proves, so the agent in this journey is fabricated —
-    a `sleep` carrying schema-2 pane marks, which is what every console live test uses. The
-    **stop** is issued through the same `SessionService` the sessions pane's detail screen
-    calls, after the detail screen has been opened by key to show it is reachable.
+    **What is driven by keypress and what is driven by call.** Two things and only two are
+    keypresses here: **focus moving** between the panes (`prefix + o`), and **`d` opening the
+    session detail while the agent is displayed** — which is the claim that matters, because
+    the sessions pane being usable with an agent in front is the whole reason it is the swap
+    controller. Everything else is a call, each for a reason:
+
+    - The **launch** runs a real agent binary. The path from the projects pane into
+      `SessionService.launch` is already driven against a real agent by
+      `test_add_project_and_tui_journey.py`; starting a second one here would prove nothing
+      new. The agent is fabricated — a `sleep` carrying schema-2 pane marks, which is what
+      every console live test uses.
+    - The **exchange** is `composer.show`, because a pane surface bakes in the production
+      socket name — a surface inside a disposable console must therefore classify as FOREIGN,
+      or it drives the owner's real console, which is what happened when it briefly did not.
+      The key-driven exchange has its own proof in
+      `test_the_projects_key_brings_the_surface_back_from_a_displayed_agent`.
+    - The **stop** is a store event, not `SessionService.force_stop`: what this journey is
+      about is the console's reaction to a session ending — the surface coming back — and the
+      stop mechanism itself is driven end-to-end in `test_swap_console.py`'s integration
+      drill. **So this test does not prove a stop initiated from the sessions pane reaches
+      the agent's process**, and does not claim to.
+    - The **route back** here is `composer.sync`, standing in for the reload that notices the
+      other writer. F12 is pressed as a key in the projects-key test, not in this one.
     """
     _live_or_skip()
 
@@ -369,11 +385,14 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
             slot: (
                 "env",
                 f"HOME={home}",
-                "uv",
-                "run",
-                "--project",
-                str(Path(__file__).resolve().parents[2]),
-                "remote-agents",
+                # The venv's interpreter directly, **not** `uv run`. Three surfaces start at
+                # once, and three concurrent `uv run` invocations contend on uv's own lock:
+                # one loses, exits, and tmux closes its pane, so the console comes up two
+                # panes and the test fails somewhere unrelated. Reproduced twice before it
+                # was diagnosed — a single `uv run` of the same command is perfectly fine.
+                str(Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python3"),
+                "-m",
+                "remote_agents",
                 "pane",
                 slot.name.lower(),
             )
@@ -558,3 +577,122 @@ async def _end_session(home: Path, session_id: SessionId) -> None:
         await store.record_event(session_id, LifecycleEvent.VERIFIED_FORCE_STOP)
     finally:
         connection.close()
+
+
+async def test_a_console_killed_while_displaying_names_the_session_it_stranded(
+    tmp_path: Path,
+) -> None:
+    """The runbook's dangerous step, pinned — because nothing covered it and it is advice.
+
+    Step 8 of the console acceptance checklist tells the operator to kill `ra-console` while
+    an agent is displayed, and promises that a fresh console *names the defunct `ra-<uuid>`
+    still holding an old projects surface*. That promise is the only thing standing between
+    the operator and a stranded session they never hear about, and it is worth a test rather
+    than a trace: a Stage 3 review traced the code and concluded the report could not be
+    produced, because a freshly built console marks its own left pane before `settle` runs.
+
+    The trace missed why it does not. A slot counts as present if **any pane anywhere** carries
+    its mark, and the stranded surface still carries it — so the fresh console does not adopt
+    its own pane, `_adopt_surface` finds exactly one marked pane, sees that its host holds no
+    agent, disowns it, and says so. Which is the behaviour the runbook describes.
+    """
+    _live_or_skip()
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    session_id = SessionId.new()
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+
+    def _composer() -> ConsoleComposer:
+        return ConsoleComposer(
+            TmuxGateway(console_socket, AsyncTmuxRunner()),
+            ("sleep", "600"),
+            tmp_path,
+            projects_command=("true",),
+            pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        )
+
+    try:
+        assert await _composer().ensure() is True
+
+        name = f"ra-{session_id}"
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", name, "sleep", "600")
+        agent_pane = (
+            await _run(
+                "tmux", "-L", console_socket, "list-panes", "-t", f"={name}:", "-F", "#{pane_id}"
+            )
+        ).strip()
+        for option, value in (
+            ("@remote_agents_schema", "2"),
+            ("@remote_agents_id", str(session_id)),
+        ):
+            await _run(
+                "tmux", "-L", console_socket, "set-option", "-p", "-t", agent_pane, option, value
+            )
+        await _composer().show(session_id)
+
+        # The dangerous command, exactly as the checklist gives it.
+        await _run("tmux", "-L", console_socket, "kill-session", "-t", "ra-console")
+
+        # DEC-040's first accepted cost: the displayed agent went with the console, and its
+        # session name did not. That is why the checklist calls this step dangerous.
+        remaining = await gateway.pane_arrangement()
+        assert not any(pane.session_id == session_id for pane in remaining), (
+            "the displayed agent's pane survived a console kill, which DEC-040 says it cannot"
+        )
+        assert any(pane.console_slot == "surface" for pane in remaining), (
+            "the stranded projects surface is what keeps the defunct session alive"
+        )
+
+        fresh = _composer()
+        assert await fresh.ensure() is True
+        report = await fresh.settle()
+
+        assert any(str(session_id) in note for note in report.blocked), (
+            f"a restarted console did not name the session it stranded: {report.blocked}"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_a_pane_surface_in_a_test_console_never_reaches_the_production_server(
+    tmp_path: Path,
+) -> None:
+    """The guard on the damage this file did once, asserted where it happened.
+
+    A surface takes its hosting from `$TMUX` and its composer's server from the composition
+    root, which hardcodes the production socket. So a surface inside a disposable console must
+    classify as **FOREIGN**: anything else and these very tests split panes into the owner's
+    live console and install a root binding on their server — which is not hypothetical, it is
+    what four leaked panes on this machine were.
+
+    Checked against `hosting_mode` directly rather than by watching the production server,
+    because the honest assertion is about the rule, and watching would mean touching the thing
+    that must not be touched.
+    """
+    _live_or_skip()
+
+    from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    try:
+        await _run(
+            "tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-console", "sleep", "60"
+        )
+        inside = (
+            await _run(
+                "tmux", "-L", console_socket, "display-message",
+                "-p", "-t", "ra-console:", "#{socket_path}",
+            )
+        ).strip()
+        assert hosting_mode({"TMUX": f"{inside},1,0"}) is HostingMode.FOREIGN, (
+            "a surface in a disposable console would build a composer against the owner's "
+            "production tmux server"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
