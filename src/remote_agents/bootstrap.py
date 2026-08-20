@@ -712,6 +712,18 @@ def _enter_console(
     return 0
 
 
+def _console_notes(report: RecoveryReport) -> RecoveryReport:
+    """Carry the console's start-time report to the surface instead of printing it.
+
+    A named seam and an identity function, which is the whole point: what it replaced was a
+    `print` to stderr, and a `print` here is erased microseconds later when Textual takes the
+    alternate screen — invisible for the entire session it describes. Naming the hand-over
+    lets a test assert that nothing is written to either stream, which is the actual defect;
+    asserting the surface renders it is a different test on the other side of the seam.
+    """
+    return report
+
+
 def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
     """What "open this session" means under console hosting: an exchange of panes.
 
@@ -819,6 +831,7 @@ def local_context(config, connection, paths: ProductionPaths):
     console_sync = None
     console_flash = None
     hide_in_console = None
+    console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
         # Hosted by a client on our own server: opening a session focuses its console tab
         # (the composer falls back to a direct client switch), tabs are reconciled on
@@ -829,7 +842,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # hosting an exec-attach would cost the dashboard its own process (attach.py), so
         # a degraded console keeps retrying quietly per pass rather than re-routing opens
         # through exec.
-        from remote_agents.application.console import ConsoleComposer
+        from remote_agents.application.console import ConsoleComposer, RecoveryReport
 
         composer = ConsoleComposer(
             runtime.gateway,
@@ -839,10 +852,15 @@ def local_context(config, connection, paths: ProductionPaths):
         if not asyncio.run(composer.ensure()):
             # Wiring continues regardless (see above), but the operator hears about it
             # here once, at the surface's front door, not only in per-pass debug logs.
-            print(
-                "The console could not be prepared; sessions open by direct switch and "
-                "no tab bar will appear. See the log, or run: remote-agents doctor",
-                file=sys.stderr,
+            console_recovery = _console_notes(
+                RecoveryReport(
+                    (),
+                    (
+                        "the console could not be prepared — check tmux on this host, "
+                        "or run: remote-agents doctor",
+                    ),
+                    settled=False,
+                )
             )
         else:
             # The start-only repair, run by the process that *is* the console's window and by
@@ -853,9 +871,9 @@ def local_context(config, connection, paths: ProductionPaths):
             # `$TMUX_PANE` is this process's own pane. Passed so `settle` can refuse when the
             # dashboard is running somewhere other than the console's left slot: hosting is
             # decided by the socket name, which is true of every pane on this server.
-            settled = asyncio.run(composer.settle(os.environ.get("TMUX_PANE")))
-            for note in settled.blocked:
-                print(f"The console could not be fully restored: {note}", file=sys.stderr)
+            console_recovery = _console_notes(
+                asyncio.run(composer.settle(os.environ.get("TMUX_PANE")))
+            )
 
         open_in_console = _console_opener(composer)
         console_sync = composer.sync
@@ -899,6 +917,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # would starve the phone's notifications (see Task 5.2's correction note).
         activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
         console_flash=console_flash,
+        console_recovery=console_recovery,
     )
 
 

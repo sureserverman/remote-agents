@@ -63,6 +63,60 @@ class ProjectsPaneScreen(ProjectsScreen):
     copies would only have to disagree once.
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: What the console's start-only repair could not put right, held so it can be
+        #: restated after every redraw — see `_restate_blocked`.
+        self._blocked: tuple[str, ...] = ()
+
+    async def populate(self) -> None:
+        await super().populate()
+        self._report_console_recovery()
+
+    def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
+        super().render_projects(query, keep_focus=keep_focus)
+        self._restate_blocked()
+
+    def _report_console_recovery(self) -> None:
+        """Tell the owner what the console's start-time repair did, and what it could not.
+
+        The two halves get different destinations because they are different facts, and this
+        surface already has a rule for each. `moved` is something that already happened and is
+        finished — a confirmation, which `announce` puts in a toast. `blocked` is what needs a
+        *person*; anything the owner must keep belongs in the status line, which is the rule
+        the attach command is already handled by.
+
+        Before this, neither reached them at all: `moved` was logged at INFO with no logging
+        configured anywhere in `src/`, and `blocked` was printed to stderr in the instant
+        before Textual took the alternate screen.
+        """
+        report = self.services.console_recovery
+        if report is None:
+            return
+        for note in report.moved:
+            self.tui.announce(f"The console was restored: {note}", severity="information")
+        self._blocked = tuple(report.blocked)
+        self._restate_blocked()
+
+    def _restate_blocked(self) -> None:
+        """Put the blocked notes back after a redraw, because the condition still holds.
+
+        `render_projects` writes the ordinary status on every fill, so a note set once would
+        be gone by the first refresh — and unlike a failed read, this is not a stale fact that
+        a redraw supersedes. Nothing in this process is going to fix it.
+        """
+        if not self._blocked:
+            return
+        # An f-string rather than a concatenation, and the difference is not style: the
+        # status-region sweep reads this call's first argument out of the AST to check that a
+        # severity-coloured status carries words of its own, and a `BinOp` is a shape it
+        # cannot read — so it reports it as colour with no words, correctly.
+        notes = " · ".join(self._blocked)
+        self.set_status(
+            f"The console could not be fully restored: {notes}",
+            severity="warning",
+        )
+
     async def choose(self, key: str) -> None:
         """A project row opens the chooser.
 

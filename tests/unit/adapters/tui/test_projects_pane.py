@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input, OptionList
+from textual.widgets import Input, OptionList, Static
 from tui_positions import position
 
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -197,3 +197,85 @@ async def test_an_empty_catalogue_still_rests_somewhere(nothing) -> None:
         await pilot.pause()
         assert position(app) == "PROJECTS"
         assert app.is_running
+
+
+# --- The start-time recovery report reaches the owner (Task 1.5) -----------------------
+#
+# `ConsoleComposer.settle()` is the console's start-only repair, and only the process
+# resident in the left slot may run it — which, under the three-pane console, is this pane.
+# What it returns used to go nowhere: `moved` was logged at INFO with no logging configured
+# anywhere in `src/`, and `blocked` was printed to stderr in the instant before Textual took
+# the alternate screen, invisible for the whole session it described.
+#
+# The two halves get different destinations, because they are different facts.
+# `moved` is something that already happened and is done — a confirmation, which this
+# surface's own rule puts in a toast. `blocked` is what needs a *person*, and this surface's
+# rule for anything the owner must keep is the status line. So a blocked note stands there
+# rather than expiring, because nothing in this process is going to fix it.
+
+from remote_agents.application.console import RecoveryReport  # noqa: E402
+
+
+def _recovered(*, moved=(), blocked=(), settled=True) -> RecoveryReport:
+    return RecoveryReport(tuple(moved), tuple(blocked), settled=settled)
+
+
+async def test_a_recovery_that_moved_something_tells_the_owner_it_happened() -> None:
+    app = ProjectsPane(
+        _context(console_recovery=_recovered(moved=("the projects surface came home",)))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        said = [str(notification.message) for notification in app._notifications]
+        assert any("the projects surface came home" in line for line in said)
+
+
+async def test_a_blocked_recovery_note_stands_in_the_status_and_survives_a_refresh() -> None:
+    """It needs a person, and nothing in this process is going to fix it."""
+    app = ProjectsPane(
+        _context(console_recovery=_recovered(blocked=("an agent is parked in a foreign pane",)))
+    )
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        assert "an agent is parked in a foreign pane" in str(status.content)
+
+        app.screen.render_projects()
+        await pilot.pause()
+        assert "an agent is parked in a foreign pane" in str(status.content), (
+            "a condition that still holds must not be redrawn away by an ordinary refresh"
+        )
+
+
+async def test_a_recovery_that_settled_cleanly_says_nothing_extra() -> None:
+    app = ProjectsPane(_context(console_recovery=_recovered()))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert list(app._notifications) == []
+        assert "Choose a project" in str(app.screen.query_one("#status", Static).content)
+
+
+async def test_a_pane_with_no_console_recovery_behind_it_says_nothing_extra() -> None:
+    """A pane in a bare terminal has no console to settle, and must not imply one."""
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert list(app._notifications) == []
+        assert "Choose a project" in str(app.screen.query_one("#status", Static).content)
+
+
+def test_the_composition_hands_the_recovery_report_over_instead_of_printing_it(capsys) -> None:
+    """The channel itself: `settle`'s report is carried to the surface, not to stderr.
+
+    Asserted against the executed composition rather than bootstrap's source text, the same
+    way the console opener's wiring is — and against the *stream*, because printing here is
+    the exact defect: Textual takes the alternate screen microseconds later and erases it.
+    """
+    from remote_agents.bootstrap import _console_notes
+
+    report = _recovered(moved=("a",), blocked=("b",))
+    carried = _console_notes(report)
+    captured = capsys.readouterr()
+    assert carried is report
+    assert "b" not in captured.err, "a blocked note printed here is erased before it is read"
+    assert "b" not in captured.out

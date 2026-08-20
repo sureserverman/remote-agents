@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from remote_agents.application.console import RecoveryReport
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject
@@ -68,6 +69,13 @@ class TuiContext:
     # One line on the tmux status bar when the feed gains news — wired only under console
     # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
     console_flash: Callable[[str], Awaitable[None]] | None = None
+    # What the console's start-only repair did and could not do, carried to the surface
+    # rather than printed. The composition root runs `settle()` before Textual starts, so a
+    # `print` there is erased by the alternate screen microseconds later — invisible for the
+    # whole session it describes. Only the process resident in the console's left slot gets a
+    # report with anything in it; every other pane is refused by `settle`'s own guard and
+    # receives an empty one.
+    console_recovery: RecoveryReport | None = None
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:

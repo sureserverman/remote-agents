@@ -81,6 +81,11 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "console_sync",
         "activity_feed",
         "console_flash",
+        # Sub-plan 3's addition: what the console's start-only repair did and could not do,
+        # carried to the surface instead of printed. The composition root runs `settle()`
+        # before Textual starts, so a `print` there is erased by the alternate screen
+        # microseconds later — invisible for the whole session it describes.
+        "console_recovery",
     }
     assert set(TuiContext.__dataclass_fields__) == expected
 
