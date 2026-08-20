@@ -104,3 +104,72 @@ def test_an_exec_that_cannot_run_leaves_the_owner_the_command(
     )
     assert code == 1
     assert "attach-session -t ra-console:" in capsys.readouterr().err
+
+
+# --- `remote-agents pane <name>`: one surface per tmux pane (Sub-plan 3, Task 1.1) ---
+#
+# The console is three tmux panes and a Textual app cannot span panes, so the surface is
+# three processes rather than one app with three widgets. Routing is what this task owns:
+# which name composes which surface, that an unknown name is refused before anything is
+# composed, and that adding the verb moved nothing that already routed.
+
+
+def test_each_pane_name_composes_its_own_surface() -> None:
+    from remote_agents.adapters.tui.panes import PANE_SURFACES
+
+    assert set(PANE_SURFACES) == {"projects", "sessions", "feed"}
+    # Three names, three distinct surfaces — not one class answering to three keys, which
+    # would route correctly and render the same pane three times.
+    assert len(set(PANE_SURFACES.values())) == 3
+
+
+def test_the_pane_command_routes_the_name_it_was_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(bootstrap, "_enter_pane", lambda name, config: seen.append(name) or 0)
+    for name in ("projects", "sessions", "feed"):
+        assert bootstrap.main(["pane", name]) == 0
+    assert seen == ["projects", "sessions", "feed"]
+
+
+def test_an_unknown_pane_name_is_refused_by_the_pane_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bootstrap, "_enter_pane", lambda name, config: pytest.fail("an unknown pane must not run")
+    )
+    with pytest.raises(SystemExit) as refusal:
+        bootstrap.main(["pane", "nonsense"])
+    assert refusal.value.code != 0
+
+
+def test_a_missing_pane_name_is_refused_rather_than_defaulted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        bootstrap, "_enter_pane", lambda name, config: pytest.fail("a nameless pane must not run")
+    )
+    with pytest.raises(SystemExit) as refusal:
+        bootstrap.main(["pane"])
+    assert refusal.value.code != 0
+
+
+def test_the_pane_command_never_reaches_the_console_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bootstrap, "_enter_console", lambda: pytest.fail("a subcommand must stay the CLI")
+    )
+    monkeypatch.setattr(bootstrap, "_enter_pane", lambda name, config: 0)
+    assert bootstrap.main(["pane", "feed"]) == 0
+
+
+def test_tui_still_routes_beside_the_pane_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The combined dashboard stays: a bare terminal has one pane, not three."""
+    monkeypatch.setattr(
+        bootstrap, "_enter_pane", lambda name, config: pytest.fail("tui is not a pane surface")
+    )
+    monkeypatch.setattr(
+        bootstrap, "_enter_console", lambda: pytest.fail("a subcommand must stay the CLI")
+    )
+    assert bootstrap.main(["doctor", "--profiles", "--json"]) == 0
+    assert "profiles" in capsys.readouterr().out

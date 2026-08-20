@@ -45,6 +45,7 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.tui import PANE_NAMES
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
@@ -353,6 +354,12 @@ def main(
     add_project_parser.add_argument("--name", required=True)
     tui_parser = subcommands.add_parser("tui")
     tui_parser.add_argument("--config", type=Path)
+    # One process per tmux pane: a Textual app owns a terminal, and the console is three
+    # panes side by side. `choices` is what refuses an unknown name — before anything is
+    # composed, rather than after a database is opened for a surface that does not exist.
+    pane_parser = subcommands.add_parser("pane")
+    pane_parser.add_argument("name", choices=sorted(PANE_NAMES))
+    pane_parser.add_argument("--config", type=Path)
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
@@ -504,6 +511,8 @@ def main(
         finally:
             connection.close()
         return attach_to(request, switch_argv=switch_client_argv)
+    if arguments.command == "pane":
+        return _enter_pane(arguments.name, arguments.config)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -701,6 +710,47 @@ def _enter_console(
         print(f"Could not attach automatically. Attach with:\n{command}", file=sys.stderr)
         return 1
     return 0
+
+
+def _enter_pane(name: str, config_path: Path | None = None) -> int:
+    """Compose and run one console pane surface over its own per-operation lease.
+
+    The same composition `tui` runs, resting on one pane's position instead of the combined
+    dashboard's. Each of the three pane processes holds its own lease and no standing handle
+    (DEC-035), which is what makes three writers over one SQLite file the story the bot and
+    the surface already told rather than a new one.
+
+    Migrations run here exactly as they do for `tui`, and for the same reason: a pane may be
+    the first thing ever run on this host. Three panes starting together serialize on
+    SQLite's write lock under the busy timeout `open_database` sets, and a migration already
+    applied is a version read.
+    """
+    from remote_agents.adapters.tui.attach import attach_to
+    from remote_agents.adapters.tui.panes import run_pane_surface
+
+    paths = ProductionPaths.for_home(Path.home())
+    try:
+        config = _private_state_config(config_path or paths.config_path, paths)
+    except ConfigError as error:
+        print(error, file=sys.stderr)
+        return 1
+    paths.ensure_directories()
+    paths.open_database(open_database, migrations=MIGRATIONS).close()
+    connection = leased_connection(config.database_path)
+    request = None
+    try:
+        request = run_pane_surface(name, local_context(config, connection, paths))
+    except Exception:
+        _LOG.exception("the %s pane surface failed", name)
+        print(
+            f"The {name} pane failed. Any session it started is listed by:\n"
+            "tmux -L remote-agents list-sessions",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        connection.close()
+    return attach_to(request, switch_argv=switch_client_argv)
 
 
 def _private_state_config(config_path: Path, paths: ProductionPaths):
