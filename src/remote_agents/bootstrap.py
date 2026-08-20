@@ -712,6 +712,26 @@ def _enter_console(
     return 0
 
 
+def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
+    """What "open this session" means under console hosting: an exchange of panes.
+
+    A named seam rather than a closure inside `local_context`, so the wiring can be asserted
+    against the executed capability instead of against bootstrap's source text — a substring
+    check for the same wiring once matched the *service* composition too, and deleting it
+    from the local one left the suite green (`tests/integration/test_tui_bootstrap.py`).
+
+    `show` and not `open`: DEC-039's accepted cost 1 names this replacement by hand. A tmux
+    client attaches to a *session*, so the switch route lands wherever the vacated window
+    ends up rather than on the agent; under the swap model the console reaches an agent by
+    exchanging its left pane, which follows the pane whatever is hosting it (DEC-040).
+    """
+
+    async def open_in_console(session_id: str) -> None:
+        await composer.show(SessionId.parse(session_id))
+
+    return open_in_console
+
+
 def _enter_pane(name: str, config_path: Path | None = None) -> int:
     """Compose and run one console pane surface over its own per-operation lease.
 
@@ -837,9 +857,7 @@ def local_context(config, connection, paths: ProductionPaths):
             for note in settled.blocked:
                 print(f"The console could not be fully restored: {note}", file=sys.stderr)
 
-        async def open_in_console(session_id: str) -> None:
-            await composer.open(SessionId.parse(session_id))
-
+        open_in_console = _console_opener(composer)
         console_sync = composer.sync
         console_flash = composer.flash
         # The stop paths ask the console to step out of the way before a pane is destroyed.

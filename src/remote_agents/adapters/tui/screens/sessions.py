@@ -328,6 +328,58 @@ class SessionsScreen(ChoiceScreen):
         await self.tui.show_detail(key)
 
 
+class SessionsPaneScreen(SessionsScreen):
+    """The console's right-top pane: the same list, where Enter opens instead of describing.
+
+    The one pane that stays on screen while an agent occupies the left slot, so it is the
+    only place the owner can reach back from — which is why Enter here means *exchange this
+    agent into the left pane* rather than *tell me about it*. The detail, where every stop,
+    inspect, rename and Remote Control affordance lives, moves to `d`, so DEC-007's full
+    action set is one key away rather than gone.
+
+    That pairing is not new: the combined dashboard's sessions region has meant exactly this
+    since it gained one. What changes is that the list is now a screen of its own, in a
+    process of its own, and inherits every one of `SessionsScreen`'s stale-read guards
+    unchanged.
+
+    The resting cursor stays on a non-mutating row (DEC-007, BL-004) and this pane satisfies
+    that by what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
+    Every mutating action is behind `d`.
+    """
+
+    position = "SESSIONS"
+
+    BINDINGS = [
+        # Hidden from the footer for the reason the dashboard's copy is: the bar is shared
+        # with every inherited binding, and the key only means something while a row is
+        # highlighted. The status line says so where it is true.
+        Binding("d", "session_detail", "Session detail", show=False),
+    ]
+
+    async def choose(self, key: str) -> None:
+        """Enter exchanges the chosen agent into the left slot; Back still goes back.
+
+        Routed through the app's one open seam, so hosting decides what opening means — the
+        exchange under the console, the exec handoff in a bare terminal — and this screen
+        never has to know which it got.
+        """
+        if key == _BACK:
+            await self.tui.go_back()
+            return
+        await self.tui._open_or_leave(key)
+
+    async def action_session_detail(self) -> None:
+        """`d` on the highlighted row opens today's detail screen, unchanged."""
+        choices = self.query_one("#choices", OptionList)
+        index = choices.highlighted
+        if index is None or choices.option_count <= index:
+            return
+        key = choices.get_option_at_index(index).id
+        if key is None or key == _BACK:
+            return
+        await self.tui.show_detail(key)
+
+
 class SessionDetailScreen(ChoiceScreen):
     """One session's state, what it means, and the actions the policy allows on it."""
 

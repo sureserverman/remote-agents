@@ -25,7 +25,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.dashboard import ProjectsPaneScreen
-from remote_agents.adapters.tui.screens.sessions import SessionsScreen
+from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen
 
 
 class ProjectsPane(RemoteAgentsTui):
@@ -44,7 +44,7 @@ class SessionsPane(RemoteAgentsTui):
     """
 
     def get_default_screen(self) -> Screen[None]:
-        return SessionsScreen()
+        return SessionsPaneScreen()
 
 
 class FeedPane(RemoteAgentsTui):
