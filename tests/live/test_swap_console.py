@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 import pytest
-from live_probe import MARKER, probe_profile
+from live_probe import MARKER, probe_profile, process_gone
 
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
@@ -43,17 +43,30 @@ class LiveConsole:
             self.gateway, {_PROJECT: home}, {_PROFILE: probe_profile()}, startup_timeout=15
         )
         self.composer = ConsoleComposer(self.gateway, ("sleep", "600"), home)
+        self.home = home
 
     async def build(self, home: Path) -> None:
         """A console shaped like the real one: a surface pane and a second pane beside it.
+
+        **Built through `ensure`, not through `create_console`.** The composer's own start path
+        is what marks the left slot as the projects surface, and every exchange here depends on
+        that mark to find the surface again. Built by calling the gateway directly, the fixture
+        produced a console the production code would never produce — an unmarked surface — and
+        three drives in this file failed the moment the surface stopped being inferred from
+        absence of identity. A live fixture that skips the path production takes is a fixture
+        testing something nobody ships.
 
         The second pane is not decoration. Killing a window's last pane destroys its session
         (Claim 11's neighbour), so a console of one pane is one force-stop away from being
         gone — the hazard this sub-plan names, and the reason the three-pane design exists.
         Every drive here therefore runs against a console that has more than the slot.
         """
-        await self.gateway.create_console(("sleep", "600"), home)
+        assert await self.composer.ensure(), "the console could not be prepared"
         await self.runner.run(*self.base, "split-window", "-d", "-t", "ra-console:", "sleep", "600")
+        marked = [pane for pane in await self.gateway.pane_arrangement() if pane.surface]
+        assert len(marked) == 1, (
+            f"the console start path did not mark exactly one surface: {marked}"
+        )
 
     async def start(self, session_id: SessionId | None = None) -> SessionId:
         """Launch a stand-in agent, optionally under a chosen id.
@@ -231,5 +244,92 @@ async def test_changing_agents_never_hosts_one_agent_in_the_others_session(
 
         assert await console.slot_pane() == surface
         assert await console.home_panes(second) == [second_pane]
+    finally:
+        await console.teardown()
+
+
+async def test_interruption_the_other_writer_kills_the_shown_agents_pane(tmp_path: Path) -> None:
+    """A second process ends the session while the console is displaying it.
+
+    Standing in for the bot, which is a different process with no composer and so cannot ask
+    the console to step aside the way a local stop does (DEC-005). It kills the pane; the
+    console is left displaying the result and nothing tells it. What must then be true is that
+    the *next* sync notices and brings the projects surface back, and that the console — whose
+    own window just lost a pane — is still there to bring it back to.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+
+    console = live_console(tmp_path)
+    try:
+        await console.build(tmp_path)
+        surface = await console.slot_pane()
+        agent_session = await console.start()
+        await console.composer.show(agent_session)
+        assert await console.slot_pane() != surface, "the agent was not displayed"
+
+        # The other writer, reaching the agent by pane id wherever it is hosted (Sub-plan 1).
+        result = await console.terminal.force_stop(agent_session)
+        assert not result.live, f"the other writer's stop did not land: {result.detail}"
+
+        await console.composer.sync(())
+
+        assert await console.slot_pane() == surface, (
+            "the console kept showing a session the other writer had already ended"
+        )
+        assert await console.gateway.console_exists() is True, "the console did not survive"
+    finally:
+        await console.teardown()
+
+
+async def test_interruption_killing_the_console_destroys_the_agent_it_was_showing(
+    tmp_path: Path,
+) -> None:
+    """The swap model's sharpest accepted cost, asserted rather than hoped for.
+
+    This task was planned as "kill the console, confirm the agent's session survives with its
+    pane back home or recoverable". tmux does neither: a displayed pane physically lives in
+    the console's window, so `kill-session` **destroys the agent's process**, and
+    `remain-on-exit` does not help because it governs a process exiting rather than tmux
+    killing the pane out from under it. Probed and pinned as Claim 12's neighbour.
+
+    What makes it dangerous rather than merely destructive is the asymmetry asserted below:
+    the agent's **session survives without its agent**, so nothing reports a loss and
+    reconciliation still sees a session. That is why DEC-036's documented "killing ra-console
+    is always safe" no longer holds under this model, and why the runbook has to stop saying
+    it (Stage 3). No start-time recovery can undo this — the process is gone.
+
+    Asserted here so that if tmux ever changes, the recorded accepted cost is re-examined
+    rather than quietly outliving its reason.
+    """
+    if os.environ.get("REMOTE_AGENTS_LIVE_ACCEPTANCE") != "1":
+        pytest.skip("BLOCKED: REMOTE_AGENTS_LIVE_ACCEPTANCE is not enabled")
+
+    console = live_console(tmp_path)
+    try:
+        await console.build(tmp_path)
+        agent_session = await console.start()
+        agent_pane = (await console.home_panes(agent_session))[0]
+        agent_pid = (
+            await console.runner.run(
+                *console.base, "display-message", "-p", "-t", agent_pane, "#{pane_pid}"
+            )
+        ).strip()
+        await console.composer.show(agent_session)
+
+        await console.runner.run(*console.base, "kill-session", "-t", "ra-console:")
+
+        assert f"ra-{agent_session}" in await console.sessions(), (
+            "the agent's own session did not survive the console being killed"
+        )
+        assert await process_gone(agent_pid), (
+            "the displayed agent outlived the console — if tmux now preserves a swapped pane, "
+            "the accepted cost recorded against the swap model needs re-examining"
+        )
+        # And the record must not read as alive: nothing decodes for this identity any more.
+        assert await console.gateway.pane_for(agent_session) is None
+        assert await console.terminal.inspect(agent_session) is None, (
+            "an agent destroyed with the console still reports as an observable session"
+        )
     finally:
         await console.teardown()

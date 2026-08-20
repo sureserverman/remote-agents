@@ -146,8 +146,40 @@ class ConsoleComposer:
             for index, owner in windows:
                 if owner is not None and owner not in live:
                     await self._unlink_quietly(index)
+            await self._restore_stale_display(live)
         except Exception:
             _LOG.exception("console tab sync failed; tabs may lag until the next pass")
+
+    async def _restore_stale_display(self, live: set[SessionId]) -> None:
+        """Bring the surface back when the session it stepped aside for is no longer live.
+
+        **The other writer's half of the stop story (DEC-005).** A local stop asks the console
+        to move first (`hide`), but the bot is a different process with no composer and cannot:
+        it ends the session and leaves the console displaying the result. Nothing tells the
+        console, so the console has to notice, and `sync` already runs on every sessions
+        reload — which makes it the pass that notices.
+
+        **What says "not at rest" is where the surface is, not what the slot holds.** The
+        obvious rule — "the slot holds a session that has ended" — only catches the graceful
+        case, where `remain-on-exit` leaves a dead pane still carrying its mark. A force stop
+        removes the pane outright, so tmux shifts a console pane of its own into position 0
+        and the slot reads as unremarkable while the surface sits in a window whose session is
+        gone. Asking after the surface catches both.
+
+        The refusal is what makes this safe to run on every reload: a slot holding a **live**
+        displayed session is left alone. Without it the console would yank itself back to the
+        projects list under an owner who was reading an agent.
+        """
+        arrangement = await self._console.pane_arrangement()
+        surface = _surface(arrangement)
+        if surface is None or (surface.on_console and surface.window_index == 0):
+            return
+        slot = _left_slot(arrangement)
+        if slot is None or (slot.session_id is not None and slot.session_id in live):
+            return
+        async with self._links:
+            await self._console.swap_panes(surface.pane_id, slot.pane_id)
+        _LOG.info("the console was showing a session that has ended; the surface is back")
 
     async def open(self, session_id: SessionId) -> None:
         """Focus one session: its tab if it has or can get one, a direct switch if not.

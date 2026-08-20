@@ -24,10 +24,18 @@ pane beside it, "the only unmarked one" is not an answer, and the console had no
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from remote_agents.application.console import _RECOVERY_PASSES, ConsoleComposer
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.ports.console import HostedPane
 
 _A = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -390,3 +398,94 @@ async def test_a_permutation_too_large_for_the_bound_says_so_rather_than_looping
     assert len(console.swaps) == _RECOVERY_PASSES
     assert not report.settled
     assert any("did not settle" in note for note in report.blocked), report.blocked
+
+
+class _SyncingConsole(RecordingConsole):
+    """A recording console that also answers the tab half of `sync`."""
+
+    async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
+        return ((0, None),)
+
+    async def link_session_window(self, session_id: SessionId) -> None:
+        return None
+
+    async def unlink_console_window(self, index: int) -> None:
+        return None
+
+
+def _record(session_id: SessionId, state: SessionState) -> SessionRecord:
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("opaque", "claude", "regular", 1),
+        state,
+        datetime.now(UTC),
+    )
+
+
+async def test_the_other_writer_ending_a_shown_session_restores_the_surface_on_the_next_sync(
+) -> None:
+    """DEC-005's two-writer story, at the one place the swap model makes it visible.
+
+    The bot is a different process with no composer, so it cannot ask the console to step
+    aside the way a local stop does (Task 2.2). It stops the session, the pane it leaves in
+    the console's slot is dead, and the projects surface is still parked in a window whose
+    session has ended. Nothing tells the console — so the console has to notice, and `sync`
+    is the pass that already runs on every sessions reload.
+    """
+    console = _SyncingConsole(
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
+    )
+
+    await composer(console).sync((_record(_A, SessionState.ENDED),))
+
+    assert console.swaps == [("%1", "%3")], (
+        "a session ended by the other writer left its dead pane in the console's slot"
+    )
+
+
+async def test_the_other_writer_leaves_a_live_shown_session_alone_on_sync() -> None:
+    """The refusal that makes the rule safe to run on every reload.
+
+    `sync` fires constantly. If it restored the surface whenever an agent occupied the slot,
+    the owner could never look at an agent for longer than one refresh — the console would
+    yank itself back to the projects list under them.
+    """
+    console = _SyncingConsole(
+        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
+    )
+
+    await composer(console).sync((_record(_A, SessionState.RUNNING),))
+
+    assert console.swaps == []
+
+
+async def test_the_other_writer_killing_the_pane_outright_still_brings_the_surface_back() -> None:
+    """The variant where there is no dead pane to detect, only an absence.
+
+    A force stop removes the pane rather than preserving it, so the console's slot is taken
+    by whichever pane tmux shifts into position 0 — a console pane of its own, carrying no
+    identity. Detected by identity alone this reads as a resting console, while the projects
+    surface sits in a window whose session is gone. What actually says "not at rest" is the
+    surface being somewhere other than the slot.
+    """
+    console = _SyncingConsole(
+        (_slot("%2"), _home(_A, "%1", None, surface=True))
+    )
+    console.arrangement = (
+        HostedPane(None, True, 0, 0, "%2", None, False),
+        _home(_A, "%1", None, surface=True),
+    )
+
+    await composer(console).sync(())
+
+    assert console.swaps == [("%1", "%2")]
+
+
+async def test_a_sync_on_a_resting_console_moves_nothing_for_the_other_writer() -> None:
+    console = _SyncingConsole((_slot("%1", surface=True), _feed("%2"), _home(_A, "%3", _A)))
+
+    await composer(console).sync((_record(_A, SessionState.RUNNING),))
+
+    assert console.swaps == []
