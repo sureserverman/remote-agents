@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from remote_agents.application.console import ConsoleComposer
+from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -23,7 +23,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.console import HostedPane
+from remote_agents.ports.console import ConsoleBindingAction, HostedPane
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _RUNNING = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -70,8 +70,10 @@ class RecordingConsole:
         self._raise_if_armed()
         self.exists = True
 
-    async def install_console_binding(self, key: str) -> None:
-        self.calls.append(("install_console_binding", key))
+    async def install_console_binding(
+        self, key: str, action, command: tuple[str, ...] = ()
+    ) -> None:
+        self.calls.append(("install_console_binding", key, action, command))
         self._raise_if_armed()
 
     async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]:
@@ -121,8 +123,14 @@ class RecordingConsole:
         self._raise_if_armed()
 
 
+#: What the projects key runs. The composition root supplies the real one; this is its shape.
+_PROJECTS_COMMAND = ("remote-agents", "console", "projects")
+
+
 def _composer(console: RecordingConsole) -> ConsoleComposer:
-    return ConsoleComposer(console, ("remote-agents", "tui"), Path("/tmp"))
+    return ConsoleComposer(
+        console, ("remote-agents", "tui"), Path("/tmp"), projects_command=_PROJECTS_COMMAND
+    )
 
 
 def named(console: RecordingConsole, name: str) -> list[tuple]:
@@ -139,14 +147,73 @@ async def test_ensure_creates_the_console_only_when_it_is_missing() -> None:
     assert named(present, "create_console") == []
 
 
-async def test_ensure_installs_the_jump_home_binding_once_per_call() -> None:
+# --- The key budget (Sub-plan 3, Task 2.1) --------------------------------------------
+#
+# Every root binding is a key the agent can never receive, on every session, forever. That
+# makes the *size* of this set a decision rather than an implementation detail, so these
+# assert the declared budget itself and not merely that installing works.
+
+
+async def test_ensure_installs_exactly_the_declared_binding_budget() -> None:
+    console = RecordingConsole()
+    await _composer(console).ensure()
+
+    installed = [(call[1], call[2]) for call in named(console, "install_console_binding")]
+    assert installed == [(binding.key, binding.action) for binding in CONSOLE_BINDINGS]
+
+
+async def test_the_binding_budget_is_two_keys_and_every_one_of_them_says_why() -> None:
+    """A third root binding should have to be argued for here, not appear silently.
+
+    The plan allows the projects key plus *at most* two for pane focus. Two is what the
+    layout actually needs: one key returns the projects surface to the left slot, and one
+    cycles focus, which reaches any of three panes in at most two presses. A per-pane focus
+    key would be a third key spent on a second way to do the same thing.
+    """
+    assert len(CONSOLE_BINDINGS) == 2
+    assert len({binding.key for binding in CONSOLE_BINDINGS}) == 2, "two keys, not one twice"
+    assert len({binding.action for binding in CONSOLE_BINDINGS}) == 2
+    for binding in CONSOLE_BINDINGS:
+        assert binding.why.strip(), f"{binding.key} is spent forever and does not say why"
+
+
+async def test_the_projects_binding_carries_our_own_command_and_focus_carries_none() -> None:
+    """The route back from a displayed agent is a command, because a key cannot exchange panes.
+
+    tmux can select a window on its own; it cannot read our pane marks and decide which
+    exchange returns the surface. So the projects key runs *our* program, and it is the
+    composition root's to supply — the same argument `create_console` already takes, for the
+    same reason: which entry point is the console is composition policy, not adapter shape.
+    """
+    console = RecordingConsole()
+    await _composer(console).ensure()
+
+    by_action = {call[2]: call[3] for call in named(console, "install_console_binding")}
+    assert by_action[ConsoleBindingAction.SHOW_PROJECTS] == _PROJECTS_COMMAND
+    assert by_action[ConsoleBindingAction.FOCUS_NEXT_PANE] == ()
+
+
+async def test_re_ensure_does_not_stack_the_bindings() -> None:
     console = RecordingConsole()
     composer = _composer(console)
     await composer.ensure()
-    assert named(console, "install_console_binding") == [("install_console_binding", "F12")]
     await composer.ensure()
-    # One bind per ensure; tmux overwrites a rebound key, so re-ensure cannot stack.
-    assert len(named(console, "install_console_binding")) == 2
+
+    # One bind per key per ensure; tmux overwrites a rebound key, so re-ensure cannot stack.
+    installed = named(console, "install_console_binding")
+    assert len(installed) == 2 * len(CONSOLE_BINDINGS)
+    assert {call[1] for call in installed} == {binding.key for binding in CONSOLE_BINDINGS}
+
+
+async def test_a_binding_that_cannot_be_installed_still_leaves_a_usable_console() -> None:
+    """DEC-006 as it reaches presentation: a missing key costs the owner a key, never a console."""
+    console = RecordingConsole()
+
+    async def refuse(key, action, command=()):
+        raise RuntimeError("tmux refused the bind")
+
+    console.install_console_binding = refuse  # type: ignore[method-assign]
+    assert await _composer(console).ensure() is False
 
 
 async def test_sync_links_live_sessions_and_unlinks_gone_ones() -> None:

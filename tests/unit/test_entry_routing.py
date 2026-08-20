@@ -245,3 +245,47 @@ def test_the_composition_root_does_not_load_the_terminal_library() -> None:
         "importing the composition root pulled in Textual; `serve` now loads the terminal "
         "library it is meant to be isolated from"
     )
+
+
+# --- The console's route back from a displayed agent (Sub-plan 3, Task 2.1) ------------
+#
+# With an agent's pane in the console's left slot, every key the owner types goes to that
+# agent — so the way back has to be a *root* binding, and a root binding can only run a
+# command. `remote-agents console projects` is that command.
+
+
+def test_the_console_verb_asks_the_composer_for_the_projects_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: list[str] = []
+
+    class _Composer:
+        def __init__(self, *args, **kwargs) -> None:
+            self.projects_command = kwargs.get("projects_command")
+
+        async def show_projects(self) -> None:
+            asked.append("show_projects")
+
+    from remote_agents.application import console
+
+    monkeypatch.setattr(console, "ConsoleComposer", _Composer)
+    assert bootstrap.main(["console", "projects"]) == 0
+    assert asked == ["show_projects"]
+
+
+def test_an_unknown_console_action_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        bootstrap, "_console_arrange", lambda action: pytest.fail("no such console action")
+    )
+    with pytest.raises(SystemExit) as refusal:
+        bootstrap.main(["console", "rearrange-everything"])
+    assert refusal.value.code != 0
+
+
+def test_the_projects_key_runs_this_interpreter_rather_than_a_name_on_path() -> None:
+    """A root binding that assumed a console script on PATH would work here and fail on pipx."""
+    import sys
+
+    command = bootstrap._projects_command()
+    assert command[0] == sys.executable
+    assert command[1:] == ("-m", "remote_agents", "console", "projects")

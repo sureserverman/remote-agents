@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
-from remote_agents.ports.console import ConsolePort, HostedPane
+from remote_agents.ports.console import ConsoleBindingAction, ConsolePort, HostedPane
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _LOG = logging.getLogger(__name__)
@@ -36,6 +36,49 @@ _LOG = logging.getLogger(__name__)
 #: Root-table key that returns the client to the dashboard window from any tab. A root
 #: binding costs every pane this key, so it is a function key nothing curated uses.
 JUMP_HOME_KEY = "F12"
+
+
+@dataclass(frozen=True, slots=True)
+class ConsoleBinding:
+    """One root-table key the console takes, and the argument for spending it."""
+
+    key: str
+    action: ConsoleBindingAction
+    why: str
+    """Why this key is worth what it costs, in the terms the cost is paid in.
+
+    Not documentation for its own sake. A root binding is a key **every agent on this server
+    can never receive**, in every session, for as long as it is bound — so a binding without
+    an argument is a key taken from the owner's agents by accident. This field is what the
+    plan's gate reads when it asks whether the budget is worth its price.
+    """
+
+
+#: The console's whole key budget. Two keys, declared here and installed from `ensure` alone.
+#:
+#: The size is the decision. A third would need to be argued for against the same cost the
+#: first two pay, which is why the test that pins this set asserts its *length* and not only
+#: its contents — a set that can grow silently is not a budget.
+CONSOLE_BINDINGS: tuple[ConsoleBinding, ...] = (
+    ConsoleBinding(
+        JUMP_HOME_KEY,
+        ConsoleBindingAction.SHOW_PROJECTS,
+        "The owner's only route back from a displayed agent. With an agent's pane in the "
+        "left slot, every key the owner types goes to that agent, so without a root key "
+        "there is no way to ask for the projects surface at all — the console could swap an "
+        "agent in and never swap it out. Inherited from the tab model, where it meant "
+        "select-window 0; under the swap model that selects the window the owner is already "
+        "on, so the key survives and its action does not.",
+    ),
+    ConsoleBinding(
+        "F11",
+        ConsoleBindingAction.FOCUS_NEXT_PANE,
+        "Three panes need keyboard focus to move between them, and the displayed agent "
+        "consumes the prefix key along with everything else the owner types. One cycling key "
+        "reaches any of the three in at most two presses; a key per pane would spend three "
+        "of the agent's keys on a second way to do the same thing.",
+    ),
+)
 
 #: The states whose sessions have a pane worth a tab. ENDED/FAILED panes may linger as
 #: PRESERVED evidence, but a tab is an invitation to work, not an archive.
@@ -89,12 +132,17 @@ class ConsoleComposer:
         dashboard_command: tuple[str, ...],
         working_directory: Path,
         *,
-        jump_home_key: str = JUMP_HOME_KEY,
+        projects_command: tuple[str, ...] = (),
+        bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
     ) -> None:
         self._console = console
         self._dashboard_command = dashboard_command
         self._working_directory = working_directory
-        self._jump_home_key = jump_home_key
+        # Which entry point returns the projects surface is composition policy, exactly as
+        # which entry point *is* the dashboard is — so it arrives the same way rather than
+        # being spelled inside the adapter that runs it.
+        self._projects_command = projects_command
+        self._bindings = bindings
         # One lock over every link decision. sync() derives its to-link set from a windows
         # snapshot, and open() links on a miss — two awaited round-trips apart, so without
         # the lock a launch completing during a periodic sync could link the same session
@@ -108,7 +156,13 @@ class ConsoleComposer:
                 await self._console.create_console(
                     self._dashboard_command, self._working_directory
                 )
-            await self._console.install_console_binding(self._jump_home_key)
+            for binding in self._bindings:
+                command = (
+                    self._projects_command
+                    if binding.action is ConsoleBindingAction.SHOW_PROJECTS
+                    else ()
+                )
+                await self._console.install_console_binding(binding.key, binding.action, command)
         except Exception:
             _LOG.exception("the console could not be ensured; the surface degrades")
             return False

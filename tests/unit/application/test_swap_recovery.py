@@ -103,7 +103,7 @@ class RecordingConsole:
     async def create_console(self, command: tuple[str, ...], cwd: Path) -> None:
         raise AssertionError("an existing console must not be recreated")
 
-    async def install_console_binding(self, key: str) -> None:
+    async def install_console_binding(self, key: str, action, command=()) -> None:
         return None
 
     async def mark_console_surface(self, pane_id: str) -> None:

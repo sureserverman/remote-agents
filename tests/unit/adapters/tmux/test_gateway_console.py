@@ -144,16 +144,103 @@ async def test_focus_and_switch_operations_use_generated_targets_only() -> None:
 
 
 async def test_the_console_binding_is_installed_on_our_socket_with_a_validated_key() -> None:
+    """Both actions of the key budget, on our socket, with the key validated either way.
+
+    `select-window 0` was what *every* binding did under the tab model. It cannot be that
+    now: under the swap model the owner is already on window 0, and what they need is the
+    projects surface exchanged back into the left slot — which tmux cannot decide on its own,
+    because it cannot read our pane marks. So the projects key runs our program instead.
+    """
+    from remote_agents.ports.console import ConsoleBindingAction
+
     runner = RecordingRunner()
-    await gateway(runner).install_console_binding("F12")
-    await gateway(runner).install_console_binding("C-a")
+    projects = ("/usr/bin/python3", "-m", "remote_agents", "console", "projects")
+    await gateway(runner).install_console_binding(
+        "F12", ConsoleBindingAction.SHOW_PROJECTS, projects
+    )
+    await gateway(runner).install_console_binding("C-a", ConsoleBindingAction.FOCUS_NEXT_PANE)
     assert runner.calls == [
-        (*_BASE, "bind-key", "-n", "F12", "select-window", "-t", "ra-console:0"),
-        (*_BASE, "bind-key", "-n", "C-a", "select-window", "-t", "ra-console:0"),
+        (
+            *_BASE,
+            "bind-key",
+            "-n",
+            "F12",
+            "run-shell",
+            "/usr/bin/python3 -m remote_agents console projects",
+        ),
+        (*_BASE, "bind-key", "-n", "C-a", "select-pane", "-t", ":.+"),
     ]
     for key in ("", "two words", "a;b", "$(rm)", "péché", "C-", "C-;"):
         with pytest.raises(ValueError):
-            await gateway(runner).install_console_binding(key)
+            await gateway(runner).install_console_binding(
+                key, ConsoleBindingAction.FOCUS_NEXT_PANE
+            )
+
+
+async def test_a_binding_whose_action_and_command_disagree_is_refused() -> None:
+    """A projects key with nothing to run, or a focus key carrying a command, is a mistake
+    that would otherwise install a binding that quietly does the wrong thing."""
+    from remote_agents.ports.console import ConsoleBindingAction
+
+    runner = RecordingRunner()
+    with pytest.raises(ValueError, match="needs the command"):
+        await gateway(runner).install_console_binding("F12", ConsoleBindingAction.SHOW_PROJECTS)
+    with pytest.raises(ValueError, match="takes no command"):
+        await gateway(runner).install_console_binding(
+            "F11", ConsoleBindingAction.FOCUS_NEXT_PANE, ("anything",)
+        )
+    assert runner.calls == [], "a refused binding must not reach tmux at all"
+
+
+async def test_a_command_with_a_space_in_its_path_stays_one_command() -> None:
+    """`run-shell` takes one shell string, so an unquoted join is a different command.
+
+    The composition root builds this from `sys.executable`, which on a real host is exactly
+    the kind of path that turns out to have a space in it.
+    """
+    from remote_agents.ports.console import ConsoleBindingAction
+
+    runner = RecordingRunner()
+    await gateway(runner).install_console_binding(
+        "F12",
+        ConsoleBindingAction.SHOW_PROJECTS,
+        ("/home/a b/python", "-m", "remote_agents", "console", "projects"),
+    )
+    assert runner.calls[0][-1] == "'/home/a b/python' -m remote_agents console projects"
+
+
+async def test_a_command_bearing_a_hash_never_reaches_tmux_own_format_engine() -> None:
+    """`/bin/sh` is not the only reader of a `run-shell` string — tmux expands it first.
+
+    The mirror of the space-in-path test above, for the second interpreter. Probed on real
+    tmux 3.4 rather than read off the manual: `run-shell "echo '#{pane_id}'"` printed `%0`,
+    and `run-shell "echo '#(id -u)'"` printed nothing, because tmux ran the `#(...)` through
+    its own format engine. `shlex.quote` leaves `#` alone — it is not a shell metacharacter
+    there — so without doubling it, a path containing `#{` or `#(` would be substituted away
+    or would execute. The same probe confirms `##` is the escape: `##{pane_id}` came back as
+    the literal `#{pane_id}`.
+
+    Not reachable from today's caller, which builds a fixed tuple from `sys.executable`. It
+    is closed now because the next binding built from a project path or a profile name would
+    reintroduce it silently.
+    """
+    from remote_agents.ports.console import ConsoleBindingAction
+
+    runner = RecordingRunner()
+    await gateway(runner).install_console_binding(
+        "F12",
+        ConsoleBindingAction.SHOW_PROJECTS,
+        ("/opt/py#{pane_id}/bin/python", "-m", "remote_agents", "console", "projects"),
+    )
+    command = runner.calls[0][-1]
+    assert "##{pane_id}" in command, "an unescaped # is a tmux format, not a path"
+    assert "#{pane_id}" not in command.replace("##{pane_id}", ""), "no bare format survived"
+
+    runner = RecordingRunner()
+    await gateway(runner).install_console_binding(
+        "F12", ConsoleBindingAction.SHOW_PROJECTS, ("/opt/#(id -u)/python", "-m", "remote_agents")
+    )
+    assert "##(id -u)" in runner.calls[0][-1], "#(...) runs a command through tmux's engine"
 
 
 async def test_a_gone_target_is_typed_for_every_single_target_console_operation() -> None:

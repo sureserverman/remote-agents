@@ -369,6 +369,11 @@ def main(
     pane_parser = subcommands.add_parser("pane")
     pane_parser.add_argument("name", choices=sorted(PANE_NAMES))
     pane_parser.add_argument("--config", type=Path)
+    # What the console's projects key runs. It exists because a tmux key cannot do this
+    # itself: tmux can select a window, but it cannot read our pane marks and work out which
+    # exchange brings the surface home. Not a surface — it arranges panes and exits.
+    console_parser = subcommands.add_parser("console")
+    console_parser.add_argument("action", choices=("projects",))
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
@@ -491,6 +496,8 @@ def main(
         return _run_surface(arguments.config, run_local_terminal, "the local terminal surface")
     if arguments.command == "pane":
         return _enter_pane(arguments.name, arguments.config)
+    if arguments.command == "console":
+        return _console_arrange(arguments.action)
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -666,14 +673,7 @@ def _enter_console(
         )
         return 0
     if ensure_console is None:
-        from remote_agents.application.console import ConsoleComposer
-
-        composer = ConsoleComposer(
-            TmuxGateway("remote-agents", AsyncTmuxRunner()),
-            (sys.executable, "-m", "remote_agents", "tui"),
-            Path.home(),
-        )
-        ensure_console = composer.ensure
+        ensure_console = _console_composer().ensure
     if not asyncio.run(ensure_console()):
         print(
             "The console could not be prepared. Check tmux on this host, or run: "
@@ -687,6 +687,51 @@ def _enter_console(
     except OSError:
         print(f"Could not attach automatically. Attach with:\n{command}", file=sys.stderr)
         return 1
+    return 0
+
+
+#: What the console's projects key runs — this program, asking for the surface back.
+def _projects_command() -> tuple[str, ...]:
+    """The argv the projects binding runs, built from this interpreter rather than a name.
+
+    `sys.executable -m remote_agents` and not the bare `remote-agents` script, for the reason
+    `create_console` already builds its dashboard command that way: the console is started
+    from whatever interpreter the owner installed this into, and a root binding that assumed
+    a console script on `PATH` would work on the developer's host and fail on a pipx install.
+    """
+    return (sys.executable, "-m", "remote_agents", "console", "projects")
+
+
+def _console_composer(gateway=None, home: Path | None = None):
+    """Build the one console composer shape, so three call sites cannot drift apart.
+
+    They already had: `_enter_console`, `_console_arrange` and `local_context` each construct
+    one, and only the last has a gateway of its own to reuse. What must not differ between
+    them is the dashboard command, the projects command and the home directory — a composer
+    that disagreed with its siblings about any of those would install a binding running a
+    different program, or create a console somewhere else.
+    """
+    from remote_agents.application.console import ConsoleComposer
+
+    return ConsoleComposer(
+        gateway if gateway is not None else TmuxGateway("remote-agents", AsyncTmuxRunner()),
+        (sys.executable, "-m", "remote_agents", "tui"),
+        home if home is not None else Path.home(),
+        projects_command=_projects_command(),
+    )
+
+
+def _console_arrange(action: str) -> int:
+    """Rearrange the console's panes and exit — the operator's route back from an agent.
+
+    Deliberately not a surface: it holds no database handle, renders nothing, and its whole
+    life is one exchange. It is presentation like everything else the composer does, so a
+    failure here is a log line and a non-zero exit, never a session's problem (DEC-006).
+    """
+    if action != "projects":  # pragma: no cover - argparse `choices` is the real guard
+        print(f"unknown console action: {action}", file=sys.stderr)
+        return 1
+    asyncio.run(_console_composer().show_projects())
     return 0
 
 
@@ -853,13 +898,7 @@ def local_context(config, connection, paths: ProductionPaths):
         # hosting an exec-attach would cost the dashboard its own process (attach.py), so
         # a degraded console keeps retrying quietly per pass rather than re-routing opens
         # through exec.
-        from remote_agents.application.console import ConsoleComposer
-
-        composer = ConsoleComposer(
-            runtime.gateway,
-            (sys.executable, "-m", "remote_agents", "tui"),
-            paths.home,
-        )
+        composer = _console_composer(runtime.gateway, paths.home)
         if not asyncio.run(composer.ensure()):
             # Wiring continues regardless (see above), but the operator hears about it
             # here once, at the surface's front door, not only in per-pass debug logs.

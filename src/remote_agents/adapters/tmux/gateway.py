@@ -12,6 +12,7 @@ from typing import Protocol
 from remote_agents.adapters.tmux.codec import (
     PANE_FORMAT,
     ManagedPane,
+    console_binding_args,
     console_slot_mark_args,
     console_target,
     current_console_window_args,
@@ -34,7 +35,7 @@ from remote_agents.adapters.tmux.codec import (
     window_session_mark_args,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import HostedPane
+from remote_agents.ports.console import ConsoleBindingAction, HostedPane
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 
@@ -58,23 +59,6 @@ _ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session n
 # tmux key names this adapter will bind: bare keys and function keys, optionally behind one
 # C-/M- modifier. Deliberately narrower than what tmux accepts — a key is configuration, not
 # input, and the closed shape keeps shell metacharacters out of the argv by construction.
-_BINDABLE_KEY_CHARACTERS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-)
-
-
-def _validate_binding_key(key: str) -> str:
-    body = key
-    for modifier in ("C-", "M-"):
-        if body.startswith(modifier):
-            body = body.removeprefix(modifier)
-            break
-    if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
-        raise ValueError(
-            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
-        )
-    return key
-
 
 def _reports_absent_server(message: str) -> bool:
     """Recognize the dedicated server simply not being up, which means zero panes."""
@@ -716,15 +700,11 @@ class TmuxGateway:
         """Flash one line on the status bar of whatever window the client is on."""
         await self._runner.run(*self._base_argv(), *display_message_args(text))
 
-    async def install_console_binding(self, key: str) -> None:
-        """Bind one validated root-table key, on this socket only, to reach the dashboard."""
-        await self._runner.run(
-            *self._base_argv(),
-            "bind-key",
-            "-n",
-            _validate_binding_key(key),
-            *select_window_args(0),
-        )
+    async def install_console_binding(
+        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+    ) -> None:
+        """Install one console root binding, on this socket only; the codec validates the key."""
+        await self._runner.run(*self._base_argv(), *console_binding_args(key, action, command))
 
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""

@@ -9,10 +9,41 @@ gateway satisfies this protocol structurally.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from remote_agents.domain.models import SessionId
+
+
+class ConsoleBindingAction(Enum):
+    """What one console root binding does — a closed set, not a description.
+
+    A binding's action decides tmux argv, so it is chosen from here rather than passed as
+    free text (DEC-001). Two members, because the console's whole key budget is two keys.
+    """
+
+    SHOW_PROJECTS = "show_projects"
+    """Return the projects surface to the console's left slot, wherever an exchange left it.
+
+    It runs *our own program* rather than a tmux command, and that is forced rather than
+    chosen: tmux can select a window by itself, but it cannot read our pane marks and work
+    out which exchange brings the surface home. Under the tab model this key was
+    `select-window 0`, which under the swap model selects the window the owner is already on.
+    """
+
+    FOCUS_NEXT_PANE = "focus_next_pane"
+    """Move focus to the next pane of the current window, cycling.
+
+    One key for three panes: cycling reaches any of them in at most two presses, where a key
+    per pane would spend three of the agent's keys on a second way to do the same thing.
+
+    Pressed outside the console it acts on whatever window that client is on. A managed
+    session's window is usually one pane, where cycling changes nothing — but this project
+    treats an operator's hand-split pane as ordinary, and the surface hands out an attach
+    command for precisely that kind of direct connection, so "a no-op outside the console" is
+    not promised. What is promised is that it only ever moves focus.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +108,9 @@ class ConsolePort(Protocol):
 
     async def create_console(self, dashboard_command: tuple[str, ...], cwd: Path) -> None: ...
 
-    async def install_console_binding(self, key: str) -> None: ...
+    async def install_console_binding(
+        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+    ) -> None: ...
 
     async def console_windows(self) -> tuple[tuple[int, SessionId | None], ...]: ...
 

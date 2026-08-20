@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.ports.console import ConsoleBindingAction
 
 _DELIMITER = "|"
 
@@ -347,6 +349,72 @@ def unlink_window_args(window_index: int) -> tuple[str, ...]:
     if window_index < 1:
         raise ValueError("only linked console tabs may be unlinked, never the dashboard")
     return ("unlink-window", "-t", f"{CONSOLE_SESSION_NAME}:{window_index}")
+
+
+#: Which characters a bindable key may be made of, once one optional modifier is stripped.
+_BINDABLE_KEY_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+
+def console_binding_args(
+    key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Return the argv suffix that installs one console root binding, on our socket only.
+
+    `-n` is the root table: no prefix, which is the whole reason these keys cost something —
+    a root binding is a key every agent on this server can never receive, for as long as it
+    is bound. That is why the key is validated here rather than trusted, and why the *set* of
+    them is declared in one place in the application layer rather than accumulated.
+
+    The two actions differ in shape, and the mismatch is refused rather than ignored:
+    `SHOW_PROJECTS` needs a command to run and `FOCUS_NEXT_PANE` must not carry one, so a
+    caller that passes the wrong pair gets a `ValueError` instead of a binding that quietly
+    does nothing.
+
+    **Two escapes, for two interpreters, and missing either one is a defect.** `run-shell`
+    takes a single shell string rather than an argv, so the command is joined with
+    `shlex.join`: an unquoted join makes any path with a space in it a different command, and
+    the composition root's own interpreter path is exactly the kind of thing that has spaces
+    on some hosts. But `/bin/sh` is not the only reader — **tmux expands the string as a
+    FORMAT first**, so `#` is a metacharacter before the shell ever sees it. Probed on real
+    tmux 3.4 rather than read off the manual: `run-shell "echo '#{pane_id}'"` printed `%0`,
+    and `run-shell "echo '#(id -u)'"` printed nothing at all, because tmux ran the `#(...)`
+    through its own format engine and substituted the result. `shlex.quote` does not escape
+    `#` — it is not a shell metacharacter in that position — so doubling it here is what
+    closes the gap. The same probe confirms the escape: `##{pane_id}` came back as the literal
+    `#{pane_id}`.
+
+    Today's only caller passes a fixed tuple built from `sys.executable`, so nothing
+    owner-controlled reaches this — which is why it is escaped now, while it is cheap, rather
+    than when a future binding is built from a project path or a profile name and reintroduces
+    the class silently.
+    """
+    body = key
+    for modifier in ("C-", "M-"):
+        if body.startswith(modifier):
+            body = body.removeprefix(modifier)
+            break
+    if not body or not set(body) <= _BINDABLE_KEY_CHARACTERS:
+        raise ValueError(
+            "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
+        )
+    if action is ConsoleBindingAction.SHOW_PROJECTS:
+        if not command:
+            raise ValueError("the projects binding needs the command that returns the surface")
+        # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:
+        # doubling first would let shlex quote the escape we just added.
+        return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
+    if command:
+        raise ValueError(f"{action.value} takes no command; tmux does this one on its own")
+    # `:.+` is "the next pane of the current window", cycling at the end. Relative to whatever
+    # window the client pressing the key is on — the console's when it matters, and otherwise
+    # a managed session's own window, where it moves focus if that window has more than one
+    # pane. That is not nothing: this project treats an operator's hand-split pane as ordinary
+    # (see `inventory`'s inherited-mark handling), and the surface hands out an attach command
+    # for exactly that kind of direct connection. Harmless — focus moves, nothing else — but
+    # "a no-op outside the console" would be a false claim, so it is not made.
+    return ("bind-key", "-n", key, "select-pane", "-t", ":.+")
 
 
 def select_window_args(window_index: int) -> tuple[str, ...]:
