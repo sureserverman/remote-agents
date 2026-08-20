@@ -158,22 +158,47 @@ uv run --locked remote-agents
 ```
 
 With no arguments, `remote-agents` enters the **console**: a tmux session named
-`ra-console` on the project's own server, whose window is the dashboard — projects on the
-left, the running sessions and the notifications feed on the right. `F12` reaches the
-dashboard (a binding installed on the project's own tmux server only — your own tmux
-configuration is never touched). Run from inside the console it says so instead of nesting;
-run from inside somebody else's tmux it prints the attach command instead. Opening a session
-gives it a window of its own, and killing the console is safe: it is presentation only, and
-every managed session survives it.
+`ra-console` on the project's own server, whose single window is **three panes** — the
+projects surface on the left at about 60% of the width, the running sessions top-right, and
+the notifications feed under them. Each pane is its own process (`remote-agents pane
+projects|sessions|feed`), because a terminal app owns a whole terminal and cannot span panes.
+Run from inside the console it says so instead of nesting; run from inside somebody else's
+tmux it prints the attach command instead.
 
-That last sentence is what changes next. The console is being reshaped to show an agent by
-**swapping** it into the dashboard's left pane, so that — once the window is split into three
-— the sessions list and the feed stay on screen beside it; the projects surface goes to live
-in that agent's own window until it is swapped back (DEC-040). The exchange, the start-time
-recovery and the lifecycle handling are in place; the three-pane layout and opening a session
-from the sessions pane land with the console's final stage. **From that point, killing the
-console while an agent is displayed destroys that agent's process**, because its pane is
-physically in the console's window — see the operator runbook.
+Opening a session **exchanges** it into the left pane: the agent's own pane moves there and
+the projects surface goes to live in that agent's window until it is swapped back, so the
+sessions list and the feed stay on screen beside the agent you are working in. Every stop,
+inspect, rename and Remote Control affordance is one `d` away on the sessions pane, which
+stays visible the whole time.
+
+**Killing the console while an agent is displayed destroys that agent's process**, because
+its pane is physically in the console's window (DEC-040). With nothing displayed, killing the
+console is safe and every managed session survives it. The console rebuilds any of its three
+panes whose process dies, including its own projects surface.
+
+### Keys the console takes
+
+**One**, and it is worth knowing why. `F12` brings the projects surface back to the left
+pane. It is a tmux *root* binding — no prefix — installed on this project's own tmux server
+only, so your own tmux configuration is never touched, but on that server it is a key no
+agent can ever receive. It earns that because the route back is the one thing that must not
+require remembering configuration: an agent fills the pane you were working in, and that is
+exactly when a console looks stuck.
+
+Everything else uses tmux's own keys. **Moving between the three panes is `Ctrl-b o`** (or
+the same `o` under whatever prefix this host's `~/.tmux.conf` sets) — the prefix reaches the
+client before any key reaches a pane, so it works even while an agent is displayed. An
+earlier design took a second root key for this; it was removed once that turned out to be
+true.
+
+Each pane offers only the flows it owns: the projects pane keeps *Add project* and *Resume*,
+which both begin by choosing a project. The sessions and feed panes offer neither.
+
+### Width
+
+The agent's pane is permanently narrower than a whole window — about 60% of your terminal's
+width. At 200 columns that is comfortable; at 100 it is tight, and worth knowing before you
+size the terminal you keep the console in.
 
 Every command with arguments is the CLI exactly as before — `serve`, `doctor`,
 `add-project`, and the rest are unchanged.
@@ -242,10 +267,10 @@ is re-read, so the new project is selectable without leaving the app.
 
 After a ready launch, where the surface goes depends on where it is hosted. From a bare shell
 this process is replaced by the attach command for the session it just started,
-`tmux -L remote-agents attach-session -t ra-<session>:`, exactly as before. Run inside a client
-on the project's own tmux server, the surface instead switches that client to the new session
-and stays alive, because a client already on the server is not nesting when it reaches a
-session — it is switching. Either way the store is never held open across your work: the
+`tmux -L remote-agents attach-session -t ra-<session>:`, exactly as before. Run inside the
+console, the surface instead **exchanges** that session's pane into the console's left pane
+and stays alive — nothing nests, nothing is switched, and the sessions list and feed stay
+beside it. Either way the store is never held open across your work: the
 surface's database connection exists only for the duration of a single store operation, so
 however long it stays up beside running sessions, the terminal you type into holds no standing
 database handle. The project ships no tmux configuration and sets no prefix, so detaching uses

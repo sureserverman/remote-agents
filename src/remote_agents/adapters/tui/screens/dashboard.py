@@ -222,8 +222,13 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     async def populate(self) -> None:
         await super().populate()
         if self.services.open_in_console is not None:
-            # Task 3.3's promise: the jump-home key is documented where the owner rests.
-            self.sub_title = "F12 returns to this dashboard"
+            # The console's one root key, documented where the owner rests. It said "F12
+            # returns to this dashboard", which was true of the tab model and is not true
+            # now: F12 brings the console's **projects pane** back to the left slot, and
+            # this combined dashboard is a different surface that a console never runs.
+            # Under console hosting it is still worth naming, because the key is bound on
+            # this server and will act whatever surface is looking at it.
+            self.sub_title = "F12 shows the console's projects pane"
         await self._reload_sessions_pane()
         self._sessions_timer = self.set_interval(
             _SESSIONS_AUTO_REFRESH, self._auto_reload_sessions

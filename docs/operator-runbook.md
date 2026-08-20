@@ -614,6 +614,50 @@ uv run --locked remote-agents tui
    Confirm the footer drops Refresh on a screen with nothing to re-read, and that typing a
    project name greys Ctrl+N, Ctrl+S and Ctrl+O rather than discarding what you typed.
 
+## Console acceptance checklist
+
+The three-pane console, driven by hand at the terminal you actually use. Run it with the
+service active, so the second writer is real.
+
+**Size the terminal first.** The agent's pane is about 60% of the width, permanently. At 200
+columns that is comfortable; at 100 it is tight. Do this check at the width you normally work
+at, because that is the claim being accepted.
+
+```bash
+uv run --locked remote-agents
+```
+
+1. Confirm one window, three panes: the projects surface on the left, the sessions list
+   top-right, the notifications feed under it. Confirm the left pane rests with the keyboard in
+   the filter and the projects list beneath it.
+2. Press `Ctrl-b o` (or your own prefix + `o`) and confirm focus moves through all three panes
+   and back. The console takes no key for this — if it stops working, your prefix changed, not
+   this project's bindings.
+3. Launch a session from the projects pane. Confirm the agent appears in the **left** pane and
+   that the sessions list and the feed are still on screen beside it.
+4. With the agent in front, confirm the sessions pane lists it. Press `d` on its row and confirm
+   the detail opens **in the sessions pane** — every stop, inspect, rename and Remote Control
+   affordance is here, and the agent stays displayed.
+5. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
+   while the agent is still in front. This is the whole point of the layout: news reaches you
+   without leaving the agent.
+6. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
+   returns to its own window. This is the console's only root key.
+7. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
+   confirm it shows the same three panes rather than building a fourth.
+8. **The dangerous one.** With an agent displayed, run
+   `tmux -L remote-agents kill-session -t ra-console` and confirm the agent's process is gone
+   and its session name is not — this is DEC-040's accepted cost, and it is why step 6 comes
+   first in normal use. Then run `remote-agents` again and confirm a fresh console comes up, and
+   that it names any defunct `ra-<uuid>` still holding an old projects surface so you can kill
+   it by hand.
+9. Kill one pane's process (`tmux -L remote-agents kill-pane -t <the feed pane>`), run
+   `remote-agents` again, and confirm exactly that pane comes back, beside the one it belongs
+   to, with the window back in its proportions.
+10. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
+    `console.window_linkable` until the console stopped linking windows; if you have scripts
+    reading that field, they need the new name.
+
 ## Terminal and service on one database
 
 The terminal and the service are separate processes writing one SQLite file. The terminal refuses
@@ -657,25 +701,28 @@ The console — the `ra-console` tmux session the bare `remote-agents` command e
 presentation only: it writes no record, and every failure inside it costs you the display and
 nothing else.
 
-**What ships today.** Opening a session still gives it a window of its own, and while that is
-so, killing the console is safe exactly as it always was:
+**The console is one window of three panes** — projects left, sessions top-right, feed under
+them — and it shows an agent by **exchanging** that agent's pane into the left slot. The
+projects surface goes to live in the agent's own window until it is swapped back (DEC-040),
+which is why the sessions list and the feed stay on screen while you work in an agent.
+
+**Killing the console is safe only while nothing is displayed:**
 
 ```bash
 tmux -L remote-agents kill-session -t ra-console
 remote-agents
 ```
 
-**What changes when the console starts displaying agents by exchange.** The design this branch
-builds shows an agent by **swapping** it into the console's left pane, so the sessions list and
-the feed can stay beside it; the projects surface goes to live in that agent's own window until
-it is swapped back (DEC-040). The machinery is in place — the exchange, the start-time
-recovery, and the stop handling below — but nothing in the shipped surface displays an agent
-that way yet. That arrives with the console's final stage, and **from that point the command
-above is no longer safe while an agent is displayed**: a displayed pane physically lives in the
-console's window, so `kill-session -t ra-console` destroys the agent's process along with it,
-and the agent's session name survives without it, so nothing looks obviously wrong at a glance.
-`remain-on-exit` does not save it — that governs a process exiting, not tmux killing the pane
-out from under it.
+**While an agent is displayed, that command destroys the agent's process.** Its pane physically
+lives in the console's window, so `kill-session -t ra-console` takes it, and the agent's session
+name survives without it — nothing looks obviously wrong at a glance. `remain-on-exit` does not
+save it: that governs a process exiting, not tmux killing the pane out from under it. Press
+`F12` first to bring the projects surface back, then kill the console if you still need to.
+
+**If a pane's process dies**, the console rebuilds exactly that pane on the next start, and puts
+the window back in its proportions afterwards — including its own projects surface, which is
+split back in beside the sessions pane. An ordinary start does *not* resize anything, so a
+layout you adjusted by hand survives.
 
 **What recovery can and cannot do.** When the dashboard process starts, it returns each pane to
 where it belongs, logging what it moved and printing what it could not put right. Some states it can only
@@ -688,10 +735,20 @@ which you can kill by hand.
 Note that *re-attaching* is not restarting: running `remote-agents` while the console already
 exists attaches a second client to the running dashboard, and does not re-run that repair.
 
-If the console cannot be prepared at all, the bare command says so and exits non-zero;
-`remote-agents doctor` reports whether this host's tmux supports the console's window contract,
-and `remote-agents tui` still runs the dashboard directly in the current terminal, where opening
-a session falls back to the exec-attach handoff.
+If the console cannot be prepared at all, the bare command says so and exits non-zero.
+`remote-agents doctor` reports whether this host's tmux supports what the console needs, under
+`console.panes_splittable` — it read `console.window_linkable` until the console stopped
+linking windows, and the probe behind it round-trips a pane split, a pane id read back from
+tmux, and a pane-scoped option, which is what the console actually does. A key that will not
+install costs you that key and not the console: the panes are built first, and a failed
+`bind-key` is logged rather than fatal. `remote-agents tui` still runs the combined dashboard
+directly in the current terminal, where opening a session falls back to the exec-attach
+handoff.
+
+**Recovery reports reach you on screen, not in a log.** What the start-time repair moved is
+announced in the projects pane; what it could not put right stands in that pane's status line
+until it is dealt with, because nothing in the process is going to fix it. Both used to go to a
+logger with no configuration and to a stderr line the terminal erased microseconds later.
 
 **Attaching to a session while it is displayed.** The copyable attach command follows the pane,
 so it names the console while that agent is shown there (DEC-039). A session target you type
