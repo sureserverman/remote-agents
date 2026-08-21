@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -196,3 +197,106 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
         _console_composer(home=home)._links._path
         == ProductionPaths.for_home(home).console_lock_path
     )
+
+
+# --- One backend, composed once per process (ARCH-B1, ARCH-B2) -----------------------
+
+_REGISTRY = """version: 1
+projects:
+  - path: {existing}
+    name: existing
+    area: infra
+    enabled: true
+    added: 2026-07-30
+"""
+
+
+def _config_file(home, paths):
+    registry = home / "projects-registry.yaml"
+    registry.write_text(
+        _REGISTRY.format(existing=home / "dev" / "infra" / "existing"), encoding="utf-8"
+    )
+    config_path = home / "config.toml"
+    config_path.write_text(
+        f'[paths]\ndev_root = "{home / "dev"}"\n'
+        f'registry_path = "{registry}"\n'
+        f'database_path = "{paths.database_path}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        encoding="utf-8",
+    )
+    return Path(config_path)
+
+
+@pytest.fixture
+def composed_home(tmp_path):
+    root = tmp_path / "home"
+    (root / "dev" / "infra" / "existing").mkdir(parents=True)
+    return root
+
+
+def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home, tmp_path):
+    """Both surfaces are composed from this, so it must carry what either one drives.
+
+    The helpers it reuses (`_local_runtime`, `_conversation_service`, `_project_creator`,
+    `ProjectCatalogueProvider`) are the ones the two compositions already shared; what
+    changes is that the sharing is now a named function rather than four call sites that
+    happened to agree.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.application.backend import Backend
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+
+        assert isinstance(backend, Backend)
+        assert backend.sessions is not None, "no session lifecycle use case"
+        assert backend.projects is not None, "no project creation use case"
+        assert backend.conversations is not None, "no resume service"
+        assert "existing" in {project.name for project in backend.catalogue}
+        assert {str(profile.profile_id) for profile in backend.profiles} == {
+            "claude",
+            "claude-remote",
+            "codex",
+            "cursor-agent",
+            "opencode",
+        }
+        assert backend.max_label_length == 40
+        assert callable(backend.refresh_catalogue)
+        assert "existing" in {project.name for project in backend.refresh_catalogue()}
+        assert backend.capture is not None
+    finally:
+        connection.close()
+
+
+def test_compose_backend_opens_no_connection_of_its_own(composed_home, tmp_path):
+    """ARCH-B2: the connection strategy is the caller's, and DEC-035 depends on it.
+
+    `serve` holds one connection for the life of the process; a surface holds one only for
+    the duration of a single store operation (`LeasedConnection`). If `compose_backend`
+    opened its own, a surface would acquire a handle it never agreed to hold, and the
+    guarantee the README states in those words would be false. Proven by handing it a
+    connection and asserting the backend uses that object.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+        store = backend.sessions._store  # noqa: SLF001 -- proving which handle it holds
+        assert store._connection is connection, (  # noqa: SLF001
+            "compose_backend must use the connection it was given, never open one"
+        )
+    finally:
+        connection.close()

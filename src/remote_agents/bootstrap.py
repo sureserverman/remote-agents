@@ -74,6 +74,7 @@ if TYPE_CHECKING:
     from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
+from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -89,7 +90,7 @@ from remote_agents.config import (
     load_secrets,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.domain.profiles import closed_profiles
+from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.production import ProductionPaths
 
@@ -539,6 +540,12 @@ class LocalRuntime:
 
     terminal: TmuxTerminal
     profiles: tuple[ProfileAvailability, ...]
+    # What the probe actually observed, before either surface narrowed it. `profiles` above
+    # is the Telegram wizard's type and the local surface converts it back again -- carried
+    # separately rather than replaced because both narrowings are still in use, and merging
+    # them is sub-plan 4's job (it has a recorded regression to avoid). `Backend` takes this
+    # one, so the backend states what was seen and each surface decides what to say.
+    compatibility: tuple[ProfileCompatibility, ...]
     # The gateway the terminal wraps, carried separately so the composition root can wire
     # console capabilities (client switching) without widening the terminal port for a
     # concern that is presentation, not lifecycle.
@@ -597,7 +604,67 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles, gateway)
+    return LocalRuntime(terminal, profiles, tuple(compatibility), gateway)
+
+
+def compose_backend(
+    config,
+    connection,
+    paths: ProductionPaths,
+    *,
+    projects: ProjectCatalogueProvider | None = None,
+    runtime: LocalRuntime | None = None,
+    locks=None,
+    hide_in_console=None,
+    activity_feed=None,
+) -> Backend:
+    """Build the one backend a process hands to its frontend (ARCH-B1, ARCH-B2).
+
+    Both compositions below are built from this. What used to be four call sites that
+    happened to agree — `ProjectCatalogueProvider`, `_local_runtime`, `_conversation_service`,
+    `_project_creator` — is now one function, so a capability added to one surface cannot
+    silently miss the other.
+
+    **The connection is the caller's, and this must never open one.** `serve` holds a single
+    connection for the life of the process; a surface holds one only for the duration of a
+    single store operation, which is the guarantee DEC-035 put in place of the old exec-away
+    contract and the README states in those words. DEC-005's five concurrent writers are
+    sound only because of that lease, so a backend that opened its own handle would not be a
+    simplification — it would remove the thing making the writer count safe.
+
+    **`projects` and `runtime` are parameters, not internals**, because the caller needs them
+    anyway for the wiring this function deliberately does not do: the service needs the
+    terminal and the gateway for its reconciler, quiet watcher and console composer, and the
+    surface needs the gateway for console hosting. Passing them in is what stops the profile
+    probe — which shells out once per profile — from running twice in one process. Omitted,
+    they are built here, which is what a test composing a bare backend wants.
+
+    **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
+    `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the
+    service load the terminal library at composition time — the exact property
+    `local_context`'s docstring promises it does not.
+    """
+    projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
+    catalogue = projects.refresh().catalogue
+    runtime = runtime or _local_runtime(config, paths, projects.paths)
+    return Backend(
+        sessions=SessionService(
+            SQLiteSessionStore(connection),
+            runtime.terminal,
+            locks=locks,
+            hide_in_console=hide_in_console,
+        ),
+        projects=_project_creator(config),
+        conversations=_conversation_service(projects.paths),
+        catalogue=catalogue,
+        refresh_catalogue=lambda: projects.refresh().catalogue,
+        # The domain's record of what was probed, not either surface's narrowing of it —
+        # see `Backend.profiles` for why the two narrowings must not be merged in passing.
+        profiles=runtime.compatibility,
+        capture=runtime.terminal.capture,
+        activity_feed=activity_feed,
+        max_label_length=config.max_label_length,
+    )
 
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
