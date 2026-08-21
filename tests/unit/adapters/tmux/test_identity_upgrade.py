@@ -14,6 +14,8 @@ asks for, named by the message that tells them why a session will not display.
 
 from __future__ import annotations
 
+import pytest
+
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.domain.models import SessionId
 
@@ -80,3 +82,48 @@ async def test_only_the_legacy_sessions_are_touched_when_both_kinds_are_present(
     marked = {call for mark in runner.calls if "set-option" in mark for call in mark}
     assert "%26" in marked
     assert "%77" not in marked, "a session that already owns its pane was rewritten"
+
+
+class InterruptedRunner(RecordingRunner):
+    """A runner that dies partway through one pane's four identity writes.
+
+    Models the interruption the repair is actually exposed to: a Ctrl-C, a tmux command
+    timeout, or the process being killed between two `set-option` calls. Only the writes
+    *before* the failure are recorded, because only those landed on the server.
+    """
+
+    def __init__(self, output: str, fail_on_write: int) -> None:
+        super().__init__(output)
+        self.fail_on_write = fail_on_write
+        self.writes = 0
+
+    async def run(self, *arguments: str) -> str:
+        if "set-option" in arguments:
+            self.writes += 1
+            if self.writes == self.fail_on_write:
+                raise RuntimeError("tmux went away mid-upgrade")
+        return await super().run(*arguments)
+
+
+async def test_an_interrupted_upgrade_leaves_the_pane_retryable() -> None:
+    """The schema mark commits the upgrade, so it must land after what it certifies.
+
+    `pane_scoped` is `pane_owned_identity(schema, raw_id)`, which is true as soon as the
+    schema reads "2" -- and `raw_id` already reads non-empty on a schema-1 pane, inherited
+    from its session. So a schema written *first* flips the skip gate before the id,
+    project and profile are pane-scoped, and `upgrade_pane_identity` then `continue`s past
+    that pane on every future run. The pane keeps a session-scoped project and profile,
+    which is exactly the identity-crossing DEC-038 exists to prevent: displace it into
+    another session and `#{@remote_agents_project_id}` resolves from the new host.
+    """
+    runner = InterruptedRunner(output=_line(_LEGACY, "%26", "1") + "\n", fail_on_write=2)
+
+    with pytest.raises(RuntimeError):
+        await _gateway(runner).upgrade_pane_identity()
+
+    landed = {mark[-2] for mark in runner.calls if "set-option" in mark}
+    assert landed, "the interruption was modelled too early to prove anything"
+    assert "@remote_agents_schema" not in landed, (
+        "the schema mark landed before the fields it certifies, so the next run will skip "
+        "this half-upgraded pane forever"
+    )

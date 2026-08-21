@@ -276,11 +276,13 @@ async def test_launch_stamps_identity_on_the_pane_and_leaves_the_session_bare(
         "@remote_agents_profile",
     )
     marks = [call for call in runner.calls if any(option in call for option in identity)]
+    # Schema last: it is the commit record the skip gate reads, so it must not become true
+    # before the three fields it certifies have landed. See `codec.pane_mark_args`.
     assert [call[3:] for call in marks] == [
-        ("set-option", "-p", "-t", _EXACT, "@remote_agents_schema", "2"),
         ("set-option", "-p", "-t", _EXACT, "@remote_agents_id", str(_SESSION)),
         ("set-option", "-p", "-t", _EXACT, "@remote_agents_project_id", "opaque-editor"),
         ("set-option", "-p", "-t", _EXACT, "@remote_agents_profile", "claude"),
+        ("set-option", "-p", "-t", _EXACT, "@remote_agents_schema", "2"),
     ]
     assert all(call[:3] == _BASE for call in marks)
     assert not [call for call in marks if "-p" not in call]

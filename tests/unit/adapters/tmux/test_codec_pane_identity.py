@@ -65,11 +65,24 @@ def test_the_mark_is_pane_scoped_for_every_field() -> None:
     marks = pane_mark_args(_SESSION, ProjectId("proj"), ProfileId("claude"))
     assert [argv[:4] for argv in marks] == [("set-option", "-p", "-t", _EXACT)] * 4
     assert [argv[4:] for argv in marks] == [
-        ("@remote_agents_schema", "2"),
         ("@remote_agents_id", str(_SESSION)),
         ("@remote_agents_project_id", "proj"),
         ("@remote_agents_profile", "claude"),
+        ("@remote_agents_schema", "2"),
     ]
+
+
+def test_the_schema_mark_is_written_last() -> None:
+    """It is the commit record for the other three, and there is no transaction.
+
+    `pane_owned_identity` reads the schema alone, so it must not be true until the fields
+    it certifies have landed. Pinned separately from the order assertion above because the
+    reason is a safety property, not a formatting one: reversing these two lines silently
+    reopens the half-upgraded-pane hazard, and the assertion above would still read as a
+    plausible list.
+    """
+    marks = pane_mark_args(_SESSION, ProjectId("proj"), ProfileId("claude"))
+    assert marks[-1][4] == "@remote_agents_schema"
 
 
 def test_a_pane_target_is_a_pane_id_and_nothing_else() -> None:

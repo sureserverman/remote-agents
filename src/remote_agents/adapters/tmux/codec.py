@@ -203,15 +203,32 @@ def pane_mark_args(
 
     The target is the session at launch time, when its only pane is the one being marked;
     thereafter the pane is addressed by the id `exact_pane_target` validates.
+
+    **The schema mark is written last, and the order is load-bearing.** These four are
+    separate `set-option` calls with no transaction around them, and `pane_owned_identity`
+    reads the schema alone to decide whether a pane owns its identity — so the schema *is*
+    the commit record for the other three. Written first, it would be true the instant it
+    landed: `raw_id` already reads non-empty on a schema-1 pane by tmux's pane -> session
+    fallback, so a run interrupted after the schema write would leave a pane reporting
+    `pane_scoped` with its project and profile still session-scoped, and
+    `upgrade_pane_identity` skips exactly those. The repair would then decline to repair it,
+    permanently, while the project mark resolved from whatever session the pane was later
+    displaced into — the crossing DEC-038 exists to prevent. (Named in prose rather than
+    spelled, because `test_the_mark_vocabulary_has_one_home` pins how many times each option
+    name appears here, and a mention is indistinguishable from a second vocabulary.)
+
+    Written last, a partial failure leaves the schema at 1, the pane is retried on the next
+    run, and the re-issued `set-option` calls are idempotent. Both callers get this: the
+    launch path and `upgrade_pane_identity`.
     """
     target = exact_session_target(f"ra-{session_id}")
     return tuple(
         ("set-option", "-p", "-t", target, option, value)
         for option, value in (
-            (_SCHEMA_OPTION, _PANE_SCHEMA_VERSION),
             (_ID_OPTION, str(session_id)),
             (_PROJECT_OPTION, str(project_id)),
             (_PROFILE_OPTION, str(profile_id)),
+            (_SCHEMA_OPTION, _PANE_SCHEMA_VERSION),
         )
     )
 
