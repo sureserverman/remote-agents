@@ -1092,8 +1092,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         is what tells the owner how old a session is.
 
         Console-hosted, this is also where the console catches up with the *other* writer.
-        The bot has no composer (DEC-005), so a session it stops while the console is
-        displaying that session goes unnoticed until something reads the list — this
+        The bot now steps the console aside itself before a stop destroys a pane — it builds
+        a composer for that one operation (DEC-005, and `bootstrap._private_boundary`) — so
+        this is no longer the only thing standing between a remote stop and a console short
+        a pane. What still arrives here is what neither writer's `hide` covered: a hide that
+        hit its 2s cap, a console too degraded to arrange, or a session that ended without
+        either surface asking. Those go unnoticed until something reads the list — this
         method's reveal, Ctrl+R, or the 10s auto-refresh — and then the projects surface is
         put back. That is a stated latency, not an accident: this is deliberately the only
         sync schedule there is. A stop issued from *this* surface does not wait for it; the

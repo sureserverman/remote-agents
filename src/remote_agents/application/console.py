@@ -478,10 +478,13 @@ class ConsoleComposer:
 
         All that is left of what used to keep a tab per live session. The tabs are gone, and
         with them the linking and unlinking; what remains is the half that matters under the
-        swap model — the bot is a separate process with no composer (DEC-005), so when it
-        stops the session the console is currently showing, nothing tells the console. This
-        pass is where the console finds out, and `_restore_stale_display` is what puts the
-        projects surface back.
+        swap model — a session can stop displaying without this process being told. The bot
+        does step the console aside before its own stops (DEC-005, and
+        `bootstrap._private_boundary`, which builds it a composer for that one operation), so
+        the common case is covered at the source. What reaches here is the residue: a hide
+        that hit its cap, a console too degraded to arrange, or a pane that ended without
+        either writer asking. This pass is where the console finds out, and
+        `_restore_stale_display` is what puts the projects surface back.
         """
         try:
             live = {
@@ -496,11 +499,14 @@ class ConsoleComposer:
     async def _restore_stale_display(self, live: set[SessionId]) -> None:
         """Bring the surface back when the session it stepped aside for is no longer live.
 
-        **The other writer's half of the stop story (DEC-005).** A local stop asks the console
-        to move first (`hide`), but the bot is a different process with no composer and cannot:
-        it ends the session and leaves the console displaying the result. Nothing tells the
-        console, so the console has to notice, and `sync` already runs on every sessions
-        reload — which makes it the pass that notices.
+        **The other writer's half of the stop story (DEC-005).** Both writers ask the console
+        to move first (`hide`) — the local surface through its own composer, the bot through
+        the one `bootstrap._private_boundary` builds it for that single operation. Neither
+        ask is guaranteed to land: it is capped at 2s, it degrades to nothing on a host whose
+        console cannot be arranged, and a pane can end without either surface asking at all.
+        In those cases the session ends and the console is left displaying the result with
+        nothing to tell it, so the console has to notice — and `sync` already runs on every
+        sessions reload, which makes it the pass that notices.
 
         **What says "not at rest" is where the surface is, not what the slot holds.** The
         obvious rule — "the slot holds a session that has ended" — only catches the graceful

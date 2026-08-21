@@ -1004,8 +1004,10 @@ def local_context(config, connection, paths: ProductionPaths):
         console_flash = composer.flash
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
-        # contract it has always had, and the bot — a different process with no composer —
-        # leaves a dead pane the next sync detects and clears.
+        # contract it has always had. The bot builds a composer of its own for this one
+        # operation (see `_private_boundary`), so both writers now hide before destroying;
+        # what still reaches `sync` is a hide that timed out, a degraded console, or a pane
+        # that ended without either writer asking.
         hide_in_console = composer.hide
 
     return TuiContext(
