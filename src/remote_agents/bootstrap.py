@@ -604,7 +604,7 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles, tuple(compatibility), gateway)
+    return LocalRuntime(terminal, profiles, compatibility, gateway)
 
 
 def compose_backend(
@@ -638,6 +638,12 @@ def compose_backend(
     surface needs the gateway for console hosting. Passing them in is what stops the profile
     probe — which shells out once per profile — from running twice in one process. Omitted,
     they are built here, which is what a test composing a bare backend wants.
+
+    Passing `projects` in does **not** save a catalogue refresh — this always calls
+    `refresh()`, deliberately, so the backend's snapshot is its own rather than whatever the
+    caller last read. That is a filesystem walk, not a probe, and the asymmetry with
+    `runtime` is intentional: do not "fix" the apparent double refresh by trusting the
+    caller's snapshot.
 
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
     `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the

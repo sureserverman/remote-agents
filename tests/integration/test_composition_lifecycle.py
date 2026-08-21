@@ -300,3 +300,67 @@ def test_compose_backend_opens_no_connection_of_its_own(composed_home, tmp_path)
         )
     finally:
         connection.close()
+
+
+async def test_a_leased_backend_holds_no_handle_between_operations(composed_home, tmp_path):
+    """DEC-035, the half a surface must keep: the handle lasts one store operation.
+
+    The local surface is long-lived beside attached sessions, so what replaced the old
+    exec-away contract is this narrower guarantee — and the README states it in those
+    words. A `compose_backend` that opened or cached a connection would falsify it silently,
+    because every test above would still pass: the backend would work, it would simply be
+    holding something it promised not to.
+    """
+    from remote_agents.adapters.sqlite.database import leased_connection, open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    database = tmp_path / "sessions.sqlite3"
+    open_database(database).close()
+
+    lease = leased_connection(database)
+    backend = compose_backend(config, lease, paths)
+    # Identity first, and it is the load-bearing half. Without it the two `_held`
+    # assertions below are vacuous: they would still pass if `compose_backend` special-cased
+    # a LeasedConnection and opened a real one instead, because nothing would then touch
+    # `lease` at all. That is precisely the DEC-035 regression this task guards.
+    assert backend.sessions._store._connection is lease, (  # noqa: SLF001
+        "the backend is not using the lease it was given"
+    )
+    assert lease._held is None, "composing alone acquired a handle"  # noqa: SLF001
+
+    await backend.sessions.list_sessions()
+
+    assert lease._held is None, (  # noqa: SLF001
+        "the surface kept a database handle between store operations (DEC-035)"
+    )
+
+
+async def test_a_long_lived_backend_keeps_the_one_handle_it_was_given(composed_home, tmp_path):
+    """The other half: the serve composition's connection is not re-opened per operation.
+
+    The store cannot tell which composition it is running under, and that is the point —
+    the strategy lives entirely in what the caller hands to `compose_backend`.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+
+        await backend.sessions.list_sessions()
+        assert backend.sessions._store._connection is connection  # noqa: SLF001
+        await backend.sessions.list_sessions()
+        assert backend.sessions._store._connection is connection, (  # noqa: SLF001
+            "the serve composition's one long-lived connection was replaced"
+        )
+    finally:
+        connection.close()
