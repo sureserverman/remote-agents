@@ -339,13 +339,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # between the caller's clear and this set, so the window never opens.
         self._busy = True
         try:
-            await opener(session_id)
+            refused = await opener(session_id)
         except Exception as error:
             _LOG.exception("switching the client to the session failed")
             self.announce(f"The session is running but could not be opened: {error}")
             return
         finally:
             self._busy = False
+        if refused is not None:
+            # The console declined, and said why. It degrades to a log line by contract and
+            # nothing configures logging, so without this the owner presses enter on a row
+            # and watches nothing happen — which is exactly what shipped.
+            self.announce(refused, severity="warning")
+            return
         # "the projects position" is this *app's* resting position, whatever that is: the
         # method unwinds to stack depth 1 and only re-renders when what it finds is a
         # projects screen. On the console's sessions and feed panes the resting position is

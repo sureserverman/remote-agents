@@ -536,6 +536,48 @@ def split_console_pane_args(
     )
 
 
+def rejoin_console_pane_args(
+    pane_id: str,
+    beside_pane: str,
+    *,
+    vertical: bool,
+    percent: int,
+    before: bool = False,
+) -> tuple[str, ...]:
+    """Return the argv suffix that moves one pane into the window another pane is in.
+
+    `join-pane` rather than `swap-pane`, and the two are not interchangeable: a swap trades,
+    so it needs a partner worth having on the far end. This is for the case where there is
+    none — the window the console's pane was parked in has had its agent destroyed — and
+    trading there would just send a second console pane out to take its place.
+
+    The flags mirror `split_console_pane_args` on purpose, because this fills the position
+    that function would have built: `-h`/`-v` for the axis, `-l <percent>%` sizing the pane
+    being moved in, `-b` to put it *before* its neighbour, and `-d` to keep focus where it
+    was rather than following the pane. Probed on tmux 3.4 rather than read off the manual:
+    `join-pane -b -h -l 60% -s <surface> -t <sessions>` against a console reduced to two
+    panes restored it to three, and the emptied window took its defunct session with it. The
+    geometry afterwards was 108x29/71x29/180x14 -- correct order, wrong shape, because the
+    layout tree changed while the pane was away. That is `console_layout_args`' job and the
+    same one it already does after a rebuild; run after it, the three panes measured
+    107x44/72x29/72x14, which is a fresh build to the column.
+    """
+    if not 1 <= percent <= 99:
+        raise ValueError("a console pane rejoin takes a percentage strictly inside 0 and 100")
+    return (
+        "join-pane",
+        "-v" if vertical else "-h",
+        "-d",
+        *(("-b",) if before else ()),
+        "-l",
+        f"{percent}%",
+        "-s",
+        exact_pane_target(pane_id),
+        "-t",
+        exact_pane_target(beside_pane),
+    )
+
+
 def list_arrangement_args() -> tuple[str, ...]:
     """Return the argv suffix that lists every pane on the server with its position.
 

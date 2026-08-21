@@ -39,7 +39,10 @@ from remote_agents.adapters.telegram.live_view import ChatViewStore, LiveView
 from remote_agents.adapters.telegram.notifications import (
     NOTIFIED_DETAIL_ACTION as _NOTIFIED_DETAIL,
 )
-from remote_agents.adapters.telegram.notifications import ActivityNotifier
+from remote_agents.adapters.telegram.notifications import (
+    ActivityNotifier,
+    StandingNotificationStore,
+)
 from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
@@ -99,6 +102,7 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
+from remote_agents.ports.standing_notification import StandingNotificationPort
 from remote_agents.ports.terminal import TerminalTargetMissing
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
@@ -224,6 +228,20 @@ this table answers from the store or from one tmux call, fast enough that a noti
 flash and be gone.
 """
 
+_SESSION_ENDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
+"""The actions after which a session is no longer one this service speaks first about.
+
+The same three members as `_LIST_LANDING_ACTIONS` below and deliberately a separate name: that
+one is about which *screen* to draw next, this one about which messages have stopped being
+true. Bare `FORCE` is absent from both, and for the same reason -- it draws the confirmation,
+so nothing has happened yet.
+
+What it triggers is about timing and nothing more. `ActivityNotifier.retire_finished` runs on
+the delivery pass regardless, because the local console ends sessions in another process and
+this handler never hears about those; sweeping here as well is what makes the owner watch their
+own stop take its notification with it, rather than find it gone half a minute later.
+"""
+
 _LIST_LANDING_ACTIONS = frozenset({GRACEFUL, CLEANUP, CONFIRMED_FORCE})
 """The actions that draw the **session list** rather than a screen about their own session.
 
@@ -249,6 +267,11 @@ class PrivateBotBoundary:
     capture: Callable[[SessionId], Awaitable[str]] | None = None
     callbacks: CallbackStatePort = field(default_factory=CallbackStateStore)
     anchors: ChatViewPort = field(default_factory=ChatViewStore)
+    standing: StandingNotificationPort = field(default_factory=StandingNotificationStore)
+    """Which message each session's notification is, so a restart amends it rather than
+    sending a second one beside it. Defaulted to the in-memory sibling for the same reason
+    `callbacks` and `anchors` are; the service is handed the durable store.
+    """
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
     notifier: ActivityNotifier = field(init=False)
@@ -312,6 +335,8 @@ class PrivateBotBoundary:
             callbacks=self.callbacks,
             owner_user_id=self.owner_user_id,
             display=self._display_for,
+            standing=self.standing,
+            finished=self._finished_sessions,
         )
 
     async def refresh_catalogue(self) -> None:
@@ -784,7 +809,14 @@ class PrivateBotBoundary:
                 # otherwise edit what the line above deleted. Told rather than left to find
                 # out, which it can -- an uneditable message is replaced -- but only after
                 # paying for the refused call, and only on the next pass.
-                self.notifier.forget(state.entity_id)
+                #
+                # Told *which* message, because the one pressed is not always the one this
+                # session currently owns: a notification sent before the standing record was
+                # durable, or one whose button could not be minted, outlives any record of
+                # itself. See `ActivityNotifier.forget`.
+                self.notifier.forget(state.entity_id, message_id)
+            if state.action in _SESSION_ENDING_ACTIONS:
+                await self.notifier.retire_finished()
         except Exception:
             if pending is None:
                 raise
@@ -1770,6 +1802,34 @@ class PrivateBotBoundary:
         return next(
             (record for record in await self._records() if str(record.session_id) == session_value),
             None,
+        )
+
+    async def _finished_sessions(self, session_values: tuple[str, ...]) -> tuple[str, ...]:
+        """Which of these sessions can no longer be the subject of a notification.
+
+        The collecting half of `_display_for`. That one decides whether to *send* about a
+        session; this one decides whether the message already sent should still be in the
+        chat, and both ask `notifiable` rather than keeping a second opinion about what a
+        state means (DEC-001, DEC-029).
+
+        A session the owner stopped, force-stopped, preserved or watched fail has answered the
+        question its notification was asking, so the alert is obsolete and goes. The
+        observation itself is untouched — it stays in `agent_activity` and so stays in the
+        local feed, which is a record of what happened rather than a list of things to do.
+
+        **A session it cannot find is left alone**, which is the narrower answer on purpose.
+        Nothing deletes a session row, so an id missing from the records means the store did
+        not answer rather than the session having finished, and deleting the owner's
+        notifications on the strength of a failed read is not a trade worth making. The
+        notification simply stands until the read succeeds.
+        """
+        if self.launcher is None:
+            return ()
+        wanted = set(session_values)
+        return tuple(
+            str(record.session_id)
+            for record in await self.launcher.list_sessions()
+            if str(record.session_id) in wanted and not notifiable(record.state)
         )
 
     async def _display_for(self, session_value: str) -> str | None:

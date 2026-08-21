@@ -119,9 +119,11 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
           AND state <> 'ended';
         """,
     ),
-    # Observations, never delivery state: the Telegram notifier's queue, rate windows, and
-    # standing messages stay in memory by decision (DEC-026) — this table is the local
-    # feed's durable source. Append-only; INTEGER PRIMARY KEY is the read order, because
+    # Observations, never delivery state: the Telegram notifier's queue and rate windows stay
+    # in memory by decision (DEC-026) — this table is the local feed's durable source. Its
+    # *standing messages* were on that list and are not any more; migration 10 gives them a
+    # table, for a reason DEC-026 did not weigh and this comment must not keep denying.
+    # Append-only; INTEGER PRIMARY KEY is the read order, because
     # insertion order is the one clock every writer shares.
     #
     # **Invariant: rows are never deleted.** Without AUTOINCREMENT, sqlite reuses the max
@@ -140,6 +142,37 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
             detail TEXT,
             confidence TEXT NOT NULL,
             observed_at TEXT NOT NULL
+        );
+        """,
+    ),
+    # Which message a session's notification *is*, so a restart amends the one in the chat
+    # instead of sending a second beside it. Not the durable queue DEC-026 declined: nothing
+    # here is drained, and a row is not news waiting to be delivered — it names a message the
+    # owner is already looking at. The queue and the rate windows are still in memory.
+    #
+    # Keyed on (chat_id, session_id) because "one notification per session" is the invariant
+    # being stored, and a primary key is the only place to state it that a second writer
+    # cannot get between. Rows are deleted, unlike `agent_activity`: one goes when the owner
+    # presses the message's button, and one goes when the session stops being notifiable —
+    # which is what makes a finished session's alert leave the chat rather than sit there
+    # offering to open something that has ended.
+    #
+    # `activities` is the rendered story as JSON, so an amendment after a restart still says
+    # "finished, then asked a question" rather than only the newest line. Denormalised on
+    # purpose: `agent_activity` is the feed's append-only record of what was *observed*, and
+    # joining the two would make the message's text depend on a retention sweep that table's
+    # own invariant contemplates.
+    (
+        10,
+        """
+        CREATE TABLE standing_notifications (
+            chat_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            token TEXT NOT NULL,
+            activities TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (chat_id, session_id)
         );
         """,
     ),

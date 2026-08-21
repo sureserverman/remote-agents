@@ -122,6 +122,9 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.adapters.sqlite.standing_notification_store import (
+        SQLiteStandingNotificationStore,
+    )
     from remote_agents.bootstrap import _private_boundary
     from remote_agents.config import AppConfig
     from remote_agents.production import ProductionPaths
@@ -147,3 +150,49 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     # `bootstrap`, which is the restart defect back: a forgotten anchor sends a second live
     # view and leaves the first above it, still holding buttons that resolve.
     assert isinstance(composition.boundary.anchors, SQLiteChatViewStore)
+    # And the third silent fallback, added for the same reason the two above are pinned: the
+    # standing notification each session owns is durable, so a restart amends the message
+    # already in the chat instead of sending a second one beside it.
+    assert isinstance(composition.boundary.standing, SQLiteStandingNotificationStore)
+
+
+def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, monkeypatch) -> None:
+    """A stop from the phone must move the console *before* it destroys the pane.
+
+    Without this one keyword argument the bot ends the session and leaves the agent's pane to
+    be killed inside the console's own window — so the console sits a pane short, sessions and
+    feed stretched across the full width, until its next reload puts the projects surface back
+    up to ten seconds later. `SessionService` defaults it to None and degrades silently, which
+    is right for a composition with no console and is exactly why the wiring needs pinning.
+
+    The console lock is asserted alongside it, because the two are one change: a second process
+    arranging these panes is only safe while both composers name the same file, and they do
+    that by both coming from `_console_composer`.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.sqlite.migrations import MIGRATIONS
+    from remote_agents.bootstrap import _console_composer, _private_boundary
+    from remote_agents.config import AppConfig
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "11")
+    home = tmp_path / "home"
+    paths = ProductionPaths.for_home(home)
+    paths.ensure_directories()
+    (home / "dev").mkdir()
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
+    connection = open_database(paths.database_path, migrations=MIGRATIONS)
+    try:
+        composition = _private_boundary(config, connection, paths)
+    finally:
+        connection.close()
+
+    launcher = composition.boundary.launcher
+    assert launcher._hide_in_console is not None, "a phone stop cannot move the console"
+    # The same file the local surface's composer takes, or the lock excludes nothing.
+    assert (
+        _console_composer(home=home)._links._path
+        == ProductionPaths.for_home(home).console_lock_path
+    )

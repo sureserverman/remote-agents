@@ -49,6 +49,10 @@ from remote_agents.ports.agent_activity import (
     AgentActivity,
 )
 from remote_agents.ports.callback_state import CallbackStatePort
+from remote_agents.ports.standing_notification import (
+    StandingNotification,
+    StandingNotificationPort,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -300,31 +304,37 @@ class _Sent:
     repeats: int
 
 
-@dataclass(frozen=True, slots=True)
-class _Standing:
-    """The one message a session owns in the chat, and what it currently says.
+class StandingNotificationStore:
+    """The process-local sibling of
+    :class:`~remote_agents.adapters.sqlite.standing_notification_store.SQLiteStandingNotificationStore`.
 
-    A session gets a message, not a stream of them. New news re-renders this one rather than
-    arriving beside it, so a session that reports for eight hours occupies one slot in the
-    chat instead of ninety-six -- which is the whole point, and is what per-pass grouping
-    could never reach: two turns thirty minutes apart are in different passes by definition.
-
-    `activities` is what the message spells out, kept so the re-render can carry the whole
-    story rather than only the newest arrival. Without it an edit would replace "finished,
-    then asked a question" with "asked a question", silently deleting agent output that the
-    drain has already removed from disk.
-
-    `token` is the callback the message's button carries. An amendment leaves both it and
-    `message_id` exactly where they are -- the message never moved -- while a replacement moves
-    the token onto the new message with `rebind` rather than minting a fresh one, so a session
-    reporting all day adds one row to a size-bounded store instead of one per report -- the
-    same reason
-    `LiveView.move_to_bottom` rebinds rather than re-mints.
+    For a composition with no database behind it. A notifier composed on this one sends a
+    session a *second* notification after a restart instead of amending the one already in the
+    chat; that is acceptable in a test or a scratch composition and is not what the service
+    runs -- `_private_boundary` hands it the durable store, for the reason
+    :class:`~remote_agents.ports.standing_notification.StandingNotificationPort` records.
     """
 
-    message_id: int
-    activities: tuple[AgentActivity, ...]
-    token: str
+    def __init__(self) -> None:
+        self._standing: dict[tuple[int, str], StandingNotification] = {}
+
+    def standing(self, chat_id: int) -> tuple[StandingNotification, ...]:
+        return tuple(
+            notification
+            for (chat, _session), notification in self._standing.items()
+            if chat == chat_id
+        )
+
+    def notification(self, chat_id: int, session_id: str) -> StandingNotification | None:
+        return self._standing.get((chat_id, session_id))
+
+    def record(self, chat_id: int, notification: StandingNotification) -> None:
+        if notification.message_id <= 0:
+            raise ValueError("a standing notification must name a real Telegram message")
+        self._standing[(chat_id, notification.session_id)] = notification
+
+    def forget(self, chat_id: int, session_id: str) -> None:
+        self._standing.pop((chat_id, session_id), None)
 
 
 _RETENTION_WINDOWS = 2
@@ -575,6 +585,13 @@ class ActivityNotifier:
       this queue in memory with no durable counterpart, so a restart takes whatever it is
       holding with it.
     - **`_last_sent`** is the rate limit, keyed by session *and* kind.
+    - **`_standing`** is which message each session's notification is, and it is the one piece
+      of this object's state that is *not* process-local. It has to outlive the process for the
+      same reason the live view's anchor does: a restart that forgets which message a session
+      owns sends it a second one on the session's next report, and leaves the first sitting in
+      the chat with nobody able to collect it. That is a durable store rather than a dict
+      (`StandingNotificationPort`), and it is not the durable queue DEC-026 declined -- nothing
+      here is drained, and a row names a message the owner is already looking at.
     - **`_bot`** arrives after construction. The boundary is built by the composition root
       long before there is a Telegram application to speak through, and a pass that runs
       before `attach` holds its activities rather than losing them.
@@ -594,6 +611,8 @@ class ActivityNotifier:
         callbacks: CallbackStatePort,
         owner_user_id: int,
         display: Callable[[str], Awaitable[str | None]],
+        standing: StandingNotificationPort | None = None,
+        finished: Callable[[tuple[str, ...]], Awaitable[tuple[str, ...]]] | None = None,
         rate_limit_seconds: float = _RATE_LIMIT_SECONDS,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -609,13 +628,16 @@ class ActivityNotifier:
         #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
         self._sent_this_pass = False
         self._last_sent: dict[tuple[str, ActivityKind], _Sent] = {}
-        self._standing: dict[str, _Standing] = {}
+        self._standing = standing if standing is not None else StandingNotificationStore()
+        #: Which of the sessions holding a notification have stopped being worth one, or None
+        #: in a composition with no lifecycle to ask. See `retire_finished`.
+        self._finished = finished
 
     def attach(self, bot: object) -> None:
         """Learn which Telegram application to speak through, once there is one."""
         self._bot = bot
 
-    def forget(self, session_id: str) -> None:
+    def forget(self, session_id: str, message_id: int | None = None) -> None:
         """Give up the standing message for a session, so its next news starts a new one.
 
         Called when the message has left the chat: the owner pressed its button and `service`
@@ -624,8 +646,100 @@ class ActivityNotifier:
         gone" as the wanted state, but it would also carry the consumed message's lines into
         the new one. The owner has read those and acted on them; the new message is about
         what has happened since.
+
+        **`message_id` names the message that was actually discarded, and a mismatch means
+        forget nothing.** A stale notification can outlive the record of it -- the chat holds
+        whatever was sent before this table existed, and a mint that fails leaves a message
+        with no record at all -- so the button the owner pressed is not always the button on
+        the message this session currently owns. Forgetting on the strength of the session id
+        alone then threw away the record of a message still standing in the chat, and the next
+        report started a *third* one beside it: the very accumulation this is here to prevent,
+        triggered by pressing the button on the leftover. Passed None, it forgets regardless,
+        which is the older contract and is what a caller with no message in hand gets.
         """
-        self._standing.pop(session_id, None)
+        if message_id is not None:
+            standing = self._recall(session_id)
+            if standing is not None and standing.message_id != message_id:
+                _LOG.info(
+                    "a notification the owner pressed was not this session's current one; "
+                    "the standing message is kept"
+                )
+                return
+        self._standing.forget(self._view.chat_id, session_id)
+
+    def _recall(self, session_id: str) -> StandingNotification | None:
+        """Which message this session owns, whichever process put it there."""
+        return self._standing.notification(self._view.chat_id, session_id)
+
+    def _remember(
+        self, session_id: str, message_id: int, activities: tuple[AgentActivity, ...], token: str
+    ) -> None:
+        self._standing.record(
+            self._view.chat_id,
+            StandingNotification(session_id, message_id, activities, token),
+        )
+
+    async def retire_finished(self) -> int:
+        """Take out of the chat every notification whose session has stopped being one.
+
+        A notification makes one claim -- *an agent was working, and it has stopped, and you
+        may want to open it* -- and a session the owner has stopped, force-stopped or closed
+        has already answered that. The message then sits in the chat offering to open something
+        that has ended, and it goes on pushing the menu up the screen. `_display_for` has
+        always refused to send a *new* one about such a session; what it could not do is
+        collect the one already sent.
+
+        **Asked of the lifecycle on every delivery pass, because the stop is not always
+        ours.** The local console stops sessions in a different process against the same
+        database (DEC-005's second writer), so a notifier that only heard about the presses it
+        served would leave the console's stops standing forever -- and a stop that happened
+        while this process was not running would be heard about by nobody. Polling the records
+        covers all three with one path.
+
+        `service` also calls this the moment it serves a stop itself. That is about timing and
+        nothing more: it makes the owner watch their own stop take its notification with it
+        rather than find it gone half a minute later, and removing it would cost the speed,
+        never the guarantee.
+
+        Only the *message* is retired. The observation stays in `agent_activity`, so the local
+        feed still shows what the agent did -- the owner asked for the alert to go, not the
+        history, and those are two different surfaces reading two different things.
+
+        Never raises: this runs inside the delivery pass, and a sweep that fails is not a
+        reason for notifications to stop being delivered.
+        """
+        if self._bot is None or self._finished is None:
+            return 0
+        try:
+            held = self._standing.standing(self._view.chat_id)
+            if not held:
+                return 0
+            finished = set(await self._finished(tuple(one.session_id for one in held)))
+        except Exception:
+            _LOG.warning("could not ask which notified sessions have finished")
+            return 0
+        retired = 0
+        for notification in held:
+            if notification.session_id not in finished:
+                continue
+            try:
+                # Pruned before the delete, for `service`'s reason on the press path: a token
+                # that outlives its message is the dead button the callback store exists to
+                # make impossible.
+                self._callbacks.prune_for_message(self._view.chat_id, notification.message_id)
+                await self._view.discard(self._bot, notification.message_id)
+                # Forgotten whether or not Telegram still had it: `discard` answers True for a
+                # message that was already gone, and both of those mean this session owns no
+                # message any more.
+                self._standing.forget(self._view.chat_id, notification.session_id)
+            except Exception:
+                # Left standing, deliberately. The record is what says the message is ours to
+                # collect, so dropping it here would strand the message in the chat with
+                # nothing able to try again -- and the next pass is thirty seconds away.
+                _LOG.warning("could not remove the notification of a session that has finished")
+                continue
+            retired += 1
+        return retired
 
     async def deliver(self, activities: Iterable[AgentActivity]) -> int:
         """Take a pass's observations and answer how many reached the owner.
@@ -637,6 +751,11 @@ class ActivityNotifier:
         if self._bot is None:
             return 0
         self._forget_expired_limits()
+        # Before the sends, not after. A session the owner has just stopped may also be
+        # holding an observation in the queue; retiring first means its message leaves the
+        # chat and `_display_for` then declines the leftover, rather than the pass amending a
+        # message one line above the one that deletes it.
+        await self.retire_finished()
         self._sent_this_pass = False
         # Grouped from the *whole* queue rather than from this pass's arrivals, which is what
         # makes a held group merge with news that came in since: an activity Telegram refused
@@ -813,7 +932,7 @@ class ActivityNotifier:
         next reader does not take "the storm is closed" for "the backoff works".
         """
         moment = self._now()
-        standing = self._standing.get(group.session_id)
+        standing = self._recall(group.session_id)
         # The window gates **every** delivery, an amendment included. It reads as too strict
         # for one that is silent -- withholding an edit only makes a message stale -- and the
         # cost it is really bounding is not the buzz: it is a Bot API call per session per
@@ -870,17 +989,17 @@ class ActivityNotifier:
                         "reply_markup": _markup(amended.keyboard),
                     },
                 ):
-                    self._standing[group.session_id] = _Standing(
-                        standing.message_id, shown, standing.token
+                    self._remember(
+                        group.session_id, standing.message_id, shown, standing.token
                     )
                     self._record_sent(group.session_id, _told(group.activities, shown), moment)
                     return True, False, _unsaid(group.activities, shown)
-                self._standing.pop(group.session_id, None)
+                self._standing.forget(self._view.chat_id, group.session_id)
                 return await self._send_afresh(updated, group, display=display, moment=moment)
             replacement = await self._replace(standing, updated, display=display)
             if replacement is not None:
                 message_id, token = replacement
-                self._standing[group.session_id] = _Standing(message_id, shown, token)
+                self._remember(group.session_id, message_id, shown, token)
                 # Stamped for what *arrived* and was shown, not for everything on screen. The
                 # two were the same thing when a message was built from one pass's news and
                 # thrown away after; a standing message goes on displaying every kind it has
@@ -900,7 +1019,7 @@ class ActivityNotifier:
             # worth starting over for: `_replace` has already put the message in the chat, so
             # falling through would leave two. Forgetting instead means the *next* pass sends
             # a fresh one, and the buttonless message is superseded then rather than now.
-            self._standing.pop(group.session_id, None)
+            self._standing.forget(self._view.chat_id, group.session_id)
             return True, True, _unsaid(group.activities, shown)
 
         return await self._send_afresh(group, group, display=display, moment=moment)
@@ -944,11 +1063,11 @@ class ActivityNotifier:
             # message. A message remembered without one would hand its missing button to every
             # message after it, where a message not remembered is merely superseded by the next
             # piece of news -- degraded once instead of degraded for good.
-            self._standing[group.session_id] = _Standing(message_id, shown, token)
+            self._remember(group.session_id, message_id, shown, token)
         return True, True, _unsaid(group.activities, shown)
 
     async def _replace(
-        self, standing: _Standing, group: SessionGroup, *, display: str
+        self, standing: StandingNotification, group: SessionGroup, *, display: str
     ) -> tuple[int, str] | None:
         """Say a session's news in a new message, take the old one out, and answer where it is.
 

@@ -21,10 +21,14 @@ of which two are recovered, three are reported, and one must produce no exchange
 
 *Reported, because no exchange can fix them and trying makes things worse:*
 
-- **The surface stranded outside a console that has lost the pane it was traded for.** The
-  other writer destroyed the displayed agent's pane. `swap-pane` trades rather than moves, so
-  bringing the surface back would exile one of the console's own panes into the defunct
-  session — a pane shorter every time. The console needs restarting, and says so.
+- **The surface stranded outside a console that has lost the pane it was traded for, and
+  carrying no slot mark.** The other writer destroyed the displayed agent's pane. `swap-pane`
+  trades rather than moves, so bringing the surface back by exchange would exile one of the
+  console's own panes into the defunct session — a pane shorter every time. A console whose
+  panes *are* marked no longer reaches this: `_reclaim_plan` moves the stranded pane home
+  instead of trading for it, and `test_console_pane_reclaim.py` covers that. What is left here
+  is the console that predates the marks, where nothing says which slot the stranded pane is,
+  so there is no position to move it back to. It needs restarting, and says so.
 - **The surface parked in a third session's window while the slot holds an agent.** Exchanging
   would push that agent into a stranger's window: a crossing created by the thing meant to
   remove crossings.
@@ -603,6 +607,15 @@ async def test_a_stranded_surface_is_reported_rather_than_bought_back_by_exiling
     surface in sends that pane out into the dead session's window — the console is one pane
     shorter, the defunct session is kept alive holding it, and repeating the sequence shaves
     the console again. The honest answer is to say the console is short a pane.
+
+    **What changed on 2026-08-21, and why this arrangement still reports.** A pane can now be
+    *moved* home rather than traded for (`_reclaim_plan`), which is the repair this state was
+    missing — but the move needs to know which position to put the pane back in, and it takes
+    that from the pane's own slot mark. Not one pane here carries one, which is a console
+    predating the marks: nothing says whether the stranded pane is the projects surface or
+    something else, and a guess would put it in the wrong place. So the report is still the
+    right answer *for this arrangement*, and the marked version of it is covered by
+    `test_console_pane_reclaim.py` rather than by weakening this.
 
     **This replaces a Task 2.3 test that asserted the exile as the desired behaviour** —
     `test_the_other_writer_killing_the_pane_outright_still_brings_the_surface_back`, named for

@@ -25,6 +25,7 @@ from remote_agents.adapters.tmux.codec import (
     pane_mark_args,
     parse_arrangement,
     parse_pane,
+    rejoin_console_pane_args,
     split_console_pane_args,
     swap_pane_args,
 )
@@ -58,6 +59,20 @@ _ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session n
 # tmux key names this adapter will bind: bare keys and function keys, optionally behind one
 # C-/M- modifier. Deliberately narrower than what tmux accepts — a key is configuration, not
 # input, and the closed shape keeps shell metacharacters out of the argv by construction.
+
+def _retargeted(mark: tuple[str, ...], pane_id: str) -> tuple[str, ...]:
+    """Point one codec-built pane mark at an exact pane id instead of its default target.
+
+    The argv is still the codec's — only the value after `-t` is replaced, and only with a
+    pane id the adapter read out of its own inventory, so DEC-001's "generated targets, never
+    free text" holds. Written as a substitution rather than a second builder because a second
+    builder is a second place for the option names to drift, which is what
+    `test_the_mark_vocabulary_has_one_home.py` exists to prevent.
+    """
+    arguments = list(mark)
+    arguments[arguments.index("-t") + 1] = exact_pane_target(pane_id)
+    return tuple(arguments)
+
 
 def _reports_absent_server(message: str) -> bool:
     """Recognize the dedicated server simply not being up, which means zero panes."""
@@ -263,6 +278,42 @@ class TmuxGateway:
             None,
         )
 
+    async def upgrade_pane_identity(self) -> tuple[SessionId, ...]:
+        """Give every session still marked under schema 1 an identity on its own pane.
+
+        A one-time repair for sessions that were launched before identity moved to the pane
+        (DEC-038). They stayed manageable — listed, captured, typed at, stopped, all through
+        the session target they have always had — but they gained no *pane* to address, and
+        the swap console can only display a session by exchanging its pane. So the owner
+        clicked a row and nothing happened, with only a log line to say why.
+
+        Nothing here is inferred. `inventory` has already decoded which session, project and
+        profile each pane belongs to, and `pane_scoped` already says whether the mark is the
+        pane's own or inherited from its session; this writes the identity it was given onto
+        the pane it was found on. A session that already owns its pane is skipped, so running
+        it twice is not a second write.
+
+        **Deliberately not automatic.** It is a write onto a running agent's pane, and the
+        owner asks for it — named by the message the console shows when a session will not
+        display. The session-scoped marks are left in place: they are what the legacy read
+        path still uses, removing them would be a second change with its own failure mode,
+        and a pane that owns its identity no longer consults them.
+        """
+        upgraded: list[SessionId] = []
+        for pane in (await self.inventory()).managed:
+            if pane.pane_scoped:
+                continue
+            for mark in pane_mark_args(pane.session_id, pane.project_id, pane.profile_id):
+                # `pane_mark_args` builds a pane-scoped `set-option` against a *target*; the
+                # launch path passes the session's own single pane, and here the pane id is
+                # already known and is the only correct target — a schema-1 session's window
+                # may hold an operator's hand-split pane beside the agent.
+                await self._runner.run(
+                    *self._base_argv(), *_retargeted(mark, pane.pane_id)
+                )
+            upgraded.append(pane.session_id)
+        return tuple(upgraded)
+
     async def _following_target(self, session_id: SessionId) -> str:
         """Return the target that follows this agent: its pane if it has one, else its session.
 
@@ -453,6 +504,32 @@ class TmuxGateway:
         """
         for arguments in console_layout_args(main_percent, minor_pane, minor_percent):
             await self._runner.run(*self._base_argv(), *arguments)
+
+    async def rejoin_console_pane(
+        self,
+        pane_id: str,
+        beside_pane: str,
+        *,
+        vertical: bool,
+        percent: int,
+        before: bool = False,
+    ) -> None:
+        """Move one of the console's own panes back into the console window.
+
+        The counterpart to `swap_panes` for the case a swap cannot serve, and the port records
+        why. Typed like every other single-target console operation: either pane can vanish
+        between the composer deciding to move it and the call landing, and the pane the
+        composer is trying to *rescue* is the one worth naming when it does.
+        """
+        try:
+            await self._runner.run(
+                *self._base_argv(),
+                *rejoin_console_pane_args(
+                    pane_id, beside_pane, vertical=vertical, percent=percent, before=before
+                ),
+            )
+        except RuntimeError as error:
+            raise _target_missing_or(error, pane_id) from error
 
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None:
         """Mark one pane as one of the console's three, so an exchange cannot lose track of it.

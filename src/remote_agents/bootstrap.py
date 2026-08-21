@@ -46,6 +46,9 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.standing_notification_store import (
+    SQLiteStandingNotificationStore,
+)
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
@@ -374,6 +377,10 @@ def main(
     # exchange brings the surface home. Not a surface — it arranges panes and exits.
     console_parser = subcommands.add_parser("console")
     console_parser.add_argument("action", choices=("projects",))
+    # A one-time repair for sessions launched before identity moved to the pane (DEC-038).
+    # They stayed manageable but gained no pane to exchange, so the console could not show
+    # them. Explicit rather than automatic: it writes onto a running agent's pane.
+    subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
@@ -498,6 +505,8 @@ def main(
         return _enter_pane(arguments.name, arguments.config)
     if arguments.command == "console":
         return _console_arrange(arguments.action)
+    if arguments.command == "upgrade-sessions":
+        return _upgrade_sessions()
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -604,6 +613,19 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     # ReconciliationService below: this single binding is the fix, and two instances here
     # would look identical and repair nothing.
     locks = SessionLocks()
+    # **The bot arranges the console too, for one operation only: stepping it aside before a
+    # stop destroys a pane.** Without this the owner stopping a displayed session from their
+    # phone left the agent's pane to be killed *inside* the console window, so the console sat
+    # a pane short — sessions and feed stretched across the whole width — until its next
+    # reload put the projects surface back, up to ten seconds later.
+    #
+    # This is the half of DEC-005 that is answered rather than accepted. Its premise was one
+    # writer over the panes by construction, and what made a second one safe is
+    # `console_lock`: both composers are built by `_console_composer`, so both name the same
+    # lock file, and neither decides from a reading the other is about to invalidate. The bot
+    # never *builds* a console — nothing here calls `ensure` — and `hide` degrades to nothing
+    # on a host with no console at all, which is every host that has not run `remote-agents`.
+    console = _console_composer(runtime.gateway, paths.home)
     return ServiceComposition(
         PrivateBotBoundary(
             secrets.owner_user_id,
@@ -615,11 +637,17 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # message the live view is would send a second one and leave the first above it,
             # still holding buttons that — since Stage 1 — still resolve.
             anchors=SQLiteChatViewStore(connection),
+            # And the durable standing notifications, which close the other half of that
+            # same defect. A restart that forgot which message a session's notification is
+            # sent a *second* one on the session's next report and left the first above the
+            # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
+            # one session's alert into one message above the menu and one below.
+            standing=SQLiteStandingNotificationStore(connection),
             catalogue=catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
             max_label_length=config.max_label_length,
-            launcher=SessionService(store, terminal, locks=locks),
+            launcher=SessionService(store, terminal, locks=locks, hide_in_console=console.hide),
             conversations=conversations,
             creator=_project_creator(config),
             capture=terminal.capture,
@@ -709,13 +737,19 @@ def _projects_command() -> tuple[str, ...]:
 
 
 def _console_composer(gateway=None, home: Path | None = None):
-    """Build the one console composer shape, so three call sites cannot drift apart.
+    """Build the one console composer shape, so four call sites cannot drift apart.
 
     They already had: `_enter_console`, `_console_arrange` and `local_context` each construct
     one, and only the last has a gateway of its own to reuse. What must not differ between
     them is the dashboard command, the projects command and the home directory — a composer
     that disagreed with its siblings about any of those would install a binding running a
     different program, or create a console somewhere else.
+
+    **`_private_boundary` is the fourth, and it is why the lock file is supplied here rather
+    than by each caller.** The bot arranges the console too now — it steps it aside before a
+    stop destroys a pane — so the composers in two different processes have to be naming the
+    same file or the lock excludes nothing. One factory, one path, and a caller cannot forget
+    it. Derived from the owner's home the way every other production path is.
     """
     from remote_agents.application.console import ConsoleComposer
     from remote_agents.ports.console import ConsolePaneSlot
@@ -725,6 +759,9 @@ def _console_composer(gateway=None, home: Path | None = None):
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
+        arrangement_lock=ProductionPaths.for_home(
+            home if home is not None else Path.home()
+        ).console_lock_path,
         # One process per pane. Which entry point each pane runs is composition policy, the
         # same as which entry point *is* the dashboard, so it is decided here rather than
         # spelled inside the composer that arranges them.
@@ -753,6 +790,30 @@ def _console_arrange(action: str) -> int:
     return 0
 
 
+def _upgrade_sessions() -> int:
+    """Give every session still marked under the old scheme an identity on its own pane.
+
+    Says what it did, including when there was nothing to do, because "nothing happened" is
+    the failure mode this whole repair exists to end.
+    """
+    gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+    try:
+        upgraded = asyncio.run(gateway.upgrade_pane_identity())
+    except Exception as error:  # noqa: BLE001 - reported, never a traceback at the terminal
+        print(f"The sessions could not be upgraded: {error}", file=sys.stderr)
+        return 1
+    if not upgraded:
+        print("Every managed session already carries its identity on its own pane.")
+        return 0
+    for session_id in upgraded:
+        print(f"upgraded ra-{session_id}")
+    print(
+        f"{len(upgraded)} session(s) upgraded. The console can show them now — no restart "
+        "needed, and nothing was interrupted."
+    )
+    return 0
+
+
 def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None:
     """Run the console's start-only repair and carry its report to the surface, or nothing.
 
@@ -776,7 +837,7 @@ def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None
         return None
 
 
-def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
+def _console_opener(composer) -> Callable[[str], Awaitable[str | None]]:
     """What "open this session" means under console hosting: an exchange of panes.
 
     A named seam rather than a closure inside `local_context`, so the wiring can be asserted
@@ -790,8 +851,8 @@ def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
     exchanging its left pane, which follows the pane whatever is hosting it (DEC-040).
     """
 
-    async def open_in_console(session_id: str) -> None:
-        await composer.show(SessionId.parse(session_id))
+    async def open_in_console(session_id: str) -> str | None:
+        return await composer.show(SessionId.parse(session_id))
 
     return open_in_console
 

@@ -60,7 +60,7 @@ class TuiContext:
     # surface stays alive, while `console_sync` notices what the other writer did to whatever
     # is displayed, wherever the surface reloads its list. Hosts wiring neither keep the
     # exec-attach contract exactly as it was.
-    open_in_console: Callable[[str], Awaitable[None]] | None = None
+    open_in_console: Callable[[str], Awaitable[str | None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
     # The feed capability: a bounded newest-first read of the durable activity table.
     # A reader, never a drainer — consuming the spool would starve the phone's

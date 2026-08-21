@@ -24,12 +24,12 @@ agent it is displaying with it (DEC-040's first accepted cost).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from remote_agents.application.console_lock import ConsoleArrangementLock, ConsoleBusy
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.ports.console import (
     ConsoleBindingAction,
@@ -173,6 +173,24 @@ class _Unwind:
     note: str
 
 
+@dataclass(frozen=True, slots=True)
+class _Reclaim:
+    """One pane of the console's, moved back in rather than exchanged for something.
+
+    The other kind of move, and it is a separate type because it is a separate operation: an
+    `_Unwind` is a trade and needs a partner, this takes a pane and no partner. Carrying the
+    layout's own placement (`vertical`, `percent`, `before`) because the pane is filling the
+    position a split would have built.
+    """
+
+    pane_id: str
+    beside: str
+    vertical: bool
+    percent: int
+    before: bool
+    note: str
+
+
 class ConsoleComposer:
     """Build the console's panes, show one agent in the left slot; degrade on failure."""
 
@@ -185,6 +203,7 @@ class ConsoleComposer:
         projects_command: tuple[str, ...],
         pane_commands: Mapping[ConsolePaneSlot, tuple[str, ...]] | None = None,
         bindings: tuple[ConsoleBinding, ...] = CONSOLE_BINDINGS,
+        arrangement_lock: Path | None = None,
     ) -> None:
         self._console = console
         self._dashboard_command = dashboard_command
@@ -215,7 +234,15 @@ class ConsoleComposer:
         # a slot the other call is already building, or `show` exchanging against a slot that
         # has since been vacated. It was named `_links` when the decisions were about linking
         # windows, and the name has outlived the mechanism.
-        self._links = asyncio.Lock()
+        #
+        # **Cross-process once `arrangement_lock` names a file**, which production always does.
+        # The bot's stop path now steps the console aside before destroying a pane, so there
+        # are two processes arranging these panes rather than one — and an `asyncio.Lock` says
+        # nothing about the other. `console_lock` carries the whole argument, including what
+        # two stale readings produce, which is a live agent in a stranger's window rather than
+        # an untidy screen. Without a path it is the in-process lock this always was, which is
+        # what every test and every scratch composition gets.
+        self._links = ConsoleArrangementLock(arrangement_lock)
 
     async def ensure(self) -> bool:
         """Make the console exist, with its panes and its keys; say whether it is usable.
@@ -506,6 +533,16 @@ class ConsoleComposer:
             slot = _left_slot(arrangement)
             if slot is not None and slot.session_id is not None and slot.session_id in live:
                 return
+            # The stop that destroyed what the console was displaying is exactly what this
+            # pass exists to notice, and until now it could only notice the half a swap can
+            # fix. A pane the other writer destroyed leaves nothing to swap *with*, so the
+            # console stayed a pane short until it was restarted -- reported once, at debug,
+            # by the branch below, which is to say not reported. It is put back here instead.
+            reclaim = _reclaim_plan(arrangement)
+            if reclaim is not None:
+                await self._reclaim(reclaim)
+                _LOG.info("console: %s", reclaim.note)
+                arrangement = await self._console.pane_arrangement()
             step, blocked = _slot_unwind(arrangement)
             if step is not None:
                 await self._console.swap_panes(step.source, step.target)
@@ -517,7 +554,7 @@ class ConsoleComposer:
             # owner can act on it.
             _LOG.debug("console: %s", note)
 
-    async def open(self, session_id: SessionId) -> None:
+    async def open(self, session_id: SessionId) -> str | None:
         """Show one session in the console — which, under the swap model, *is* `show`.
 
         Kept as a name rather than folded away because it is what the surface's one open seam
@@ -527,10 +564,19 @@ class ConsoleComposer:
         it too: DEC-039 recorded that a client switch lands on whatever occupies the vacated
         window rather than on the agent, so it was never a degraded route to the same place.
         """
-        await self.show(session_id)
+        return await self.show(session_id)
 
-    async def show(self, session_id: SessionId) -> None:
-        """Put one agent's pane in the console's left slot, sending whoever is there home.
+    async def show(self, session_id: SessionId) -> str | None:
+        """Put one agent's pane in the console's left slot; answer with why, if it could not.
+
+        **The return value is the whole point of this signature.** Everything here degrades to
+        a log line by design (DEC-040), and there is no logging configured anywhere in `src/` —
+        so a session that could not be displayed was a click that did nothing, with no
+        explanation on screen. The commonest cause is not a fault at all: a session launched
+        before identity moved to the pane (DEC-038) names no pane, so there is nothing to
+        exchange. It is still fully manageable; it just cannot be *shown*. Saying so, and
+        naming the repair, is worth more than the log line nobody reads.
+
 
         **Two exchanges when an agent is already shown, never one.** Swapping the slot's
         current occupant straight against the incoming agent would leave the outgoing agent
@@ -550,27 +596,82 @@ class ConsoleComposer:
         try:
             async with self._links:
                 arrangement = await self._console.pane_arrangement()
+                # Before anything is measured. A console left a pane short by a stop that
+                # destroyed what it was displaying has the *sessions* pane in position 0, and
+                # every question below is asked of position -- so measuring first and moving
+                # after would answer them about the wrong pane. Reclaiming here is also what
+                # makes the click work rather than merely be refused: the owner pressed enter
+                # on a row, and the console repairing itself on the way is the answer they
+                # wanted.
+                reclaim = _reclaim_plan(arrangement)
+                if reclaim is not None:
+                    await self._reclaim(reclaim)
+                    _LOG.info("console: %s", reclaim.note)
+                    arrangement = await self._console.pane_arrangement()
                 slot = _left_slot(arrangement)
                 agent = _pane_of(arrangement, session_id)
-                if slot is None or agent is None:
+                if slot is None:
+                    _LOG.debug("no console slot to show %s in", session_id)
+                    return "The console has no pane to show this in. Restart it."
+                if agent is None:
+                    # The one case worth telling the owner about by name, because it is not a
+                    # fault and it has a repair: a session marked before identity moved to
+                    # the pane names no pane, so there is nothing to exchange.
                     _LOG.debug("nothing to show for %s; the console is left as it is", session_id)
-                    return
+                    return (
+                        "This session started before the console could show sessions in a "
+                        "pane, so it has nothing to swap in. Run: remote-agents "
+                        "upgrade-sessions"
+                    )
                 if slot.pane_id == agent.pane_id:
-                    return
+                    return None
+                if slot.session_id is None and slot.console_slot not in (
+                    None,
+                    ConsolePaneSlot.PROJECTS.value,
+                ):
+                    # **The slot is one of the console's own panes, and not the one that is
+                    # meant to step aside.** Swapping here exiles the sessions list or the
+                    # feed into the agent's window, and the console comes back one pane
+                    # shorter every time the owner clicks a row -- which is how a console that
+                    # had already lost its surface went on to lose its sessions pane, observed
+                    # 2026-08-21. The exchange below is only ever safe against the projects
+                    # surface or against an agent that can be sent home first.
+                    #
+                    # An **unmarked** slot is deliberately still allowed: a console predating
+                    # the slot marks has an unmarked surface, and refusing that would take the
+                    # feature away from it to prevent damage it cannot suffer.
+                    _LOG.warning(
+                        "the console's left slot is its %s pane, not the projects surface; "
+                        "showing %s there would exile it",
+                        slot.console_slot,
+                        session_id,
+                    )
+                    return (
+                        "The console is a pane short, so showing this would cost it another "
+                        "one. Restart the console and try again."
+                    )
                 if slot.session_id is not None:
                     if not await self._send_home(arrangement, slot):
-                        return
+                        return "The session already on screen could not be put back."
                     arrangement = await self._console.pane_arrangement()
                     slot = _left_slot(arrangement)
                     agent = _pane_of(arrangement, session_id)
                     if slot is None or agent is None or slot.session_id is not None:
                         _LOG.warning("the left slot did not free up; %s is not shown", session_id)
-                        return
+                        return "The left pane did not free up. Try again."
                 await self._console.swap_panes(agent.pane_id, slot.pane_id)
-        except Exception:
+        except ConsoleBusy:
+            # Not a fault, and not worth a traceback: the other surface is mid-exchange and
+            # this one declined to decide from a reading that is about to be wrong. Pressing
+            # again is the whole remedy, so that is what it says.
+            _LOG.info("the console was busy; %s was not shown", session_id)
+            return "The console is busy rearranging itself. Try that again."
+        except Exception as error:
             _LOG.exception(
                 "showing %s in the console failed; the arrangement is unchanged", session_id
             )
+            return f"The console could not show this session: {error}"
+        return None
 
     async def show_projects(self) -> None:
         """Bring the projects surface back to the left slot, wherever the exchange left it.
@@ -648,6 +749,56 @@ class ConsoleComposer:
             return False
         await self._console.swap_panes(parked.pane_id, slot.pane_id)
         return True
+
+    async def _reclaim(self, plan: _Reclaim) -> None:
+        """Move a stranded console pane home and put the window back in its proportions.
+
+        Two calls, and the second is not optional. A rejoined pane lands in the right order
+        and the wrong shape, because the layout tree changed while it was away -- measured on
+        tmux 3.4, the reclaimed console came back 108x29/71x29/180x14, with the feed running
+        the full width under both. That is the same defect a *rebuilt* pane has and it has the
+        same answer, `normalize_console_layout`, which is why this reuses it rather than
+        nudging sizes: after it the same console measured 107x44/72x29/72x14, which is a fresh
+        build to the column.
+
+        Called with `self._links` already held, like every other method here that moves a
+        pane: the pane ids in `plan` are only true for as long as nothing else is exchanging.
+        """
+        await self._console.rejoin_console_pane(
+            plan.pane_id,
+            plan.beside,
+            vertical=plan.vertical,
+            percent=plan.percent,
+            before=plan.before,
+        )
+        await self._normalize()
+
+    async def _normalize(self) -> None:
+        """Put the console window back in the proportions `CONSOLE_LAYOUT` declares.
+
+        Reads the arrangement again rather than being handed one: the move above renumbered
+        the panes, and the feed's id is what the minor resize needs. A console with no feed
+        pane to resize is left alone -- the layout call would have nothing to point at, and a
+        console that short has a larger problem `recover` reports.
+        """
+        arrangement = await self._console.pane_arrangement()
+        feed = next(
+            (
+                pane
+                for pane in arrangement
+                if pane.on_console and pane.console_slot == ConsolePaneSlot.FEED.value
+            ),
+            None,
+        )
+        if feed is None:
+            return
+        await self._console.normalize_console_layout(
+            next(
+                spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS
+            ),
+            feed.pane_id,
+            next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.FEED),
+        )
 
     async def _adopt_surface(self) -> tuple[str, ...]:
         """Mark the left slot as the console's surface, once, for a console that lacks one.
@@ -736,7 +887,16 @@ class ConsoleComposer:
         try:
             async with self._links:
                 for _ in range(_RECOVERY_PASSES):
-                    step, blocked = _unwind_plan(await self._console.pane_arrangement())
+                    arrangement = await self._console.pane_arrangement()
+                    # Tried first, because a console short of a pane cannot be returned to
+                    # rest around the gap: the slot every unwind is computed from is whichever
+                    # pane tmux shifted into position 0.
+                    reclaim = _reclaim_plan(arrangement)
+                    if reclaim is not None:
+                        await self._reclaim(reclaim)
+                        moved.append(reclaim.note)
+                        continue
+                    step, blocked = _unwind_plan(arrangement)
                     if step is None:
                         settled = not blocked
                         break
@@ -1011,6 +1171,74 @@ def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, t
         "that pane; nothing was moved. If the displayed agent was stopped by the other "
         "surface, the console is a pane short and needs restarting",
     )
+
+
+def _reclaim_plan(arrangement: tuple[HostedPane, ...]) -> _Reclaim | None:
+    """The console pane that is stranded with nothing to trade back, or None.
+
+    **The state this answers is the one `_slot_unwind` ends by telling the owner to restart
+    for**, and it is reached by an ordinary action rather than by a crash. The console shows an
+    agent, which means the agent's pane is in the console and one of the console's own panes is
+    parked in the agent's window. Stop that session from the phone -- or clean it up from
+    anywhere -- and the pane in the console is *destroyed*. tmux closes the gap, the console is
+    down to two panes, and the console's own pane is sitting in a window with no agent left in
+    it. Nothing can be exchanged for it: a swap trades, so trading there would send a second
+    console pane out to replace the first, which is the shrinking `_slot_unwind` refuses to do.
+
+    A **move** has no such cost, so the three conditions below are exactly the ones that make
+    one unambiguously right:
+
+    - **The console is short this slot.** Read from the console's own panes only. A slot whose
+      mark is on a pane parked elsewhere is missing *from the console*, which is the question.
+    - **Exactly one pane elsewhere carries that slot's mark.** More than one is the ambiguity
+      `_surface` refuses to resolve by listing order, and it is refused here for its reason.
+    - **The window holding it has no pane of its own left.** This is what separates a console
+      pane stranded by a destroyed agent from one parked by a *live* display: while the agent
+      is alive its pane is in the arrangement carrying the host's identity, and the exchange
+      that put it there is the thing that must undo it. Without this condition the reclaim
+      would fire on every ordinary display and pull the surface back under the owner's nose.
+
+    It answers one move at a time, like `_unwind_plan` and for the same reason -- a move
+    renumbers the positions the next would be computed from.
+
+    `beside` comes from the layout rather than from whatever is handy, so the reclaimed pane
+    lands in its declared position: the projects surface rejoins *before* the sessions pane,
+    which is where a rebuild would have split it. When that neighbour is not in the console
+    either, there is no placement this can be sure of, and it declines rather than guessing --
+    a console that far apart is the one `_slot_unwind` reports.
+    """
+    console = [pane for pane in arrangement if pane.on_console]
+    if not console:
+        return None
+    held = {pane.console_slot for pane in console if pane.console_slot}
+    for spec in CONSOLE_LAYOUT:
+        if spec.slot.value in held:
+            continue
+        stranded = [
+            pane
+            for pane in arrangement
+            if pane.console_slot == spec.slot.value and not pane.on_console
+        ]
+        if len(stranded) != 1:
+            continue
+        pane = stranded[0]
+        if pane.host is None or any(other.session_id == pane.host for other in arrangement):
+            continue
+        beside = next(
+            (other for other in console if other.console_slot == spec.splits_from.value), None
+        )
+        if beside is None:
+            continue
+        return _Reclaim(
+            pane.pane_id,
+            beside.pane_id,
+            spec.vertical,
+            spec.percent,
+            spec.before,
+            f"the console's {spec.slot.value} pane was left in session {pane.host}'s window "
+            "by a session that has since been stopped, and was moved back into the console",
+        )
+    return None
 
 
 def _unwind_plan(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, tuple[str, ...]]:

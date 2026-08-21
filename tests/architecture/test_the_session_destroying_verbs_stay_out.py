@@ -1,10 +1,30 @@
-"""The tmux verbs that destroy a managed session may not be built anywhere in the codec.
+"""The tmux verbs that destroy a managed session may be built in one audited place, or none.
 
 `join-pane` and `move-pane` relocate a pane into another window. Do that with a managed
 session's only pane and its window is left empty, so tmux destroys the window — and the
 session with it, taking the `@remote_agents_*` identity too. Probed on tmux 3.4 (2026-08-19)
 and recorded as DEC-040's rejected alternative, which is the shape the whole swap design
 exists to avoid: `swap-pane` exchanges two panes and leaves both windows occupied.
+
+**`join-pane` gained exactly one exemption on 2026-08-21, and the exemption is named rather
+than general.** The rule was absolute because the codec cannot see who is calling it, and that
+is still true — so the allowance is pinned to one builder by name, and the check below fails
+the moment a second function builds the verb. What earned it was a state the absolute rule left
+with no repair at all: the console displays an agent by exchanging panes, so one of the
+console's own panes is parked in that agent's window. Stop that session from the phone and
+`destroy` kills the pane *in the console* — its own docstring names the surviving husk — after
+which the console is one pane short and the pane it lost is sitting in a window with no agent.
+A swap cannot fix it, because a swap trades and there is nothing there worth having; trading
+anyway sends a *second* console pane out, and the console shrinks again on every stop. Observed
+in the owner's console on 2026-08-21: the projects pane gone, then the sessions pane gone after
+one more click, with the agent showing in the top pane.
+
+The harm this rule names does not reach that move. What is relocated is the *console's* pane,
+never a managed session's only pane; the window it empties belongs to a session whose agent is
+already destroyed and whose record is already ENDED, so the identity marks it takes are marks
+for something that no longer exists. `application.console._reclaim_plan` will not produce the
+move unless the host window has no pane of its own left — that is the condition, and this
+comment is where a reader is told to go and check that it still holds.
 
 The plan that built this had a gate check spelling the same rule as a `grep`, and a gate check
 runs on the day somebody runs the plan. It also matched *prose* — it first failed on a docstring
@@ -32,6 +52,13 @@ _CODEC = (
 
 #: Verbs that can empty a window, and so destroy the session that window belongs to.
 _SESSION_DESTROYING_VERBS = frozenset({"join-pane", "move-pane", "break-pane"})
+
+#: The one audited exemption: which builder may spell which verb, and nothing else may.
+#:
+#: A pair rather than a bare verb name, because "the codec may say `join-pane` somewhere" is
+#: not the rule that was argued for — "this one function moves the console's own pane home" is.
+#: `move-pane` and `break-pane` keep no exemption at all.
+_PERMITTED = frozenset({("rejoin_console_pane_args", "join-pane")})
 
 #: The tab mechanism, retired with the swap model (Sub-plan 3, Task 2.4).
 #:
@@ -76,14 +103,62 @@ def _argv_strings() -> set[str]:
     }
 
 
+def _argv_strings_by_function() -> set[tuple[str, str]]:
+    """Every (function, argv string) pair in the codec, docstrings excluded.
+
+    The module-wide reading above cannot express a *named* exemption: it would have to allow
+    the verb everywhere or nowhere, and "nowhere" is what left the reclaim with no repair while
+    "everywhere" is what the rule exists to prevent. Attributed to the function that spells it,
+    the allowance stays as narrow as the argument for it.
+    """
+    tree = ast.parse(_CODEC.read_text(encoding="utf-8"))
+    pairs: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        body = node.body[1:] if _leads_with_a_docstring(node) else node.body
+        for statement in body:
+            for inner in ast.walk(statement):
+                if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                    pairs.add((node.name, inner.value))
+    return pairs
+
+
+def _leads_with_a_docstring(node: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
+    return bool(
+        node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    )
+
+
 def test_the_codec_never_builds_a_command_that_can_destroy_a_managed_session() -> None:
-    built = _argv_strings() & _SESSION_DESTROYING_VERBS
+    built = {
+        pair
+        for pair in _argv_strings_by_function()
+        if pair[1] in _SESSION_DESTROYING_VERBS
+    } - _PERMITTED
 
     assert built == set(), (
         f"the codec builds {sorted(built)}, which relocates a pane out of its window. A managed "
         "session's window left empty is a session tmux destroys, along with the identity marks "
         "on it — DEC-040's rejected alternative, probed rather than assumed. Exchange panes with "
-        "`swap_pane_args` instead, which leaves both windows occupied."
+        "`swap_pane_args` instead, which leaves both windows occupied. The single exemption is "
+        f"{sorted(_PERMITTED)}, argued in this module's docstring; extending it is a decision, "
+        "not a fix."
+    )
+
+
+def test_the_one_exemption_is_actually_taken() -> None:
+    """An exemption nothing uses is a hole, not an allowance.
+
+    If the reclaim is ever removed or renamed, this fails and the pair goes with it, rather
+    than sitting in the set as permission the next person inherits without the argument.
+    """
+    assert _PERMITTED <= _argv_strings_by_function(), (
+        "the permitted destroying verb is not built by the function it was permitted for; "
+        "remove the exemption rather than leaving it open"
     )
 
 
