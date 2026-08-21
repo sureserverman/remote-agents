@@ -364,3 +364,46 @@ async def test_a_long_lived_backend_keeps_the_one_handle_it_was_given(composed_h
         )
     finally:
         connection.close()
+
+
+def test_both_compositions_wire_hide_in_console_from_their_own_composers(
+    composed_home, tmp_path, monkeypatch
+):
+    """ARCH-B3, as corrected at the Stage 1 gate.
+
+    The plan originally said `hide_in_console` is the surface's alone. It is not, and has
+    not been since the console-lock work: the bot builds a composer too, so a stop issued
+    from the phone steps the console aside before destroying the pane. The asymmetry is in
+    what each composer may do -- the surface's builds and arranges the console, the bot's is
+    hide-only and never calls `ensure` -- not in who has one.
+
+    Pinned because a `Backend` shared by both processes is exactly the change that would
+    tempt someone to give them one composer, and the bot must never gain `ensure`: it would
+    build the owner's console from a process that has no window in it.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import _private_boundary, local_context
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "7")
+    monkeypatch.delenv("TMUX", raising=False)
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = _private_boundary(config, connection, paths)
+        context = local_context(config, connection, paths)
+
+        assert composition.boundary.launcher._hide_in_console is not None, (  # noqa: SLF001
+            "the bot lost its hide-only composer; a phone stop would leave the console "
+            "a pane short until the next sync"
+        )
+        # Not console-hosted here ($TMUX unset), so the surface wires none -- which is the
+        # other half of the same rule: the surface's composer is conditional on hosting.
+        assert context.launcher._hide_in_console is None  # noqa: SLF001
+    finally:
+        connection.close()

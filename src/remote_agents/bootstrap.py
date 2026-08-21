@@ -675,11 +675,8 @@ def compose_backend(
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    catalogue = projects.refresh().catalogue
-    project_paths = projects.paths
-    runtime = _local_runtime(config, paths, project_paths)
+    runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal
-    conversations = _conversation_service(project_paths)
     secrets = load_secrets()
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
@@ -699,6 +696,18 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     # never *builds* a console — nothing here calls `ensure` — and `hide` degrades to nothing
     # on a host with no console at all, which is every host that has not run `remote-agents`.
     console = _console_composer(runtime.gateway, paths.home)
+    # The one backend this process hands its frontend (ARCH-B1). `locks` and the console
+    # hide are the service's own wiring and go in here; the reconciler and quiet watcher
+    # below are not the frontend's to drive and stay outside it (ARCH-B3).
+    backend = compose_backend(
+        config,
+        connection,
+        paths,
+        projects=projects,
+        runtime=runtime,
+        locks=locks,
+        hide_in_console=console.hide,
+    )
     return ServiceComposition(
         PrivateBotBoundary(
             secrets.owner_user_id,
@@ -716,15 +725,15 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
             # one session's alert into one message above the menu and one below.
             standing=SQLiteStandingNotificationStore(connection),
-            catalogue=catalogue,
+            catalogue=backend.catalogue,
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
             max_label_length=config.max_label_length,
-            launcher=SessionService(store, terminal, locks=locks, hide_in_console=console.hide),
-            conversations=conversations,
-            creator=_project_creator(config),
-            capture=terminal.capture,
-            catalogue_source=lambda: projects.refresh().catalogue,
+            launcher=backend.sessions,
+            conversations=backend.conversations,
+            creator=backend.projects,
+            capture=backend.capture,
+            catalogue_source=backend.refresh_catalogue,
         ),
         terminal,
         # Readiness is wired in deliberately: without it, reconciliation promotes any
@@ -1032,7 +1041,6 @@ def local_context(config, connection, paths: ProductionPaths):
     from remote_agents.adapters.tui.context import FEED_LIMIT, ProfileChoice, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    catalogue = projects.refresh().catalogue
     runtime = _local_runtime(config, paths, projects.paths)
 
     open_in_console = None
@@ -1083,11 +1091,22 @@ def local_context(config, connection, paths: ProductionPaths):
         # that ended without either writer asking.
         hide_in_console = composer.hide
 
+    # The same backend the service composes, over this process's leased connection
+    # (ARCH-B1, ARCH-B2). The console capabilities above are this surface's alone and stay
+    # out of it (ARCH-B3); `hide_in_console` is not one of those -- the bot wires its own,
+    # from a hide-only composer -- so it goes in as a parameter here.
+    backend = compose_backend(
+        config,
+        connection,
+        paths,
+        projects=projects,
+        runtime=runtime,
+        hide_in_console=hide_in_console,
+        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+    )
     return TuiContext(
-        launcher=SessionService(
-            SQLiteSessionStore(connection), runtime.terminal, hide_in_console=hide_in_console
-        ),
-        creator=_project_creator(config),
+        launcher=backend.sessions,
+        creator=backend.projects,
         profiles=tuple(
             # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
             # uses `reason` for two things -- why a profile is blocked, and a note about a
@@ -1102,19 +1121,19 @@ def local_context(config, connection, paths: ProductionPaths):
             )
             for profile in runtime.profiles
         ),
-        refresh_catalogue=lambda: projects.refresh().catalogue,
+        refresh_catalogue=backend.refresh_catalogue,
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-        max_label_length=config.max_label_length,
-        catalogue=catalogue,
+        max_label_length=backend.max_label_length,
+        catalogue=backend.catalogue,
         # The same capture the service hands the bot. Redactions default to the empty set
         # the bot also uses -- no configuration key sources them today.
-        capture=runtime.terminal.capture,
-        conversations=_conversation_service(projects.paths),
+        capture=backend.capture,
+        conversations=backend.conversations,
         open_in_console=open_in_console,
         console_sync=console_sync,
         # A reader of the durable observation table, never a drainer: consuming the spool
         # would starve the phone's notifications (see Task 5.2's correction note).
-        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+        activity_feed=backend.activity_feed,
         console_flash=console_flash,
         console_recovery=console_recovery,
     )
