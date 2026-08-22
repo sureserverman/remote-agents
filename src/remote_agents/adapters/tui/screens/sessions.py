@@ -38,11 +38,9 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
     remote_control_directions,
-    trust_available,
 )
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
-from remote_agents.domain.trust import TrustState
 
 _LOG = logging.getLogger(__name__)
 
@@ -473,46 +471,9 @@ class SessionDetailScreen(ChoiceScreen):
         self.set_status(
             f"State: {record.state.value}. {explain_state(record.state, record.orphan_provenance)}"
         )
-        self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
+        self.show_choices(self.detail_entries(record))
 
-    async def _observed_trust(self, record: SessionRecord) -> TrustState:
-        """Always UNKNOWN, so "Trust this project" never renders here. **DEC-047, deliberate.**
-
-        The owner is looking at the dialog. DEC-040 has the console exchange its left pane with
-        the agent's, so on this surface the Claude Code trust prompt is on screen and is
-        answered by typing into it, exactly as it would be at any terminal. A row that re-asks
-        it would be duplication -- and worse than redundant, because it puts a second,
-        differently-worded route to a security-relevant answer beside the real one.
-
-        The bot's twin path is not duplication and stays: there is no pane on Telegram, so a
-        trust-blocked launch surfaces as a FAILED record with nothing actionable behind it.
-        That asymmetry is the whole of DEC-047, which supersedes DEC-016's "both surfaces"
-        clause -- every argued sentence in DEC-016 was about the remote case.
-
-        **This was recorded as a defect for a day**, on the reading that DEC-016 required
-        parity, and this docstring said so. It was not a defect; the owner's reasoning had
-        simply never been written down. Spelled out here because getting it wrong in the safe
-        direction is cheap and the reverse is not: a reader who "repairs" this is adding a
-        second answer path to a security question, not restoring a missing feature.
-
-        Written out rather than left as a probe because the original probe reached for a
-        `trust_state` attribute on `self.services` by name -- and `TuiContext` has never
-        carried one, `SessionService.trust_state` being a *backend* method -- so it *looked*
-        like a capability check being told no. It never asked. Now it does not pretend to.
-        `test_the_local_surface_does_not_re_ask_for_trust.py` pins it.
-
-        The `trust_available` gate below is what the guard used to be and is kept for the
-        same reason the docstring above it gave: a trust-blocked `claude-remote` launch can
-        land RUNNING, because its readiness marker is observed before the dialog renders, so
-        state is not evidence about the dialog -- only the pane is. It changes no answer
-        today; it is the shape the repair goes back into.
-        """
-        del record
-        return TrustState.UNKNOWN
-
-    def detail_entries(
-        self, record: SessionRecord, trust: TrustState = TrustState.UNKNOWN
-    ) -> tuple[tuple[str, str], ...]:
+    def detail_entries(self, record: SessionRecord) -> tuple[tuple[str, str], ...]:
         """The actions this session offers, taken from the policy and not decided here.
 
         The stop entries are exactly `available_actions(record.state, record.orphan_provenance)`
@@ -538,12 +499,10 @@ class SessionDetailScreen(ChoiceScreen):
         # `SessionService.rename` does not gate on one — naming a session that has just ended is
         # harmless, and the row it is on is still listed until reconciliation removes it.
         entries.append(("rename", "Rename"))
-        if trust_available(record, trust):
-            # Above the stop rows and below the read-only ones, because it is neither: it
-            # unblocks a session rather than reading or ending it. Defaults to absent --
-            # `trust` is UNKNOWN unless a caller went and looked, so a surface that forgets
-            # to observe renders no row rather than a row that cannot work.
-            entries.append(("trust", "Trust this project"))
+        # No "Trust this project" row, deliberately: DEC-047. The console exchanges its left
+        # pane with the agent's (DEC-040), so the owner is looking at the trust dialog and
+        # answers it there. `trust_available` is the shared policy and still says yes for
+        # these records -- it is the *bot* that acts on it, where there is no pane.
         # One row per direction, so the decision is taken here and the confirmation that
         # follows has exactly one thing to confirm. The single "Claude Remote Control" row
         # this replaces opened a three-row screen where Enable and Disable sat side by side
@@ -567,8 +526,6 @@ class SessionDetailScreen(ChoiceScreen):
             await self.show_inspect()
         elif key == "rename":
             await self.show_rename()
-        elif key == "trust":
-            await self.answer_trust()
         elif key in _REMOTE_CONTROL_DIRECTIONS:
             await self.confirm_remote_control(_REMOTE_CONTROL_DIRECTIONS[key])
         elif key == FORCE:
@@ -580,35 +537,6 @@ class SessionDetailScreen(ChoiceScreen):
             # Restructuring this chain into a dispatch table would silently remove the
             # confirmation step, and no existing test asserts the ordering itself.
             await self.tui.stop(key, self.session_value, self)
-
-    async def answer_trust(self) -> None:
-        """Answer the folder-trust question, re-reading the record and the pane first.
-
-        Not modal-confirmed, and that is a judgment worth writing down rather than an
-        omission. The two actions DEC-008 puts a confirmation in front of are force stop and
-        Remote Control, and this one destroys nothing: it answers a question the agent is already
-        asking, with the answer the owner would have to give at the keyboard for the session
-        to be usable at all. A confirmation here would ask "are you sure you want to unblock
-        the thing you launched".
-
-        What it is guarded by instead is the pane itself. `answer_trust` on the terminal
-        re-reads the capture and refuses unless the dialog is still on screen, so the worst
-        a stale row can do is nothing.
-        """
-        async with self.holding_the_guard():
-            record = await self.tui.current_record(self.session_value)
-            if record is None:
-                await self.refuse()
-                return
-            async with self.awaiting("Trusting the project…"):
-                answered = await self.tui.answer_trust(record, self)
-            if answered is None:
-                return
-            if answered is TrustState.AWAITING:
-                self.set_status("The project is still waiting to be trusted. Try again.")
-            else:
-                self.set_status("Trusted. Relaunch the session if the agent already gave up.")
-            await self.render_detail()
 
     async def confirm_force(self) -> None:
         """Re-read the record, ask the modal, and issue only on a `True`.
@@ -864,9 +792,10 @@ class RenameScreen(ChoiceScreen):
     async def submit(self, value: str) -> None:
         """Validate, then rename — re-reading the session first, because it may have gone.
 
-        Awaited inline under the guard rather than run on a worker, matching `answer_trust`
-        rather than `ProjectReviewScreen._create_project`. That screen went off the pump
-        because creating a project scans the development root and writes a directory, so
+        Awaited inline under the guard rather than run on a worker, matching this screen's
+        other short store calls rather than `ProjectReviewScreen._create_project`. That
+        screen went off the pump because creating a project scans the development root and
+        writes a directory, so
         holding the pump made `ctrl+q` unanswerable for the duration. A rename is one indexed
         UPDATE under the session lock — the same cost class as the record read directly above
         it, which is already awaited here.

@@ -21,6 +21,14 @@ file.** It is not standing in the way of a repair; it is what stops one. A chang
 these fail is adding a second answer path to a security question, and it needs DEC-047
 superseded first.
 
+**The code is now gone, not merely inert.** For a day this pinned a row that existed and could
+never render, because `_observed_trust` returned `UNKNOWN` outright. The row, its dispatch arm,
+`SessionDetailScreen.answer_trust` and `RemoteAgentsTui.answer_trust` were all deleted once
+DEC-047 settled that they should not exist — describing dead code is not the same as removing
+it. What is left for this file to assert is therefore stronger: not "the row is suppressed" but
+"nothing here builds one". The assertions did not have to change to say it, which is the useful
+property of having written them against the drawn rows rather than against the implementation.
+
 The three assertions still earn their place together: the row is absent for a `claude`
 session whose pane really is showing the dialog; the backend is never asked, so nothing is
 reaching for a trust state behind the scenes; and the policy *would* offer the row for that
