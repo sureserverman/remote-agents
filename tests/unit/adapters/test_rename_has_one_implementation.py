@@ -84,6 +84,13 @@ def test_no_frontend_reaches_past_the_use_case_to_the_store_verb() -> None:
     `set_label` is what `SessionService.rename` calls once it holds the session lock and has
     re-read the record (DEC-007). A frontend calling it directly would rename a session
     without either, and would do so while every journey test above stayed green.
+
+    **Today this cannot happen and the guard is a floor rather than a live check**: both
+    frontends are typed against `Backend` (ARCH-B1), which exposes no store, so there is no
+    `set_label` in reach to call. It is kept because that is a property of the current
+    composition rather than of the language — a frontend handed a store for some other reason
+    would silently regain the shortcut — and because a guard that costs one AST walk is the
+    cheapest possible way to notice.
     """
     offenders = [
         _where(path, node)
@@ -98,14 +105,16 @@ def test_no_frontend_reaches_past_the_use_case_to_the_store_verb() -> None:
 def test_the_label_rule_is_defined_once_and_lives_in_the_domain() -> None:
     """One `normalize_label`, and it is not in an adapter."""
     definitions = [
-        f"{path.relative_to(_SRC.parent.parent)}:{node.lineno}"
+        str(path.relative_to(_SRC.parent.parent))
         for path in sorted(_SRC.rglob("*.py"))
         for node in ast.walk(ast.parse(path.read_text()))
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         and node.name == "normalize_label"
     ]
 
-    assert definitions == ["src/remote_agents/domain/models.py:22"], definitions
+    # The path, not the line: the claim is "one definition, in the domain", and a line number
+    # would additionally couple this to every insertion above it in `models.py`.
+    assert definitions == ["src/remote_agents/domain/models.py"], definitions
 
 
 def test_no_frontend_re_derives_a_clause_of_the_label_rule() -> None:

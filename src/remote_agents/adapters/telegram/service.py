@@ -1390,10 +1390,23 @@ class PrivateBotBoundary:
         `sessions is None` is a host with no session use case, which cannot answer at all; it
         is the arm the removed predicate opened with, kept because the answer is still "no
         command" rather than an attribute error mid-render.
+
+        `SessionNotFoundError` is caught for the same reason and is **not** belt-and-braces:
+        the removed `_can_copy_attach` reached only `inspect`, which answers `None` for a
+        session that has gone, so a row drawn just before the record ended used to earn the
+        refusal sentence below. `copy_attach` opens with `_require_session` instead, and
+        `session.attach` has no `_PENDING_NOTICES` entry, so an uncaught raise here reaches
+        `callback`'s `if pending is None: raise` and costs the owner the screen rather than a
+        sentence. The window is narrow — between `_record`'s list read and this call — but it
+        is the one behavioural difference this task would otherwise have made, and the task
+        forbids one.
         """
         if record is None or self.backend.sessions is None:
             return None
-        return await self.backend.sessions.copy_attach(record.session_id)
+        try:
+            return await self.backend.sessions.copy_attach(record.session_id)
+        except SessionNotFoundError:
+            return None
 
     async def _attach_row_is_offered(self, record: SessionRecord) -> bool:
         """Whether the detail draws a Copy attach row at all — this surface's own choice.
@@ -1854,7 +1867,12 @@ class PrivateBotBoundary:
         return await self._sessions_reply(notice=endings[action])
 
     async def _records(self) -> tuple[SessionRecord, ...]:
-        """The listable records, without the readiness pass — every re-read but a list open."""
+        """The listable records, without the readiness pass.
+
+        Every read but the sessions list, which uses `_listed_records`. Stated that way round
+        rather than as "every re-read": `_sessions_reply` is also where a stop, a rename and a
+        cleanup land, so it is not only reached by an owner opening the list.
+        """
         if self.backend.sessions is None:
             return ()
         return self._named(only_listed(await self.backend.sessions.list_sessions()))

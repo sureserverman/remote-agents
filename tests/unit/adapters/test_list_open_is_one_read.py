@@ -91,7 +91,7 @@ def test_each_frontend_opens_its_list_through_the_one_shared_read(frontend: str)
     assert len(calls) == 1, f"{frontend} list-open read sites: {calls}"
 
 
-def test_only_the_local_surface_syncs_a_console_after_reading(_: None = None) -> None:
+def test_only_the_local_surface_syncs_a_console_after_reading() -> None:
     """ARCH-B3, stated as the narrow claim rather than the tidy one."""
     assert _calls_named(_FRONTENDS["telegram"], "console_sync") == []
     assert _calls_named(_FRONTENDS["tui"], "console_sync") != []

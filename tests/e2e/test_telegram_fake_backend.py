@@ -1482,9 +1482,14 @@ class _AttachableLauncher(SessionUseCaseDouble):
     """One session and one pane observation, counting who was asked what.
 
     Faithful to `SessionService` on the point this test is about: `copy_attach` answers from
-    `pane_is_attachable` and then builds a command, exactly as the real one does, so a change
-    that stops the bot asking the shared rule shows up here rather than being absorbed by a
-    stub that always says yes.
+    `pane_is_attachable` and then builds a command, exactly as the real one does, so a stub
+    that always said yes cannot absorb a change here.
+
+    What that does **not** buy, stated because the shape invites the wrong reading: because
+    this double applies the rule itself, the reply half never reaches the real
+    `SessionService.copy_attach` and so cannot notice *it* losing the ownership check. That is
+    covered where it lives — `tests/unit/application/test_commands.py` drives the real service
+    over four ownership cases.
 
     The counters are the rest of the point. The detail's row gate is *one* `inspect`; pressing
     the row is *one* `copy_attach` and no inspect at all. Before this task the press was three
@@ -1494,6 +1499,7 @@ class _AttachableLauncher(SessionUseCaseDouble):
     def __init__(self, record: SessionRecord, observation: TerminalObservation | None) -> None:
         self.record = record
         self.observation = observation
+        self.ended = False
         self.inspects = 0
         self.attach_calls = 0
 
@@ -1511,6 +1517,10 @@ class _AttachableLauncher(SessionUseCaseDouble):
     async def copy_attach(self, session_id: object) -> str | None:
         del session_id
         self.attach_calls += 1
+        if self.ended:
+            # What `SessionService.copy_attach` actually raises, from its own
+            # `_require_session`, when the row has gone since the row was drawn.
+            raise SessionNotFoundError(str(self.record.session_id))
         if not pane_is_attachable(self.observation, self.record):
             return None
         return "tmux attach -t ra-demo"
@@ -1549,12 +1559,19 @@ async def _open_detail(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
 
 
 def test_the_bot_keeps_no_ownership_predicate_of_its_own() -> None:
-    """DEC-021 requires the predicate identical on both surfaces, so there is one of it.
+    """The named predicate is gone. **Only the name** — this line proves nothing wider.
 
     `_can_copy_attach` re-derived `application/services.copy_attach`'s ownership comparison —
     live-or-preserved, same project, same profile — inside the adapter. Two copies of a rule
     DEC-021 requires identical is one copy plus a future divergence, and the divergence would
     be silent: both would keep answering the same way until the day the application's changed.
+
+    A `hasattr` check cannot say that. A re-derivation under any other name, or inline in
+    `_detail_reply`, passes it — which is exactly the trap Stage 2 recorded and every other
+    sweep in this stage is shaped around. The shape guard lives in
+    `tests/unit/adapters/test_attach_ownership_is_asked_not_restated.py`, which sweeps both
+    frontend trees for the pane conditions the rule is made of. This test keeps the narrow
+    claim its assertion supports: the old name is not back.
     """
     assert not hasattr(PrivateBotBoundary, "_can_copy_attach")
 
@@ -1602,6 +1619,28 @@ async def test_the_refusal_wording_is_unchanged_when_the_pane_has_gone() -> None
     chat = FakeChat()
     anchor = await _open_detail(chat, boundary)
     launcher.observation = None
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert chat.messages[anchor].text == (
+        "Copy Attach is unavailable: this session has no pane on this host any more."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_between_the_row_and_the_press_is_refused_in_words() -> None:
+    """A refusal, not a traceback — the one behavioural delta Task 3.4 would have made.
+
+    The predicate this task removed reached only `inspect`, which answers `None` for a session
+    that has gone, so this landed on the sentence below. `copy_attach` opens with
+    `_require_session` and raises instead, and `session.attach` has no `_PENDING_NOTICES`
+    entry, so an uncaught raise reaches `callback`'s `if pending is None: raise` and costs the
+    owner their screen. Found by the Stage 3 gate's Tier-2 review.
+    """
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    launcher.ended = True
 
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
 

@@ -163,9 +163,15 @@ async def test_a_pane_owned_by_another_project_is_refused_on_the_row_and_on_the_
     profile evidence and supplies a pane that has it, so it would pass just as happily against
     a bot that never compared either. DEC-021's ownership half is what stops a live pane
     belonging to a *different* project being handed over, and it is only asserted by watching
-    a mismatch be refused — on both the row and the reply, because the two ask through
-    different paths (`inspect` plus the shared rule, and `copy_attach`) and either could keep
-    the comparison while the other lost it.
+    a mismatch be refused on both the row and the reply.
+
+    **Only the row assertion discriminates here**, and saying so is the point of writing this
+    down: `Launcher.copy_attach` above applies `pane_is_attachable` itself, so the reply half
+    never reaches the real `SessionService.copy_attach` and cannot detect *it* dropping the
+    comparison. That case is covered in `tests/unit/application/test_commands.py`, which drives
+    the real service over four ownership cases. The reply is asserted anyway because the two
+    halves could diverge in the adapter — the row could keep the rule while the reply stopped
+    asking — and that is a difference this file can see.
     """
     session_id = SessionId.new()
     record = SessionRecord(

@@ -126,8 +126,12 @@ async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecor
     launch that has just become ready would show as FAILED until the next open.
 
     What happens *after* is the caller's. The local surface hands the result to its console
-    (ARCH-B3); the bot has no console to hand it to. That asymmetry stays in the frontends,
-    because it is about what a surface hosts rather than about what the list is.
+    (ARCH-B3); the bot does not, because it hosts no console to arrange around a list it has
+    just drawn. **Not "the bot has nothing to do with a console"** — it wires a hide-only
+    composer of its own (`bootstrap._private_boundary`), so a stop from the phone steps the
+    console aside before destroying a pane. That is the correction `application/backend.py`
+    already records, and the narrow claim is the one worth repeating here: the asymmetry is in
+    what each composer may *do*, not in who has one.
     """
     await sessions.refresh_readiness()
     return only_listed(await sessions.list_sessions())

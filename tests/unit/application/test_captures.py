@@ -1,7 +1,7 @@
 """One bounded capture rendering, driven the way both frontends drive it.
 
 The NUL refusal and the `sanitize_terminal_text` call existed twice — `telegram/inspection.py`
-and `tui/screens/sessions.py: render_capture` — **with different bounds**: 500 lines / 128 KiB
+and `tui/screens/sessions.py: capture_for_pane` — **with different bounds**: 500 lines / 128 KiB
 on the bot, 2000 / 512 KiB in the pane. Those bounds are the one part of the duplication this
 merge must not resolve, so they arrive as arguments and nothing in this file asserts a value
 for them; the two call sites' own numbers are pinned where the callers are, in
@@ -18,6 +18,7 @@ somebody to add a default sentence tomorrow.
 
 from __future__ import annotations
 
+import ast
 import pathlib
 
 import pytest
@@ -33,6 +34,34 @@ _SOURCE = (
 ).read_text(encoding="utf-8")
 
 _BOUNDS = {"max_lines": 500, "max_bytes": 128 * 1024}
+
+
+def _executable_text() -> str:
+    """The module's code with its prose removed — docstrings dropped, comments never unparsed.
+
+    Asserting over the raw file text was the first shape of the check below and it forbade the
+    wrong thing: it made *explaining* Telegram's boundary a test failure, so this module's own
+    docstring had to paraphrase around the words it wanted. A reader adding "(4096 UTF-16
+    units)" for clarity would have got a red test with no visible cause, and the honest reading
+    of that is a guard that had started policing documentation instead of behaviour.
+
+    The claim worth making is that the renderer does not *implement* the wrapper, which is a
+    claim about code.
+    """
+    tree = ast.parse(_SOURCE)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            node.body.pop(0)
+            if not node.body:
+                node.body.append(ast.Pass())
+    return ast.unparse(tree)
 
 
 def test_a_capture_holding_nul_is_refused_with_no_text_at_all() -> None:
@@ -112,7 +141,9 @@ def test_the_shared_renderer_does_not_absorb_telegrams_presentation_wrapper() ->
     `session-output.txt` fallback and its `encodable_text` pass stay in `inspection.py` and
     `presenters.py`. A reader must not be able to assume this function inherited any of them.
     """
-    assert "utf-16" not in _SOURCE.casefold()
-    assert "4096" not in _SOURCE
-    assert "session-output.txt" not in _SOURCE
-    assert "encodable_text" not in _SOURCE
+    code = _executable_text()
+
+    assert "utf-16" not in code.casefold()
+    assert "4096" not in code
+    assert "session-output.txt" not in code
+    assert "encodable_text" not in code

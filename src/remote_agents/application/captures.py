@@ -1,7 +1,7 @@
 """The one bounded rendering of a captured pane, for both frontends.
 
 Showing an owner what an agent has printed was written twice — `adapters/telegram/inspection.py`
-and `adapters/tui/screens/sessions.py: render_capture` — as the same three steps: refuse a
+and `adapters/tui/screens/sessions.py: capture_for_pane` — as the same three steps: refuse a
 capture holding NUL, measure whether the capture ran past the surface's bounds, hand the bytes
 to `ports/terminal_text.sanitize_terminal_text`. Two copies is the arrangement this module
 retires (ARCH-B4).
