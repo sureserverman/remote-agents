@@ -333,7 +333,8 @@ class PrivateBotBoundary:
     `concurrent_updates(False)`, so updates are handled one at a time. That is already
     load-bearing for token binding — the comment there says so — and this field now rests
     on it too. A change made for throughput would give two interleaved presses one shared
-    marker, which is the cheap half of what it would break.
+    marker, which is the cheap half of what it would break. Both arguments were comments
+    only until `test_the_bot_handles_updates_sequentially` pinned the literal.
     """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
@@ -2362,7 +2363,10 @@ async def run_private_bot(
     # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
     # unbound token in the chat. Two renders in flight at once would let one screen's buttons
     # be adopted by the other's message. This is python-telegram-bot's default; it is written
-    # out so a change made for throughput cannot quietly reopen that interleaving.
+    # out so a change made for throughput cannot quietly reopen that interleaving -- and
+    # `test_the_bot_handles_updates_sequentially` now fails on `True`, on a non-literal, and
+    # on the call being deleted, because until it existed this comment was the whole guard.
+    # A second argument rests on the same setting at `_sessions_page` above.
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
