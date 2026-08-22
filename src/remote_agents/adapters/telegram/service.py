@@ -69,6 +69,7 @@ from remote_agents.application.project_catalog import (
     rank_by_recent_use,
     search_catalogue,
 )
+from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CLEANUP,
@@ -2019,12 +2020,12 @@ class PrivateBotBoundary:
         unavailable = []
         for profile in self.profiles:
             capability = capabilities.get(profile.profile_id)
-            if (
-                profile.available
-                and capability is not None
-                and capability.catalogue_available
-                and capability.selected_resume_available
-            ):
+            # `profile.available` and the `None` capability stay the bot's own: the local
+            # surface renders no row at all for an agent it cannot offer, so it never asks
+            # either question. `resume_capable` is the part both surfaces were answering
+            # separately, and the `reason` composed in the `else` below is what the bot does
+            # with the answer rather than part of it.
+            if profile.available and capability is not None and resume_capable(capability):
                 buttons.append(
                     Button(
                         _profile_name(profile.profile_id),
@@ -2054,7 +2055,9 @@ class PrivateBotBoundary:
             return self._message("The project is no longer available.")
         try:
             result = await self.backend.conversations.catalogue(
-                ConversationCatalogueQuery(page, 10, ProfileId(profile_id), ProjectId(project_id))
+                ConversationCatalogueQuery(
+                    page, RESUME_PAGE_SIZE, ProfileId(profile_id), ProjectId(project_id)
+                )
             )
         except ValueError:
             return self._message("That conversation list is no longer open.")

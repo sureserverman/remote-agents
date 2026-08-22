@@ -90,7 +90,6 @@ __all__ = [
 ]
 
 
-_RESUME_PAGE_SIZE = 10
 #: How long a failure toast stays up, against Textual's `NOTIFICATION_TIMEOUT` of 5. Long
 #: enough to read the remedy at an unhurried pace rather than a skim, which is what the
 #: default gave it — a gate evaluator measured the message at 55 words.

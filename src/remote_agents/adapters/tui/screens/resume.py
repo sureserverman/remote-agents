@@ -35,6 +35,7 @@ from remote_agents.adapters.tui.model import (
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable_profiles
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -43,7 +44,6 @@ from remote_agents.domain.conversations import (
 from remote_agents.domain.models import ProfileId, ProjectId
 
 _LOG = logging.getLogger(__name__)
-_RESUME_PAGE_SIZE = 10
 
 
 class ResumeProjectsScreen(ChoiceScreen):
@@ -131,11 +131,7 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
             screen.announce(f"Resume is unavailable: {error}")
             screen.show_choices(((_BACK, "Back"),))
             return
-        capable = tuple(
-            capability
-            for capability in capabilities
-            if capability.catalogue_available and capability.selected_resume_available
-        )
+        capable = resume_capable_profiles(capabilities)
         # Inside the guard, not after it. `push_screen` yields while the new screen
         # mounts, so clearing first leaves a window in which a second of this app's
         # bindings pops the screen being mounted and the fetched capabilities are
@@ -210,11 +206,7 @@ class ResumeProfilesScreen(ChoiceScreen):
             self.announce(f"Resume is unavailable: {error}")
             self.show_choices(((_BACK, "Back"),))
             return
-        self.capable = tuple(
-            capability
-            for capability in capabilities
-            if capability.catalogue_available and capability.selected_resume_available
-        )
+        self.capable = resume_capable_profiles(capabilities)
         await self.populate()
 
     async def populate(self) -> None:
@@ -443,7 +435,7 @@ async def fetch_page(
                 profile_id=ProfileId(profile),
                 project_id=ProjectId(project.opaque_id),
                 page=page,
-                page_size=_RESUME_PAGE_SIZE,
+                page_size=RESUME_PAGE_SIZE,
             )
         )
     except Exception as error:

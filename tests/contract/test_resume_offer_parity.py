@@ -21,12 +21,25 @@ through the port, which is the only way to ask either surface what it does with 
 second state is added later, this file should keep its synthetic one anyway: it asserts the
 *mechanism*, and a real state would be one instance of it.
 
-**Still a real comparison, as of the shared-use-cases sub-plan's Stage 2 (DEC-019).** Its
-three sibling contracts were re-read at Task 2.4 and two of them had their claims narrowed,
-because the functions they compare had become one. Resume has not been merged yet — that is
-Stage 3 Task 3.2 — so both sides below are genuinely separate implementations and this file
-can genuinely fail. Re-read it when the merge lands; it is the file most likely to quietly
-become a tautology next.
+**Re-read at Stage 3 Task 3.2 — the merge the previous version of this paragraph pointed
+forward to as the one most likely to make this file a tautology (DEC-019).** What that task
+consolidated is the resume flow's *page size* and its *capability filter*: how many
+conversations one page holds, and which agents may be offered at all. Neither is what this
+file compares. The comparison below is over which **conversations** each surface renders as
+choosable, and that has gone through the shared `resume_available` since BL-004 — so on the
+predicate itself the two sides already agree by construction, which is why the last two tests
+here state independently what it must return.
+
+**What it still genuinely compares** is everything around the predicate, and Task 3.2 moved
+none of it: the bot filters into buttons and mints a one-shot token per row while the local
+surface filters into option rows, the ordering of the filter against the empty check is each
+surface's own, and so is the sentence shown over an emptied page.
+`test_a_page_filtered_empty_says_so_rather_than_inviting_a_choice` is the case that has
+actually failed on one side and passed on the other.
+
+**And one claim it can newly check**, added by that task: both surfaces ask the catalogue for
+the same page size. Asserted off the query each one *sends* rather than off the constant they
+both import, because importing the same name is not evidence that either passes it.
 """
 
 from __future__ import annotations
@@ -40,8 +53,9 @@ from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import build_private_bot
-from remote_agents.application.conversations import resume_available
+from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.resume_flow import RESUME_PAGE_SIZE
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -87,8 +101,12 @@ class _Conversations:
 
     def __init__(self, summaries: tuple[ConversationSummary, ...]) -> None:
         self.summaries = summaries
+        #: Every query this port was asked, so a test can compare what the two surfaces
+        #: requested and not merely what they did with the answer.
+        self.asked: list[ConversationCatalogueQuery] = []
 
     async def catalogue(self, query) -> ConversationCataloguePage:
+        self.asked.append(query)
         return ConversationCataloguePage(self.summaries, query.page, 1)
 
     async def resolve_for_resume(self, reference: ConversationReference):
@@ -348,3 +366,66 @@ def test_the_policy_is_what_both_surfaces_are_being_compared_against() -> None:
     """
     assert resume_available(_summary(ConversationState.RESUMABLE)) is True
     assert resume_available(_summary(_FutureConversationState.ARCHIVED)) is False
+
+
+async def test_both_surfaces_ask_the_catalogue_for_the_same_page_size() -> None:
+    """A conversation's address is which page it is on, and two surfaces must agree on it.
+
+    The bot passed a bare positional `10` into `ConversationCatalogueQuery` and the local
+    surface passed its own `_RESUME_PAGE_SIZE = 10`, with nothing keeping the two numbers
+    equal. They are one constant now (`application/resume_flow.RESUME_PAGE_SIZE`), but a
+    shared constant is only worth what the call sites do with it — so this reads the
+    `page_size` off the query each surface actually sent, and compares the two before
+    comparing either to the constant.
+
+    Driven through the same journeys as the offer comparison above: the bot's catalogue reply,
+    and the local surface's flow as far as the conversation list, which is where its first
+    page is fetched.
+    """
+    resumable = _summary(ConversationState.RESUMABLE)
+
+    telegram_port = _Conversations((resumable,))
+    boundary = build_private_bot(
+        7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=telegram_port)
+    )
+    await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
+
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+
+    tui_port = _Conversations((resumable,))
+    app = RemoteAgentsTui(
+        TuiContext(
+            backend=backend_for(
+                sessions=object(),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                conversations=tui_port,  # type: ignore[arg-type]
+                catalogue=(_PROJECT,),
+            ),
+            profiles=(ProfileChoice("claude", True),),
+            attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
+        )
+    )
+    async with app.run_test() as pilot:
+        await app.action_resume()
+        await pilot.pause()
+        await app.screen.choose(_PROJECT_ID)
+        await pilot.pause()
+        await app.screen.choose("claude")
+        await pilot.pause()
+
+    assert telegram_port.asked and tui_port.asked, (
+        "a surface never asked the catalogue at all, so this comparison sees nothing: "
+        f"telegram={telegram_port.asked!r} tui={tui_port.asked!r}"
+    )
+    asked = {
+        "telegram": [query.page_size for query in telegram_port.asked],
+        "tui": [query.page_size for query in tui_port.asked],
+    }
+    assert asked["telegram"] == asked["tui"], (
+        f"the surfaces paged the same catalogue differently: {asked}"
+    )
+    assert asked["tui"] == [RESUME_PAGE_SIZE], (
+        f"a surface chose a page size that is not the shared one ({RESUME_PAGE_SIZE}): {asked}"
+    )
