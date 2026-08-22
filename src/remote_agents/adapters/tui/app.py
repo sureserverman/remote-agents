@@ -41,9 +41,6 @@ from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
     AnswerTrustCommand,
-    CleanupCommand,
-    ForceStopCommand,
-    GracefulStopCommand,
     LaunchCommand,
     RemoteControlCommand,
     ResumeCommand,
@@ -53,18 +50,19 @@ from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
 from remote_agents.application.session_actions import (
-    CLEANUP,
     FORCE,
-    GRACEFUL,
-    StopFailure,
-    available_actions,
     explain_state,
-    force_stop_failure,
     remote_control_available,
-    stop_failure,
 )
+from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
-from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 
@@ -904,18 +902,47 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._busy = True
         try:
-            record = await self.current_record(session_value)
+            try:
+                expected = SessionId.parse(session_value)
+            except ValueError:
+                # `current_record` used to answer this case by simply matching nothing, and
+                # the refusal below is the same one it produced. Kept explicit because the
+                # shared use case takes a parsed id, so an unparseable value would otherwise
+                # raise into the handler underneath and report "did not complete" over a
+                # session that was never identified — a different sentence for the same
+                # nothing-happened.
+                await screen.refuse()
+                return
+            # Two calls rather than one, because the spinner belongs around the dispatch and
+            # not around the re-read: `awaiting` covers the rows and rewrites the status line,
+            # and its own docstring scopes it to "the part where something outside this
+            # process has been asked and has not replied". `execute_stop` is exactly these
+            # two, and the bot uses it because it has nothing to do in between.
+            resolution = await resolve_stop(
+                action, expected, read_record=lambda: self.current_record(session_value)
+            )
+            record = resolution.record
             if record is None:
                 await screen.refuse()
                 return
-            if action not in available_actions(record.state, record.orphan_provenance):
+            if resolution.refusal is not None:
+                # Every refusal that reaches here with a record is a policy refusal, and this
+                # sentence is written for that one. `IDENTITY` would be the wrong sentence —
+                # the action did not become unavailable, a different record came back than
+                # the one asked about — and it is unreachable rather than handled: this
+                # surface passes no `profile_id`, and `current_record` only ever returns a
+                # record whose id already equals `session_value`, which `expected` parsed
+                # from. **Loosening `current_record`'s matching, or passing a `profile_id`
+                # here, makes it reachable and this line wrong**, which is the whole reason
+                # the assumption is written down rather than left implicit across two files.
                 await screen.refuse(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
-                failure = await self._issue_stop(action, record)
+                outcome = await dispatch_stop(resolution, sessions=self._services.backend.sessions)
+            failure = outcome.failure
         except Exception as error:
             _LOG.exception("stop failed")
             # Move the cursor off the confirm button before reporting. A failed force
@@ -977,50 +1004,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 screen.announce(f"{failure.summary} {failure.remedy}")
         finally:
             self._busy = False
-
-    async def _issue_stop(self, action: str, record: SessionRecord) -> StopFailure | None:
-        """Send exactly one curated command, and answer why it did not take effect.
-
-        Force is its own named branch and an unrecognized action raises, rather than the kill
-        being the trailing `else`. It was, and nothing could reach it — `stop` only calls this
-        for an action `available_actions` returned. But "anything I do not recognize is a
-        kill" is a fail-dangerous default in the one method that kills, and the cost of it
-        being right is that every future caller stays correct by accident.
-
-        **Graceful and force both answer; `cleanup` returns nothing at all, so there is nothing
-        there to read.** Graceful's `TerminalObservation` has always distinguished a clean exit
-        from a timeout — the service's own docstring says `preserved` "remains the way a caller
-        tells a clean exit from `graceful_timeout`" — and both surfaces threw the value away
-        until BL-008.
-
-        **Force is read through a different function, and that is not an inconsistency.**
-        `stop_failure` keys on `preserved`, which for graceful *is* the success; force removes
-        the pane, so `preserved` is false on every force including the one that worked, and
-        routing force through it would report every completed kill as a failure.
-        `force_stop_failure` reads the detail instead.
-
-        What it reports: `TmuxRuntime.force_stop` returns `detail="ownership_lost"`
-        *without* killing anything when no managed pane matches, and both surfaces used to say
-        "Force stopped X" over it. Under DEC-017 the behaviour is deliberately unchanged —
-        `SessionService.force_stop` still records `VERIFIED_FORCE_STOP`, the record still
-        reaches ENDED, the row still clears — because a row the owner cannot clear is worse
-        than an over-confident message. Only the claim changed. The cost the owner accepted
-        with it: the durable history still cannot tell the two apart, so this sentence on
-        screen is the only place the distinction exists.
-        """
-        launcher = self._services.backend.sessions
-        if action == GRACEFUL:
-            observation = await launcher.graceful_stop(
-                GracefulStopCommand(record.session_id, record.profile_id)
-            )
-            return stop_failure(observation)
-        if action == CLEANUP:
-            await launcher.cleanup(CleanupCommand(record.session_id))
-            return None
-        if action == FORCE:
-            observation = await launcher.force_stop(ForceStopCommand(record.session_id))
-            return force_stop_failure(observation)
-        raise ValueError(f"no command is curated for the action {action!r}")
 
     # Store reads screens share ---------------------------------------------------
 

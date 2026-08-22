@@ -410,3 +410,60 @@ async def test_a_graceful_stop_that_worked_says_nothing_about_a_failure() -> Non
 
     assert reported == []
     assert "did not take effect" not in status
+
+
+async def test_a_session_value_that_is_not_a_session_id_refuses_without_reading_the_store() -> None:
+    """The one branch Task 1.3 added, driven rather than reasoned about.
+
+    Routing this surface onto the shared use case needed a parsed `SessionId`, where the old
+    code passed the raw string to `current_record` and simply matched nothing. So an
+    unparseable value gained a place it could raise, and the guard maps it back to the
+    refusal `current_record` used to produce.
+
+    Unreachable through navigation today — every `session_value` originates as
+    `str(SessionId)` on a rendered row — which is exactly why it is pinned here. "This cannot
+    currently happen" is the kind of claim a later change invalidates quietly, and this is
+    the path that destroys sessions. Asked for by the Tier-1 review of Task 1.3, as its one
+    Important finding.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.stop("graceful", "not-a-session-id", app.screen)
+        await pilot.pause()
+        said = announcements(app)
+
+    assert launcher.issued == [], "nothing may be dispatched for a session never identified"
+    # `issued == []` alone does not discriminate, and that is the point of the second
+    # assertion. Without the guard `SessionId.parse` raises into `stop`'s own `except`, which
+    # also dispatches nothing — and then tells the owner "Stop and close did not complete:
+    # session ID must be a UUID", a fault report over a session that was never identified.
+    # `refuse()` with no message says nothing and redraws, which is what the old
+    # `current_record` miss produced. So what is pinned is the sentence, not the silence.
+    assert not any("did not complete" in one for one in said), said
+
+
+async def test_a_session_value_in_non_canonical_uuid_form_is_refused_too() -> None:
+    """`SessionId.parse` rejects a UUID that is not in canonical form, not only a non-UUID.
+
+    A separate case because it is a different rejection inside `parse` — the value *is* a
+    UUID, and `str(parsed) != value` is what refuses it — and because a guard written against
+    "not a UUID" alone would let this one through to raise.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.stop("graceful", str(record.session_id).upper(), app.screen)
+        await pilot.pause()
+        said = announcements(app)
+
+    assert launcher.issued == []
+    assert not any("did not complete" in one for one in said), said

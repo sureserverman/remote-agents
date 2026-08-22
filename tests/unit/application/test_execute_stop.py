@@ -20,6 +20,7 @@ Merging them is the moment that guarantee could quietly be dropped, so it is pin
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -41,7 +42,10 @@ from remote_agents.application.stops import (
     IDENTITY,
     MISSING,
     UNAVAILABLE,
+    StopOutcome,
+    dispatch_stop,
     execute_stop,
+    resolve_stop,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -355,3 +359,136 @@ async def test_the_unknown_session_detail_reaches_the_owner_s_vocabulary() -> No
 
     assert outcome.failure is not None
     assert outcome.failure.detail == UNKNOWN_SESSION
+
+
+# Task 1.3 — the two phases, because the surfaces differ about what happens between them ----
+#
+# The bot shows a pending notice *before* the whole thing and lands one screen after it, so
+# `execute_stop` is exactly its shape. The local surface covers its rows with a spinner
+# (`ChoiceScreen.awaiting`) around the dispatch **and not around the re-read** — deliberately:
+# that context manager's own docstring says it "covers only the part where something outside
+# this process has been asked and has not replied", and a refusal that flashed it would be a
+# visible change on a surface this refactor may not change.
+#
+# Folding the phases into one call would therefore have forced a choice between a spinner on
+# every refusal and a second store read. Splitting them costs neither, and cannot drift,
+# because `execute_stop` *is* the composition — asserted below rather than asserted about.
+
+
+async def test_resolve_refuses_without_reaching_the_use_case() -> None:
+    reader = _Reader(a_record(SessionState.ENDED))
+
+    resolution = await resolve_stop("graceful", SESSION, read_record=reader)
+
+    assert resolution.refusal == UNAVAILABLE
+    assert resolution.record is not None
+    assert reader.reads == 1
+
+
+async def test_resolve_authorises_a_permitted_action_and_carries_the_re_read_record() -> None:
+    reader = _Reader(a_record())
+
+    resolution = await resolve_stop("graceful", SESSION, read_record=reader)
+
+    assert resolution.refusal is None
+    assert resolution.record is not None
+    assert resolution.action == "graceful"
+
+
+async def test_dispatch_sends_the_command_the_resolution_authorised() -> None:
+    resolution = await resolve_stop("graceful", SESSION, read_record=_Reader(a_record()))
+    use_case = _UseCase()
+
+    outcome = await dispatch_stop(resolution, sessions=use_case)
+
+    assert outcome.dispatched is True
+    assert use_case.calls == [("graceful", GracefulStopCommand(SESSION, CLAUDE))]
+
+
+async def test_dispatch_refuses_to_run_a_resolution_that_was_refused() -> None:
+    """Fail closed. A caller that ignores the refusal and dispatches anyway is the whole
+    hazard of splitting the phases, so the second phase re-checks rather than trusting."""
+    resolution = await resolve_stop("graceful", SESSION, read_record=_Reader(None))
+    use_case = _UseCase()
+
+    with pytest.raises(ValueError, match="refused"):
+        await dispatch_stop(resolution, sessions=use_case)
+
+    assert use_case.calls == []
+
+
+@pytest.mark.parametrize(
+    "reader_records, action",
+    [
+        ((a_record(),), "graceful"),
+        ((a_record(SessionState.PRESERVED),), "cleanup"),
+        ((a_record(),), "force"),
+        ((a_record(SessionState.ENDED),), "graceful"),
+        ((None,), "graceful"),
+    ],
+)
+async def test_execute_is_exactly_resolve_then_dispatch(reader_records, action) -> None:
+    """The seam cannot drift, because the one-call form is built from the two-call form.
+
+    Asserted over every outcome shape — dispatched, policy-refused, and record-missing — so
+    a future change that special-cases one of them inside `execute_stop` fails here.
+    """
+    one_call = await execute_stop(
+        action, SESSION, sessions=_UseCase(), read_record=_Reader(*reader_records)
+    )
+
+    two_calls_use_case = _UseCase()
+    resolution = await resolve_stop(action, SESSION, read_record=_Reader(*reader_records))
+    two_calls = (
+        await dispatch_stop(resolution, sessions=two_calls_use_case)
+        if resolution.refusal is None
+        else StopOutcome(False, resolution.record, resolution.refusal)
+    )
+
+    assert (one_call.dispatched, one_call.refusal) == (two_calls.dispatched, two_calls.refusal)
+    assert (one_call.record is None) == (two_calls.record is None)
+
+
+def test_a_stop_outcome_refuses_to_be_a_bool() -> None:
+    """Carried over from the retired `StopResult`, and pinned rather than assumed.
+
+    A dataclass instance is unconditionally truthy, so `assert await execute_stop(...)` would
+    pass over every refusal. That is not hypothetical: the same slip survived a commit on the
+    type this one replaces, and Task 1.2 rewrote thirteen call sites by hand.
+    """
+    with pytest.raises(TypeError, match="no truth value"):
+        bool(StopOutcome(False))
+
+
+def test_no_adapter_builds_a_stop_command_of_its_own() -> None:
+    """The three typed commands are constructed in `application/` and nowhere else.
+
+    This is the Stage 1 gate's own sweep, written as a test so the guarantee outlives the
+    gate that checked it once. A stop command built inside an adapter is a second dispatch by
+    definition — it is the thing the merged use case exists to be the only one of — and a
+    grep of this exact shape would have found the two copies this sub-plan retired on any day
+    of the year before it.
+
+    Deferred from Task 1.2 rather than narrowed to the Telegram tree: it went red there on
+    `adapters/tui/app.py`, which was Task 1.3's half, and a test that changes meaning between
+    two commits is worse than one that arrives a commit later.
+    """
+    adapters = pathlib.Path(__file__).resolve().parents[3] / "src" / "remote_agents" / "adapters"
+    assert adapters.is_dir(), "the sweep must fail loudly rather than pass over nothing"
+
+    offenders = {
+        path.relative_to(adapters).as_posix(): sorted(found)
+        for path, found in (
+            (
+                path,
+                {
+                    name
+                    for name in ("GracefulStopCommand(", "CleanupCommand(", "ForceStopCommand(")
+                    if name in path.read_text(encoding="utf-8")
+                },
+            )
+            for path in sorted(adapters.rglob("*.py"))
+        )
+        if found
+    }
+    assert offenders == {}
