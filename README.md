@@ -17,6 +17,10 @@ uv sync --locked
 uv run --locked pytest -q
 ```
 
+See [the architecture document](docs/architecture.md) for how the code behind both surfaces is
+arranged: the layers, the dependency rule `tests/architecture/check_imports.py` enforces, and the
+process model the terminal and the service share.
+
 ## Production operation
 
 Keep both runtime files outside the repository and owner-readable only:
