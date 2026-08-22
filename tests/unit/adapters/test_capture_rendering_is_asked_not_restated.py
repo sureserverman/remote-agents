@@ -16,9 +16,14 @@ and it must test the bytes for NUL.
 **What the sweep deliberately allows.** The TUI uses `\\x00` inside *string* sentinels
 (`NEVER_EMPTY`, the `\\x00back` option keys), which is an unrelated use of the same escape and
 predates all of this — so the sweep looks for a `bytes` constant containing NUL, not for the
-escape in source text. `adapters/tmux/capture.py` is outside both frontend trees and stays
-there: capturing a pane is that adapter's job, and widening this guard to reach it would make
-it mean something else.
+escape in source text. The sweep is also scoped to the two frontend trees, and deliberately:
+capturing a pane is the tmux adapter's job, and widening this guard to reach it would make it
+mean something else.
+
+*(This paragraph named `adapters/tmux/capture.py` as the thing outside the sweep that "stays
+there". It does not stay: `sanitize_capture` was a pass-through with no caller in `src/`, and
+the file was deleted closing BL-007. The scope statement survives the file it used to cite,
+so the citation is dropped rather than the rule.)*
 """
 
 from __future__ import annotations

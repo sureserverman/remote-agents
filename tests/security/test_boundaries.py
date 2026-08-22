@@ -19,8 +19,8 @@ from remote_agents.adapters.telegram.authorization import (
 )
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
-from remote_agents.adapters.tmux.capture import sanitize_capture
 from remote_agents.adapters.tmux.codec import exact_session_target
+from remote_agents.application.captures import render_capture
 from remote_agents.application.stops import execute_stop
 from remote_agents.config import ConfigError
 from remote_agents.domain.models import (
@@ -60,7 +60,25 @@ def test_symlinked_telegram_environment_file_is_rejected(tmp_path) -> None:
 
 
 def test_pane_capture_removes_control_sequences_before_returning_it() -> None:
-    assert sanitize_capture(b"\x1b[31mred\x1b[0m\x00", max_lines=2, max_bytes=100) == "red"
+    """Asserted against the path a frontend's bytes actually take (BL-007).
+
+    This asserted the same property against `adapters/tmux/capture.sanitize_capture`, which
+    had **no caller in `src/`** — a security test guarding a boundary the product never
+    crossed, which is the DEC-019 shape in the file where it is least welcome. The function is
+    deleted; `application/captures.render_capture` is where a capture is bounded and sanitized
+    for both surfaces.
+
+    The properties are not identical, and the difference is why this is two assertions rather
+    than a repointed one. The old function passed NUL to the sanitizer, which stripped it and
+    returned the text. The production path **refuses** a capture containing NUL outright and
+    renders nothing — strictly stronger, and the assertion below would have quietly become a
+    weaker claim had the input simply been carried over.
+    """
+    rendered = render_capture(b"\x1b[31mred\x1b[0m", max_lines=2, max_bytes=100)
+    assert rendered.text == "red", "an ANSI escape reached a surface"
+
+    binary = render_capture(b"\x1b[31mred\x1b[0m\x00", max_lines=2, max_bytes=100)
+    assert binary.text is None, "a capture holding NUL was rendered instead of refused"
 
 
 async def test_force_stop_rechecks_the_current_record_before_dispatch() -> None:

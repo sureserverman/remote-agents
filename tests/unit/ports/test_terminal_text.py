@@ -65,6 +65,20 @@ def test_the_line_bound_is_still_enforced() -> None:
     assert len(result.splitlines()) == 10
 
 
+def test_undecodable_bytes_become_the_replacement_character_rather_than_raising() -> None:
+    """Rehomed from `tests/unit/adapters/tmux/test_capture.py`, deleted with `sanitize_capture`.
+
+    It was the **only** test in the suite covering this, and the decode is this module's, not
+    the tmux adapter's — a pane holding a stray `\xff` must come back as bounded text rather
+    than raising `UnicodeDecodeError` at whichever surface asked for it. Nothing else asserts
+    it: `render_capture` refuses NUL before decoding, but invalid UTF-8 is not NUL and reaches
+    the sanitizer intact.
+    """
+    result = sanitize_terminal_text(b"ok\xff\n" + b"x" * 100, max_lines=2, max_bytes=8)
+
+    assert result == "ok\ufffd\nxxxx"
+
+
 def test_the_byte_bound_slices_before_decoding() -> None:
     result = sanitize_terminal_text(b"x" * 500, max_lines=10, max_bytes=100)
 

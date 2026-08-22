@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from uuid import uuid4
 
-from remote_agents.adapters.tmux.capture import sanitize_capture
+from remote_agents.application.captures import render_capture
 
 
 def test_capture_from_a_disposable_tmux_socket_is_cleaned(tmp_path: Path) -> None:
@@ -34,6 +34,6 @@ def test_capture_from_a_disposable_tmux_socket_is_cleaned(tmp_path: Path) -> Non
             capture_output=True,
         ).stdout
 
-        assert sanitize_capture(output, max_lines=10, max_bytes=100) == "red"
+        assert render_capture(output, max_lines=10, max_bytes=100).text == "red"
     finally:
         subprocess.run(["tmux", "-L", socket, "kill-session", "-t", f"={session}:"], check=False)
