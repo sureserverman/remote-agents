@@ -272,7 +272,13 @@ async def test_boundary_refresh_is_inert_without_a_catalogue_source() -> None:
 
 
 class _UsageLauncher(SessionUseCaseDouble):
-    """A launcher that reports usage and nothing else — the ranking's only dependency."""
+    """Reports usage, which is the ranking's only dependency.
+
+    It answers the render-time reads too, inherited from `SessionUseCaseDouble` — before
+    Stage 3 a missing method was read as a missing capability, and this double relied on
+    that. It models nothing about panes; the base's answers are the same ones the removed
+    probes produced.
+    """
 
     def __init__(self, usage) -> None:
         self.usage = usage
@@ -454,10 +460,18 @@ async def test_paging_a_picker_does_not_re_read_the_catalogue(
     assert source.reads == 1
 
 
-async def test_an_unranked_catalogue_survives_a_launcher_that_cannot_report_usage(
+async def test_an_unranked_catalogue_survives_a_host_with_no_session_use_case(
     dev_root: Path, registry_path: Path
 ) -> None:
-    """Not a degraded mode: it is the composition every TUI-less test uses."""
+    """Not a degraded mode: it is the composition every TUI-less test uses.
+
+    Renamed at the Stage 3 gate. It used to say "a launcher that cannot report usage",
+    which described a case that no longer exists: the boundary asked by name and read a
+    missing `project_usage` as no usage, so a partial double exercised this path. Nothing
+    asks by name now — a use case that is present and cannot report usage raises — so what
+    is actually covered here, and all this ever constructed, is a host that wired no
+    session use case at all.
+    """
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     unranked = provider.refresh().catalogue
     boundary = build_private_bot(

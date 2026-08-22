@@ -1346,8 +1346,11 @@ class PrivateBotBoundary:
                 "Copy Attach is unavailable: this session has no pane on this host any more.",
                 back=back,
             )
-        sessions = self.backend.sessions
-        command = await sessions.copy_attach(record.session_id) if sessions is not None else None
+        # No None check: `_can_copy_attach` above returns False when there is no session use
+        # case, so reaching here establishes one. The check that used to stand here was the
+        # old `getattr` probe's None arm, kept by reflex when the probe went; it read as
+        # though this could still be an unwired host, which after Stage 3 it cannot be.
+        command = await self.backend.sessions.copy_attach(record.session_id)
         if command is None:
             return self._message(
                 "Copy Attach is unavailable: this session has no pane on this host any more.",

@@ -32,10 +32,8 @@ from remote_agents.adapters.telegram.service import build_private_bot
 OWNER = 7
 CHAT = 11
 
-_TELEGRAM = (
-    pathlib.Path(__file__).resolve().parents[4] / "src" / "remote_agents" / "adapters" / "telegram"
-)
-_SERVICE = _TELEGRAM / "service.py"
+_ADAPTERS = pathlib.Path(__file__).resolve().parents[4] / "src" / "remote_agents" / "adapters"
+_SERVICE = _ADAPTERS / "telegram" / "service.py"
 
 
 class _Launcher:
@@ -60,11 +58,16 @@ def _boundary_class() -> ast.ClassDef:
 
 def test_the_boundary_declares_no_untyped_backend_field() -> None:
     """Parsed, not grepped: an annotation is what this is about, and a comment can say
-    `object | None` without declaring anything.
+    that spelling without declaring anything.
 
-    Any field of this class annotated `object | None` is a seam of the kind this stage
-    exists to close — a slot the composition root fills with something nobody named, which
-    every reader then has to reach into by guesswork.
+    Scoped to this class on purpose, and the scope is worth stating because the seam did
+    not vanish — it moved. `Backend.sessions` and `Backend.projects` are still annotated
+    `object | None`, deliberately and for one release: naming `SessionService` there would
+    pull the whole port graph into every module that reads a `Backend`. What changed is
+    that a frontend now receives *one named field of a declared type* instead of four
+    anonymous slots it reached into by guesswork, and that is the property this checks.
+    Sub-plan 4 tightens the two that remain; until it does, this test would be lying if it
+    claimed the annotation was gone from the codebase.
     """
     untyped = [
         node.target.id
@@ -78,16 +81,22 @@ def test_the_boundary_declares_no_untyped_backend_field() -> None:
 
 
 def test_no_use_case_is_reached_by_name() -> None:
-    """The whole adapter tree, not just the five sites the plan listed.
+    """Every adapter, recursively — because the sixth probe was not in this directory.
 
-    A probe is a probe wherever it is written, and the next one will not be added at a line
-    number this plan happened to name. `notifications.py` and `live_view.py` hold the same
-    kind of collaborator and are swept here for that reason.
+    This swept `adapters/telegram/*.py` non-recursively and matched only `self.<name>`,
+    which missed two things at once. The TUI's probe lived in
+    `adapters/tui/screens/sessions.py` — a subdirectory of a sibling package — and the TUI
+    spells the field `self._services`, so neither the glob nor the pattern could have found
+    it. It was removed by the same stage, and this test could not have told anyone.
+
+    So: `rglob` over the whole adapter tree, and an optional leading underscore. A probe is
+    a probe wherever it is written, and the next one will not appear at a path this plan
+    happened to name.
     """
-    probe = re.compile(r"getattr\(\s*self\.(launcher|backend|creator|services)\s*,")
+    probe = re.compile(r"getattr\(\s*self\._?(launcher|backend|creator|services)\s*,")
     offenders = [
-        f"{path.name}:{index}: {line.strip()}"
-        for path in sorted(_TELEGRAM.glob("*.py"))
+        f"{path.relative_to(_ADAPTERS)}:{index}: {line.strip()}"
+        for path in sorted(_ADAPTERS.rglob("*.py"))
         for index, line in enumerate(path.read_text().splitlines(), start=1)
         if probe.search(line)
     ]

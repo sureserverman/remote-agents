@@ -73,6 +73,33 @@ def test_local_context_composes_the_same_service_the_bot_composes() -> None:
         "hold one the other never sees"
     )
 
+    # The other half, and it is not redundant. "Composed once" only means both surfaces
+    # share it if both surfaces are actually *handed* it — the version of this test that
+    # counted `conversations=backend.conversations` twice was checking exactly that, in a
+    # spelling that broke when the boundary started taking the whole backend. Asserted here
+    # as the fact rather than the spelling: each composition calls `compose_backend` once
+    # and passes the result to its frontend.
+    for name, frontend in (
+        ("_private_boundary", "build_private_bot"),
+        ("local_context", "TuiContext"),
+    ):
+        function = next(
+            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        assert len(calls(function, "compose_backend")) == 1, (
+            f"{name} does not compose exactly one backend"
+        )
+        handed = [
+            keyword
+            for node in calls(function, frontend)
+            for keyword in node.keywords
+            if keyword.arg == "backend"
+        ]
+        assert len(handed) == 1, (
+            f"{name} composes a backend but does not hand it to {frontend}, so its surface "
+            "is driving something the other surface never sees"
+        )
+
 
 def test_local_context_needs_no_telegram_secrets() -> None:
     """The terminal is documented to run on a host with no Telegram credentials."""

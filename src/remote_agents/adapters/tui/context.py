@@ -74,6 +74,32 @@ class TuiContext:
     # receives an empty one.
     console_recovery: RecoveryReport | None = None
 
+    def __post_init__(self) -> None:
+        """Refuse a backend this surface cannot actually drive.
+
+        `launcher: SessionService` and `creator: ProjectCreationService` were **required**
+        fields here before Stage 3. Folding them into `Backend`, where both are optional so
+        the bot can represent a host that wired neither, silently made them optional here
+        too — and this surface has no `is None` guard on either. `refresh_readiness` on the
+        ordinary sessions reload, `available_areas` in the project screen, and seven other
+        call sites dereference them straight. A composition that forgot one would therefore
+        start and die inside the dashboard's mount worker: the same silent-absence failure
+        the refactor set out to end, moved from a `getattr` to a dataclass default.
+
+        So the guarantee is restored rather than described. It is the contract this class
+        already had; the bot keeps the optional one because it genuinely degrades, answering
+        "that is unavailable" at thirteen guarded entry points.
+        """
+        # Spelled out rather than looped over a tuple of field names. The loop wanted an
+        # attribute lookup by name, which is not a capability probe here — the names are
+        # literals two lines up — but it is indistinguishable from one to the sweep that
+        # keeps probes out of the adapters, and it tripped it. A rule worth enforcing is
+        # worth not arguing with over a saved line.
+        if self.backend.sessions is None:
+            raise ValueError("the local surface requires a backend with `sessions`")
+        if self.backend.projects is None:
+            raise ValueError("the local surface requires a backend with `projects`")
+
     @property
     def max_label_length(self) -> int:
         """The host's configured bound, which now has exactly one home.

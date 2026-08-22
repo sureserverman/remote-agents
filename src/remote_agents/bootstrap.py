@@ -1143,8 +1143,6 @@ def local_context(config, connection, paths: ProductionPaths):
         # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
         # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-        # Redactions default to the empty set the bot also uses -- no configuration key
-        # sources them today. Not a capability, a parameter of `backend.capture`.
         open_in_console=open_in_console,
         console_sync=console_sync,
         console_flash=console_flash,

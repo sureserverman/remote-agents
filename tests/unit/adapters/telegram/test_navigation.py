@@ -111,33 +111,28 @@ def _resolved() -> ResolvedConversation:
 
 
 def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
-    """Built through `backend_for`, which is the shape Task 3.2 hands the boundary whole.
+    """The wired bot these thirty-two tests drive.
 
-    The unpacking below is the one task's worth of scaffolding it looks like: the boundary
-    still declares the use cases as separate fields, so the backend is assembled and then
-    taken apart again. What that buys now is that the factory is exercised by a real bot
-    test — thirty-two of them, through this helper — with the suite's own partial doubles,
-    before seventy-nine construction sites are rewritten to depend on it.
+    One backend, handed over whole. It was briefly two — a `backend_for(...)` assembled and
+    then taken apart into the boundary's separate fields — which was Task 3.1's scaffolding
+    while the boundary still declared them individually. Task 3.2 removed that need, and
+    leaving the copy in would have made this helper quietly lossy: a `capture=` or
+    `profiles=` added to the factory call would never have reached the bot, because only
+    four field names were being copied across.
 
-    `profiles` is deliberately *not* routed through the backend. `Backend.profiles` is the
-    domain `ProfileCompatibility`; the bot renders the wizard's `ProfileAvailability`, and
-    the two narrow differently. Handing the domain tuple straight to the boundary is the
-    plausible-looking line that once took the local surface down on a timed-out probe.
+    `profiles` is deliberately not routed through the backend. `Backend.profiles` is the
+    domain `ProfileCompatibility`; this surface renders `ProfileAvailability`, and handing
+    the domain tuple straight over is the line that once took the local surface down on a
+    version probe that merely timed out.
     """
-    backend = backend_for(
-        sessions=_Launcher(_record()),
-        projects=_Creator(),
-        conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
-        catalogue=(PROJECT,),
-    )
     return build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
-            catalogue=backend.catalogue,
-            sessions=backend.sessions,
-            conversations=backend.conversations,
-            projects=backend.projects,
+            sessions=_Launcher(_record()),
+            projects=_Creator(),
+            conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
+            catalogue=(PROJECT,),
         ),
         profiles=(ProfileAvailability("claude", True, None),),
     )

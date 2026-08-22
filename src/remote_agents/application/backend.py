@@ -60,12 +60,19 @@ class Backend:
     Task 3.1's `backend_for` factory exists to avoid. Sub-plan 4 tightens it once the
     frontends no longer construct partial backends.
 
-    **Optional, like every other field, and the reason is the frontends' existing
-    contract.** A boundary without a session use case answers "that is unavailable" rather
-    than failing to start, and it has always done so; the same is true of the local
-    surface. This type records what a process wired, so it has to be able to record a
-    process that wired nothing — otherwise typing the seam would change behaviour on the
-    hosts that rely on the absence, which is the one thing this refactor may not do.
+    **Optional because the bot's existing contract needs it to be, and only the bot's.**
+    `PrivateBotBoundary` answers "that is unavailable" rather than failing to start, at
+    thirteen guarded entry points, and it has always done so. This type records what a
+    process wired, so it has to be able to record one that wired nothing — otherwise typing
+    the seam would change behaviour on the hosts relying on that absence, which is the one
+    thing this refactor may not do.
+
+    **The local surface is the other case, and it is enforced rather than assumed.**
+    `TuiContext` declared `launcher: SessionService` as a required field and has no `is
+    None` guard anywhere; making it optional here would have made a forgotten wiring die in
+    the dashboard's mount worker instead of at construction. `TuiContext.__post_init__`
+    therefore refuses a backend missing `sessions` or `projects`. Two frontends, two
+    contracts, both now stated somewhere a reader can find them.
 
     That optionality is *not* how the composition root is held to wiring it. Nothing
     reaches for a capability by name any more, so a forgotten field is a named `None` on a
@@ -99,13 +106,25 @@ class Backend:
     shows it.
 
     `ProfileCompatibility` carries `available`, `status`, `version` and `reason` separately.
-    Both frontends narrow it, and they narrow it differently: the Telegram wizard's
-    `ProfileAvailability` requires a curated id, while the surface's `ProfileChoice` refuses
-    any reason alongside `available=True`. That second rule is why a version probe which
-    merely timed out once took the whole local surface down — `bootstrap` still carries the
-    note. Keeping the domain type here means the backend states what was observed and each
-    surface decides what to say about it; unifying the two narrowings is sub-plan 4's job,
-    and it needs this distinction intact to do it.
+    Each frontend narrows it differently: the Telegram wizard's `ProfileAvailability`
+    requires a curated id, while the surface's `ProfileChoice` refuses any reason alongside
+    `available=True`. That second rule is why a version probe which merely timed out once
+    took the whole local surface down — `bootstrap` still carries the note.
+
+    **This field is written and not yet read, and that is the one exception to the promise
+    the rest of this type makes.** Everywhere else, a capability added here reaches both
+    surfaces or neither. Profiles do not: `compose_backend` records `runtime.compatibility`
+    on this field, and then the bot is handed `runtime.profiles` separately
+    (`bootstrap._private_boundary`) and the surface narrows `runtime.profiles` again into
+    `ProfileChoice` (`bootstrap.local_context`). So profiles are still composed twice and
+    can still diverge.
+
+    It is left that way deliberately. Routing both narrowings through this field means
+    designing the unified type that carries both semantics — a curated-id check plus a
+    tri-state reason separating "blocked" from "probe did not answer" — which is sub-plan
+    4's stage and its own gate, precisely because merging them naively is what took the
+    local surface down before. The field is the seam that work lands on; until then, do not
+    read it and conclude the two surfaces agree.
     """
 
     capture: Callable[[SessionId], Awaitable[str]] | None = None
