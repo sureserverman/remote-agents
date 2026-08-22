@@ -24,12 +24,18 @@ into a region nobody reads would still satisfy every object-level assertion, and
 would still catch it. That is the claim; the shared dispatch narrowed it rather than voiding
 it.
 
-So there are three claims here and they fail separately:
+So there are three claims about a **graceful** stop here, and they fail separately:
 
 * each surface **names the cause** — the fix on that surface;
 * the two surfaces **agree** — DEC-007, and the thing a single shared vocabulary buys;
 * the two causes **do not read alike** on either surface — the half BL-008 would otherwise
   close without answering, since one message for both causes satisfies the first two claims.
+
+**And a fourth, about force.** The force-stop tests below are not instances of the three:
+`test_a_force_that_killed_the_pane_still_reads_as_a_stop_that_worked` asserts the opposite
+direction — that a force which *did* work is never reported as a failure — which is the trap
+DEC-017 sets, since `preserved` is false on every force including the successful one. Counted
+separately because "three claims" read as the file's whole inventory and was not.
 
 The detail values are spelled as literals rather than imported as constants, deliberately.
 They are the strings `adapters/tmux/runtime.py` puts on the wire, and a contract test that

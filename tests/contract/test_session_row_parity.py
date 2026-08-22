@@ -20,8 +20,12 @@ test_no_adapter_redefines_the_row_or_the_area_predicate`, not by anything here.
 
 What still has teeth in this file is everything about `state_word`: that the three ORPHANED
 cases stay three distinct words, and that every other state reads as its own value. Those
-assert the policy against literals rather than against a second copy of itself, so they fail
-when the policy changes -- which is the whole of what this file now claims.
+assert the policy against something that is not a second copy of itself, so they fail when
+the policy changes -- which is the whole of what this file now claims. Two compare against
+literals (`_ORPHAN_CASES`); the third compares `state_word(state, None)` against
+`state.value`, which is the enum rather than a literal. It still has teeth -- any change to
+the word mapping breaks it -- but "against literals" named the mechanism more strongly than
+it is, and the distinction is the kind this file exists to keep straight.
 
 Rewritten at Task 2.4 of the shared-use-cases sub-plan, under DEC-019: the merge is
 permitted, and leaving a docstring claiming a detection the file can no longer perform is the

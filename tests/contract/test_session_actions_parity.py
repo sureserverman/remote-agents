@@ -17,6 +17,14 @@ the assertion. That is a deliberate limit and not an oversight; see DEC-019, whi
 an allow-list of recognized rows on the grounds that it must be kept current and fails
 noisily when it is not.
 
+**This file carries a second contract the paragraphs above do not mention.**
+`test_both_surfaces_offer_the_same_remote_control_directions` compares the Remote Control
+direction rows across both surfaces, against `remote_control_directions`, and it fails
+separately from everything described so far. Named here because a reader taking this
+docstring as the file's inventory would not know that check lives in it — the understatement
+predates the shared-use-cases sub-plan and survived its Task 2.4 re-read, and was found by
+the Stage 2 gate's evaluator.
+
 What this test does NOT check: whether the policy itself is right. Both sides of the
 assertion derive from `available_actions`, so changing it moves them together and this file
 stays green — verified by mutation, not assumed. The policy's own correctness is pinned by

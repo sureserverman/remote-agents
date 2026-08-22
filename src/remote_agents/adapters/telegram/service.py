@@ -1275,6 +1275,27 @@ class PrivateBotBoundary:
                 "That session is no longer available.",
                 back=self._sessions_back(),
             )
+        # **These read-only rows are the surfaces' one deliberate divergence, and the four
+        # axes are written down here so nobody has to re-derive them from a diff again.**
+        # Against `adapters/tui/screens/sessions.py: detail_entries`:
+        #
+        #   1. order — here Inspect, Rename, [Copy attach]; there [Copy attach], [Inspect],
+        #      Rename;
+        #   2. Inspect is unconditional here and gated on `backend.capture is not None`
+        #      there;
+        #   3. Copy attach is gated on `_can_copy_attach` here and unconditional there,
+        #      which is the row's *presence* and is a separate question from DEC-021's
+        #      ownership predicate that Task 3.4 consolidates;
+        #   4. the label — "Inspect" here, "Inspect output" there.
+        #
+        # Everything *below* these rows is already shared: the trust row reads
+        # `trust_available`, the remote-control rows `remote_control_directions`, the stops
+        # `available_actions` + `ACTION_LABELS`, and the parity contract pins the last two on
+        # both surfaces. So the detail action set is not a duplicate awaiting a merge — it is
+        # three shared groups and one divergent head, and unifying any row of the table above
+        # is a functionality change. Owner's decision, 2026-08-22, recorded in the
+        # shared-use-cases sub-plan under Task 2.3; a later stage that wants one assembler has
+        # to parameterize exactly these four axes.
         buttons = [
             (Button("Inspect", self._callback("session.inspect", session_value)),),
             # A full-width row of its own, like every other read-only action: renaming changes

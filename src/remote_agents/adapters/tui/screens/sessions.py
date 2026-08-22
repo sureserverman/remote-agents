@@ -519,6 +519,11 @@ class SessionDetailScreen(ChoiceScreen):
         conservative set — a divergence the parity contract cannot see if the other surface
         does the same thing.
         """
+        # The read-only rows below diverge from the bot's on four axes — order, Inspect's
+        # capture gate, Copy attach's ownership gate, and the Inspect label. That is
+        # deliberate and is enumerated in full at `adapters/telegram/service.py:
+        # _detail_reply`, where the sibling set is built. Everything after them is shared
+        # policy, so this is the only part of the screen a merge would have to touch.
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
         if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))

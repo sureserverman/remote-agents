@@ -155,6 +155,41 @@ def test_the_predicate_answers_rather_than_raising() -> None:
 # Neither adapter keeps a copy ---------------------------------------------------------------
 
 
+def test_no_frontend_decides_for_itself_which_sessions_are_listed() -> None:
+    """The ENDED filter's own guard, which the name-based sweep above cannot provide.
+
+    The sweep beside this one forbids *definitions* — `def session_row`, `def
+    selectable_area` — because those twins were named functions. **The ENDED filter never
+    was.** Both surfaces carried it as an inline generator expression (`if record.state is
+    not SessionState.ENDED`), which is the cheapest form to reintroduce and the one form no
+    name-based sweep can see: an adapter could grow the comprehension back tomorrow and every
+    other test in this file would stay green.
+
+    Found by the Stage 2 gate's evaluator, which noticed the guard covered two of the three
+    things the stage merged.
+
+    Scoped to the two frontend trees rather than all of `adapters/`, because
+    `adapters/sqlite/session_store.py` legitimately names `SessionState.ENDED` in a
+    resume-binding query — that is storage, not a list decision, and a sweep that failed on
+    it would be one somebody adds an exemption to and then stops trusting.
+    """
+    adapters = pathlib.Path(__file__).resolve().parents[3] / "src" / "remote_agents" / "adapters"
+    frontends = [adapters / "telegram", adapters / "tui"]
+    for tree in frontends:
+        assert tree.is_dir(), f"{tree} must exist or this sweep passes over nothing"
+
+    offenders = sorted(
+        path.relative_to(adapters).as_posix()
+        for tree in frontends
+        for path in tree.rglob("*.py")
+        if "SessionState.ENDED" in path.read_text("utf-8")
+    )
+    assert offenders == [], (
+        "a frontend named ENDED itself; which sessions are listed is `listed_in_sessions`'s "
+        "decision and DEC-017's argument depends on there being exactly one of it"
+    )
+
+
 def test_no_adapter_redefines_the_row_or_the_area_predicate() -> None:
     """The Stage 2 gate's own sweep, as a test, for the reason Stage 1's sweep became one.
 
