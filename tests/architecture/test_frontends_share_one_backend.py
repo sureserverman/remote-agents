@@ -72,15 +72,36 @@ _STOP_COMMANDS = frozenset({"GracefulStopCommand", "ForceStopCommand", "CleanupC
 _COMMANDS_MODULE = "remote_agents.application.commands"
 
 
-def _adapter_modules() -> list[tuple[str, ast.Module]]:
-    """Every adapter module, parsed, sorted by path so failures name a stable first offender."""
-    return sorted(
+def _adapter_modules(root: Path = _ADAPTERS) -> list[tuple[str, ast.Module]]:
+    """Every adapter module under `root`, parsed, sorted by path.
+
+    **Raises rather than returning nothing**, which is the whole of DEC-010's lesson. That
+    entry records an AST sweep in this repository that "was found to glob a relative path and
+    pass having read nothing": every one of its assertions was of the form *no offender was
+    found*, and over an empty file list every one of those is true. The check reported green,
+    for months, having examined zero bytes.
+
+    A guard that can pass vacuously is worse than no guard, because it also occupies the slot
+    where a real one would go. So the failure mode is made unrepresentable here rather than
+    asserted about elsewhere: the three rules below cannot run over an empty set, because
+    building the set is what fails first.
+
+    `root` is a parameter solely so `test_an_empty_source_root_fails_rather_than_passing` can
+    drive this over a tree it controls. Production callers pass nothing.
+    """
+    modules = sorted(
         (
-            (path.relative_to(_SOURCE).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
-            for path in _ADAPTERS.rglob("*.py")
+            (path.relative_to(root).as_posix(), ast.parse(path.read_text(encoding="utf-8")))
+            for path in root.rglob("*.py")
         ),
         key=lambda pair: pair[0],
     )
+    if not modules:
+        raise AssertionError(
+            f"the adapter sweep parsed no modules under {root} — every rule below would "
+            "have passed by reading nothing at all (DEC-010)"
+        )
+    return modules
 
 
 def _local_names_for(tree: ast.Module, imported: frozenset[str], module: str) -> set[str]:
@@ -193,7 +214,7 @@ def test_no_adapter_constructs_a_stop_command() -> None:
     for module, tree in _adapter_modules():
         bound = _local_names_for(tree, _STOP_COMMANDS, _COMMANDS_MODULE)
         built = bound & _called_names(tree)
-        offenders.extend(f"{module}: builds {name}" for name in sorted(built))
+        offenders.extend(f"adapters/{module}: builds {name}" for name in sorted(built))
 
     assert not offenders, (
         "a stop command is constructed inside an adapter; ending a session is "
@@ -222,7 +243,7 @@ def test_no_adapter_discovers_a_backend_capability_by_probing() -> None:
     for module, tree in _adapter_modules():
         for attribute, line in sorted(_literal_probes(tree)):
             if attribute in capabilities:
-                offenders.append(f"{module}:{line}: probes for {attribute!r}")
+                offenders.append(f"adapters/{module}:{line}: probes for {attribute!r}")
 
     assert not offenders, (
         "a backend capability is discovered by probing rather than read as a declared field. "
@@ -263,10 +284,81 @@ def test_no_adapter_redefines_a_shared_use_case() -> None:
     offenders = []
     for module, tree in _adapter_modules():
         for name in sorted(_defined_names(tree) & shared):
-            offenders.append(f"{module}: defines {name}")
+            offenders.append(f"adapters/{module}: defines {name}")
 
     assert not offenders, (
         "a shared use case is defined again inside an adapter. The decision is shared and the "
         "sentence stays the surface's (DEC-043) — a surface may word the outcome its own way, "
         "but it asks rather than restating the rule:\n  " + "\n  ".join(offenders)
     )
+
+
+# --- The vacuity guard: these rules cannot pass by reading nothing ----------------------
+
+
+def test_the_sweep_reads_every_adapter_module() -> None:
+    """The count, and the packages, so a sweep that half-resolves is caught too.
+
+    A floor rather than an exact number: adapters are added often and pinning 60 would make
+    this file fail for every unrelated new module, which is how a guard gets weakened by
+    whoever is trying to land something else. What is pinned exactly is that **every adapter
+    package is represented** — a root that resolved to one subdirectory would clear a bare
+    count while examining a sixth of the tree.
+    """
+    modules = _adapter_modules()
+    assert len(modules) >= 55, (
+        f"the sweep found {len(modules)} adapter modules, fewer than expected — if adapters "
+        "were genuinely removed, lower this floor deliberately rather than by accident"
+    )
+    packages = {module.split("/")[0] for module, _ in modules if "/" in module}
+    assert packages == {"agents", "projects", "sqlite", "telegram", "tmux", "tui"}, (
+        f"the sweep covered {sorted(packages)}, not every adapter package"
+    )
+
+
+def test_an_empty_source_root_fails_rather_than_passing(tmp_path: Path) -> None:
+    """DEC-010's failure, reproduced against a root that really is empty.
+
+    Not a hypothetical: the entry records this exact shape shipping in this repository and
+    reporting green. The assertion is that `_adapter_modules` *raises* — because the three
+    rules are all "no offender was found", and an empty set satisfies all three.
+    """
+    with pytest.raises(AssertionError, match="parsed no modules"):
+        _adapter_modules(tmp_path)
+
+
+def test_a_root_holding_no_python_fails_too(tmp_path: Path) -> None:
+    """A directory that exists and contains the wrong things is the likelier accident.
+
+    A path typo usually resolves *somewhere*. This is the case where the tree is real, is
+    readable, and simply holds nothing this sweep can parse — which reads identically to
+    success at every call site.
+    """
+    (tmp_path / "adapters").mkdir()
+    (tmp_path / "adapters" / "README.md").write_text("not python", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="parsed no modules"):
+        _adapter_modules(tmp_path / "adapters")
+
+
+def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
+    """The positive half: the rules do fire on a tree they are pointed at.
+
+    The three tests above prove the sweep refuses an empty root. This proves the refusal is
+    not the *only* thing it can do — a guard that raised on every input would satisfy them
+    all and still be useless. One synthetic adapter, one real violation, caught.
+    """
+    (tmp_path / "fake.py").write_text(
+        "from remote_agents.application.commands import ForceStopCommand as Force\n"
+        "def go(sid, pid):\n"
+        "    return Force(sid, pid)\n",
+        encoding="utf-8",
+    )
+
+    modules = _adapter_modules(tmp_path)
+    assert len(modules) == 1
+
+    _, tree = modules[0]
+    bound = _local_names_for(tree, _STOP_COMMANDS, _COMMANDS_MODULE)
+    assert bound == {"Force"}, "the alias was not followed to its binding"
+    assert bound & _called_names(tree) == {"Force"}, "the aliased construction was not seen"
