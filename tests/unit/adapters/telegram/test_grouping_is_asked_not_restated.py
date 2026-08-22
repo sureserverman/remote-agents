@@ -108,3 +108,41 @@ def test_the_delivery_driver_asks_the_policy_module() -> None:
     assert _POLICY in imported, (
         f"the notifier does not ask the policy module; it imports {imported}"
     )
+
+
+# The suppression window --------------------------------------------------------------------
+
+
+def test_the_adapter_never_doubles_anything() -> None:
+    """The taper is DEC-013 clause (5), and it moved. Exponentiation is what it cannot avoid.
+
+    Swept for the operator rather than for `window`'s name (DEC-043), because a re-derivation
+    comes back as `self._rate_limit * 2 ** n` inline, or as a fresh helper, and neither wears
+    the old identifier. DEC-031 is the reason this is worth a guard at all: the failure here was
+    measured at 96 messages over eight hours where the taper intends twelve, and it was
+    invisible in every unit test that checked a single doubling.
+    """
+    offenders = [
+        _where(path, node)
+        for path, node in _nodes()
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+    ]
+
+    assert offenders == [], f"the adapter is computing a backoff itself: {offenders}"
+
+
+def test_the_adapter_never_stamps_a_repeat_count() -> None:
+    """Writing a `Sent` is the counter bookkeeping, and the reset rule rides on it.
+
+    The adapter still *owns* the map -- residence is not policy, the same split DEC-026 makes
+    for the backlog -- so it reads entries freely. What it may not do is decide what goes in
+    one, because that decision is where "a different kind resets the session" lives, and a
+    second copy of it would be a second answer to when the owner stops being told.
+    """
+    offenders = [
+        _where(path, node)
+        for path, node in _nodes()
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Sent"
+    ]
+
+    assert offenders == [], f"the adapter is stamping repeat counts itself: {offenders}"

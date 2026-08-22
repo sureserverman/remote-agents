@@ -24,10 +24,14 @@ import pytest
 
 from remote_agents.application import notification_policy
 from remote_agents.application.notification_policy import (
+    Sent,
     SessionGroup,
+    due,
     for_update,
     grouped_for_delivery,
+    record_sent,
     shown_in_message,
+    window,
 )
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
@@ -247,3 +251,119 @@ def test_a_collapsed_observation_takes_the_place_its_newest_copy_earned() -> Non
         ActivityKind.NEEDS_ANSWER,
         ActivityKind.COMPLETED,
     ]
+
+
+# The suppression window: its taper, and what resets it -------------------------------------
+
+
+def _sent_map() -> dict[tuple[str, ActivityKind], Sent]:
+    """The suppression map, which stays with the surface; only the rules for it moved.
+
+    Handed to every function below rather than owned by one, which is what "the moved policy is
+    pure" means here: there is no policy object holding state between calls, so a case can put
+    the map into any shape it likes and ask one question about it.
+    """
+    return {}
+
+
+def test_the_window_doubles_per_repeat_to_a_cap_of_five_doublings() -> None:
+    """DEC-013 clause (5), walked to its cap: 2 minutes, 4, 8, 16, 32, then 64 for ever.
+
+    Walked rather than sampled. A test that checks one doubling passes against a taper that
+    doubles once and then stops, and against one that never caps and reaches nineteen hours by
+    the tenth repeat -- and DEC-031 records that the failure here is invisible in a unit test
+    and only shows up over hours of real delivery, which is exactly why the whole curve is
+    asserted rather than a point on it.
+    """
+    rate_limit = timedelta(seconds=120)
+
+    curve = [window(repeats, rate_limit=rate_limit) for repeats in range(8)]
+
+    assert curve == [
+        timedelta(minutes=2),
+        timedelta(minutes=4),
+        timedelta(minutes=8),
+        timedelta(minutes=16),
+        timedelta(minutes=32),
+        timedelta(minutes=64),
+        timedelta(minutes=64),
+        timedelta(minutes=64),
+    ], "the taper is 2/4/8/16/32/64 and then flat -- not unbounded, not stalled early"
+
+
+def test_a_repeat_of_the_same_kind_climbs_the_taper() -> None:
+    """The count is what makes each wait longer, so it has to survive being read."""
+    sent = _sent_map()
+    moment = OBSERVED
+
+    for _ in range(3):
+        record_sent(sent, SESSION_A, [ActivityKind.COMPLETED], moment)
+
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 2
+
+
+def test_a_different_kind_resets_that_sessions_repeat_counts() -> None:
+    """DEC-013 clause (5): a repeat count claims nothing has changed, and a new kind is evidence.
+
+    The reset lands on the kinds the session did *not* say this pass. The kinds the message
+    carried are exempt, because recording the second of them would otherwise reset the first,
+    which was stamped a moment earlier in the same send.
+    """
+    sent = _sent_map()
+    for _ in range(4):
+        record_sent(sent, SESSION_A, [ActivityKind.COMPLETED], OBSERVED)
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 3
+
+    record_sent(sent, SESSION_A, [ActivityKind.NEEDS_ANSWER], OBSERVED)
+
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0, (
+        "a different kind is evidence something changed, so the taper starts over"
+    )
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].sent_at == OBSERVED, (
+        "only the counter resets; the stamp stays, so the base window still collapses a burst"
+    )
+
+
+def test_two_kinds_in_one_message_do_not_reset_each_other() -> None:
+    """The exemption, which is the whole reason `record_sent` takes a batch and not a key.
+
+    Applied per-kind to a grouped message the rule turns on itself. DEC-031 measured what that
+    costs: a standing condition backed off to sixty-four minutes is absent from almost every
+    message, so it was almost always the kind being reset -- by its own suppression.
+    """
+    sent = _sent_map()
+    for _ in range(3):
+        record_sent(sent, SESSION_A, [ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER], OBSERVED)
+
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 2
+    assert sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats == 2
+
+
+def test_another_sessions_counts_are_untouched_by_a_reset() -> None:
+    """The reset is scoped to the session that spoke, because a repeat count is about it."""
+    sent = _sent_map()
+    for _ in range(3):
+        record_sent(sent, SESSION_A, [ActivityKind.COMPLETED], OBSERVED)
+        record_sent(sent, SESSION_B, [ActivityKind.COMPLETED], OBSERVED)
+
+    record_sent(sent, SESSION_A, [ActivityKind.NEEDS_ANSWER], OBSERVED)
+
+    assert sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0
+    assert sent[(SESSION_B, ActivityKind.COMPLETED)].repeats == 2, "B said nothing new"
+
+
+def test_news_is_due_when_its_own_window_has_passed_and_not_before() -> None:
+    """`due` reads the window the entry's own count earns, not the base one."""
+    sent = _sent_map()
+    rate_limit = timedelta(seconds=120)
+    activity = _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran it")
+
+    assert due(activity, sent, OBSERVED, rate_limit=rate_limit), "nothing sent yet is always news"
+
+    for _ in range(3):
+        record_sent(sent, SESSION_A, [ActivityKind.COMPLETED], OBSERVED)
+
+    assert not due(activity, sent, OBSERVED + timedelta(minutes=7), rate_limit=rate_limit), (
+        "at two repeats the window is eight minutes, and seven is inside it"
+    )
+    assert due(activity, sent, OBSERVED + timedelta(minutes=8), rate_limit=rate_limit)

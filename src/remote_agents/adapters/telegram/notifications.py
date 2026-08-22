@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -43,14 +42,19 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.application.notification_policy import (
+    MAXIMUM_BACKOFF_DOUBLINGS,
+    Sent,
     SessionGroup,
+    due,
     for_update,
     grouped_for_delivery,
     merged,
+    record_sent,
     shown_in_message,
     told,
     unheard,
     unsaid,
+    window,
 )
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
@@ -278,21 +282,6 @@ Scoped to (session, kind) rather than to the chat: an agent that finishes and th
 answer has said two different things, and collapsing those would lose the one worth acting on.
 """
 
-_MAXIMUM_BACKOFF_DOUBLINGS = 5
-"""How far the repeat window may double: 2 minutes to 64, and no further.
-
-Capped rather than unbounded because an agent that has been waiting eight hours is still
-waiting, and a window that keeps doubling eventually amounts to never telling the owner again.
-"""
-
-
-@dataclass(frozen=True, slots=True)
-class _Sent:
-    """When one (session, kind) last went out, and how many times running."""
-
-    sent_at: datetime
-    repeats: int
-
 
 class StandingNotificationStore:
     """The process-local sibling of
@@ -452,7 +441,7 @@ class ActivityNotifier:
         #: Whether the pass that just ran delivered anything, so `_report_backlog` can tell an
         #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
         self._sent_this_pass = False
-        self._last_sent: dict[tuple[str, ActivityKind], _Sent] = {}
+        self._last_sent: dict[tuple[str, ActivityKind], Sent] = {}
         self._standing = standing if standing is not None else StandingNotificationStore()
         #: Which of the sessions holding a notification have stopped being worth one, or None
         #: in a composition with no lifecycle to ask. See `retire_finished`.
@@ -725,7 +714,7 @@ class ActivityNotifier:
         reason and the filter outlived it.
 
         The second defect is worse and is why this is stated as a rule. A kind held back by
-        its own window was absent from the message, and `_record_sent` read that absence as
+        its own window was absent from the message, and `record_sent` read that absence as
         "this session reported something different, so the held kind is not repeating" -- the
         notifier taking its own suppression decision as evidence against itself. A standing
         condition backed off to sixty-four minutes is absent from sixty-three of every
@@ -733,7 +722,7 @@ class ActivityNotifier:
         backoff never advanced past the first step. Measured on the module's own premises
         (`Stop` fires per turn), an overnight session with a periodic companion produced 75 to
         255 notifications where the taper intends 12. Sending the whole group closes both: what
-        was observed rides along, and what was observed is what `_record_sent` is told about.
+        was observed rides along, and what was observed is what `record_sent` is told about.
 
         **A repeat is written into the message the owner already has; only news they have not
         been alerted to is allowed to arrive (DEC-034).** This is the second correction the
@@ -749,7 +738,7 @@ class ActivityNotifier:
 
         **It closes them and does not restore the taper**, which is worth stating here because
         the numbers above invite the opposite reading. `_forget_expired_limits` prunes an entry
-        at `_window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
+        at `window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
         a kind observed less often than that finds no entry, is re-created at zero, and never
         doubles at all. Measured after this change: a lone `Stop` every four minutes still
         produces 120 messages in eight hours. That defect is older than this module's grouping
@@ -764,7 +753,10 @@ class ActivityNotifier:
         # pass, on the same chat rate limit `_MAXIMUM_SENDS_PER_PASS` exists for, spent to
         # rewrite a sentence with a slightly newer one. The message the owner is looking at
         # already says the session stopped, which is what it is for.
-        if not any(self._due(activity, moment) for activity in group.activities):
+        if not any(
+            due(activity, self._last_sent, moment, rate_limit=self._rate_limit)
+            for activity in group.activities
+        ):
             return False, False, ()
         display = await self._display(group.session_id)
         if display is None:
@@ -818,7 +810,9 @@ class ActivityNotifier:
                     },
                 ):
                     self._remember(group.session_id, standing.message_id, shown, standing.token)
-                    self._record_sent(group.session_id, told(group.activities, shown), moment)
+                    record_sent(
+                        self._last_sent, group.session_id, told(group.activities, shown), moment
+                    )
                     return True, False, unsaid(group.activities, shown)
                 self._standing.forget(self._view.chat_id, group.session_id)
                 return await self._send_afresh(updated, group, display=display, moment=moment)
@@ -831,15 +825,17 @@ class ActivityNotifier:
                 # thrown away after; a standing message goes on displaying every kind it has
                 # ever carried, so reading the screen would report each of them as reported
                 # again on every pass -- the counts would climb without the agent saying
-                # anything, and `_record_sent`'s cross-kind reset could never fire, because no
+                # anything, and `record_sent`'s cross-kind reset could never fire, because no
                 # kind is ever absent from a message that keeps them all.
                 #
-                # This is a narrowing, and `_record_sent`'s docstring warns about one. It is
+                # This is a narrowing, and `record_sent`'s docstring warns about one. It is
                 # not that one: the argument there was narrowed by *suppression*, so the
                 # notifier read its own silence as the session having changed the subject.
                 # This narrows to what the session actually said this pass, which is the
                 # question the taper was always asking.
-                self._record_sent(group.session_id, told(group.activities, shown), moment)
+                record_sent(
+                    self._last_sent, group.session_id, told(group.activities, shown), moment
+                )
                 return True, True, unsaid(group.activities, shown)
             # The replacement could not be given a working button, which is the one outcome
             # worth starting over for: `_replace` has already put the message in the chat, so
@@ -881,7 +877,7 @@ class ActivityNotifier:
         # suppress its next report. What it does cover is a kind that was rendered without
         # being due -- that one has now been said, and is a repeat from here on.
         shown = shown_in_message(outgoing, limit=_MAXIMUM_LINES_PER_MESSAGE)
-        self._record_sent(group.session_id, (a.kind for a in shown), moment)
+        record_sent(self._last_sent, group.session_id, (a.kind for a in shown), moment)
         token = await self._mint(outgoing, message_id, display=display)
         if token is not None:
             # Recorded only once the button exists, because a standing message is one this
@@ -975,69 +971,6 @@ class ActivityNotifier:
             return None
         return token
 
-    def _due(self, activity: AgentActivity, moment: datetime) -> bool:
-        """Whether this one observation is news, given when its kind was last sent."""
-        entry = self._last_sent.get((activity.session_id, activity.kind))
-        return entry is None or moment - entry.sent_at >= self._window(entry.repeats)
-
-    def _window(self, repeats: int) -> timedelta:
-        """How long this news stays old, given how many times it has already been sent.
-
-        A fixed window is the right answer for a burst and the wrong one for a **standing**
-        condition. `Stop` fires per turn, so a busy agent repeats "finished" and one message
-        per two minutes is a fair summary. But `needs_answer` repeats for as long as the owner
-        does not answer -- which, at three in the morning, is all night -- and a fixed window
-        turns that into a message every two minutes until they wake up. The pane-quiet path
-        already has the equivalent rule (`observe_quiet` reports once per spell and re-arms only
-        on a change); the hook-sourced kinds had nothing, because the burst was the only case
-        anyone had in mind.
-
-        So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
-        every 64 minutes for as long as it lasts. The first message arrives as fast as ever --
-        this only ever makes the *second and later* copies rarer -- and the cap keeps the signal
-        alive rather than muting it, because an agent that is still waiting is still news.
-        """
-        return self._rate_limit * (2 ** min(repeats, _MAXIMUM_BACKOFF_DOUBLINGS))
-
-    def _record_sent(
-        self, session_id: str, kinds: Iterable[ActivityKind], moment: datetime
-    ) -> None:
-        """Stamp every kind this message carried, and let the rest of the session start over.
-
-        A repeat count is a claim that *nothing has changed*. The moment a session reports a
-        different kind, something has: an agent that finishes, is asked something, and finishes
-        again is not repeating itself, and backing its second "finished" off to an hour would
-        answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
-        so their base windows still collapse a genuine burst.
-
-        **The kinds this message carried are exempt from that reset, and the exemption is the
-        whole reason this takes a batch rather than a key.** The rule was written when a
-        message carried exactly one kind, and applied per-kind to a grouped one it turns on
-        itself: recording the second kind resets the first, which was recorded a moment earlier
-        in the same send and is not evidence that anything changed.
-
-        **`kinds` is what the message *carried*, which since `_send` stops filtering by window
-        is everything the session was observed saying this pass** -- and that identity is what
-        makes the exemption complete rather than partial. An earlier version passed only the
-        kinds whose own window had elapsed, which left the dominant case open: a standing
-        condition backed off to sixty-four minutes is *absent* from almost every message, so it
-        was almost always the kind being reset, by its own suppression. Measured, that produced
-        75 to 255 notifications overnight where the taper intends 12. A caller that ever
-        narrows this argument again reopens exactly that, and nothing about the resulting
-        messages would look wrong.
-
-        So the reset applies to what the session did not say at all this pass, which is what "a
-        different kind" always meant.
-        """
-        carried = set(kinds)
-        for kind in carried:
-            key = (session_id, kind)
-            prior = self._last_sent.get(key)
-            self._last_sent[key] = _Sent(moment, 0 if prior is None else prior.repeats + 1)
-        for other, sent in self._last_sent.items():
-            if other[0] == session_id and other[1] not in carried and sent.repeats:
-                self._last_sent[other] = _Sent(sent.sent_at, 0)
-
     def _forget_expired_limits(self) -> None:
         """Keep the rate-limit map the size of what it is still suppressing.
 
@@ -1077,11 +1010,12 @@ class ActivityNotifier:
         small entry per (session, kind) -- and that is the whole price.
         """
         moment = self._now()
-        floor = self._window(_MAXIMUM_BACKOFF_DOUBLINGS)
+        floor = window(MAXIMUM_BACKOFF_DOUBLINGS, rate_limit=self._rate_limit)
         expired = [
             key
             for key, sent in self._last_sent.items()
-            if moment - sent.sent_at >= max(self._window(sent.repeats) * _RETENTION_WINDOWS, floor)
+            if moment - sent.sent_at
+            >= max(window(sent.repeats, rate_limit=self._rate_limit) * _RETENTION_WINDOWS, floor)
         ]
         for key in expired:
             del self._last_sent[key]

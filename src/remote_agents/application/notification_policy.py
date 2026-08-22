@@ -18,8 +18,9 @@ opinion about a number the surface owns (DEC-034 accepted cost 4).
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
@@ -223,3 +224,113 @@ def unsaid(
     go loses agent output permanently.
     """
     return tuple(activity for activity in arrived if activity not in shown)
+
+
+# The suppression window --------------------------------------------------------------------
+#
+# The rules move; the map does not. `ActivityNotifier` keeps holding the
+# `dict[(session, kind), Sent]` for the same reason DEC-026 keeps the backlog in the adapter's
+# memory -- residence is not policy -- and hands it to each function below. That is what makes
+# these pure in the sense the sub-plan asked for: no object here survives between calls, and
+# every moment they reason about arrives as an argument.
+
+MAXIMUM_BACKOFF_DOUBLINGS = 5
+"""How far the repeat window may double: 2 minutes to 64, and no further.
+
+Capped rather than unbounded because an agent that has been waiting eight hours is still
+waiting, and a window that keeps doubling eventually amounts to never telling the owner again.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Sent:
+    """When a (session, kind) was last delivered, and how many consecutive times."""
+
+    sent_at: datetime
+    repeats: int
+
+
+def window(repeats: int, *, rate_limit: timedelta) -> timedelta:
+    """How long this news stays old, given how many times it has already been sent.
+
+    A fixed window is the right answer for a burst and the wrong one for a **standing**
+    condition. `Stop` fires per turn, so a busy agent repeats "finished" and one message
+    per two minutes is a fair summary. But `needs_answer` repeats for as long as the owner
+    does not answer -- which, at three in the morning, is all night -- and a fixed window
+    turns that into a message every two minutes until they wake up. The pane-quiet path
+    already has the equivalent rule (`observe_quiet` reports once per spell and re-arms only
+    on a change); the hook-sourced kinds had nothing, because the burst was the only case
+    anyone had in mind.
+
+    So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
+    every 64 minutes for as long as it lasts. The first message arrives as fast as ever --
+    this only ever makes the *second and later* copies rarer -- and the cap keeps the signal
+    alive rather than muting it, because an agent that is still waiting is still news.
+
+    `rate_limit` is the base window, asked for rather than held, on the same argument as the
+    line budget: it is the surface's number, and a second frontend would answer it differently.
+    """
+    return rate_limit * (2 ** min(repeats, MAXIMUM_BACKOFF_DOUBLINGS))
+
+
+def due(
+    activity: AgentActivity,
+    sent: Mapping[tuple[str, ActivityKind], Sent],
+    moment: datetime,
+    *,
+    rate_limit: timedelta,
+) -> bool:
+    """Whether this one observation is news, given when its kind was last sent.
+
+    Measured against the window that entry's *own* repeat count earns, not the base one --
+    which is the whole of what the taper does, and the reason `moment` is a parameter rather
+    than a clock read in here.
+    """
+    entry = sent.get((activity.session_id, activity.kind))
+    return entry is None or moment - entry.sent_at >= window(entry.repeats, rate_limit=rate_limit)
+
+
+def record_sent(
+    sent: MutableMapping[tuple[str, ActivityKind], Sent],
+    session_id: str,
+    kinds: Iterable[ActivityKind],
+    moment: datetime,
+) -> None:
+    """Stamp every kind this message carried, and let the rest of the session start over.
+
+    A repeat count is a claim that *nothing has changed*. The moment a session reports a
+    different kind, something has: an agent that finishes, is asked something, and finishes
+    again is not repeating itself, and backing its second "finished" off to an hour would
+    answer the wrong question. Only the counter resets -- the other kinds keep their stamps,
+    so their base windows still collapse a genuine burst.
+
+    **The kinds this message carried are exempt from that reset, and the exemption is the
+    whole reason this takes a batch rather than a key.** The rule was written when a
+    message carried exactly one kind, and applied per-kind to a grouped one it turns on
+    itself: recording the second kind resets the first, which was recorded a moment earlier
+    in the same send and is not evidence that anything changed.
+
+    **`kinds` is what the message *carried*, which since `_send` stops filtering by window
+    is everything the session was observed saying this pass** -- and that identity is what
+    makes the exemption complete rather than partial. An earlier version passed only the
+    kinds whose own window had elapsed, which left the dominant case open: a standing
+    condition backed off to sixty-four minutes is *absent* from almost every message, so it
+    was almost always the kind being reset, by its own suppression. Measured, that produced
+    75 to 255 notifications overnight where the taper intends 12. A caller that ever
+    narrows this argument again reopens exactly that, and nothing about the resulting
+    messages would look wrong.
+
+    So the reset applies to what the session did not say at all this pass, which is what "a
+    different kind" always meant.
+
+    Mutates the map it is given rather than returning a new one, because the map is the
+    surface's and this is a rule being applied to it, not a second copy of it being made.
+    """
+    carried = set(kinds)
+    for kind in carried:
+        key = (session_id, kind)
+        prior = sent.get(key)
+        sent[key] = Sent(moment, 0 if prior is None else prior.repeats + 1)
+    for other, entry in sent.items():
+        if other[0] == session_id and other[1] not in carried and entry.repeats:
+            sent[other] = Sent(entry.sent_at, 0)
