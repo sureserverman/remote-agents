@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from textual.widgets import OptionList
 from tui_positions import position
 
@@ -74,12 +75,14 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
 
         # Connection B — the terminal's own composition, sharing only the database file.
         context = TuiContext(
-            launcher=SessionService(SQLiteSessionStore(terminal_connection), terminal),
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=SessionService(SQLiteSessionStore(terminal_connection), terminal),
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                catalogue=(_PROJECT,),
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: (_PROJECT,),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-            catalogue=(_PROJECT,),
         )
         app = RemoteAgentsTui(context)
 
@@ -138,12 +141,14 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
         assert launched.display.custom_label is None, "the fixture must start with no name"
 
         context = TuiContext(
-            launcher=SessionService(SQLiteSessionStore(terminal_connection), terminal),
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=SessionService(SQLiteSessionStore(terminal_connection), terminal),
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                catalogue=(_PROJECT,),
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: (_PROJECT,),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-            catalogue=(_PROJECT,),
         )
         app = RemoteAgentsTui(context)
 
@@ -195,12 +200,14 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
             LaunchCommand(ProjectId("opaque-existing"), ProfileId("claude"), "service-key")
         )
         context = TuiContext(
-            launcher=SessionService(SQLiteSessionStore(terminal_connection), terminal),
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=SessionService(SQLiteSessionStore(terminal_connection), terminal),
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                catalogue=(_PROJECT,),
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: (_PROJECT,),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-            catalogue=(_PROJECT,),
         )
         app = RemoteAgentsTui(context)
 

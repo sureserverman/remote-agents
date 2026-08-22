@@ -7,17 +7,20 @@ import inspect
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 
 
 def test_the_context_carries_a_conversation_service_field() -> None:
-    assert "conversations" in TuiContext.__dataclass_fields__
+    """On the backend now, which is where the bot's has always come from too."""
+    assert "conversations" in Backend.__dataclass_fields__
 
 
 def test_conversations_is_optional_so_a_host_without_one_still_starts() -> None:
-    field = TuiContext.__dataclass_fields__["conversations"]
+    field = Backend.__dataclass_fields__["conversations"]
     assert field.default is None
 
 
@@ -90,64 +93,82 @@ def test_local_context_signature_is_unchanged_for_callers() -> None:
 
 @pytest.mark.parametrize("field_name", ["capture", "conversations"])
 def test_the_context_was_widened_by_exactly_the_two_planned_fields(field_name: str) -> None:
-    assert field_name in TuiContext.__dataclass_fields__
+    """The TUI-parity widening, now carried by the backend both surfaces receive."""
+    assert field_name in Backend.__dataclass_fields__
 
 
 def test_no_further_capability_leaked_into_the_context() -> None:
     """The sealed surface widens only deliberately; anything unlisted here is scope creep.
 
-    `capture`/`conversations` were the TUI-parity widening (Stage 4 of that plan);
-    `open_in_console` is the console-surface plan's Stage 2 widening, `console_sync` its
-    Stage 3 sibling, and `activity_feed`/`console_flash` its Stage 5 pair — a reader of the durable
-    observation table, wired in every hosting since the feed is useful outside the
-    console. The two console capabilities are wired only under console hosting; anywhere
-    else those fields stay None and the exec-attach contract is untouched. Growing this
-    set is a decision, and this test is where it is made visible.
+    Two sets now, because the fields split in two and collapsing them back into one would
+    lose the distinction the split was for. The **backend** carries what both surfaces
+    drive; the **context** carries what is this surface's alone. A capability arriving on
+    the wrong side is exactly what this test is for: `attach_argv` on the backend would
+    make the bot inherit a route DEC-039 says is not its, and `conversations` on the
+    context would put the resume service back to being composed twice.
+
+    Growing either set is a decision, and this is where it is made visible.
     """
-    expected = {
-        "launcher",
-        "creator",
+    surface = {
+        "backend",
+        # The profile narrowing this surface applies: `ProfileChoice` refuses any reason
+        # alongside `available=True`, which the domain's `ProfileCompatibility` does not.
         "profiles",
-        "refresh_catalogue",
+        # DEC-039: deliberately not host-following, unlike the bot's.
         "attach_argv",
-        "max_label_length",
-        "catalogue",
-        "capture",
+        # A parameter of `backend.capture`, not a capability of its own.
         "capture_redactions",
-        "conversations",
+        # The console capabilities (DEC-040), wired only under console hosting.
         "open_in_console",
         "console_sync",
-        "activity_feed",
         "console_flash",
-        # Sub-plan 3's addition: what the console's start-only repair did and could not do,
-        # carried to the surface instead of printed. The composition root runs `settle()`
-        # before Textual starts, so a `print` there is erased by the alternate screen
-        # microseconds later — invisible for the whole session it describes.
         "console_recovery",
     }
-    assert set(TuiContext.__dataclass_fields__) == expected
+    shared = {
+        "sessions",
+        "projects",
+        "conversations",
+        "catalogue",
+        "refresh_catalogue",
+        "profiles",
+        "capture",
+        "activity_feed",
+        "max_label_length",
+    }
+
+    assert set(TuiContext.__dataclass_fields__) == surface
+    assert set(Backend.__dataclass_fields__) == shared
+    assert surface & shared == {"profiles"}, (
+        "`profiles` is the one name on both, and deliberately: the backend's is the domain "
+        "`ProfileCompatibility` and the context's is this surface's `ProfileChoice`. Any "
+        "other overlap is a capability composed twice."
+    )
 
 
 def test_a_none_conversations_context_is_constructible() -> None:
     context = TuiContext(
-        launcher=object(),  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=object(),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=tuple,
+        ),
         profiles=(),
-        refresh_catalogue=tuple,
         attach_argv=lambda session_id: ("tmux",),
     )
-    assert context.conversations is None
-    assert context.capture is None
+    assert context.backend.conversations is None
+    assert context.backend.capture is None
 
 
 def test_a_wired_conversations_context_holds_the_service() -> None:
     service = ConversationService(object())  # type: ignore[arg-type]
     context = TuiContext(
-        launcher=object(),  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=object(),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=tuple,
+            conversations=service,
+        ),
         profiles=(),
-        refresh_catalogue=tuple,
         attach_argv=lambda session_id: ("tmux",),
-        conversations=service,
     )
-    assert context.conversations is service
+    assert context.backend.conversations is service

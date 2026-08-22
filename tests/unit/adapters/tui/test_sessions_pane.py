@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from backends import tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
 
@@ -61,15 +62,15 @@ def _record(session_id: SessionId = _SESSION, name: str = "existing") -> Session
 
 def _context(records: tuple[SessionRecord, ...] = (), **overrides) -> TuiContext:
     base = {
-        "launcher": _Launcher(records),
-        "creator": object(),
+        "sessions": _Launcher(records),
+        "projects": object(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
     }
     base.update(overrides)
-    return TuiContext(**base)  # type: ignore[arg-type]
+    return tui_context_for(**base)
 
 
 def test_the_sessions_pane_rests_on_the_sessions_list() -> None:
@@ -176,9 +177,9 @@ async def test_the_cursor_rests_painted_on_a_row_whose_enter_does_not_mutate() -
             for segment in choices.render_line(line)
             if segment.text.strip() and segment.style is not None
         ]
-        assert any(
-            segment.style.clear_meta_and_links() == cursor for segment in painted
-        ), "the sessions pane drew no cursor on its resting row"
+        assert any(segment.style.clear_meta_and_links() == cursor for segment in painted), (
+            "the sessions pane drew no cursor on its resting row"
+        )
 
         choices.focus()
         await pilot.press("enter")
@@ -304,7 +305,7 @@ async def test_a_failed_read_does_not_send_the_owner_somewhere_that_is_not_there
         async def list_sessions(self):
             raise RuntimeError("store contended")
 
-    app = SessionsPane(_context((), launcher=_Failing(())))
+    app = SessionsPane(_context((), sessions=_Failing(())))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         # Through the screen's own reload, which is the path that catches and reports.

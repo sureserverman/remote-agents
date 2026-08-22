@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from textual.widgets import Static
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -63,13 +64,15 @@ def _activity(kind: ActivityKind, *, minutes_ago: int, detail: str | None = None
 
 def _context(feed=None) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            activity_feed=feed,
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        activity_feed=feed,
     )
 
 
@@ -184,7 +187,7 @@ async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_loa
 
 @_SURFACES
 async def test_the_feed_is_bounded_rather_than_an_archive(surface) -> None:
-    """"A glance, not an archive" was asserted in prose and never driven.
+    """ "A glance, not an archive" was asserted in prose and never driven.
 
     The reader LIMITs and the render slices, both at `FEED_LIMIT` — but every test here fed
     two rows, so a bound of twenty and a bound of two thousand were indistinguishable.

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from tui_feedback import breadcrumb
 from tui_feedback import status as _status
 from tui_positions import position
@@ -53,12 +54,14 @@ class _Listing:
 
 def _context(launcher: _Listing) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_EXISTING,),
+            catalogue=(_EXISTING,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_EXISTING,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_EXISTING,),
     )
 
 

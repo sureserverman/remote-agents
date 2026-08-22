@@ -342,7 +342,7 @@ class ProjectChooserScreen(ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         entries: tuple[tuple[str, str], ...] = (("launch", "Launch a new session"),)
-        if self.services.conversations is not None:
+        if self.services.backend.conversations is not None:
             entries = (*entries, ("resume", "Resume a conversation"))
         self.show_choices((*entries, (_BACK, "Back")))
 

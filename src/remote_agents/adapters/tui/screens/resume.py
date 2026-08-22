@@ -116,7 +116,7 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
     entry point firing mid-navigation used to reset the chosen project, after which
     selecting a profile silently did nothing and only Escape recovered.
     """
-    conversations = screen.services.conversations
+    conversations = screen.services.backend.conversations
     if conversations is None:
         return
     async with screen.holding_the_guard():
@@ -192,7 +192,7 @@ class ResumeProfilesScreen(ChoiceScreen):
         avoid, and it is only listed separately here because this flow was extracted a task
         after that precedent was set and did not inherit it.
         """
-        conversations = self.services.conversations
+        conversations = self.services.backend.conversations
         if conversations is None:
             return
         try:
@@ -364,7 +364,7 @@ class ResumeConversationsScreen(ChoiceScreen):
         self.show_choices(tuple(entries), highlight=len(entries) - 1)
 
     async def choose(self, key: str) -> None:
-        conversations = self.services.conversations
+        conversations = self.services.backend.conversations
         if conversations is None:
             return
         if key == _BACK:
@@ -435,7 +435,7 @@ async def fetch_page(
     first, and the conversation list, which fetches every later one. Reporting onto the
     caller's screen is what keeps a failed read on the position that asked for it.
     """
-    conversations = screen.services.conversations
+    conversations = screen.services.backend.conversations
     if conversations is None:
         return None
     try:

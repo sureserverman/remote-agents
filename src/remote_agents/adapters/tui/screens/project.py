@@ -46,7 +46,9 @@ class AreasScreen(ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         try:
-            offered = await self.tui.in_thread(self.services.creator.available_areas, group="areas")
+            offered = await self.tui.in_thread(
+                self.services.backend.projects.available_areas, group="areas"
+            )
         except Exception as error:
             _LOG.exception("listing areas failed")
             # States the failure rather than pointing at the exit, for the reason recorded on
@@ -229,7 +231,7 @@ class ProjectReviewScreen(GatheredSelectionScreen):
             try:
                 command = CreateProjectCommand(self.area, self.project_name)
                 created = await tui.in_thread(
-                    lambda: self.services.creator.create(command), group="create-project"
+                    lambda: self.services.backend.projects.create(command), group="create-project"
                 )
             except Exception as error:
                 _LOG.exception("project creation failed")

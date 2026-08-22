@@ -56,6 +56,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
@@ -177,13 +178,15 @@ def _context(
     trust_error: str | None = None,
 ) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(record=record or _record(), trust_error=trust_error),  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(record=record or _record(), trust_error=trust_error),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (project,),
+            catalogue=(project,),
+            conversations=_Conversations(description=description),  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (project,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(project,),
-        conversations=_Conversations(description=description),  # type: ignore[arg-type]
     )
 
 

@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import working
@@ -197,13 +198,15 @@ class _Conversations:
 
 def _context(launcher: _Launcher, creator: _Creator | None = None) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=creator or _Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=creator or _Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            conversations=_Conversations(),  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        conversations=_Conversations(),  # type: ignore[arg-type]
     )
 
 

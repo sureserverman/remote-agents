@@ -43,6 +43,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
@@ -197,13 +198,15 @@ def _context(
     conversations: object | None = None,
 ) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        conversations=conversations,  # type: ignore[arg-type]
-        creator=creator or _SlowCreator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            conversations=conversations,  # type: ignore[arg-type]
+            projects=creator or _SlowCreator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 
@@ -418,7 +421,11 @@ async def test_a_worker_does_not_outlive_the_app() -> None:
     catalogue = _SlowCatalogue()
     launcher = _SlowLauncher()
     launcher.release.set()
-    app = RemoteAgentsTui(replace(_context(launcher), refresh_catalogue=catalogue))
+    context = _context(launcher)
+    # The catalogue reader lives on the backend now, so the replacement is nested.
+    app = RemoteAgentsTui(
+        replace(context, backend=replace(context.backend, refresh_catalogue=catalogue))
+    )
     in_flight: list = []
     try:
         async with app.run_test(size=(100, 30)) as pilot:

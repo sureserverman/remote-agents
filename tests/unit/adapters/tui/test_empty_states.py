@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import tui_context_for
 from textual.widgets import OptionList
 from tui_filter import settle_filter
 
@@ -82,15 +83,15 @@ class _Conversations:
 
 def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
-        "launcher": _Listing(),
-        "creator": _Creator(),
+        "sessions": _Listing(),
+        "projects": _Creator(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
     }
     arguments.update(overrides)
-    return TuiContext(**arguments)  # type: ignore[arg-type]
+    return tui_context_for(**arguments)
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
@@ -188,7 +189,7 @@ async def test_a_filter_matching_nothing_says_so_rather_than_emptying_the_pane()
 async def test_the_sessions_list_says_there_are_none() -> None:
     from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 
-    app = RemoteAgentsTui(_context(launcher=_Listing(())))
+    app = RemoteAgentsTui(_context(sessions=_Listing(())))
 
     async with app.run_test() as pilot:
         await app.action_sessions()
@@ -201,7 +202,7 @@ async def test_the_sessions_list_says_there_are_none() -> None:
 async def test_an_area_less_development_root_says_so_and_still_offers_back() -> None:
     from remote_agents.adapters.tui.screens.project import AreasScreen
 
-    app = RemoteAgentsTui(_context(creator=_Creator(areas=())))
+    app = RemoteAgentsTui(_context(projects=_Creator(areas=())))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -241,7 +242,7 @@ async def test_the_empty_row_cannot_be_chosen() -> None:
     Selecting it must not dispatch — the sessions screen's `choose` would take the row key as
     a session id and go looking for a record that was never there.
     """
-    app = RemoteAgentsTui(_context(launcher=_Listing(())))
+    app = RemoteAgentsTui(_context(sessions=_Listing(())))
 
     async with app.run_test() as pilot:
         await app.action_sessions()

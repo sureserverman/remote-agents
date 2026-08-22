@@ -201,7 +201,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
-        self._catalogue = context.catalogue
+        self._catalogue = context.backend.catalogue
         self.selection = LaunchSelection()
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
@@ -575,7 +575,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         try:
             self._catalogue = await self.in_thread(
-                self._services.refresh_catalogue, group="catalogue"
+                self._services.backend.refresh_catalogue, group="catalogue"
             )
         except Exception:
             _LOG.exception("catalogue refresh failed")
@@ -732,7 +732,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
-        if self.busy or not self.offers("resume") or self._services.conversations is None:
+        if self.busy or not self.offers("resume") or self._services.backend.conversations is None:
             return
         await self.switch_flow(ResumeProjectsScreen())
 
@@ -752,7 +752,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._busy = True
         try:
             async with screen.awaiting("Resuming the conversation…"):
-                outcome = await self._services.launcher.resume(
+                outcome = await self._services.backend.sessions.resume(
                     ResumeCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile),
@@ -821,7 +821,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         different things to say to the owner.
         """
         try:
-            return await self._services.launcher.answer_trust(
+            return await self._services.backend.sessions.answer_trust(
                 AnswerTrustCommand(record.session_id, _idempotency_key())
             )
         except Exception as error:
@@ -852,7 +852,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 await screen.refuse("Remote Control is no longer available for this session.")
                 return
             async with screen.awaiting(f"Setting Remote Control to {desired.value}…"):
-                state = await self._services.launcher.set_remote_control(
+                state = await self._services.backend.sessions.set_remote_control(
                     RemoteControlCommand(record.session_id, desired, _idempotency_key())
                 )
         except Exception as error:
@@ -1008,7 +1008,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         with it: the durable history still cannot tell the two apart, so this sentence on
         screen is the only place the distinction exists.
         """
-        launcher = self._services.launcher
+        launcher = self._services.backend.sessions
         if action == GRACEFUL:
             observation = await launcher.graceful_stop(
                 GracefulStopCommand(record.session_id, record.profile_id)
@@ -1107,7 +1107,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         It used to reconcile a tab per live session, which is what "sync" named. That
         mechanism retired with Sub-plan 3's Task 2.4.
         """
-        await self._services.launcher.refresh_readiness()
+        await self._services.backend.sessions.refresh_readiness()
         records = await self.read_sessions()
         if self._services.console_sync is not None:
             await self._services.console_sync(records)
@@ -1115,7 +1115,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
-        records = await self._services.launcher.list_sessions()
+        records = await self._services.backend.sessions.list_sessions()
         # ENDED is filtered exactly as the bot filters it: the record is retained for audit
         # but there is nothing left to reach, inspect, or stop.
         return tuple(record for record in records if record.state is not SessionState.ENDED)
@@ -1153,7 +1153,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # rather than an `AttributeError`.
             covered = body.awaiting("Launching…") if body is not None else contextlib.nullcontext()
             async with covered:
-                record = await self._services.launcher.launch(
+                record = await self._services.backend.sessions.launch(
                     LaunchCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile.profile_id),

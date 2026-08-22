@@ -5,13 +5,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
-from remote_agents.application.conversations import ConversationService
-from remote_agents.application.project_admin import ProjectCreationService
-from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.services import SessionService
-from remote_agents.domain.models import SessionId
-from remote_agents.ports.agent_activity import AgentActivity
 
 #: How many observations the feed shows and its reader fetches — one number, imported by
 #: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
@@ -38,22 +33,28 @@ class ProfileChoice:
 class TuiContext:
     """The sealed surface the terminal app drives; it never reaches past these."""
 
-    launcher: SessionService
-    creator: ProjectCreationService
+    backend: Backend
+    """Every use case this surface may drive, as the composition root assembled it (ARCH-B1).
+
+    Eight fields stood here instead — `launcher`, `creator`, `refresh_catalogue`,
+    `catalogue`, `capture`, `conversations`, `activity_feed`, `max_label_length`. They were
+    correctly typed, unlike the bot's, and that was the odd part: the same objects, named
+    twice, composed twice, and only one of the two namings kept honest. A capability added
+    to one surface could miss the other with nothing to say so.
+
+    `profiles` stays outside it, and so do `attach_argv` and the four console fields. The
+    first because `Backend.profiles` is the domain `ProfileCompatibility` and this surface
+    renders `ProfileChoice`, which refuses any reason alongside `available=True` — the rule
+    that once took this surface down on a version probe that merely timed out. The rest
+    because they are this surface's alone: DEC-039 keeps the attach route per-surface, and
+    DEC-040 keeps console hosting out of anything the bot shares.
+    """
     profiles: tuple[ProfileChoice, ...]
-    refresh_catalogue: Callable[[], tuple[CatalogProject, ...]]
     attach_argv: Callable[[str], tuple[str, ...]]
-    max_label_length: int = 40
-    catalogue: tuple[CatalogProject, ...] = field(default_factory=tuple)
-    # Widened deliberately for the two capabilities that need a dependency the launch wizard
-    # never did: `capture` (inspect) and `conversations` (resume). Both are optional, so a
-    # host that wires neither simply offers neither affordance rather than failing to start.
-    # `capture_redactions` is a third field but not a third capability: it parameterizes
-    # `capture`, can only remove text from what is rendered, and is inert when capture is
-    # None. Nothing sources it today; the bot passes no redactions either.
-    capture: Callable[[SessionId], Awaitable[str]] | None = None
+    # `capture_redactions` is not a capability but a parameter of one: it tunes
+    # `backend.capture`, can only remove text from what is rendered, and is inert when
+    # capture is None. Nothing sources it today; the bot passes no redactions either.
     capture_redactions: tuple[str, ...] = field(default_factory=tuple)
-    conversations: ConversationService | None = None
     # The console capabilities, same widening pattern as the two above: when the
     # composition root determines the surface is hosted by a client on our own tmux server,
     # opening a session **exchanges** that agent's pane into the console's left slot and the
@@ -62,10 +63,6 @@ class TuiContext:
     # exec-attach contract exactly as it was.
     open_in_console: Callable[[str], Awaitable[str | None]] | None = None
     console_sync: Callable[[tuple], Awaitable[None]] | None = None
-    # The feed capability: a bounded newest-first read of the durable activity table.
-    # A reader, never a drainer — consuming the spool would starve the phone's
-    # notifications, which is the delivery story DEC-031/DEC-034 fought for.
-    activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None
     # One line on the tmux status bar when the feed gains news — wired only under console
     # hosting, where a status line exists to flash on; a glance-level nudge, never a modal.
     console_flash: Callable[[str], Awaitable[None]] | None = None
@@ -77,6 +74,13 @@ class TuiContext:
     # receives an empty one.
     console_recovery: RecoveryReport | None = None
 
-    def __post_init__(self) -> None:
-        if self.max_label_length < 1:
-            raise ValueError("label length bound must be positive")
+    @property
+    def max_label_length(self) -> int:
+        """The host's configured bound, which now has exactly one home.
+
+        Kept as a property rather than pushed to every reader: it is read where a name is
+        being validated, and `self.services.backend.max_label_length` at those sites reads
+        as plumbing rather than as the rule it is. `Backend.__post_init__` does the
+        validation this class used to do, so the check is not lost by moving.
+        """
+        return self.backend.max_label_length

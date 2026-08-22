@@ -404,7 +404,7 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
         )
         # Not console-hosted here ($TMUX unset), so the surface wires none -- which is the
         # other half of the same rule: the surface's composer is conditional on hosting.
-        assert context.launcher._hide_in_console is None  # noqa: SLF001
+        assert context.backend.sessions._hide_in_console is None  # noqa: SLF001
     finally:
         connection.close()
 

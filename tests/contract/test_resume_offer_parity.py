@@ -124,13 +124,15 @@ async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
 
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=object(),  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=object(),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                conversations=_Conversations(summaries),  # type: ignore[arg-type]
+                catalogue=(_PROJECT,),
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: (_PROJECT,),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-            conversations=_Conversations(summaries),  # type: ignore[arg-type]
-            catalogue=(_PROJECT,),
         )
     )
     async with app.run_test() as pilot:
@@ -161,13 +163,15 @@ async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
 
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=object(),  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=object(),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: (_PROJECT,),
+                conversations=_Conversations(summaries),  # type: ignore[arg-type]
+                catalogue=(_PROJECT,),
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: (_PROJECT,),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-            conversations=_Conversations(summaries),  # type: ignore[arg-type]
-            catalogue=(_PROJECT,),
         )
     )
     async with app.run_test() as pilot:

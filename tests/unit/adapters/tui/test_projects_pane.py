@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from backends import tui_context_for
 from textual.widgets import Input, OptionList, Static
 from tui_positions import position
 
@@ -79,15 +80,15 @@ def _record() -> SessionRecord:
 
 def _context(**overrides) -> TuiContext:
     base = {
-        "launcher": _Launcher((_record(),)),
-        "creator": _Creator(),
+        "sessions": _Launcher((_record(),)),
+        "projects": _Creator(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_INFRA, _TOOLS),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_INFRA, _TOOLS),
     }
     base.update(overrides)
-    return TuiContext(**base)  # type: ignore[arg-type]
+    return tui_context_for(**base)
 
 
 def test_the_projects_pane_rests_on_the_projects_position() -> None:
@@ -185,9 +186,9 @@ async def test_the_keyboard_rests_in_the_filter_and_one_down_draws_the_cursor() 
             for segment in choices.render_line(line)
             if segment.text.strip() and segment.style is not None
         ]
-        assert any(
-            segment.style.clear_meta_and_links() == cursor for segment in painted
-        ), "the projects pane drew no cursor on the row the keyboard had reached"
+        assert any(segment.style.clear_meta_and_links() == cursor for segment in painted), (
+            "the projects pane drew no cursor on the row the keyboard had reached"
+        )
 
 
 @pytest.mark.parametrize("nothing", [()])

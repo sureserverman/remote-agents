@@ -1120,8 +1120,12 @@ def local_context(config, connection, paths: ProductionPaths):
         activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
     )
     return TuiContext(
-        launcher=backend.sessions,
-        creator=backend.projects,
+        # The whole backend, as `_private_boundary` hands the bot the same object. What used
+        # to be eight arguments taken out of it one at a time -- launcher, creator,
+        # refresh_catalogue, catalogue, capture, conversations, activity_feed,
+        # max_label_length -- is one, so a capability added to the backend cannot reach one
+        # surface and miss the other.
+        backend=backend,
         profiles=tuple(
             # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
             # uses `reason` for two things -- why a profile is blocked, and a note about a
@@ -1136,19 +1140,13 @@ def local_context(config, connection, paths: ProductionPaths):
             )
             for profile in runtime.profiles
         ),
-        refresh_catalogue=backend.refresh_catalogue,
+        # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
+        # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-        max_label_length=backend.max_label_length,
-        catalogue=backend.catalogue,
-        # The same capture the service hands the bot. Redactions default to the empty set
-        # the bot also uses -- no configuration key sources them today.
-        capture=backend.capture,
-        conversations=backend.conversations,
+        # Redactions default to the empty set the bot also uses -- no configuration key
+        # sources them today. Not a capability, a parameter of `backend.capture`.
         open_in_console=open_in_console,
         console_sync=console_sync,
-        # A reader of the durable observation table, never a drainer: consuming the spool
-        # would starve the phone's notifications (see Task 5.2's correction note).
-        activity_feed=backend.activity_feed,
         console_flash=console_flash,
         console_recovery=console_recovery,
     )

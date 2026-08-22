@@ -20,6 +20,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from backends import backend_for
+
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 from remote_agents.application.console import ConsoleComposer
@@ -64,7 +66,6 @@ class RecordingConsole:
     async def install_console_binding(self, key: str) -> None:
         self.calls.append(("install_console_binding", key))
 
-
     async def pane_arrangement(self):
         return tuple(self.panes)
 
@@ -88,16 +89,16 @@ def _context(launcher: _Launcher, composer: ConsoleComposer) -> TuiContext:
         await composer.show(SessionId.parse(session_id))
 
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         open_in_console=open_in_console,
         console_sync=composer.sync,
     )
-
-
 
 
 def test_only_console_hosting_composes_the_capabilities(monkeypatch, tmp_path: Path) -> None:

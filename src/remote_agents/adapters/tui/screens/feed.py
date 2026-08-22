@@ -98,7 +98,7 @@ class FeedRegion:
         """
         if self._feed_news is None:
             self._feed_news = FeedNews()
-        reader = self.services.activity_feed
+        reader = self.services.backend.activity_feed
         pane = self.query_one("#feed-pane", Static)
         if reader is None:
             return

@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_positions import position
@@ -124,13 +125,15 @@ class _Conversations:
 
 def _context() -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            conversations=_Conversations(),  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        conversations=_Conversations(),  # type: ignore[arg-type]
     )
 
 

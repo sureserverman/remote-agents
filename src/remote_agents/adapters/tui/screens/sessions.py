@@ -475,23 +475,34 @@ class SessionDetailScreen(ChoiceScreen):
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
-        """Read the pane's trust state. No session-state gate; see the bot's twin for why.
+        """Always UNKNOWN, so "Trust this project" never renders here. **BL-005, left as found.**
 
-        In short: a trust-blocked `claude-remote` launch can land RUNNING, because its
-        readiness marker can be observed before the dialog renders. State is not evidence
-        about the dialog; only the pane is. Failures are swallowed to UNKNOWN rather than
-        reported -- a pane we cannot read is one we must not offer to answer, and it is not
-        worth replacing the detail with an error.
+        This used to reach for a `trust_state` attribute on `self.services` by name, and
+        `self.services` is a `TuiContext`: no version of that class has ever had one --
+        `SessionService.trust_state` is a *backend* method. So the probe always returned None,
+        the state was always UNKNOWN, and `trust_available` always said no: the row, its
+        handler and its command are all written and none of them has ever been reachable.
+
+        DEC-016 says both surfaces offer this row, so that is a defect, and it is deliberately
+        not repaired here. Typing this context against `Backend` is exactly the change that
+        would fix it by accident -- `self.services.backend.sessions.trust_state(...)` is one
+        plausible line away -- and the owner's decision on 2026-08-21 was that this refactor
+        changes no functionality. Repairing it is a separate decision, taken with the bot's
+        twin path re-read beside it.
+
+        Written out rather than left as a probe because the probe *looked* like a capability
+        check, and a reader could reasonably conclude the surface was asking and being told
+        no. It never asked. `tests/unit/adapters/tui/test_trust_row_bl005.py` pins both
+        halves and is deleted when BL-005 is closed.
+
+        The `trust_available` gate below is what the guard used to be and is kept for the
+        same reason the docstring above it gave: a trust-blocked `claude-remote` launch can
+        land RUNNING, because its readiness marker is observed before the dialog renders, so
+        state is not evidence about the dialog -- only the pane is. It changes no answer
+        today; it is the shape the repair goes back into.
         """
-        if not trust_available(record, TrustState.AWAITING):
-            return TrustState.UNKNOWN
-        read = getattr(self.services, "trust_state", None)
-        if read is None:
-            return TrustState.UNKNOWN
-        try:
-            return await read(record.session_id)
-        except Exception:
-            return TrustState.UNKNOWN
+        del record
+        return TrustState.UNKNOWN
 
     def detail_entries(
         self, record: SessionRecord, trust: TrustState = TrustState.UNKNOWN
@@ -508,7 +519,7 @@ class SessionDetailScreen(ChoiceScreen):
         does the same thing.
         """
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
-        if self.services.capture is not None:
+        if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))
         # Grouped with the read-only rows above rather than with the stops below, and the bot's
         # twin gives the reason in the same words: renaming changes what the session is called
@@ -707,7 +718,7 @@ class SessionDetailScreen(ChoiceScreen):
                 if record is None:
                     await self.refuse()
                     return
-                command = await self.services.launcher.copy_attach(record.session_id)
+                command = await self.services.backend.sessions.copy_attach(record.session_id)
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return
@@ -752,7 +763,7 @@ class SessionDetailScreen(ChoiceScreen):
         onto this detail and leave the owner here, rather than opening an output screen with
         nothing in it and an error message they would have to leave to read.
         """
-        capture = self.services.capture
+        capture = self.services.backend.capture
         if capture is None:
             return
         async with self.holding_the_guard():
@@ -906,7 +917,7 @@ class RenameScreen(ChoiceScreen):
                 return
             try:
                 async with self.awaiting("Renaming…"):
-                    await self.services.launcher.rename(record.session_id, label)
+                    await self.services.backend.sessions.rename(record.session_id, label)
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return

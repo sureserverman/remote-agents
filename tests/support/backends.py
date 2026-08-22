@@ -116,3 +116,40 @@ class SessionUseCaseDouble:
     async def project_usage(self) -> tuple[()]:
         """No launch history, so the catalogue keeps the order it was built in."""
         return ()
+
+
+#: The `TuiContext` fields that are the surface's own rather than the backend's — the attach
+#: route (DEC-039), the profile narrowing this surface applies, the capture parameter, and
+#: the four console capabilities (DEC-040).
+_SURFACE_FIELDS = frozenset(
+    {
+        "profiles",
+        "attach_argv",
+        "capture_redactions",
+        "open_in_console",
+        "console_sync",
+        "console_flash",
+        "console_recovery",
+    }
+)
+
+
+def tui_context_for(**arguments: object):
+    """Build a `TuiContext`, sorting each argument into the backend or the surface.
+
+    The twin of `backend_for`, for the several test helpers that take one flat `**overrides`
+    dict and hand it straight to the constructor. Those cannot be rewritten mechanically the
+    way a literal call can, and rewriting each by hand would put the same split in six
+    places — where the seventh would get it subtly wrong.
+
+    It names the split rather than hiding it: anything in `_SURFACE_FIELDS` is the surface's,
+    everything else is a `Backend` field and goes through `backend_for`, so an unknown key
+    fails loudly at `Backend(**...)` rather than being silently dropped. Deliberately no
+    `launcher`/`creator` aliases — the point of Stage 3 is that those names are gone, and a
+    compatibility shim here would keep them alive in the one place nobody looks.
+    """
+    from remote_agents.adapters.tui.context import TuiContext
+
+    surface = {name: value for name, value in arguments.items() if name in _SURFACE_FIELDS}
+    backend = {name: value for name, value in arguments.items() if name not in _SURFACE_FIELDS}
+    return TuiContext(backend=backend_for(**backend), **surface)  # type: ignore[arg-type]

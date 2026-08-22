@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from backends import backend_for
 from textual.widgets import Input, OptionList, TextArea
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -53,13 +54,15 @@ class _Listing:
 
 def _context(launcher: _Listing, capture=None, redactions: tuple[str, ...] = ()) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            capture=capture,
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        capture=capture,
         capture_redactions=redactions,
     )
 

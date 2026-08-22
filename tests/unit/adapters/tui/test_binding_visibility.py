@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from textual.screen import Screen
 from textual.widgets import Input, OptionList
 from tui_feedback import announcements
@@ -108,14 +109,16 @@ class _Conversations:
 
 def _context(*, conversations: bool = True) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            capture=lambda _session_id: _captured(),
+            conversations=_Conversations() if conversations else None,  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        capture=lambda _session_id: _captured(),
-        conversations=_Conversations() if conversations else None,  # type: ignore[arg-type]
     )
 
 

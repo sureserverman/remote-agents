@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
@@ -46,10 +47,12 @@ class _Creator:
 
 def _context(open_in_console=None) -> TuiContext:
     return TuiContext(
-        launcher=object(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=object(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         open_in_console=open_in_console,
     )
@@ -73,8 +76,7 @@ def test_hosting_mode_reads_the_tmux_socket_not_just_its_presence() -> None:
         is HostingMode.FOREIGN
     ), "a disposable test server must never be treated as the console"
     assert (
-        hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-lookalike,42,0"})
-        is HostingMode.FOREIGN
+        hosting_mode({"TMUX": "/tmp/tmux-1000/remote-agents-lookalike,42,0"}) is HostingMode.FOREIGN
     ), "only the exact production name is the console"
 
 

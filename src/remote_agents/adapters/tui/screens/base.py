@@ -307,9 +307,9 @@ class ChoiceScreen(Screen[None]):
         if action == "refresh":
             # Mirrors `action_refresh`, which now delegates to `refresh_contents`.
             return True if self.can_refresh else False
-        if action == "resume" and self.services.conversations is None:
-            # Mirrors `action_resume`'s `self._services.conversations is None` early return: a
-            # host that wired no conversation service has no resume flow to open, and the
+        if action == "resume" and self.services.backend.conversations is None:
+            # Mirrors `action_resume`'s early return on the same read: a host that wired
+            # no conversation service has no resume flow to open, and the
             # binding has been advertised on those hosts all along. Checked before the
             # in-flight rule below so a host without the capability hides the key outright
             # rather than greying it, which would imply it were available later.

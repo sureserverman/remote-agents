@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from backends import tui_context_for
 from textual.command import DiscoveryHit, Hit
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -56,15 +57,15 @@ class _Conversations:
 
 def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
-        "launcher": _Listing(),
-        "creator": object(),
+        "sessions": _Listing(),
+        "projects": object(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
     }
     arguments.update(overrides)
-    return TuiContext(**arguments)  # type: ignore[arg-type]
+    return tui_context_for(**arguments)
 
 
 async def _discovered(app: RemoteAgentsTui) -> list[str]:
@@ -205,7 +206,7 @@ async def test_the_palette_withholds_a_flow_jump_that_would_discard_typed_work()
     """
     from textual.widgets import Input
 
-    app = RemoteAgentsTui(_context(creator=_Creator(), conversations=_Conversations()))
+    app = RemoteAgentsTui(_context(projects=_Creator(), conversations=_Conversations()))
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+n")
@@ -239,7 +240,7 @@ async def test_an_entry_is_re_checked_when_it_is_chosen_not_only_when_it_is_list
     """
     from textual.widgets import Input
 
-    app = RemoteAgentsTui(_context(creator=_Creator(), conversations=_Conversations()))
+    app = RemoteAgentsTui(_context(projects=_Creator(), conversations=_Conversations()))
 
     async with app.run_test() as pilot:
         hits = [hit async for hit in NavigationCommands(app.screen).discover()]

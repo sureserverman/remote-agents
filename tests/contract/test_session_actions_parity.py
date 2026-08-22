@@ -121,10 +121,12 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
 
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=_Launcher(),  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=_Launcher(),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

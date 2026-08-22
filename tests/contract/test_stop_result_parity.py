@@ -142,10 +142,12 @@ async def _tui_said(record: SessionRecord, detail: str) -> str:
     launcher = _Launcher(record, detail)
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=launcher,  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=launcher,  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -304,10 +306,12 @@ async def _tui_said_force(record: SessionRecord, detail: str) -> str:
     launcher = _ForceLauncher(record, detail)
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=launcher,  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=launcher,  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
