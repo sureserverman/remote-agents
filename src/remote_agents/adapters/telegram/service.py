@@ -86,6 +86,7 @@ from remote_agents.application.session_actions import (
     trust_available,
 )
 from remote_agents.application.session_views import (
+    listed_sessions,
     only_listed,
     selectable_area,
     session_row,
@@ -1188,9 +1189,7 @@ class PrivateBotBoundary:
         the list is empty, so a notice that only the populated branch rendered would be
         dropped precisely when it mattered most.
         """
-        if self.backend.sessions is not None:
-            await self.backend.sessions.refresh_readiness()
-        records = await self._records()
+        records = await self._listed_records()
         # Counted from the records this list is about to page, never from a second read: two
         # reads can disagree, because a session can end between them.
         #
@@ -1855,12 +1854,27 @@ class PrivateBotBoundary:
         return await self._sessions_reply(notice=endings[action])
 
     async def _records(self) -> tuple[SessionRecord, ...]:
+        """The listable records, without the readiness pass — every re-read but a list open."""
         if self.backend.sessions is None:
             return ()
+        return self._named(only_listed(await self.backend.sessions.list_sessions()))
+
+    async def _listed_records(self) -> tuple[SessionRecord, ...]:
+        """What opening the sessions list reads: the readiness pass and the read, together.
+
+        The pairing is `application/session_views.listed_sessions`, shared with the local
+        surface. What stays here is the project-name decoration, which is this surface's own —
+        the local one renders an area and a name from its own catalogue instead.
+        """
+        if self.backend.sessions is None:
+            return ()
+        return self._named(await listed_sessions(self.backend.sessions))
+
+    def _named(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
         project_names = {project.opaque_id: project.name for project in self.catalogue}
         return tuple(
             _with_project_name(record, project_names.get(str(record.project_id)))
-            for record in only_listed(await self.backend.sessions.list_sessions())
+            for record in records
         )
 
     async def _record(self, session_value: str) -> SessionRecord | None:

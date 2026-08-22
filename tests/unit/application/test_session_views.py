@@ -27,6 +27,7 @@ from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
     listed_in_sessions,
+    listed_sessions,
     only_listed,
     selectable_area,
     session_row,
@@ -257,3 +258,53 @@ def test_filtering_a_batch_keeps_order_and_drops_only_the_ended() -> None:
     kept = only_listed(records)
 
     assert [r.state for r in kept] == [s for s in SessionState if s is not SessionState.ENDED]
+
+
+class _RecordingSessions:
+    """Answers a list open while writing down what it was asked, and in which order."""
+
+    def __init__(self, records: tuple[SessionRecord, ...]) -> None:
+        self._records = records
+        self.asked: list[str] = []
+
+    async def refresh_readiness(self) -> None:
+        self.asked.append("refresh")
+
+    async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.asked.append("read")
+        return self._records
+
+
+@pytest.mark.asyncio
+async def test_a_list_open_refreshes_before_it_reads() -> None:
+    """The order is the reason this is one function rather than two calls at each surface.
+
+    Reading first would draw the list from records the pass is about to promote, so a launch
+    that had just become ready would show as FAILED until the owner opened the list again —
+    a stale row that corrects itself, which is the hardest kind to notice or report.
+    """
+    sessions = _RecordingSessions((_record(SessionState.RUNNING),))
+
+    await listed_sessions(sessions)
+
+    assert sessions.asked == ["refresh", "read"]
+
+
+@pytest.mark.asyncio
+async def test_a_list_open_returns_only_what_a_list_may_show() -> None:
+    """The read half is `only_listed`, so DEC-017's "exactly ENDED" reaches both surfaces."""
+    running = _record(SessionState.RUNNING)
+    ended = _record(SessionState.ENDED)
+    sessions = _RecordingSessions((running, ended))
+
+    assert await listed_sessions(sessions) == (running,)
+
+
+@pytest.mark.asyncio
+async def test_a_list_open_keeps_the_order_the_store_gave() -> None:
+    """Neither surface sorts here; the row's age column is what tells the owner how old it is."""
+    first = _record(SessionState.RUNNING)
+    second = _record(SessionState.PRESERVED)
+    sessions = _RecordingSessions((second, first))
+
+    assert await listed_sessions(sessions) == (second, first)

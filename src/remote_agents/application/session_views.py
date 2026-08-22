@@ -21,6 +21,7 @@ and the Textual side still hands its rows to a widget.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Protocol
 
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
@@ -90,3 +91,43 @@ def only_listed(records: Iterable[SessionRecord]) -> tuple[SessionRecord, ...]:
     tells the owner how old a session is.
     """
     return tuple(record for record in records if listed_in_sessions(record))
+
+
+class _ListReadableSessions(Protocol):
+    """The two questions a list open asks, named so this module needs no use-case import.
+
+    A Protocol rather than `SessionService` because `application/session_views.py` renders and
+    filters; importing the service to type one argument would tie a rendering module to the
+    one that owns locks and a store. The two frontends pass the same object either way.
+    """
+
+    async def refresh_readiness(self) -> object: ...
+
+    async def list_sessions(self) -> Iterable[SessionRecord]: ...
+
+
+async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecord, ...]:
+    """Refresh readiness, then return the sessions worth showing. The list-open read.
+
+    Both surfaces did exactly this, in exactly this order, and nothing held them together.
+    Neither half was the duplicate — `refresh_readiness` was always one method and
+    `only_listed` has been shared since Stage 2 — so what was written twice was the *pairing*,
+    which is the kind of duplicate no sweep for a repeated name can see.
+
+    **The pairing is the interesting part, because it is deliberately not applied everywhere.**
+    The pass rescans every record and runs a tmux capture per FAILED session, so the paths
+    that re-read one session — the bot's `_record`, the local surface's `current_record` —
+    read without it, and both had written that reasoning down separately. Putting the pair
+    here makes "a list open refreshes, a re-read does not" a single decision with one place to
+    change it, instead of an agreement between two comments.
+
+    Order is load-bearing and is the reason this is a function rather than two calls a caller
+    makes: reading first would draw the list from records the pass is about to promote, so a
+    launch that has just become ready would show as FAILED until the next open.
+
+    What happens *after* is the caller's. The local surface hands the result to its console
+    (ARCH-B3); the bot has no console to hand it to. That asymmetry stays in the frontends,
+    because it is about what a surface hosts rather than about what the list is.
+    """
+    await sessions.refresh_readiness()
+    return only_listed(await sessions.list_sessions())

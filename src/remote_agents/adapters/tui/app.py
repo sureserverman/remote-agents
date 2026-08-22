@@ -54,7 +54,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.application.session_views import only_listed
+from remote_agents.application.session_views import listed_sessions, only_listed
 from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import (
@@ -1090,8 +1090,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         It used to reconcile a tab per live session, which is what "sync" named. That
         mechanism retired with Sub-plan 3's Task 2.4.
         """
-        await self._services.backend.sessions.refresh_readiness()
-        records = await self.read_sessions()
+        records = await listed_sessions(self._services.backend.sessions)
         if self._services.console_sync is not None:
             await self._services.console_sync(records)
         return records
