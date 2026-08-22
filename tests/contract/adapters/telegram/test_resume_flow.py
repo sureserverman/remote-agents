@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from backends import SessionUseCaseDouble, backend_for
+
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
@@ -47,7 +49,7 @@ class Catalogue:
         )
 
 
-class Launcher:
+class Launcher(SessionUseCaseDouble):
     def __init__(self) -> None:
         self.commands = []
 
@@ -83,10 +85,12 @@ async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press(
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(project,),
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=launcher,
+            conversations=ConversationService(Catalogue(resolved)),
+        ),
         profiles=(ProfileAvailability("claude", True), ProfileAvailability("cursor-agent", True)),
-        launcher=launcher,
-        conversations=ConversationService(Catalogue(resolved)),
     )
 
     profiles = await boundary._resume_profiles_reply(project.opaque_id)
@@ -123,10 +127,12 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(project,),
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=Launcher(),
+            conversations=ConversationService(Catalogue(resolved)),
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=Launcher(),
-        conversations=ConversationService(Catalogue(resolved)),
     )
 
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")

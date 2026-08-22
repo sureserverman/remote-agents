@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 from telegram.error import BadRequest, TelegramError
 
@@ -158,9 +159,10 @@ async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repe
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=launcher,
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
@@ -195,9 +197,10 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
         profiles=(ProfileAvailability("cursor-agent", True),),
-        launcher=launcher,
     )
     token = boundary.callbacks.create(
         "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
@@ -237,8 +240,9 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
 
     reply = await boundary._sessions_reply()
@@ -255,12 +259,14 @@ async def test_private_bot_boundary_searches_projects_and_launches_from_a_result
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(
-            CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
-            CatalogProject("b" * 24, "opaque-verse", "writing", "Registered"),
+        backend=backend_for(
+            catalogue=(
+                CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
+                CatalogProject("b" * 24, "opaque-verse", "writing", "Registered"),
+            ),
+            sessions=launcher,
         ),
         profiles=(ProfileAvailability("codex", True),),
-        launcher=launcher,
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
@@ -294,7 +300,7 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),)),
     )
     launch = _Message()
     sessions = _Message()
@@ -310,9 +316,10 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     )
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.
-    assert [
-        button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]
-    ] == ["• Sessions", "Launch"]
+    assert [button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]] == [
+        "• Sessions",
+        "Launch",
+    ]
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
@@ -329,7 +336,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
 
     launcher = _Launcher()
     launcher.records = [session]
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
     detail = await boundary._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
@@ -365,7 +372,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
 
     launcher = _Launcher()
     launcher.records = [session]
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
     detail = await boundary._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
@@ -409,7 +416,9 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
         CatalogProject(f"{number:024d}", f"Project {number}", "tests", "Registered")
         for number in range(25)
     )
-    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, project_page_size=10)
+    boundary = PrivateBotBoundary(
+        7, 11, backend=backend_for(catalogue=catalogue), project_page_size=10
+    )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
     launch = _button(message.replies[0], "Launch")
@@ -513,7 +522,7 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
     older = CatalogProject("a" * 24, "older", "tests", "Registered")
     newer = CatalogProject("b" * 24, "newer", "tests", "Registered")
 
-    class _UsageLauncher:
+    class _UsageLauncher(SessionUseCaseDouble):
         async def project_usage(self):
             return [
                 ProjectUsage(
@@ -531,9 +540,11 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(older, newer),
-        catalogue_source=lambda: (older, newer),
-        launcher=_UsageLauncher(),
+        backend=backend_for(
+            catalogue=(older, newer),
+            refresh_catalogue=lambda: (older, newer),
+            sessions=_UsageLauncher(),
+        ),
     )
     served: list[tuple[str, ...]] = []
 
@@ -627,7 +638,7 @@ class _Connection:
         return None
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self) -> None:
         self.commands = []
         self.records = []
@@ -834,7 +845,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     keyboard past 100 buttons, so the screen was a few projects away from not rendering.
     Both flows now share one renderer; only the action each button carries differs.
     """
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(94))
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(catalogue=_catalogue(94)))
 
     resume = boundary._resume_projects_reply()
     launch = boundary._projects_reply(boundary.catalogue, view_id="all")
@@ -852,7 +863,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 
 def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
     """A project chosen after paging or searching must still resume, never launch."""
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(catalogue=_catalogue(30)))
     boundary._resume_projects_reply()
 
     second = boundary._project_page_reply("all|2", flow="resume")
@@ -869,7 +880,7 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(catalogue=_catalogue(30)))
     boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
@@ -888,8 +899,9 @@ def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launch
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -1360,7 +1372,7 @@ def _spool(
 def _notified(*records: SessionRecord, **bot_arguments: object):
     launcher = _Launcher()
     launcher.records = list(records)
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=launcher))
     bot = _NotifyBot(**bot_arguments)
     boundary.notifier.attach(bot)
     return boundary, bot
@@ -1574,7 +1586,7 @@ async def test_a_session_that_stops_while_its_notification_waits_is_not_notified
 
     # The owner presses Stop while the activity is held for retry. Nothing re-drains it; the
     # only copy left is the one in the notifier's queue.
-    boundary.launcher.records = [replace(record, state=SessionState.STOP_REQUESTED)]
+    boundary.backend.sessions.records = [replace(record, state=SessionState.STOP_REQUESTED)]
 
     await _watch_quiet_once(composition)
 
@@ -1854,9 +1866,7 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     session_id = str(record.session_id)
     _spool(spool, session_id, stamp="000001")
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
-    _spool(
-        spool, session_id, event="Notification", reason="permission_prompt", stamp="000003"
-    )
+    _spool(spool, session_id, event="Notification", reason="permission_prompt", stamp="000003")
 
     await _watch_quiet_once(
         ServiceComposition(

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
@@ -61,7 +61,7 @@ class _Catalogue:
         return (ProfileResumeCapability(ProfileId("claude"), True, True),)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """One RUNNING session, so the list and the detail both have something to draw."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -133,11 +133,13 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=backend.catalogue,
+        backend=backend_for(
+            catalogue=backend.catalogue,
+            sessions=backend.sessions,
+            conversations=backend.conversations,
+            projects=backend.projects,
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=backend.sessions,
-        conversations=backend.conversations,
-        creator=backend.projects,
     )
 
 
@@ -207,11 +209,11 @@ async def _every_screen(
     await boundary.launch_command(chat.message_update("/launch"), None)
     snapshot(anchor)
 
-    if boundary.creator is not None:
+    if boundary.backend.projects is not None:
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
         snapshot(anchor)
 
-    if boundary.conversations is not None:
+    if boundary.backend.conversations is not None:
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
         snapshot(anchor)
 
@@ -307,9 +309,8 @@ async def test_the_pending_screen_stays_barless_while_it_waits() -> None:
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_LaunchingLauncher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_LaunchingLauncher(_record()),
     )
     rendered = _recording(chat)
 
@@ -392,11 +393,13 @@ async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_Creator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_Creator(),
     )
 
     anchor = await _open_entry(chat, boundary, entry)
@@ -480,7 +483,9 @@ def _sessions_counts_boundary(states: list[SessionState]) -> PrivateBotBoundary:
         )
         for index, state in enumerate(states)
     ]
-    return PrivateBotBoundary(OWNER, CHAT, catalogue=(PROJECT,), launcher=_ManyLauncher(records))
+    return PrivateBotBoundary(
+        OWNER, CHAT, backend=backend_for(catalogue=(PROJECT,), sessions=_ManyLauncher(records))
+    )
 
 
 @pytest.mark.asyncio
@@ -550,11 +555,13 @@ def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=creator,
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=creator,
     )
 
 
@@ -658,11 +665,13 @@ def _outcome_boundary(state: SessionState) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_OutcomeLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_RealCreator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_OutcomeLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_RealCreator(),
     )
 
 
@@ -784,10 +793,12 @@ def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
         PrivateBotBoundary(
             OWNER,
             CHAT,
-            catalogue=(PROJECT,),
+            backend=backend_for(
+                catalogue=(PROJECT,),
+                sessions=launcher,
+                conversations=ConversationService(_Catalogue(_resolved())),
+            ),
             profiles=(ProfileAvailability("claude", True, None),),
-            launcher=launcher,
-            conversations=ConversationService(_Catalogue(_resolved())),
         ),
         launcher,
     )
@@ -898,11 +909,13 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_Creator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_Creator(),
     )
 
     await boundary.launch_command(chat.message_update("/launch"), None)
@@ -993,10 +1006,12 @@ async def test_resume_without_review_answers_every_state_it_can_return(
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1015,10 +1030,12 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1046,10 +1063,12 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(stopping),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(stopping),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1077,10 +1096,12 @@ async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(failed, created=True),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(failed, created=True),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1106,9 +1127,8 @@ async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> Non
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=launcher),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=launcher,
     )
     launcher.launched: list[object] = []
 
@@ -1162,9 +1182,8 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
     )
     # `cleanup` is offered for PRESERVED and `graceful` for RUNNING (`available_actions`), so
     # each action is offered from the state that actually permits it rather than from one
@@ -1209,9 +1228,8 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
     boundary = PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
     )
     record = _record()
     token = boundary.stops.offer(

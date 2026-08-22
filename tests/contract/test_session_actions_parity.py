@@ -32,6 +32,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -80,7 +81,7 @@ SITUATIONS: list[tuple[SessionState, OrphanProvenance | None]] = [
 ]
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
 
@@ -93,7 +94,7 @@ class _Launcher:
 
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
-    boundary = PrivateBotBoundary(7, 11, launcher=_Launcher(record))
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=_Launcher(record)))
     detail = await boundary._detail_reply(str(record.session_id))
     return {
         _LABEL_TO_ACTION[button.text]
@@ -108,7 +109,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def refresh_readiness(self):
             return (record,)
 
@@ -191,14 +192,14 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     from remote_agents.adapters.telegram.wizard import ProfileAvailability
 
     boundary = PrivateBotBoundary(
-        7, 11, profiles=(ProfileAvailability("claude", True, None),), launcher=_Launcher(record)
+        7,
+        11,
+        backend=backend_for(sessions=_Launcher(record)),
+        profiles=(ProfileAvailability("claude", True, None),),
     )
     detail = await boundary._detail_reply(str(record.session_id))
     return [
-        button.text
-        for row in detail.keyboard
-        for button in row
-        if "Remote Control" in button.text
+        button.text for row in detail.keyboard for button in row if "Remote Control" in button.text
     ]
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from backends import backend_for
 from fake_telegram import LoneMessageBot
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
@@ -103,14 +104,18 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
         boundary = PrivateBotBoundary(
             OWNER,
             CHAT,
-            catalogue=provider.refresh().catalogue,
-            profiles=(ProfileAvailability("claude", True, None),),
-            launcher=SessionService(SQLiteSessionStore(connection), terminal),
-            creator=ProjectCreationService(
-                FilesystemProjectWorkspace(dev_root),
-                RegistryProjectRecorder(registry_path, dev_root, today=lambda: date(2026, 8, 5)),
+            backend=backend_for(
+                catalogue=provider.refresh().catalogue,
+                sessions=SessionService(SQLiteSessionStore(connection), terminal),
+                projects=ProjectCreationService(
+                    FilesystemProjectWorkspace(dev_root),
+                    RegistryProjectRecorder(
+                        registry_path, dev_root, today=lambda: date(2026, 8, 5)
+                    ),
+                ),
+                refresh_catalogue=lambda: provider.refresh().catalogue,
             ),
-            catalogue_source=lambda: provider.refresh().catalogue,
+            profiles=(ProfileAvailability("claude", True, None),),
         )
 
         areas = await boundary._reply_for("project.open", "areas")
@@ -148,7 +153,7 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
         )
 
         assert "Session created" in str(launched["text"])
-        records = await boundary.launcher.list_sessions()
+        records = await boundary.backend.sessions.list_sessions()
         assert [record.state for record in records] == [SessionState.RUNNING]
         assert str(records[0].project_id) == opaque
     finally:

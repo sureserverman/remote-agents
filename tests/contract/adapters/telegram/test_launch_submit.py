@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -12,7 +13,7 @@ from remote_agents.application.project_catalog import CatalogProject
 _PROJECT = "a" * 24
 
 
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     """Records every LaunchCommand it is handed, so a repeat is observable rather than implied."""
 
     def __init__(self) -> None:
@@ -35,9 +36,11 @@ def _boundary() -> tuple[PrivateBotBoundary, _RecordingLauncher]:
         PrivateBotBoundary(
             7,
             11,
-            catalogue=(CatalogProject(_PROJECT, "Demo", "tests", "Registered"),),
+            backend=backend_for(
+                catalogue=(CatalogProject(_PROJECT, "Demo", "tests", "Registered"),),
+                sessions=launcher,
+            ),
             profiles=(ProfileAvailability("claude", True),),
-            launcher=launcher,
         ),
         launcher,
     )

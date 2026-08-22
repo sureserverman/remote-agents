@@ -5,6 +5,7 @@ from html import escape
 from uuid import UUID
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
@@ -154,7 +155,7 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
 def _stopped_boundary(*records: SessionRecord) -> PrivateBotBoundary:
     """A boundary whose list holds exactly `records` — what remains *after* the stop ran."""
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return list(records)
 
@@ -164,8 +165,10 @@ def _stopped_boundary(*records: SessionRecord) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=_Launcher(),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
     )
 
 
@@ -310,7 +313,7 @@ async def test_every_stop_action_lands_on_list_with_its_own_lead_line(action, le
     assert "Back" not in _labels(with_survivor)
 
 
-class _MovedOnLauncher:
+class _MovedOnLauncher(SessionUseCaseDouble):
     """Lists the session in a state that no longer matches the one its token was offered at."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -344,8 +347,9 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     token = boundary.stops.offer(
         offered.session_id, offered.profile_id, SessionState.RUNNING, None, "graceful", 7, 11
@@ -402,8 +406,9 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     token = boundary.stops.offer(
         record.session_id, record.profile_id, record.state, None, "graceful", 7, 11

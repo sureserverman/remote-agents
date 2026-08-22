@@ -29,6 +29,7 @@ from enum import StrEnum
 from html import unescape
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -96,7 +97,7 @@ class _Conversations:
 async def _telegram_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
     """The conversation references the bot renders as choosable rows."""
     boundary = PrivateBotBoundary(
-        7, 11, catalogue=(_PROJECT,), conversations=_Conversations(summaries)
+        7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
     reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
     # The tokens are minted unbound, exactly as a real render mints them; binding them to a
@@ -147,7 +148,7 @@ async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
 async def _telegram_said(summaries: tuple[ConversationSummary, ...]) -> str:
     """Everything the bot's conversation list put in front of the owner."""
     boundary = PrivateBotBoundary(
-        7, 11, catalogue=(_PROJECT,), conversations=_Conversations(summaries)
+        7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
     reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
     return unescape(str(reply.text))
@@ -288,7 +289,11 @@ async def test_neither_surface_resumes_a_conversation_the_policy_refuses() -> No
     conversations = _Conversations((refused,))
 
     boundary = PrivateBotBoundary(
-        7, 11, catalogue=(_PROJECT,), conversations=conversations, launcher=_RefusingLauncher()
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(_PROJECT,), conversations=conversations, sessions=_RefusingLauncher()
+        ),
     )
     token = boundary.callbacks.create(
         "resume.confirm", str(refused.reference), 7, 11, mutation=True
@@ -301,7 +306,7 @@ async def test_neither_surface_resumes_a_conversation_the_policy_refuses() -> No
     )
 
 
-class _RefusingLauncher:
+class _RefusingLauncher(SessionUseCaseDouble):
     """Fails loudly if a resume is ever dispatched for a refused conversation."""
 
     async def resume(self, command):  # pragma: no cover - reaching it is the failure

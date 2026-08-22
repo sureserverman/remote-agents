@@ -6,7 +6,6 @@ import asyncio
 import io
 import logging
 import signal
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from html import escape
@@ -50,6 +49,7 @@ from remote_agents.adapters.telegram.presenters import (
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
     InspectQuery,
@@ -59,7 +59,6 @@ from remote_agents.application.commands import (
 )
 from remote_agents.application.conversations import (
     ConversationCatalogueQuery,
-    ConversationService,
     resume_available,
 )
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
@@ -88,7 +87,6 @@ from remote_agents.application.session_actions import (
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import (
-    MAX_LABEL_LENGTH,
     OrphanProvenance,
     ProfileId,
     ProjectId,
@@ -259,12 +257,35 @@ class PrivateBotBoundary:
 
     owner_user_id: int
     owner_chat_id: int
-    catalogue: tuple[CatalogProject, ...] = ()
+    backend: Backend = field(default_factory=Backend)
+    """Every use case this bot may drive, as the composition root assembled them (ARCH-B1).
+
+    Four fields used to stand here instead — `launcher`, `creator`, `conversations`,
+    `capture` — and the first two were declared as a bare optional `object`, which is a slot
+    rather than a type. Nothing named what a launcher was, so five places asked it by
+    `getattr` whether it could rename, inspect, copy an attach command, read a trust state,
+    report project usage; and a composition root that forgot one of those got the same
+    silence as a host that genuinely had none.
+
+    Absence is still representable, because it is still real: `Backend()` is a host that
+    wired nothing, and `help_command` lists only what this composition actually carries. The
+    difference is that the absence now has a name and a declared field, instead of being the
+    answer a probe gives when it cannot find a method.
+
+    `profiles` is deliberately **not** in here. `Backend.profiles` is the domain
+    `ProfileCompatibility`; this surface renders `ProfileAvailability`, which requires a
+    curated id, and the local surface narrows the same domain tuple differently again.
+    Handing the domain type straight to a frontend is what once took the local surface down
+    on a version probe that merely timed out.
+    """
     profiles: tuple[ProfileAvailability, ...] = ()
-    launcher: object | None = None
-    conversations: ConversationService | None = None
-    creator: object | None = None
-    capture: Callable[[SessionId], Awaitable[str]] | None = None
+    catalogue: tuple[CatalogProject, ...] = field(init=False)
+    """The catalogue as currently drawn, seeded from the backend and re-ranked in place.
+
+    Not a `Backend` field read through: `Backend` is frozen because a process composes it
+    once, while this is what the last refresh produced. `_refresh_catalogue` writes it off
+    the event loop; every screen reads it.
+    """
     callbacks: CallbackStatePort = field(default_factory=CallbackStateStore)
     anchors: ChatViewPort = field(default_factory=ChatViewStore)
     standing: StandingNotificationPort = field(default_factory=StandingNotificationStore)
@@ -316,13 +337,11 @@ class PrivateBotBoundary:
     """
     project_page_size: int = 10
     session_page_size: int = 8
-    #: The host's configured bound, which may be tighter than the domain ceiling but never
-    #: looser — `config.py` clamps the setting to 1..40. Defaulted so a boundary built without
-    #: a config (every test that does not care) still refuses what the domain would refuse.
-    max_label_length: int = MAX_LABEL_LENGTH
-    catalogue_source: Callable[[], tuple[CatalogProject, ...]] | None = None
 
     def __post_init__(self) -> None:
+        # Seeded, not aliased. `Backend.catalogue` is the snapshot the process composed
+        # with; this is the one on screen, and `_refresh_catalogue` replaces it.
+        self.catalogue = self.backend.catalogue
         self.stops = StopController(self.callbacks)
         self.view = LiveView(
             chat_id=self.owner_chat_id, callbacks=self.callbacks, anchors=self.anchors
@@ -363,26 +382,26 @@ class PrivateBotBoundary:
         this clears `_project_views` and re-ranks, so a refresh under a thumb would reshuffle
         the list being paged through. Opening is the boundary where a new order is expected.
         """
-        if self.catalogue_source is None:
+        if self.backend.refresh_catalogue is None:
             return
-        catalogue = await asyncio.to_thread(self.catalogue_source)
+        catalogue = await asyncio.to_thread(self.backend.refresh_catalogue)
         self.catalogue = await self._ranked(catalogue)
         self._project_views.clear()
 
     async def _ranked(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
         """Order the catalogue by recent use, or leave it exactly as it came.
 
-        A launcher that cannot report usage is not an error: the unranked catalogue is the
-        honest answer rather than an empty one. Every real composition wires `SessionService`,
-        which does report usage (`bootstrap.py`), so in practice this branch is reached only
-        by a boundary built without a launcher and by test doubles that do not model usage —
-        which is most of them. `now` is read here, at the one place with a reason to know the
-        time; `rank_by_recent_use` stays pure.
+        A host with no session use case cannot report usage, and the unranked catalogue is
+        the honest answer rather than an empty one. This used to ask the launcher by name
+        whether it could report usage at all, which gave a composition that forgot to wire
+        one the same answer as a host that has none. `now` is read here, at the one place
+        with a reason to know the time; `rank_by_recent_use` stays pure.
         """
-        usage = getattr(self.launcher, "project_usage", None)
-        if usage is None:
+        sessions = self.backend.sessions
+        if sessions is None:
             return catalogue
-        return rank_by_recent_use(catalogue, await usage(), datetime.now(UTC))
+        usage = await sessions.project_usage()
+        return rank_by_recent_use(catalogue, usage, datetime.now(UTC))
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user
@@ -462,9 +481,7 @@ class PrivateBotBoundary:
             # offered. It used to answer with Home, which was defensible while Home was the
             # root of everything; the sessions list is the root of nothing here.
             self._flow = _flow_of(entry.action)
-            await self._finish_entry(
-                bot, entry, message, await self._entry_landing(entry)
-            )
+            await self._finish_entry(bot, entry, message, await self._entry_landing(entry))
             return
         if entry.action in _SEARCH_ACTIONS:
             projects = search_catalogue(self.catalogue, value)
@@ -495,13 +512,14 @@ class PrivateBotBoundary:
             )
             return
         if entry.action == "session.rename":
-            # `getattr`, not just a None check: `launcher` is duck-typed, and a composition
-            # wiring one without `rename` would otherwise raise mid-step — leaving the input
-            # box open and every later reply re-raising, which is exactly the failure Stage 2's
-            # Critical was. Production wires `SessionService`, so this is latent; latent is
-            # what the last one was too.
-            rename = getattr(self.launcher, "rename", None)
-            if rename is None:
+            # A host with no session use case cannot rename, and must say so rather than
+            # raise mid-step: raising here leaves the input box open and every later reply
+            # re-raising, which is exactly the failure Stage 2's Critical was. This used to
+            # ask the launcher by name whether it could rename at all — a question that
+            # could not distinguish that host from a composition root that forgot to wire
+            # one.
+            sessions = self.backend.sessions
+            if sessions is None:
                 await self._finish_entry(
                     bot, entry, message, _reply_arguments(self._message("Renaming is unavailable."))
                 )
@@ -517,17 +535,17 @@ class PrivateBotBoundary:
                 )
                 return
             try:
-                label = normalize_label(value, max_length=self.max_label_length)
+                label = normalize_label(value, max_length=self.backend.max_label_length)
             except ValueError:
                 await self._ask_again(
                     bot,
                     entry,
                     message,
-                    f"Use a visible name of up to {self.max_label_length} characters.",
+                    f"Use a visible name of up to {self.backend.max_label_length} characters.",
                 )
                 return
             try:
-                await rename(SessionId.parse(entry.entity_id), label)
+                await sessions.rename(SessionId.parse(entry.entity_id), label)
             except (SessionNotFoundError, KeyError):
                 # The session ended under the owner while the box was open. Its detail screen
                 # is gone too, so the list is the only honest place to land.
@@ -650,7 +668,7 @@ class PrivateBotBoundary:
         del context
         if self.permits(update) and update.effective_message is not None:
             self._flow = "resume"
-            if self.conversations is None:
+            if self.backend.conversations is None:
                 await self._answer_command(
                     update.effective_message,
                     _reply_arguments(self._message("Resume is unavailable.")),
@@ -686,13 +704,13 @@ class PrivateBotBoundary:
             "",
             "<b>Launch</b> starts a curated agent in a project.",
         ]
-        if self.conversations is not None:
+        if self.backend.conversations is not None:
             lines.append("<b>Resume</b> continues a saved conversation in a new session.")
         lines.append(
             "<b>Sessions</b> lists what is running. Open one to read its output, copy an "
             "attach command, rename it, or stop it."
         )
-        if self.creator is not None:
+        if self.backend.projects is not None:
             lines.append("<b>Add Project</b> registers a new project to launch into.")
         lines += [
             "",
@@ -916,7 +934,7 @@ class PrivateBotBoundary:
         return _reply_arguments(self._message("That action is no longer available."))
 
     async def _launch_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return _reply_arguments(self._message("Launching is unavailable."))
         project_id, profile_id = _split_launch(entity_id)
         # Re-derived before the claim, not after. The confirmation screen checked both when it
@@ -936,7 +954,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        record = await self.launcher.launch(
+        record = await self.backend.sessions.launch(
             LaunchCommand(
                 ProjectId(project_id),
                 ProfileId(profile_id),
@@ -977,7 +995,7 @@ class PrivateBotBoundary:
     async def _resume_reply(
         self, reference_value: str, token: str, message_id: int
     ) -> dict[str, object]:
-        if self.launcher is None or self.conversations is None:
+        if self.backend.sessions is None or self.backend.conversations is None:
             return _reply_arguments(self._message("Resuming is unavailable."))
         # Everything re-derivable is re-derived **before** the claim, which is the ordering
         # `_launch_reply` records and the ordering this path did not have: claiming first
@@ -1015,7 +1033,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        outcome = await self.launcher.resume(
+        outcome = await self.backend.sessions.resume(
             ResumeCommand(
                 resolved.summary.project_id,
                 resolved.summary.profile_id,
@@ -1077,11 +1095,11 @@ class PrivateBotBoundary:
 
     async def _project_areas_reply(self) -> RenderedMessage:
         """Offer only the server-enumerated areas; a typed area never reaches the filesystem."""
-        if self.creator is None:
+        if self.backend.projects is None:
             return self._message("Adding a project is unavailable.")
         areas = tuple(
             area
-            for area in await asyncio.to_thread(self.creator.available_areas)
+            for area in await asyncio.to_thread(self.backend.projects.available_areas)
             if _selectable_area(area)
         )
         if not areas:
@@ -1122,7 +1140,7 @@ class PrivateBotBoundary:
         self, entity_id: str, token: str, message_id: int
     ) -> dict[str, object]:
         """Create at most once per confirmation, then re-read the catalogue off the loop."""
-        if self.creator is None:
+        if self.backend.projects is None:
             return _reply_arguments(self._message("Adding a project is unavailable."))
         if not self.callbacks.claim_mutation(
             token,
@@ -1135,7 +1153,9 @@ class PrivateBotBoundary:
         if not separator:
             return _reply_arguments(self._message("That action has already run."))
         try:
-            created = await asyncio.to_thread(self.creator.create, CreateProjectCommand(area, name))
+            created = await asyncio.to_thread(
+                self.backend.projects.create, CreateProjectCommand(area, name)
+            )
         except ProjectCreationError as error:
             return _reply_arguments(
                 self._message(f"<b>Project not created</b>\n{escape(str(error))}")
@@ -1168,8 +1188,8 @@ class PrivateBotBoundary:
         the list is empty, so a notice that only the populated branch rendered would be
         dropped precisely when it mattered most.
         """
-        if self.launcher is not None:
-            await self.launcher.refresh_readiness()
+        if self.backend.sessions is not None:
+            await self.backend.sessions.refresh_readiness()
         records = await self._records()
         # Counted from the records this list is about to page, never from a second read: two
         # reads can disagree, because a session can end between them.
@@ -1333,8 +1353,8 @@ class PrivateBotBoundary:
                 "Copy Attach is unavailable: this session has no pane on this host any more.",
                 back=back,
             )
-        copy = getattr(self.launcher, "copy_attach", None)
-        command = await copy(record.session_id) if copy is not None else None
+        sessions = self.backend.sessions
+        command = await sessions.copy_attach(record.session_id) if sessions is not None else None
         if command is None:
             return self._message(
                 "Copy Attach is unavailable: this session has no pane on this host any more.",
@@ -1368,7 +1388,7 @@ class PrivateBotBoundary:
     async def _remote_control_reply(
         self, entity_id: str, token: str, message_id: int
     ) -> dict[str, object]:
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return _reply_arguments(self._message("Remote Control is unavailable."))
         session_value, separator, state_value = entity_id.partition("|")
         if not separator:
@@ -1386,7 +1406,7 @@ class PrivateBotBoundary:
         ):
             return _reply_arguments(self._message("That action has already run."))
         state = RemoteControlState(state_value)
-        result = await self.launcher.set_remote_control(
+        result = await self.backend.sessions.set_remote_control(
             RemoteControlCommand(SessionId.parse(session_value), state, token)
         )
         # Just the resulting state. Distinguishing "was already active" from "is now active"
@@ -1408,18 +1428,16 @@ class PrivateBotBoundary:
         it is in fact stuck on a question. Whether a trust-blocked launch lands in FAILED or
         RUNNING is a race, so state says nothing about it and the pane is the only authority.
         """
-        if self.launcher is None or not trust_available(record, TrustState.AWAITING):
+        if self.backend.sessions is None or not trust_available(record, TrustState.AWAITING):
             # Asked with AWAITING as a hypothetical: if the answer is False even then, the
             # record alone rules the row out (wrong profile) and the pane never has to be
             # read. Only a session that *could* be answered costs a capture.
             return False
-        read = getattr(self.launcher, "trust_state", None)
-        if read is None:
-            return False
-        return trust_available(record, await read(record.session_id))
+        state = await self.backend.sessions.trust_state(record.session_id)
+        return trust_available(record, state)
 
     async def _trust_reply(self, entity_id: str, token: str, message_id: int) -> dict[str, object]:
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return _reply_arguments(self._message("Answering the trust question is unavailable."))
         # Re-read before the claim, for the reason `_launch_reply` and `_remote_control_reply`
         # both give: this button outlives the screen that drew it. The profile is re-checked
@@ -1440,7 +1458,7 @@ class PrivateBotBoundary:
             message_id=message_id,
         ):
             return _reply_arguments(self._message("That action has already run."))
-        result = await self.launcher.answer_trust(
+        result = await self.backend.sessions.answer_trust(
             AnswerTrustCommand(SessionId.parse(entity_id), token)
         )
         # UNKNOWN is the expected answer, not a failure: answering clears the dialog, so the
@@ -1462,12 +1480,9 @@ class PrivateBotBoundary:
         this predicate is what decides whether the bot offers a PRESERVED session its attach
         at all, and DEC-021 requires both surfaces to offer it or neither.
         """
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return False
-        inspect = getattr(self.launcher, "inspect", None)
-        if inspect is None:
-            return False
-        observation = await inspect(InspectQuery(record.session_id))
+        observation = await self.backend.sessions.inspect(InspectQuery(record.session_id))
         return bool(
             observation is not None
             and (observation.live or observation.preserved)
@@ -1552,10 +1567,10 @@ class PrivateBotBoundary:
             self._attachment = None
 
     async def _inspection_result(self, session_value: str):
-        if self.capture is None:
+        if self.backend.capture is None:
             return None
         try:
-            captured = await self.capture(SessionId.parse(session_value))
+            captured = await self.backend.capture(SessionId.parse(session_value))
         except TerminalTargetMissing:
             # The pane died between this view being drawn and the button being pressed —
             # an OOM kill, or a terminal crash. Reconciliation ends the record on its next
@@ -1595,7 +1610,7 @@ class PrivateBotBoundary:
         if action == FORCE:
             return _reply_arguments(await self._force_confirm_reply(token, message_id))
         request = self.stops.claim(token, self.owner_user_id, self.owner_chat_id, message_id)
-        if request is None or self.launcher is None:
+        if request is None or self.backend.sessions is None:
             # DEC-008 drops the repeat rather than servicing it; where the *answer* is drawn
             # is a separate question, and it lands on the list like every other stop outcome
             # rather than on the one Home-only screen a stop button could still reach.
@@ -1604,7 +1619,9 @@ class PrivateBotBoundary:
             )
         record = await self._record(str(request.session_id))
         result = (
-            await self.stops.execute(request, self.launcher, record) if record is not None else None
+            await self.stops.execute(request, self.backend.sessions, record)
+            if record is not None
+            else None
         )
         if result is None or not result.dispatched:
             # Lands on the list like every other outcome. Covers both halves of the guard:
@@ -1789,12 +1806,12 @@ class PrivateBotBoundary:
         return await self._sessions_reply(notice=endings[action])
 
     async def _records(self) -> tuple[SessionRecord, ...]:
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return ()
         project_names = {project.opaque_id: project.name for project in self.catalogue}
         return tuple(
             _with_project_name(record, project_names.get(str(record.project_id)))
-            for record in await self.launcher.list_sessions()
+            for record in await self.backend.sessions.list_sessions()
             if record.state is not SessionState.ENDED
         )
 
@@ -1823,12 +1840,12 @@ class PrivateBotBoundary:
         notifications on the strength of a failed read is not a trade worth making. The
         notification simply stands until the read succeeds.
         """
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return ()
         wanted = set(session_values)
         return tuple(
             str(record.session_id)
-            for record in await self.launcher.list_sessions()
+            for record in await self.backend.sessions.list_sessions()
             if str(record.session_id) in wanted and not notifiable(record.state)
         )
 
@@ -1857,10 +1874,10 @@ class PrivateBotBoundary:
         from `_records` and a session present-but-finished must not both arrive here as
         "cannot be named", because only one of them is worth an operator's attention.
         """
-        if self.launcher is None:
+        if self.backend.sessions is None:
             return None
         project_names = {project.opaque_id: project.name for project in self.catalogue}
-        for record in await self.launcher.list_sessions():
+        for record in await self.backend.sessions.list_sessions():
             if str(record.session_id) == session_value:
                 if not notifiable(record.state):
                     # Said out loud, and said differently from the notifier's own drop. This
@@ -1921,7 +1938,7 @@ class PrivateBotBoundary:
         # on this screen. Add Project used to live on Home, one level up from the only screen
         # that can tell you it is missing.
         finders = [Button("Search", self._callback(picker.search, "search"))]
-        if picker.creates_projects and self.creator is not None:
+        if picker.creates_projects and self.backend.projects is not None:
             finders.append(Button("Add Project", self._callback("project.open", "areas")))
         buttons.append(tuple(finders))
         # No `back`. This screen had exactly one parent when Home was the only way to reach
@@ -1959,10 +1976,10 @@ class PrivateBotBoundary:
     async def _resume_profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
-        if self.conversations is None:
+        if self.backend.conversations is None:
             return self._message("Resume is unavailable.")
         capabilities = {
-            str(item.profile_id): item for item in await self.conversations.capabilities()
+            str(item.profile_id): item for item in await self.backend.conversations.capabilities()
         }
         buttons = []
         unavailable = []
@@ -1996,13 +2013,13 @@ class PrivateBotBoundary:
 
     async def _resume_catalogue_reply(self, entity_id: str) -> RenderedMessage:
         parsed = _split_resume_page(entity_id)
-        if parsed is None or self.conversations is None:
+        if parsed is None or self.backend.conversations is None:
             return self._message("That conversation list is no longer open.")
         project_id, profile_id, page = parsed
         if not any(project.opaque_id == project_id for project in self.catalogue):
             return self._message("The project is no longer available.")
         try:
-            result = await self.conversations.catalogue(
+            result = await self.backend.conversations.catalogue(
                 ConversationCatalogueQuery(page, 10, ProfileId(profile_id), ProjectId(project_id))
             )
         except ValueError:
@@ -2028,9 +2045,7 @@ class PrivateBotBoundary:
                     # index is partial on `state <> 'ended'`, so the conversation binds again
                     # once its session has ended. An unwanted resume therefore costs a
                     # session to stop, not a conversation forever.
-                    self._callback(
-                        "resume.confirm", str(summary.reference), mutation=True
-                    ),
+                    self._callback("resume.confirm", str(summary.reference), mutation=True),
                 ),
             )
             for summary in result.conversations
@@ -2072,13 +2087,13 @@ class PrivateBotBoundary:
         )
 
     async def _resolve_resume(self, reference_value: str):
-        if self.conversations is None:
+        if self.backend.conversations is None:
             return None
         try:
             reference = ConversationReference(reference_value)
         except ValueError:
             return None
-        return await self.conversations.resolve_for_resume(reference)
+        return await self.backend.conversations.resolve_for_resume(reference)
 
     def _profiles_reply(self, project_id: str) -> RenderedMessage:
         if not any(project.opaque_id == project_id for project in self.catalogue):
@@ -2162,7 +2177,7 @@ class PrivateBotBoundary:
                 self._callback("launch.open", "projects"),
             ),
         ]
-        if self.conversations is not None:
+        if self.backend.conversations is not None:
             bar.append(
                 Button(
                     _tab("Resume", self._flow == "resume"),

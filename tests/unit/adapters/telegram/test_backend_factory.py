@@ -79,6 +79,10 @@ def test_an_unasked_capability_comes_back_absent() -> None:
     """
     backend = backend_for(sessions=_PartialLauncher())
 
+    assert backend.projects is None, (
+        "a host that wires no project creation must not appear to have one — forty-nine "
+        "boundaries in this suite are that host"
+    )
     assert backend.capture is None
     assert backend.activity_feed is None
     assert backend.conversations is None
@@ -95,12 +99,14 @@ def test_the_defaults_are_the_type_s_own_defaults() -> None:
     old value. So this asserts equality with a bare production-shaped `Backend` rather
     than with literals.
     """
-    bare = Backend(sessions=object(), projects=object())
+    bare = Backend()
     made = backend_for()
 
     assert made.max_label_length == bare.max_label_length
     assert made.catalogue == bare.catalogue
     assert made.profiles == bare.profiles
+    assert made.sessions == bare.sessions
+    assert made.projects == bare.projects
 
 
 def test_what_the_caller_states_survives() -> None:

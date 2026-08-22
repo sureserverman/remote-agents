@@ -735,15 +735,17 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
             # one session's alert into one message above the menu and one below.
             standing=SQLiteStandingNotificationStore(connection),
-            catalogue=backend.catalogue,
+            # The whole backend, not five of its fields taken out and handed over one at a
+            # time. `catalogue` and `max_label_length` came through here too and are on it;
+            # the boundary seeds its render copy of the first from `Backend.catalogue`.
+            backend=backend,
+            # Except the profiles, which stay a separate argument on purpose:
+            # `Backend.profiles` is the domain `ProfileCompatibility` and this surface
+            # renders `ProfileAvailability`. `runtime.profiles` is that narrowing, and
+            # passing `backend.profiles` here instead is the plausible-looking line that
+            # breaks it — see `Backend.profiles`.
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
-            max_label_length=config.max_label_length,
-            launcher=backend.sessions,
-            conversations=backend.conversations,
-            creator=backend.projects,
-            capture=backend.capture,
-            catalogue_source=backend.refresh_catalogue,
         ),
         terminal,
         # Readiness is wired in deliberately: without it, reconciliation promotes any

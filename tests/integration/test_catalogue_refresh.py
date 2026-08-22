@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
@@ -248,8 +249,10 @@ async def test_boundary_refresh_replaces_the_catalogue_and_clears_cached_views(
     boundary = PrivateBotBoundary(
         1,
         2,
-        catalogue=provider.refresh().catalogue,
-        catalogue_source=lambda: provider.refresh().catalogue,
+        backend=backend_for(
+            catalogue=provider.refresh().catalogue,
+            refresh_catalogue=lambda: provider.refresh().catalogue,
+        ),
     )
     boundary._project_views["all"] = boundary.catalogue
 
@@ -261,14 +264,14 @@ async def test_boundary_refresh_replaces_the_catalogue_and_clears_cached_views(
 
 
 async def test_boundary_refresh_is_inert_without_a_catalogue_source() -> None:
-    boundary = PrivateBotBoundary(1, 2, catalogue=())
+    boundary = PrivateBotBoundary(1, 2, backend=backend_for(catalogue=()))
 
     await boundary.refresh_catalogue()
 
     assert boundary.catalogue == ()
 
 
-class _UsageLauncher:
+class _UsageLauncher(SessionUseCaseDouble):
     """A launcher that reports usage and nothing else — the ranking's only dependency."""
 
     def __init__(self, usage) -> None:
@@ -296,9 +299,11 @@ async def _ranked_boundary(dev_root: Path, registry_path: Path, usage) -> Privat
     boundary = PrivateBotBoundary(
         1,
         2,
-        catalogue=provider.refresh().catalogue,
-        catalogue_source=lambda: provider.refresh().catalogue,
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=provider.refresh().catalogue,
+            refresh_catalogue=lambda: provider.refresh().catalogue,
+            sessions=launcher,
+        ),
         profiles=(ProfileAvailability("claude", True),),
     )
     await boundary.refresh_catalogue()
@@ -350,9 +355,11 @@ async def test_a_ranked_catalogue_is_re_read_on_the_next_refresh(
     boundary = PrivateBotBoundary(
         1,
         2,
-        catalogue=catalogue,
-        catalogue_source=lambda: provider.refresh().catalogue,
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=catalogue,
+            refresh_catalogue=lambda: provider.refresh().catalogue,
+            sessions=launcher,
+        ),
     )
 
     await boundary.refresh_catalogue()
@@ -394,7 +401,7 @@ def _picker_boundary(
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     source = _CountingSource(provider)
     boundary = PrivateBotBoundary(
-        1, 2, catalogue=provider.refresh().catalogue, catalogue_source=source
+        1, 2, backend=backend_for(catalogue=provider.refresh().catalogue, refresh_catalogue=source)
     )
     return boundary, source
 
@@ -454,7 +461,11 @@ async def test_an_unranked_catalogue_survives_a_launcher_that_cannot_report_usag
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     unranked = provider.refresh().catalogue
     boundary = PrivateBotBoundary(
-        1, 2, catalogue=unranked, catalogue_source=lambda: provider.refresh().catalogue
+        1,
+        2,
+        backend=backend_for(
+            catalogue=unranked, refresh_catalogue=lambda: provider.refresh().catalogue
+        ),
     )
 
     await boundary.refresh_catalogue()

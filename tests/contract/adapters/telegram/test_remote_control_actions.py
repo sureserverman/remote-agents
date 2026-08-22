@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from backends import SessionUseCaseDouble, backend_for
+
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.domain.models import (
     ProfileId,
@@ -12,7 +14,7 @@ from remote_agents.domain.models import (
 from remote_agents.domain.remote_control import RemoteControlState
 
 
-class Launcher:
+class Launcher(SessionUseCaseDouble):
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
         self.commands = []
@@ -38,7 +40,7 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
         datetime.now(UTC),
     )
     launcher = Launcher(record)
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=launcher))
     detail = await boundary._detail_reply(str(record.session_id))
     token = next(
         button.callback_data

@@ -190,7 +190,7 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
     finally:
         connection.close()
 
-    launcher = composition.boundary.launcher
+    launcher = composition.boundary.backend.sessions
     assert launcher._hide_in_console is not None, "a phone stop cannot move the console"
     # The same file the local surface's composer takes, or the lock excludes nothing.
     assert (
@@ -398,7 +398,7 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
         composition = _private_boundary(config, connection, paths)
         context = local_context(config, connection, paths)
 
-        assert composition.boundary.launcher._hide_in_console is not None, (  # noqa: SLF001
+        assert composition.boundary.backend.sessions._hide_in_console is not None, (  # noqa: SLF001
             "the bot lost its hide-only composer; a phone stop would leave the console "
             "a pane short until the next sync"
         )
@@ -439,7 +439,7 @@ def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_pa
     try:
         composition = _private_boundary(config, connection, paths)
 
-        assert composition.boundary.launcher._locks is composition.reconciler._locks, (  # noqa: SLF001
+        assert composition.boundary.backend.sessions._locks is composition.reconciler._locks, (  # noqa: SLF001
             "the service and the reconciler hold different lock maps (DEC-030)"
         )
     finally:

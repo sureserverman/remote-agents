@@ -15,6 +15,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
+from backends import SessionUseCaseDouble
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList, TextArea
 from tui_positions import position
@@ -64,7 +65,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     )
 
 
-class _Everything:
+class _Everything(SessionUseCaseDouble):
     def __init__(self, state: SessionState) -> None:
         self.record = _record(state)
         self.issued: list[object] = []

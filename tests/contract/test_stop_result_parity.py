@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from html import unescape
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
@@ -66,7 +67,7 @@ def _record() -> SessionRecord:
     )
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """A graceful stop that reports `detail` and leaves the session exactly where it was.
 
     Leaving it listed is not incidental — it is the evidence both surfaces used to have, and
@@ -110,8 +111,10 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
+            sessions=launcher,
+        ),
     )
     token = boundary.stops.offer(
         record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
@@ -221,7 +224,7 @@ async def test_both_surfaces_name_the_same_cause(detail: str) -> None:
         )
 
 
-class _ForceLauncher:
+class _ForceLauncher(SessionUseCaseDouble):
     """A force stop that reports `detail` and leaves the session gone from the list.
 
     Gone, on both outcomes, and that is the point of BL-026 rather than a convenience.
@@ -267,8 +270,10 @@ async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
+            sessions=launcher,
+        ),
     )
     # The *confirmed* token, because an unconfirmed force is refused at `claim` by design —
     # the second press is what makes it runnable, and this drives the press that runs.

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from backends import backend_for
 from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.sqlite.database import open_database
@@ -95,11 +96,13 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(project,),
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=service,
+            conversations=ConversationService(SingleConversationCatalogue(resolved)),
+            capture=terminal.capture,
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
-        conversations=ConversationService(SingleConversationCatalogue(resolved)),
-        capture=terminal.capture,
     )
     try:
         profiles = await boundary._resume_profiles_reply(project.opaque_id)

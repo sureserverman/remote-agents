@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 from stop_results import a_clean_stop, a_verified_force_stop
 from telegram.error import BadRequest
@@ -136,7 +138,7 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
 def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
     """A boundary over a chat's worth of state, with no terminal behind it."""
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return list(records)
 
@@ -146,12 +148,14 @@ def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=_Launcher(),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
     )
 
 
-class _RenamingLauncher:
+class _RenamingLauncher(SessionUseCaseDouble):
     """Holds one record and applies renames to it, so the detail can be re-read after one."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -195,8 +199,9 @@ def _renameable(record: SessionRecord) -> tuple[PrivateBotBoundary, _RenamingLau
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -564,7 +569,7 @@ def _inspectable_boundary(record: SessionRecord, output: str) -> PrivateBotBound
     async def _capture(_session_id) -> str:
         return output
 
-    boundary.capture = _capture
+    boundary.backend = replace(boundary.backend, capture=_capture)
     return boundary
 
 
@@ -579,7 +584,7 @@ def _a_running_session(state: SessionState = SessionState.RUNNING) -> SessionRec
     )
 
 
-class _TrustLauncher:
+class _TrustLauncher(SessionUseCaseDouble):
     """One FAILED Claude session whose pane is waiting on the folder-trust question."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -610,8 +615,9 @@ def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -724,7 +730,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
     session = _a_running_session()
     boundary = _boundary(session)
 
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [session]
 
@@ -734,7 +740,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
         async def launch(self, _command):
             raise RuntimeError("the profile could not be started")
 
-    boundary.launcher = _FailingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_FailingLauncher())
     # The launch guard checks the curated availability set before it reaches the launcher, so
     # without this the screen under test is "That agent is unavailable." and the except branch
     # is never entered.
@@ -770,7 +776,7 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
     session = _a_running_session()
     boundary = _boundary(session)
 
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [session]
 
@@ -780,7 +786,7 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
         async def graceful_stop(self, _command):
             raise RuntimeError("the terminal went away mid-stop")
 
-    boundary.launcher = _FailingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_FailingLauncher())
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
@@ -829,7 +835,7 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
 
     stopped: list[str] = []
 
-    class _StoppingLauncher:
+    class _StoppingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [] if stopped else [session]
 
@@ -847,7 +853,7 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
             stopped.append("force")
             return a_verified_force_stop()
 
-    boundary.launcher = _StoppingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_StoppingLauncher())
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
@@ -1327,7 +1333,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     database = tmp_path / "sessions.sqlite3"
     connection = open_database(database)
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [record]
 
@@ -1337,7 +1343,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     before = PrivateBotBoundary(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(connection),
         anchors=SQLiteChatViewStore(connection),
     )
@@ -1351,7 +1357,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     after = PrivateBotBoundary(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(reopened),
         anchors=SQLiteChatViewStore(reopened),
     )
@@ -1380,7 +1386,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
     """
     record = _a_running_session()
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [record]
 
@@ -1391,7 +1397,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
     boundary = PrivateBotBoundary(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(connection),
         anchors=SQLiteChatViewStore(connection),
     )

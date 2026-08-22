@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from backends import SessionUseCaseDouble, backend_for
+
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
@@ -35,7 +37,7 @@ class FakeCatalogue:
         return (ProfileResumeCapability(ProfileId("claude"), True, True),)
 
 
-class FakeLauncher:
+class FakeLauncher(SessionUseCaseDouble):
     def __init__(self) -> None:
         self.commands = []
 
@@ -76,10 +78,12 @@ async def test_owner_resume_journey_uses_a_catalogue_reference_not_provider_inpu
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(project,),
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=launcher,
+            conversations=ConversationService(FakeCatalogue(resolved)),
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=launcher,
-        conversations=ConversationService(FakeCatalogue(resolved)),
     )
     catalogue = await boundary._resume_catalogue_reply(f"{project.opaque_id}|claude|1")
     selection = catalogue.keyboard[0][0].callback_data

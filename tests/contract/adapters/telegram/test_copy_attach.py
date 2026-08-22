@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from backends import SessionUseCaseDouble, backend_for
+
 from remote_agents.adapters.telegram.service import PrivateBotBoundary
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.application.commands import InspectQuery
@@ -19,7 +21,7 @@ from remote_agents.domain.models import (
 from remote_agents.ports.terminal import TerminalObservation
 
 
-class Launcher:
+class Launcher(SessionUseCaseDouble):
     def __init__(self, record: SessionRecord, observation: TerminalObservation | None) -> None:
         self.record = record
         self.observation = observation
@@ -53,11 +55,13 @@ async def test_copy_attach_requires_live_matching_project_and_profile_evidence()
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject(str(project_id), "opaque-editor", "writing", "Registered"),),
-        launcher=Launcher(
-            record,
-            TerminalObservation(
-                session_id, True, False, project_id=project_id, profile_id=ProfileId("claude")
+        backend=backend_for(
+            catalogue=(CatalogProject(str(project_id), "opaque-editor", "writing", "Registered"),),
+            sessions=Launcher(
+                record,
+                TerminalObservation(
+                    session_id, True, False, project_id=project_id, profile_id=ProfileId("claude")
+                ),
             ),
         ),
     )
@@ -99,15 +103,17 @@ async def test_a_preserved_pane_is_offered_a_read_only_attach() -> None:
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject(str(project_id), "opaque-editor", "writing", "Registered"),),
-        launcher=Launcher(
-            record,
-            TerminalObservation(
-                session_id,
-                live=False,
-                preserved=True,
-                project_id=project_id,
-                profile_id=ProfileId("claude"),
+        backend=backend_for(
+            catalogue=(CatalogProject(str(project_id), "opaque-editor", "writing", "Registered"),),
+            sessions=Launcher(
+                record,
+                TerminalObservation(
+                    session_id,
+                    live=False,
+                    preserved=True,
+                    project_id=project_id,
+                    profile_id=ProfileId("claude"),
+                ),
             ),
         ),
     )
@@ -135,7 +141,7 @@ async def test_copy_attach_is_hidden_when_the_pane_is_not_currently_live() -> No
         SessionState.RUNNING,
         datetime.now(UTC),
     )
-    boundary = PrivateBotBoundary(7, 11, launcher=Launcher(record, None))
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=Launcher(record, None)))
 
     detail = await boundary._detail_reply(str(session_id))
 

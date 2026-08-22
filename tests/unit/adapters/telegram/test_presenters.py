@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.telegram.presenters import (
     MAX_TELEGRAM_TEXT_UNITS,
@@ -68,7 +69,7 @@ def _labels(rendered) -> tuple[tuple[str, ...], ...]:
 
 
 def _sessions_boundary(*records: SessionRecord) -> PrivateBotBoundary:
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return list(records)
 
@@ -78,8 +79,10 @@ def _sessions_boundary(*records: SessionRecord) -> PrivateBotBoundary:
     return PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=_Launcher(),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
     )
 
 

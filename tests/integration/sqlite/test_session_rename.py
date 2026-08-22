@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -198,8 +199,10 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=(CatalogProject("opaque-editor", "opaque-editor", "tests", "Registered"),),
-        launcher=service,
+        backend=backend_for(
+            catalogue=(CatalogProject("opaque-editor", "opaque-editor", "tests", "Registered"),),
+            sessions=service,
+        ),
     )
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)

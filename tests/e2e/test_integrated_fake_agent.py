@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from backends import backend_for
 from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.projects.registry import RegisteredProject
@@ -136,7 +137,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, launcher=service)
+    boundary = PrivateBotBoundary(7, 11, backend=backend_for(catalogue=catalogue, sessions=service))
 
     try:
         record = await service.launch(
@@ -187,9 +188,8 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=catalogue,
+        backend=backend_for(catalogue=catalogue, sessions=service),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
     )
 
     try:
@@ -259,10 +259,10 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
     boundary = PrivateBotBoundary(
         7,
         11,
-        catalogue=catalogue,
-        catalogue_source=lambda: catalogue,
+        backend=backend_for(
+            catalogue=catalogue, refresh_catalogue=lambda: catalogue, sessions=service
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
     )
     assert [project.name for project in boundary.catalogue] == ["alpha", "opaque-editor"]
 

@@ -51,7 +51,7 @@ from remote_agents.ports.agent_activity import AgentActivity
 class Backend:
     """The sealed set of use cases a frontend may drive, and nothing besides."""
 
-    sessions: object
+    sessions: object | None = None
     """The session lifecycle use case (`application.services.SessionService`).
 
     Typed `object` for one release only. `SessionService` imports `ports.terminal`, and
@@ -59,10 +59,30 @@ class Backend:
     that reads a `Backend` — including the two frontends' test doubles, which is the churn
     Task 3.1's `backend_for` factory exists to avoid. Sub-plan 4 tightens it once the
     frontends no longer construct partial backends.
+
+    **Optional, like every other field, and the reason is the frontends' existing
+    contract.** A boundary without a session use case answers "that is unavailable" rather
+    than failing to start, and it has always done so; the same is true of the local
+    surface. This type records what a process wired, so it has to be able to record a
+    process that wired nothing — otherwise typing the seam would change behaviour on the
+    hosts that rely on the absence, which is the one thing this refactor may not do.
+
+    That optionality is *not* how the composition root is held to wiring it. Nothing
+    reaches for a capability by name any more, so a forgotten field is a named `None` on a
+    declared type rather than a `getattr` returning quietly, and
+    `test_compose_backend_builds_one_backend_from_the_real_helpers` asserts every real
+    composition carries one. The absence is representable; it is not permitted in
+    production and a test says so.
     """
 
-    projects: object
-    """Project creation (`application.project_admin.ProjectCreationService`)."""
+    projects: object | None = None
+    """Project creation (`application.project_admin.ProjectCreationService`).
+
+    Optional for the reason `sessions` is, and independently of it: forty-nine boundaries
+    in the suite carry a session use case and no project creation, because a host that
+    cannot register a project must not advertise Add Project. `help_command` is where that
+    composition describes itself.
+    """
 
     conversations: object | None = None
     """Resume catalogue and resolution, or None on a host that offers no resume."""
