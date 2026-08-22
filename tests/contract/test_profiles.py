@@ -126,3 +126,31 @@ def test_profile_availability_is_not_version_pinned() -> None:
     assert by_id["claude-remote"].status == "AVAILABLE"
     assert by_id["codex"].status == "AVAILABLE"
     assert by_id["codex"].reason is None
+
+
+def test_every_curated_profile_has_a_label_on_the_bot() -> None:
+    """The curated set and the label table must not come apart, and they nearly did.
+
+    They used to be one thing. `adapters/telegram/wizard._PROFILE_LABELS` was both the
+    curated-id check and the display names, so a sixth profile reaching the domain failed
+    loudly at composition -- the type refused to construct.
+
+    Sub-plan 4 retired that module. The check moved to
+    `application.profiles._curated_ids`, which reads `closed_profiles()` and therefore
+    accepts whatever the domain curates; the labels stayed behind as a hardcoded dict in
+    `service._profile_name` with a `"Unavailable"` fallback. So the loud failure became a
+    quiet one: a sixth profile would now construct fine and render a launch button captioned
+    "Unavailable".
+
+    Nobody is about to add a sixth. But the guard that used to be free is gone, and this is
+    what buys it back -- and it is cheaper than either re-coupling them or letting the next
+    reader discover the fallback in production. Found by the Stage 1 gate evaluator.
+    """
+    from remote_agents.adapters.telegram.service import _profile_name
+
+    for definition in closed_profiles():
+        profile_id = str(definition.profile_id)
+        assert _profile_name(profile_id) != "Unavailable", (
+            f"{profile_id} is curated by the domain but has no label on the bot, so it would "
+            'render as a launch button captioned "Unavailable"'
+        )

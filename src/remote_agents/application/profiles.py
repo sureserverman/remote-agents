@@ -18,12 +18,16 @@ through to a type that read any reason as blocking is what took the local surfac
 (dropping the reason whenever `available` is true) throws the note away rather than carrying
 it.
 
-So the merge splits the overloaded field instead of choosing a winner (DEC-042): a
-**blocking** reason and a non-blocking **note** are different facts, and a type that cannot
-say which one it is holding forces every reader to guess. Both original invariants survive —
-the curated-id check from the wizard, the no-blocking-reason-when-available check from the
-local surface — and the state that satisfied one type and crashed the other is now
-representable.
+So the merge splits the overloaded field instead of choosing a winner (**DEC-045**, which
+is the entry that records this and the one to read): a **blocking** reason and a non-blocking
+**note** are different facts, and a type that cannot say which one it is holding forces every
+reader to guess. The plan reached that shape by analogy with DEC-042 — which separates two
+*questions* that look like one, about tmux sockets rather than about types — but the analogy
+is where DEC-042's involvement ends; it says nothing about invariants.
+
+Both original invariants survive — the curated-id check from the wizard, and the
+no-blocking-reason-when-available check from the local surface — and the state that satisfied
+one type and crashed the other is now representable.
 
 **It lives in `application/` because `Backend` carries it**, and DEC-015/ARCH-02 forbids
 `application/` importing an adapter type — so the merged type could not have lived in either

@@ -190,9 +190,15 @@ def test_both_surfaces_are_handed_the_same_profile_tuple(
 
     Profiles were the single capability `Backend` composed twice: the bot was handed
     `LocalRuntime.profiles` and the local surface re-narrowed `LocalRuntime.profiles` again,
-    so the two could diverge with nothing to say so. This asserts they cannot, by comparing
-    what the surface receives against `Backend.profiles` itself rather than against a second
-    computation of it.
+    so the two could diverge with nothing to say so.
+
+    **What this actually compares, stated precisely.** It composes twice on purpose --
+    `local_context` and `compose_backend` each run their own probe and their own
+    `_narrow_profiles` -- and asserts the two results are equal. So its teeth are that the two
+    composition paths do not drift *from each other*, which is exactly the failure that was
+    possible before and is not now. It is not the same object read twice, and it would not
+    catch a `_narrow_profiles` wrong in the same way on both paths; the tri-state itself is
+    pinned by its neighbour above, which drives one path end to end with a probe that fails.
     """
     from remote_agents.bootstrap import compose_backend
     from remote_agents.config import load_config
@@ -217,7 +223,7 @@ def test_the_naive_merge_is_what_the_type_refuses() -> None:
     refusal directly, so a future edit that "simplifies" the two fields back into one cannot
     do it quietly: it has to delete this test, and deleting it says what it is doing.
 
-    **Deliberately redundant with `tests/unit/application/test_profiles.py`'s
+    **Deliberately redundant with `tests/unit/application/test_profile_availability.py`'s
     `test_an_available_profile_has_no_blocking_reason`**, which asserts the same invariant with
     a different reason string. It is kept for its position, not its coverage: this file is
     where the outage is recalled, and the invariant is easier to weaken when the only thing

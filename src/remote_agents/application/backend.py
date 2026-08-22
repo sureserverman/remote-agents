@@ -117,8 +117,10 @@ class Backend:
     at once — why a profile is blocked, and why no version is being shown — and the local
     surface's old type read any reason as blocking, so a version probe that merely timed out
     took it down. `ProfileAvailability` splits that field, and each surface reads the part it
-    means: `blocked_reason` alone for the local surface, `any_reason` for the bot's one-string
-    row. DEC-043 — the decision is shared, the sentence stays the surface's.
+    means: the local surface's launch list reads `blocked_reason` alone, and the bot's resume
+    list — the one row anywhere that renders a reason without distinguishing the two cases —
+    reads `any_reason`. The bot's launch list renders no reason at all, filtering on
+    `available`. DEC-043 — the decision is shared, the sentence stays the surface's.
     """
 
     capture: Callable[[SessionId], Awaitable[str]] | None = None

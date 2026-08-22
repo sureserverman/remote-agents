@@ -13,8 +13,8 @@ The two adapter types this replaces each modelled two of the three. The Telegram
 `ProfileAvailability` had no rule about reasons at all and could hold state 2, but required a
 curated id; the local surface's `ProfileChoice` enforced "an available profile has no blocking
 reason" and therefore could not hold state 2, but accepted any non-empty id. Neither was wrong
-for its own surface, and that is why DEC-042 says a look-alike pair is merged by carrying both
-invariants rather than by picking one.
+for its own surface, and **DEC-045** is the entry recording why that means a look-alike pair is
+merged by carrying both invariants rather than by picking one.
 """
 
 from __future__ import annotations
@@ -35,7 +35,14 @@ class TestTheCuratedIdCheck:
         assert ProfileAvailability(profile_id, True).profile_id == profile_id
 
     def test_the_curated_set_is_exactly_the_five_closed_profiles(self) -> None:
-        """Pinned as a set with its length, so a sixth cannot arrive unnoticed (DEC-041)."""
+        """Pinned as a set *and* by its length, so a sixth cannot arrive unnoticed.
+
+        The length assertion is the load-bearing half: an equality check alone would still
+        pass if the curated set and this literal grew together, which is exactly what a
+        careless edit does. Same practice DEC-041 uses on `CONSOLE_BINDINGS` — that entry is
+        about tmux root keys, not about profiles, and is cited here as precedent for the
+        technique rather than as authority over this set.
+        """
         from remote_agents.domain.profiles import closed_profiles
 
         curated = {str(definition.profile_id) for definition in closed_profiles()}
@@ -90,8 +97,8 @@ class TestTheTriStateReason:
         subject is a merge that invented one. `probe_profiles` always sets
         `executable_missing` when it blocks, so the rule would look free — and it would raise
         at `bootstrap`'s narrowing the first time any other producer did not, which is the
-        shape of the incident this type exists to end. DEC-042 says carry both semantics, not
-        three.
+        shape of the incident this type exists to end. DEC-045 says carry both semantics, not
+        three, and names this as a rejected alternative with its cost.
         """
         assert ProfileAvailability("claude", False).blocked_reason is None
 
@@ -110,10 +117,11 @@ class TestWhatEachSurfaceReads:
     def test_the_bot_reads_any_reason_blocking_or_not(self) -> None:
         """The bot's shape: one string for an unlaunchable row, blocking or not.
 
-        `adapters/telegram/service.py:2081-2083` composes `profile.reason or <catalogue
-        fallback>` today, reaching that branch with `available=True` whenever the catalogue is
-        not resume-capable — so it has always shown the probe note there. `any_reason` is that
-        same string once the field is split.
+        `adapters/telegram/service.py:2085` composes `profile.any_reason or <catalogue
+        fallback>`, reaching that branch with `available=True` whenever the catalogue is not
+        resume-capable — so it has always shown the probe note there. Before the split it read
+        a single `.reason`; `any_reason` is that same string, which is the point of the
+        property.
         """
         blocked = ProfileAvailability("codex", False, blocked_reason="executable_missing")
         noted = ProfileAvailability("claude", True, note="version_probe_failed")
@@ -127,8 +135,11 @@ class TestWhatEachSurfaceReads:
         """The local surface's shape: a reason only where it refuses.
 
         `adapters/tui/screens/launch.py:251,260` reads a reason only in its unavailable
-        branches, so `blocked_reason` alone is what it needs and the note stays invisible to
-        it — which is the behaviour `bootstrap` currently buys by discarding the note outright.
+        branches, so `blocked_reason` alone is what it needs. **The note is not discarded — it
+        is simply not read here.** It survives the narrowing onto `TuiContext.profiles[i].note`
+        like any other field; what changed is that the surface ignoring it is now a choice the
+        screen makes, rather than a fact about what reached it. `bootstrap` used to discard it,
+        which is what left nothing downstream able to tell a timed-out probe from a quiet one.
         """
         noted = ProfileAvailability("claude", True, note="version_probe_failed")
         assert noted.blocked_reason is None

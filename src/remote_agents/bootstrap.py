@@ -1156,7 +1156,11 @@ def local_context(config, connection, paths: ProductionPaths):
         # because", and this surface's old type read any reason as blocking, so passing it
         # through unconditionally took the whole surface down with `an available profile has
         # no blocking reason` when a version probe merely timed out. Dropping the note
-        # avoided the crash and lost the diagnostic. Splitting the field keeps both.
+        # avoided the crash and lost the diagnostic. Splitting the field means the note now
+        # *reaches* this surface -- `launch.py` still renders only `blocked_reason`, so an
+        # owner here sees no difference yet between a quiet probe and one that timed out.
+        # DEC-045 accepted cost 1. What changed is that the information is present to render,
+        # rather than discarded three layers earlier.
         profiles=backend.profiles,
         # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
         # own rather than following the host the way the bot's does.
