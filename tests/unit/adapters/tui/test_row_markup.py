@@ -27,15 +27,20 @@ found it, and the sweep behind it found more than the review did:
 
     grep -rn 'set_status(f"' src/remote_agents/adapters/tui/
 
-`app.py`'s `answer_trust` writes an exception's own text there, the inspect screen writes the
-owner's typed search query, and the project review writes the owner's typed project name. The
-sink is very much still live for text this app did not author.
+The inspect screen writes the owner's typed search query there, the project review writes the
+owner's typed project name, and a stop failure writes its summary. The sink is very much still
+live for text this app did not author.
 
-So the driven test is **retargeted rather than deleted**: it now reaches `#status` through the
-exception path, which is un-authored in the strongest sense — a string from another layer
-entirely. The resume-specific route it used to take is gone, but the property it protects is
-not, and deleting it would have left the sink covered only by `markup=False` and the structural
-sweep below while the docstring claimed there was nothing left to cover.
+So the driven test is **retargeted rather than deleted**, and has now been retargeted twice —
+which is the point of writing the sweep down rather than naming one route. It first drove
+`#status` through the resume confirmation, a step that no longer exists; then through
+`RemoteAgentsTui.answer_trust`, whose exception text was the strongest un-authored string
+available until DEC-047 deleted the local surface's trust path outright; and now through the
+inspect screen's search box, where the string is the owner's own keystrokes. That is
+un-authored in the most literal sense there is, and unlike the other two it is not going
+anywhere. Each time, the route died and the property did not — deleting the test with the
+route would have left the sink covered only by `markup=False` and the structural sweep below,
+while the docstring claimed there was nothing left to cover.
 Fixing the row `Label` looked like a class fix and was not: review then found `#status` — which
 receives the description the moment a conversation is selected, and the custom label via
 `record.display.rendered` — and `#output`, which renders the session's raw captured pane
@@ -117,24 +122,9 @@ def _record(custom_label: str | None = None) -> SessionRecord:
 @dataclass(slots=True)
 class _Launcher:
     record: SessionRecord = field(default_factory=_record)
-    #: When set, `answer_trust` raises with this text. The one live path that still writes a
-    #: string this app did not author into `#status`, and so the one that can drive the sink.
-    trust_error: str | None = None
 
     async def refresh_readiness(self):
         return (self.record,)
-
-    async def trust_state(self, _session_id):
-        from remote_agents.domain.trust import TrustState
-
-        return TrustState.AWAITING
-
-    async def answer_trust(self, _command):
-        if self.trust_error is not None:
-            raise RuntimeError(self.trust_error)
-        from remote_agents.domain.trust import TrustState
-
-        return TrustState.UNKNOWN
 
     async def list_sessions(self):
         return (self.record,)
@@ -171,16 +161,25 @@ class _Conversations:
         )
 
 
+async def _captured_output(_session_id) -> str:
+    """One line of pane output, so the inspect screen has something to search.
+
+    `Backend.capture` is `Callable[[SessionId], Awaitable[str]]` — already decoded, because
+    the bounding and sanitizing happened upstream in `application/captures.render_capture`.
+    """
+    return "the session said something"
+
+
 def _context(
     *,
     project: CatalogProject,
     record: SessionRecord | None = None,
     description: str = "plain",
-    trust_error: str | None = None,
 ) -> TuiContext:
     return TuiContext(
         backend=backend_for(
-            sessions=_Launcher(record=record or _record(), trust_error=trust_error),  # type: ignore[arg-type]
+            sessions=_Launcher(record=record or _record()),  # type: ignore[arg-type]
+            capture=_captured_output,
             projects=object(),  # type: ignore[arg-type]
             refresh_catalogue=lambda: (project,),
             catalogue=(project,),
@@ -235,26 +234,32 @@ async def test_a_conversation_description_containing_markup_is_shown_literally()
 async def test_the_status_line_shows_a_markup_bearing_failure_literally() -> None:
     """The rows were only one sink. `#status` receives text this app did not author too.
 
-    **Retargeted, not deleted.** This used to drive the conversation description into `#status`
-    by selecting a conversation — a path that ran through a confirmation step which no longer
-    exists. The sink does still take un-authored text, so the test follows it to a route that
-    survives: `RemoteAgentsTui.answer_trust` writes an exception's own `str()` straight to
-    `set_status`, which is un-authored in the strongest sense available here — the string comes
-    from another layer entirely and can contain anything.
+    **Retargeted twice, not deleted.** This drove `#status` through the resume confirmation
+    until that step was removed, then through `RemoteAgentsTui.answer_trust` until DEC-047
+    deleted the local surface's trust path. It now types into the inspect screen's search box,
+    and `_search` writes the query straight back — `f"No match for {query!r}. Escape to go
+    back."` The `!r` quotes the string; it does not escape markup.
 
-    An unbalanced `[` there raises `MarkupError` in a widget that parses markup, which is the
+    This route is the strongest of the three and the most durable: the string is the owner's
+    literal keystrokes rather than an exception another layer happened to raise, and searching
+    captured output is not a step any decision is likely to remove.
+
+    An unbalanced `[` here raises `MarkupError` in a widget that parses markup, which is the
     same defect this file closed at the rows and would have reopened at a sink nobody was
     driving any more.
     """
     project = CatalogProject("opaque-existing", "existing", "infra", "Registered")
-    app = RemoteAgentsTui(_context(project=project, trust_error=_MARKUP_DESCRIPTION))
+    app = RemoteAgentsTui(_context(project=project))
     async with app.run_test(size=(200, 30)) as pilot:
         await pilot.pause()
         await app.show_sessions()
         await pilot.pause()
         await app.show_detail(str(_record().session_id))
         await pilot.pause()
-        await app.screen.answer_trust()
+        await app.screen.show_inspect()
+        await pilot.pause()
+        # Matches nothing in the captured line, which is the branch that echoes the query.
+        app.screen._search(_MARKUP_DESCRIPTION)
         await pilot.pause()
         screen = _rendered(app)
 
