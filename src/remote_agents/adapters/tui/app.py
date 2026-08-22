@@ -41,9 +41,6 @@ from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.application.commands import (
     AnswerTrustCommand,
-    CleanupCommand,
-    ForceStopCommand,
-    GracefulStopCommand,
     LaunchCommand,
     RemoteControlCommand,
     ResumeCommand,
@@ -53,18 +50,20 @@ from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
 from remote_agents.application.session_actions import (
-    CLEANUP,
     FORCE,
-    GRACEFUL,
-    StopFailure,
-    available_actions,
     explain_state,
-    force_stop_failure,
     remote_control_available,
-    stop_failure,
 )
+from remote_agents.application.session_views import listed_sessions, only_listed
+from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
-from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionId,
+    SessionRecord,
+    SessionState,
+)
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
 
@@ -91,7 +90,6 @@ __all__ = [
 ]
 
 
-_RESUME_PAGE_SIZE = 10
 #: How long a failure toast stays up, against Textual's `NOTIFICATION_TIMEOUT` of 5. Long
 #: enough to read the remedy at an unhurried pace rather than a skim, which is what the
 #: default gave it — a gate evaluator measured the message at 55 words.
@@ -201,7 +199,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
-        self._catalogue = context.catalogue
+        self._catalogue = context.backend.catalogue
         self.selection = LaunchSelection()
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
@@ -339,13 +337,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # between the caller's clear and this set, so the window never opens.
         self._busy = True
         try:
-            await opener(session_id)
+            refused = await opener(session_id)
         except Exception as error:
             _LOG.exception("switching the client to the session failed")
             self.announce(f"The session is running but could not be opened: {error}")
             return
         finally:
             self._busy = False
+        if refused is not None:
+            # The console declined, and said why. It degrades to a log line by contract and
+            # nothing configures logging, so without this the owner presses enter on a row
+            # and watches nothing happen — which is exactly what shipped.
+            self.announce(refused, severity="warning")
+            return
         # "the projects position" is this *app's* resting position, whatever that is: the
         # method unwinds to stack depth 1 and only re-renders when what it finds is a
         # projects screen. On the console's sessions and feed panes the resting position is
@@ -569,7 +573,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """
         try:
             self._catalogue = await self.in_thread(
-                self._services.refresh_catalogue, group="catalogue"
+                self._services.backend.refresh_catalogue, group="catalogue"
             )
         except Exception:
             _LOG.exception("catalogue refresh failed")
@@ -726,7 +730,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def action_resume(self) -> None:
         """Open the resume flow, if this host wired a conversation service at all."""
-        if self.busy or not self.offers("resume") or self._services.conversations is None:
+        if self.busy or not self.offers("resume") or self._services.backend.conversations is None:
             return
         await self.switch_flow(ResumeProjectsScreen())
 
@@ -746,7 +750,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._busy = True
         try:
             async with screen.awaiting("Resuming the conversation…"):
-                outcome = await self._services.launcher.resume(
+                outcome = await self._services.backend.sessions.resume(
                     ResumeCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile),
@@ -815,7 +819,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         different things to say to the owner.
         """
         try:
-            return await self._services.launcher.answer_trust(
+            return await self._services.backend.sessions.answer_trust(
                 AnswerTrustCommand(record.session_id, _idempotency_key())
             )
         except Exception as error:
@@ -846,7 +850,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 await screen.refuse("Remote Control is no longer available for this session.")
                 return
             async with screen.awaiting(f"Setting Remote Control to {desired.value}…"):
-                state = await self._services.launcher.set_remote_control(
+                state = await self._services.backend.sessions.set_remote_control(
                     RemoteControlCommand(record.session_id, desired, _idempotency_key())
                 )
         except Exception as error:
@@ -898,18 +902,47 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         self._busy = True
         try:
-            record = await self.current_record(session_value)
+            try:
+                expected = SessionId.parse(session_value)
+            except ValueError:
+                # `current_record` used to answer this case by simply matching nothing, and
+                # the refusal below is the same one it produced. Kept explicit because the
+                # shared use case takes a parsed id, so an unparseable value would otherwise
+                # raise into the handler underneath and report "did not complete" over a
+                # session that was never identified — a different sentence for the same
+                # nothing-happened.
+                await screen.refuse()
+                return
+            # Two calls rather than one, because the spinner belongs around the dispatch and
+            # not around the re-read: `awaiting` covers the rows and rewrites the status line,
+            # and its own docstring scopes it to "the part where something outside this
+            # process has been asked and has not replied". `execute_stop` is exactly these
+            # two, and the bot uses it because it has nothing to do in between.
+            resolution = await resolve_stop(
+                action, expected, read_record=lambda: self.current_record(session_value)
+            )
+            record = resolution.record
             if record is None:
                 await screen.refuse()
                 return
-            if action not in available_actions(record.state, record.orphan_provenance):
+            if resolution.refusal is not None:
+                # Every refusal that reaches here with a record is a policy refusal, and this
+                # sentence is written for that one. `IDENTITY` would be the wrong sentence —
+                # the action did not become unavailable, a different record came back than
+                # the one asked about — and it is unreachable rather than handled: this
+                # surface passes no `profile_id`, and `current_record` only ever returns a
+                # record whose id already equals `session_value`, which `expected` parsed
+                # from. **Loosening `current_record`'s matching, or passing a `profile_id`
+                # here, makes it reachable and this line wrong**, which is the whole reason
+                # the assumption is written down rather than left implicit across two files.
                 await screen.refuse(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
                 return
             async with screen.awaiting(f"{_ACTION_LABELS[action]}…"):
-                failure = await self._issue_stop(action, record)
+                outcome = await dispatch_stop(resolution, sessions=self._services.backend.sessions)
+            failure = outcome.failure
         except Exception as error:
             _LOG.exception("stop failed")
             # Move the cursor off the confirm button before reporting. A failed force
@@ -971,50 +1004,6 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 screen.announce(f"{failure.summary} {failure.remedy}")
         finally:
             self._busy = False
-
-    async def _issue_stop(self, action: str, record: SessionRecord) -> StopFailure | None:
-        """Send exactly one curated command, and answer why it did not take effect.
-
-        Force is its own named branch and an unrecognized action raises, rather than the kill
-        being the trailing `else`. It was, and nothing could reach it — `stop` only calls this
-        for an action `available_actions` returned. But "anything I do not recognize is a
-        kill" is a fail-dangerous default in the one method that kills, and the cost of it
-        being right is that every future caller stays correct by accident.
-
-        **Graceful and force both answer; `cleanup` returns nothing at all, so there is nothing
-        there to read.** Graceful's `TerminalObservation` has always distinguished a clean exit
-        from a timeout — the service's own docstring says `preserved` "remains the way a caller
-        tells a clean exit from `graceful_timeout`" — and both surfaces threw the value away
-        until BL-008.
-
-        **Force is read through a different function, and that is not an inconsistency.**
-        `stop_failure` keys on `preserved`, which for graceful *is* the success; force removes
-        the pane, so `preserved` is false on every force including the one that worked, and
-        routing force through it would report every completed kill as a failure.
-        `force_stop_failure` reads the detail instead.
-
-        What it reports: `TmuxRuntime.force_stop` returns `detail="ownership_lost"`
-        *without* killing anything when no managed pane matches, and both surfaces used to say
-        "Force stopped X" over it. Under DEC-017 the behaviour is deliberately unchanged —
-        `SessionService.force_stop` still records `VERIFIED_FORCE_STOP`, the record still
-        reaches ENDED, the row still clears — because a row the owner cannot clear is worse
-        than an over-confident message. Only the claim changed. The cost the owner accepted
-        with it: the durable history still cannot tell the two apart, so this sentence on
-        screen is the only place the distinction exists.
-        """
-        launcher = self._services.launcher
-        if action == GRACEFUL:
-            observation = await launcher.graceful_stop(
-                GracefulStopCommand(record.session_id, record.profile_id)
-            )
-            return stop_failure(observation)
-        if action == CLEANUP:
-            await launcher.cleanup(CleanupCommand(record.session_id))
-            return None
-        if action == FORCE:
-            observation = await launcher.force_stop(ForceStopCommand(record.session_id))
-            return force_stop_failure(observation)
-        raise ValueError(f"no command is curated for the action {action!r}")
 
     # Store reads screens share ---------------------------------------------------
 
@@ -1086,8 +1075,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         is what tells the owner how old a session is.
 
         Console-hosted, this is also where the console catches up with the *other* writer.
-        The bot has no composer (DEC-005), so a session it stops while the console is
-        displaying that session goes unnoticed until something reads the list — this
+        The bot now steps the console aside itself before a stop destroys a pane — it builds
+        a composer for that one operation (DEC-005, and `bootstrap._private_boundary`) — so
+        this is no longer the only thing standing between a remote stop and a console short
+        a pane. What still arrives here is what neither writer's `hide` covered: a hide that
+        hit its 2s cap, a console too degraded to arrange, or a session that ended without
+        either surface asking. Those go unnoticed until something reads the list — this
         method's reveal, Ctrl+R, or the 10s auto-refresh — and then the projects surface is
         put back. That is a stated latency, not an accident: this is deliberately the only
         sync schedule there is. A stop issued from *this* surface does not wait for it; the
@@ -1097,18 +1090,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         It used to reconcile a tab per live session, which is what "sync" named. That
         mechanism retired with Sub-plan 3's Task 2.4.
         """
-        await self._services.launcher.refresh_readiness()
-        records = await self.read_sessions()
+        records = await listed_sessions(self._services.backend.sessions)
         if self._services.console_sync is not None:
             await self._services.console_sync(records)
         return records
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
-        records = await self._services.launcher.list_sessions()
-        # ENDED is filtered exactly as the bot filters it: the record is retained for audit
-        # but there is nothing left to reach, inspect, or stop.
-        return tuple(record for record in records if record.state is not SessionState.ENDED)
+        # The comment this replaces claimed the filter matched the bot's "exactly", which was
+        # true and checked by nothing — the two were separate generator expressions over the
+        # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
+        # asserted over the whole `SessionState` set rather than over the states a reader
+        # thought to name.
+        return only_listed(await self._services.backend.sessions.list_sessions())
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
@@ -1143,7 +1137,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # rather than an `AttributeError`.
             covered = body.awaiting("Launching…") if body is not None else contextlib.nullcontext()
             async with covered:
-                record = await self._services.launcher.launch(
+                record = await self._services.backend.sessions.launch(
                     LaunchCommand(
                         ProjectId(project.opaque_id),
                         ProfileId(profile.profile_id),

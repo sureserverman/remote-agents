@@ -35,6 +35,7 @@ from remote_agents.adapters.tui.model import (
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.conversations import ConversationCatalogueQuery, resume_available
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable_profiles
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -43,7 +44,6 @@ from remote_agents.domain.conversations import (
 from remote_agents.domain.models import ProfileId, ProjectId
 
 _LOG = logging.getLogger(__name__)
-_RESUME_PAGE_SIZE = 10
 
 
 class ResumeProjectsScreen(ChoiceScreen):
@@ -116,7 +116,7 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
     entry point firing mid-navigation used to reset the chosen project, after which
     selecting a profile silently did nothing and only Escape recovered.
     """
-    conversations = screen.services.conversations
+    conversations = screen.services.backend.conversations
     if conversations is None:
         return
     async with screen.holding_the_guard():
@@ -125,18 +125,13 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
         except Exception as error:
             _LOG.exception("resume capabilities failed")
             screen.set_status(
-                "Resume is unavailable on this host. Press escape to return to the "
-                "project list.",
+                "Resume is unavailable on this host. Press escape to return to the project list.",
                 severity="error",
             )
             screen.announce(f"Resume is unavailable: {error}")
             screen.show_choices(((_BACK, "Back"),))
             return
-        capable = tuple(
-            capability
-            for capability in capabilities
-            if capability.catalogue_available and capability.selected_resume_available
-        )
+        capable = resume_capable_profiles(capabilities)
         # Inside the guard, not after it. `push_screen` yields while the new screen
         # mounts, so clearing first leaves a window in which a second of this app's
         # bindings pops the screen being mounted and the fetched capabilities are
@@ -192,7 +187,7 @@ class ResumeProfilesScreen(ChoiceScreen):
         avoid, and it is only listed separately here because this flow was extracted a task
         after that precedent was set and did not inherit it.
         """
-        conversations = self.services.conversations
+        conversations = self.services.backend.conversations
         if conversations is None:
             return
         try:
@@ -211,11 +206,7 @@ class ResumeProfilesScreen(ChoiceScreen):
             self.announce(f"Resume is unavailable: {error}")
             self.show_choices(((_BACK, "Back"),))
             return
-        self.capable = tuple(
-            capability
-            for capability in capabilities
-            if capability.catalogue_available and capability.selected_resume_available
-        )
+        self.capable = resume_capable_profiles(capabilities)
         await self.populate()
 
     async def populate(self) -> None:
@@ -364,7 +355,7 @@ class ResumeConversationsScreen(ChoiceScreen):
         self.show_choices(tuple(entries), highlight=len(entries) - 1)
 
     async def choose(self, key: str) -> None:
-        conversations = self.services.conversations
+        conversations = self.services.backend.conversations
         if conversations is None:
             return
         if key == _BACK:
@@ -435,7 +426,7 @@ async def fetch_page(
     first, and the conversation list, which fetches every later one. Reporting onto the
     caller's screen is what keeps a failed read on the position that asked for it.
     """
-    conversations = screen.services.conversations
+    conversations = screen.services.backend.conversations
     if conversations is None:
         return None
     try:
@@ -444,7 +435,7 @@ async def fetch_page(
                 profile_id=ProfileId(profile),
                 project_id=ProjectId(project.opaque_id),
                 page=page,
-                page_size=_RESUME_PAGE_SIZE,
+                page_size=RESUME_PAGE_SIZE,
             )
         )
     except Exception as error:

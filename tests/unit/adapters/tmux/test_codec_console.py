@@ -43,10 +43,6 @@ def test_console_target_is_the_exact_session_form() -> None:
     assert console_target() == "ra-console:"
 
 
-
-
-
-
 def test_the_exec_handoff_switches_to_the_agents_own_session() -> None:
     """The one switch route left, and the caller it serves is not the console.
 
@@ -61,6 +57,7 @@ def test_the_exec_handoff_switches_to_the_agents_own_session() -> None:
 
     assert argv[:3] == ("tmux", "-L", "remote-agents")
     assert argv[3:] == ("switch-client", "-t", _EXACT)
+
 
 def test_display_message_carries_one_status_line_literally() -> None:
     """`-l` pins literal rendering: without it tmux format-expands the message, and
@@ -79,8 +76,6 @@ def test_display_message_carries_one_status_line_literally() -> None:
         display_message_args("")
     with pytest.raises(ValueError):
         display_message_args("two\nlines")
-
-
 
 
 def test_the_zoom_probe_asks_whether_anything_is_hiding_the_feed() -> None:

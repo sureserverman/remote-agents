@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backends import backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -51,13 +52,15 @@ class _Conversations:
 
 def _context(*, conversations: object | None = None) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            conversations=conversations,  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        conversations=conversations,  # type: ignore[arg-type]
     )
 
 

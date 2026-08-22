@@ -8,11 +8,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from backends import backend_for
 from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
@@ -92,14 +93,16 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(project,),
+        backend=backend_for(
+            catalogue=(project,),
+            sessions=service,
+            conversations=ConversationService(SingleConversationCatalogue(resolved)),
+            capture=terminal.capture,
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
-        conversations=ConversationService(SingleConversationCatalogue(resolved)),
-        capture=terminal.capture,
     )
     try:
         profiles = await boundary._resume_profiles_reply(project.opaque_id)

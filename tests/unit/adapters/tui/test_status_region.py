@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from backends import tui_context_for
 from textual.widgets import OptionList, Static
 
 # Neither is re-exported from `textual.widgets`. Both are system widgets this app never
@@ -128,15 +129,15 @@ class _Conversations:
 
 def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
-        "launcher": _FakeLauncher(),
-        "creator": _FakeCreator(),
+        "sessions": _FakeLauncher(),
+        "projects": _FakeCreator(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_EXISTING,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_EXISTING,),
     }
     arguments.update(overrides)
-    return TuiContext(**arguments)  # type: ignore[arg-type]
+    return tui_context_for(**arguments)
 
 
 async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
@@ -334,7 +335,7 @@ async def test_a_failed_launch_is_an_error_notification_rather_than_a_four_line_
     the four-line failure in the status region, which is the state this task started from.
     """
     launcher = _FakeLauncher(error=RuntimeError("the terminal port broke its contract"))
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
@@ -366,7 +367,7 @@ async def test_a_notification_shows_markup_bearing_text_literally() -> None:
     is not, so a regression here does not return the wrong string, it *raises* on this input.
     """
     launcher = _FakeLauncher(error=RuntimeError(_MARKUP))
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     # `notifications=True` because `run_test` disables them by default, which leaves the
     # screen with no `ToastRack` and nothing to mount into. `App._notifications` is populated
@@ -681,7 +682,7 @@ async def test_a_failed_read_still_says_what_failed_after_its_toast_has_gone() -
         async def copy_attach(self, _session_id):
             return None
 
-    app = RemoteAgentsTui(_context(launcher=_Unreadable()))
+    app = RemoteAgentsTui(_context(sessions=_Unreadable()))
 
     async with app.run_test() as pilot:
         await app.action_sessions()

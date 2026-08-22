@@ -372,8 +372,17 @@ def _instant_from_row(value: str) -> datetime:
 
 def _record_from_row(
     row: tuple[
-        str, str, str, str, str, str,
-        str | None, str | None, str | None, str | None, str | None,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        str | None,
     ],
 ) -> SessionRecord:
     """Rebuild a validated domain record from one trusted SQLite projection row."""

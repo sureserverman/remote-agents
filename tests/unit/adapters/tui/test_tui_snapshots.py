@@ -84,6 +84,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from textual.widgets import Input
 from tui_positions import position
 
@@ -309,13 +310,18 @@ def _context(
     """
     launcher = _Launcher(record=_record(state)) if launcher is None else launcher
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=_Creator() if creator is None else creator,  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=_Creator() if creator is None else creator,  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT, _OTHER),
+            catalogue=(_PROJECT, _OTHER),
+            capture=(lambda _session_id: _captured()) if capture is None else capture,
+            conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
+        ),
         profiles=(
             ProfileChoice("claude", True),
             ProfileChoice("codex", False, "not installed on this host"),
         ),
-        refresh_catalogue=lambda: (_PROJECT, _OTHER),
         attach_argv=lambda session_id: (
             "tmux",
             "-L",
@@ -324,9 +330,6 @@ def _context(
             "-t",
             f"={session_id}",
         ),
-        catalogue=(_PROJECT, _OTHER),
-        capture=(lambda _session_id: _captured()) if capture is None else capture,
-        conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
     )
 
 

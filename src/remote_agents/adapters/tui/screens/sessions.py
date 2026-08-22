@@ -29,6 +29,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
+from remote_agents.application.captures import render_capture
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -42,7 +43,6 @@ from remote_agents.application.session_actions import (
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
         (_REMOTE_CONTROL_KEYS[direction], REMOTE_CONTROL_LABELS[direction])
         for direction in remote_control_directions(record, record.remote_control_state)
     )
+
 
 #: How often the sessions list re-reads the store while it is the screen on top. Long enough
 #: that a host is not answering a tmux readiness probe continuously, short enough that a
@@ -475,23 +476,34 @@ class SessionDetailScreen(ChoiceScreen):
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
-        """Read the pane's trust state. No session-state gate; see the bot's twin for why.
+        """Always UNKNOWN, so "Trust this project" never renders here. **BL-005, left as found.**
 
-        In short: a trust-blocked `claude-remote` launch can land RUNNING, because its
-        readiness marker can be observed before the dialog renders. State is not evidence
-        about the dialog; only the pane is. Failures are swallowed to UNKNOWN rather than
-        reported -- a pane we cannot read is one we must not offer to answer, and it is not
-        worth replacing the detail with an error.
+        This used to reach for a `trust_state` attribute on `self.services` by name, and
+        `self.services` is a `TuiContext`: no version of that class has ever had one --
+        `SessionService.trust_state` is a *backend* method. So the probe always returned None,
+        the state was always UNKNOWN, and `trust_available` always said no: the row, its
+        handler and its command are all written and none of them has ever been reachable.
+
+        DEC-016 says both surfaces offer this row, so that is a defect, and it is deliberately
+        not repaired here. Typing this context against `Backend` is exactly the change that
+        would fix it by accident -- `self.services.backend.sessions.trust_state(...)` is one
+        plausible line away -- and the owner's decision on 2026-08-21 was that this refactor
+        changes no functionality. Repairing it is a separate decision, taken with the bot's
+        twin path re-read beside it.
+
+        Written out rather than left as a probe because the probe *looked* like a capability
+        check, and a reader could reasonably conclude the surface was asking and being told
+        no. It never asked. `tests/unit/adapters/tui/test_trust_row_bl005.py` pins both
+        halves and is deleted when BL-005 is closed.
+
+        The `trust_available` gate below is what the guard used to be and is kept for the
+        same reason the docstring above it gave: a trust-blocked `claude-remote` launch can
+        land RUNNING, because its readiness marker is observed before the dialog renders, so
+        state is not evidence about the dialog -- only the pane is. It changes no answer
+        today; it is the shape the repair goes back into.
         """
-        if not trust_available(record, TrustState.AWAITING):
-            return TrustState.UNKNOWN
-        read = getattr(self.services, "trust_state", None)
-        if read is None:
-            return TrustState.UNKNOWN
-        try:
-            return await read(record.session_id)
-        except Exception:
-            return TrustState.UNKNOWN
+        del record
+        return TrustState.UNKNOWN
 
     def detail_entries(
         self, record: SessionRecord, trust: TrustState = TrustState.UNKNOWN
@@ -507,8 +519,13 @@ class SessionDetailScreen(ChoiceScreen):
         conservative set — a divergence the parity contract cannot see if the other surface
         does the same thing.
         """
+        # The read-only rows below diverge from the bot's on four axes — order, Inspect's
+        # capture gate, Copy attach's ownership gate, and the Inspect label. That is
+        # deliberate and is enumerated in full at `adapters/telegram/service.py:
+        # _detail_reply`, where the sibling set is built. Everything after them is shared
+        # policy, so this is the only part of the screen a merge would have to touch.
         entries: list[tuple[str, str]] = [("attach", "Copy attach")]
-        if self.services.capture is not None:
+        if self.services.backend.capture is not None:
             entries.append(("inspect", "Inspect output"))
         # Grouped with the read-only rows above rather than with the stops below, and the bot's
         # twin gives the reason in the same words: renaming changes what the session is called
@@ -707,7 +724,7 @@ class SessionDetailScreen(ChoiceScreen):
                 if record is None:
                     await self.refuse()
                     return
-                command = await self.services.launcher.copy_attach(record.session_id)
+                command = await self.services.backend.sessions.copy_attach(record.session_id)
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return
@@ -752,7 +769,7 @@ class SessionDetailScreen(ChoiceScreen):
         onto this detail and leave the owner here, rather than opening an output screen with
         nothing in it and an error message they would have to leave to read.
         """
-        capture = self.services.capture
+        capture = self.services.backend.capture
         if capture is None:
             return
         async with self.holding_the_guard():
@@ -767,7 +784,7 @@ class SessionDetailScreen(ChoiceScreen):
                 _LOG.exception("capture failed")
                 self.announce(f"The output could not be captured: {error}")
                 return
-            text = render_capture(captured, self.services.capture_redactions)
+            text = capture_for_pane(captured, self.services.capture_redactions)
             await self.advance_to(InspectScreen(text or "This session has produced no output yet."))
 
     async def show_rename(self) -> None:
@@ -906,7 +923,7 @@ class RenameScreen(ChoiceScreen):
                 return
             try:
                 async with self.awaiting("Renaming…"):
-                    await self.services.launcher.rename(record.session_id, label)
+                    await self.services.backend.sessions.rename(record.session_id, label)
             except Exception as error:
                 self.tui.report_store_failure(error, self)
                 return
@@ -1077,22 +1094,34 @@ class InspectScreen(ChoiceScreen):
         return super().check_action(action, parameters)
 
 
-def render_capture(captured: str, redactions: tuple[str, ...]) -> str:
+def capture_for_pane(captured: str, redactions: tuple[str, ...]) -> str:
     """Turn a raw capture into what the output pane should show.
 
-    `ports/terminal_text.sanitize_terminal_text` is the shared safety transformation, so
-    nothing is re-implemented here. What is deliberately *not* reused is the Telegram
-    presentation wrapper: its 4096-UTF-16-unit inline cap and session-output.txt attachment
-    fallback exist because Telegram messages are bounded, and a scrollable local pane is not.
+    `application/captures.render_capture` is the shared bounded rendering, so nothing is
+    re-implemented here — including the bounds, which it takes from this surface rather than
+    holding any of its own. What is deliberately *not* reused is the Telegram presentation
+    wrapper: its 4096-UTF-16-unit inline cap and session-output.txt attachment fallback exist
+    because Telegram messages are bounded, and a scrollable local pane is not.
+
+    **Named for the pane rather than for the rendering**, so that `render_capture` means one
+    thing across the project. This was `render_capture` too, which made the shared function
+    something this module had to import under an alias — two functions, one name, different
+    signatures, one calling the other. The Stage 3 gate's own sweep for a second definition is
+    what surfaced it: a collision that has to be explained in a comment is one a reader has to
+    re-resolve every time.
+
+    The shared renderer only *signals* that a capture was binary, because the two surfaces
+    refuse in different sentences. This one is the pane's, worded for a full screen; the bot
+    words its own.
     """
-    raw = captured.encode()
-    if b"\x00" in raw:
-        # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
-        # rendering text, and printing it to a terminal can corrupt the display.
-        return "This session's output is binary and cannot be displayed."
-    return sanitize_terminal_text(
-        raw,
+    rendered = render_capture(
+        captured.encode(),
         max_lines=_INSPECT_MAX_LINES,
         max_bytes=_INSPECT_MAX_BYTES,
         redactions=redactions,
     )
+    if rendered.text is None:
+        # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
+        # rendering text, and printing it to a terminal can corrupt the display.
+        return "This session's output is binary and cannot be displayed."
+    return rendered.text

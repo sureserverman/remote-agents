@@ -30,6 +30,7 @@ from remote_agents.application.session_actions import (
     GRACEFUL_TIMEOUT,
     UNKNOWN_SESSION,
     available_actions,
+    pane_is_attachable,
 )
 from remote_agents.domain.models import (
     ProfileId,
@@ -256,12 +257,7 @@ class SessionService:
         """
         record = await self._require_session(session_id)
         observation = await self._terminal.inspect(session_id)
-        if (
-            observation is None
-            or not (observation.live or observation.preserved)
-            or observation.project_id != record.project_id
-            or observation.profile_id != record.profile_id
-        ):
+        if not pane_is_attachable(observation, record):
             return None
         return await self._terminal.copy_attach(session_id)
 

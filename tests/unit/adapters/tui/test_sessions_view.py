@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from backends import backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -69,10 +70,13 @@ class _Listing:
 
 def _context(launcher: _Listing) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_EXISTING,),
+            catalogue=(_EXISTING,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_EXISTING,),
         attach_argv=lambda session_id: (
             "tmux",
             "-L",
@@ -81,7 +85,6 @@ def _context(launcher: _Listing) -> TuiContext:
             "-t",
             f"={session_id}",
         ),
-        catalogue=(_EXISTING,),
     )
 
 

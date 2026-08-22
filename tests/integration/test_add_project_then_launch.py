@@ -7,13 +7,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from backends import backend_for
 from fake_telegram import LoneMessageBot
 
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
+from remote_agents.adapters.telegram.service import (
+    _TextEntry,
+    build_private_bot,
+)
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.application.project_admin import ProjectCreationService
@@ -100,17 +104,21 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
     try:
         provider = ProjectCatalogueProvider(registry_path, dev_root)
         terminal = FakeTerminal()
-        boundary = PrivateBotBoundary(
+        boundary = build_private_bot(
             OWNER,
             CHAT,
-            catalogue=provider.refresh().catalogue,
-            profiles=(ProfileAvailability("claude", True, None),),
-            launcher=SessionService(SQLiteSessionStore(connection), terminal),
-            creator=ProjectCreationService(
-                FilesystemProjectWorkspace(dev_root),
-                RegistryProjectRecorder(registry_path, dev_root, today=lambda: date(2026, 8, 5)),
+            backend=backend_for(
+                catalogue=provider.refresh().catalogue,
+                sessions=SessionService(SQLiteSessionStore(connection), terminal),
+                projects=ProjectCreationService(
+                    FilesystemProjectWorkspace(dev_root),
+                    RegistryProjectRecorder(
+                        registry_path, dev_root, today=lambda: date(2026, 8, 5)
+                    ),
+                ),
+                refresh_catalogue=lambda: provider.refresh().catalogue,
             ),
-            catalogue_source=lambda: provider.refresh().catalogue,
+            profiles=(ProfileAvailability("claude", True, None),),
         )
 
         areas = await boundary._reply_for("project.open", "areas")
@@ -148,7 +156,7 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
         )
 
         assert "Session created" in str(launched["text"])
-        records = await boundary.launcher.list_sessions()
+        records = await boundary.backend.sessions.list_sessions()
         assert [record.state for record in records] == [SessionState.RUNNING]
         assert str(records[0].project_id) == opaque
     finally:

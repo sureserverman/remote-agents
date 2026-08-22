@@ -12,10 +12,16 @@ from dataclasses import dataclass
 from remote_agents.adapters.tui.context import ProfileChoice
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
-from remote_agents.application.session_actions import state_word
+from remote_agents.application.session_views import selectable_area, session_row
 from remote_agents.domain.conversations import ConversationSummary
-from remote_agents.domain.models import SessionRecord, normalize_label
-from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.domain.models import normalize_label
+
+# Re-exported rather than re-implemented. Both of these used to be defined here *and* in
+# `adapters/telegram/service.py`, byte for byte, which is how the two surfaces rendered both
+# kinds of ORPHANED the same way (BL-031). They now live in `application/session_views.py`;
+# the names stay importable from here because `screens/` and `app.py` take them from this
+# module and there is nothing to gain from moving every import site.
+__all__ = ["selectable_area", "session_row"]
 
 # Row keys for choices that are navigation rather than data. The NUL prefix is what keeps
 # them from colliding with a project id, a profile id, or a conversation reference.
@@ -94,15 +100,6 @@ def label_or_error(value: str, limit: int) -> str | None:
         raise ValueError(f"use a visible label of up to {limit} characters") from error
 
 
-def selectable_area(value: str) -> bool:
-    """Offer an existing directory only when the project identity rule also accepts it."""
-    try:
-        ProjectIdentity(area=value, name=value)
-    except ValueError:
-        return False
-    return True
-
-
 def conversation_row(summary: ConversationSummary) -> str:
     """Render a conversation for selection: never a provider ID, and no filtering beyond that.
 
@@ -114,13 +111,3 @@ def conversation_row(summary: ConversationSummary) -> str:
     """
     described = summary.description or "(no description)"
     return f"{described} · {summary.state.value} · {age(summary.updated_at)}"
-
-
-def session_row(record: SessionRecord) -> str:
-    """One list row. The state word comes from the shared policy, never from `state.value`.
-
-    Both surfaces had this exact line, independently, which is how they rendered both kinds
-    of ORPHANED identically (BL-031). `state_word` is the single authority now.
-    """
-    word = state_word(record.state, record.orphan_provenance)
-    return f"{record.display.rendered} · {word} · {age(record.created_at)}"

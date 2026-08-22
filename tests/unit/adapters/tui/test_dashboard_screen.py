@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from backends import backend_for
 from textual.widgets import OptionList, Static
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -67,12 +68,14 @@ def _record() -> SessionRecord:
 
 def _context(records: tuple[SessionRecord, ...] = ()) -> TuiContext:
     return TuiContext(
-        launcher=_Launcher(records),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(records),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 

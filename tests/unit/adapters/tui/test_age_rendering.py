@@ -60,12 +60,26 @@ def test_both_surfaces_render_an_age_through_the_same_function() -> None:
     Asserted by identity, not by comparing two outputs: two implementations that happen to
     agree on the cases a test lists is exactly the state this task ended, and a
     same-output assertion would have passed throughout it.
+
+    **The bot is no longer asserted directly, because it no longer calls `age` at all.** It
+    used to, in `_session_row_label`, which was its only age-rendering site; that function
+    moved to `application/session_views.py: session_row` when the two byte-identical row
+    copies were merged, and the now-unused import went with it. This test failed on
+    `telegram_service.age` at that moment — correctly, since a module-attribute pin outlives
+    what it was pinning without saying so.
+
+    So the chain is asserted where it now runs: the shared row builder uses the shared `age`,
+    and the bot's row *is* that builder. The claim in the name is if anything stronger than
+    before — the two surfaces no longer merely call one function, one of them has no
+    age-rendering code left to diverge.
     """
     from remote_agents.adapters.telegram import service as telegram_service
     from remote_agents.adapters.tui import model as tui_model
+    from remote_agents.application import session_views
 
-    assert tui_model.age is age
-    assert telegram_service.age is age
+    assert tui_model.age is age, "the feed renders ages on this surface and must share it"
+    assert session_views.age is age
+    assert telegram_service.session_row is session_views.session_row
 
 
 def test_neither_surface_kept_a_private_copy() -> None:

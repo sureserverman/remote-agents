@@ -7,6 +7,14 @@ checkable claim rather than a summary sentence, and losing one names itself in t
 
 Every probe drives the real app through Pilot and asserts an observable effect — a rendered
 screen, or a command that reached the launcher. None of them can pass by falling through.
+
+**"Parity" here names a checklist, not a comparison, and the file has never done otherwise.**
+Only the local surface is driven below — there is no Telegram boundary in this module. What
+is asserted is that the terminal *has* each capability the bot had, one probe per item; what
+is not asserted is that the two produce the same words for it. The cross-surface comparisons
+live in `tests/contract/*_parity.py`, and several of those now compare one shared function
+with itself and say so. Stated because a file named `test_surface_parity` is otherwise read
+as the thing that would catch a divergence, and it is not (DEC-019).
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList, TextArea
 from tui_positions import position
@@ -64,7 +73,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
     )
 
 
-class _Everything:
+class _Everything(SessionUseCaseDouble):
     def __init__(self, state: SessionState) -> None:
         self.record = _record(state)
         self.issued: list[object] = []
@@ -130,14 +139,16 @@ def _app(state: SessionState = SessionState.RUNNING) -> tuple[RemoteAgentsTui, _
     return (
         RemoteAgentsTui(
             TuiContext(
-                launcher=launcher,  # type: ignore[arg-type]
-                creator=object(),  # type: ignore[arg-type]
+                backend=backend_for(
+                    sessions=launcher,  # type: ignore[arg-type]
+                    projects=object(),  # type: ignore[arg-type]
+                    refresh_catalogue=lambda: (_PROJECT,),
+                    catalogue=(_PROJECT,),
+                    capture=_capture,
+                    conversations=_Conversations(),  # type: ignore[arg-type]
+                ),
                 profiles=(ProfileChoice("claude", True),),
-                refresh_catalogue=lambda: (_PROJECT,),
                 attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-                catalogue=(_PROJECT,),
-                capture=_capture,
-                conversations=_Conversations(),  # type: ignore[arg-type]
             )
         ),
         launcher,

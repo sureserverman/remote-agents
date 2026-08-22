@@ -66,7 +66,7 @@ def test_the_local_context_offers_the_catalogue_profiles_and_creation_service(
         context = local_context(config, connection, paths)
 
         assert isinstance(context, TuiContext)
-        assert "existing" in {project.name for project in context.catalogue}
+        assert "existing" in {project.name for project in context.backend.catalogue}
         assert {profile.profile_id for profile in context.profiles} == {
             "claude",
             "claude-remote",
@@ -75,7 +75,7 @@ def test_the_local_context_offers_the_catalogue_profiles_and_creation_service(
             "opencode",
         }
         assert context.max_label_length == 40
-        assert context.creator.available_areas() == ("infra",)
+        assert context.backend.projects.available_areas() == ("infra",)
     finally:
         connection.close()
 
@@ -206,9 +206,9 @@ def test_the_local_context_wires_the_two_stage_four_capabilities(
     try:
         context = local_context(config, connection, paths)
 
-        assert context.capture is not None, "the terminal cannot inspect without a capture"
-        assert callable(context.capture)
-        assert isinstance(context.conversations, ConversationService), (
+        assert context.backend.capture is not None, "the terminal cannot inspect without a capture"
+        assert callable(context.backend.capture)
+        assert isinstance(context.backend.conversations, ConversationService), (
             "the terminal cannot resume without a conversation service"
         )
         # No configuration key sources redactions today; the bot passes none either.
@@ -261,14 +261,16 @@ def test_a_pane_runs_over_a_lease_and_leaves_no_handle_behind(
     assert main(["pane", "sessions", "--config", str(config_path)]) == 0
 
     assert len(seen) == 1
-    store = seen[0].launcher._store  # type: ignore[attr-defined]
+    store = seen[0].backend.sessions._store  # type: ignore[attr-defined]
     assert isinstance(store._connection, LeasedConnection), (
         "a pane surface must reach the store through the per-operation lease"
     )
 
 
 def test_a_pane_that_fails_says_where_its_sessions_are_and_exits_nonzero(
-    home: Path, paths: ProductionPaths, monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    paths: ProductionPaths,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A surface that dies must not take the owner's route to its sessions with it."""

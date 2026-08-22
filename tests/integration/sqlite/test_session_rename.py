@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -172,7 +173,7 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     """
     from fake_telegram import FakeChat
 
-    from remote_agents.adapters.telegram.service import PrivateBotBoundary
+    from remote_agents.adapters.telegram.service import build_private_bot
     from remote_agents.application.project_catalog import CatalogProject
     from remote_agents.application.services import SessionService
 
@@ -195,11 +196,13 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     store = _store(tmp_path)
     await store.save(_record())
     service = SessionService(store, _NoTerminal())
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("opaque-editor", "opaque-editor", "tests", "Registered"),),
-        launcher=service,
+        backend=backend_for(
+            catalogue=(CatalogProject("opaque-editor", "opaque-editor", "tests", "Registered"),),
+            sessions=service,
+        ),
     )
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)

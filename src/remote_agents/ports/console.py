@@ -163,6 +163,33 @@ class ConsolePort(Protocol):
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None: ...
 
+    async def rejoin_console_pane(
+        self,
+        pane_id: str,
+        beside_pane: str,
+        *,
+        vertical: bool,
+        percent: int,
+        before: bool = False,
+    ) -> None:
+        """Move one of the console's own panes back into the console window.
+
+        The operation `swap_panes` cannot express, and the difference is the whole reason this
+        exists: a swap *trades*, so it needs something on the far end worth having. When the
+        agent that displaced a console pane has its pane **destroyed** -- a cleanup, a force
+        stop -- there is nothing left in that window to trade with, and exchanging anyway would
+        send a second console pane out to replace the first. The console then shrinks by one
+        pane per stop, which is exactly what was observed.
+
+        A move takes one pane and no partner, so it puts the console back together without
+        exiling anything. What it leaves behind is a window with no panes, which tmux destroys
+        along with the defunct session that held it -- the session being ended already, that is
+        the wanted end state rather than a side effect.
+
+        Sized and placed like a split (`vertical`, `percent`, `before`) because it is filling
+        the position a split would have built, and the caller is `CONSOLE_LAYOUT` either way.
+        """
+
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...
 
     async def normalize_console_layout(

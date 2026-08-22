@@ -47,6 +47,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from test_tui_snapshots import settle
 from textual import events
 from tui_feedback import announcements, status
@@ -73,12 +74,14 @@ class _Creator:
 
 def _context() -> TuiContext:
     return TuiContext(
-        launcher=object(),  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=object(),  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 

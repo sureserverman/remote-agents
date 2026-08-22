@@ -1,9 +1,11 @@
 """Agent activity becomes durable: an append-only record of observations, for the feed.
 
 This records *observations* — what an agent was seen doing — never delivery state: the
-Telegram notifier's queue, rate windows, and standing messages stay in memory by decision
-(DEC-026), and this table is the local feed's source, not a second delivery ledger. The
-reader is bounded and newest-first because a feed is a glance, not an archive.
+Telegram notifier's queue and rate windows stay in memory by decision (DEC-026), and this
+table is the local feed's source, not a second delivery ledger. Its standing messages moved
+out of memory in migration 10, which is a different question — *which message is this
+session's notification* — and has its own table. The reader is bounded and newest-first
+because a feed is a glance, not an archive.
 """
 
 from __future__ import annotations
@@ -103,4 +105,4 @@ def test_the_migration_count_is_pinned_by_hand() -> None:
     """`len(MIGRATIONS)` comparisons elsewhere are conveniences; this literal is the one
     assertion an accidentally dropped migration cannot pass. Bump this — and only this —
     when adding a migration."""
-    assert len(MIGRATIONS) == 9
+    assert len(MIGRATIONS) == 10

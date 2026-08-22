@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
@@ -135,12 +136,14 @@ class _Launcher:
 
 def _context(launcher: _Launcher) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 

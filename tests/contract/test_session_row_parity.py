@@ -1,4 +1,4 @@
-"""Both surfaces name a session's state with one word, from one authority (BL-031).
+"""What a session's state is called, and that neither surface can call it something else.
 
 DEC-020 split ORPHANED into an adopted live agent and a record whose evidence supports no
 action. The detail screen already distinguished them -- different sentence, and only the
@@ -6,16 +6,41 @@ adopted half carries a Force stop row -- but both *list* rows read `· orphaned 
 owner scanning the list could not tell which without opening each one. The complaint DEC-020
 answers is felt in the list, which is where the owner looks first.
 
-The two surfaces had byte-identical copies of the row format, which is how they drifted into
-the same defect at the same time and would have drifted apart the moment one was fixed alone.
-`state_word` is the single authority now; this file is what keeps it single.
+**This file no longer detects divergence between the surfaces, and says so rather than
+implying otherwise (DEC-019).** It used to compare two byte-identical copies of the row
+format -- `adapters/telegram/service.py: _session_row_label` against
+`adapters/tui/model.py: session_row` -- and that comparison could genuinely fail, because
+either copy could be edited alone. There is now one `application/session_views.py:
+session_row`, and both imports below resolve to it. `test_both_surfaces_render_the_same_row`
+and `test_both_surfaces_agree_for_every_state` therefore compare a function with itself:
+**they cannot fail, and they are kept only because both import paths must keep resolving.**
+An adapter that grew its own copy again would be caught by
+`tests/unit/application/test_session_views.py:
+test_no_adapter_redefines_the_row_or_the_area_predicate`, not by anything here.
+
+What still has teeth in this file is everything about `state_word`: that the three ORPHANED
+cases stay three distinct words, and that every other state reads as its own value. Those
+assert the policy against something that is not a second copy of itself, so they fail when
+the policy changes -- which is the whole of what this file now claims. Two compare against
+literals (`_ORPHAN_CASES`); the third compares `state_word(state, None)` against
+`state.value`, which is the enum rather than a literal. It still has teeth -- any change to
+the word mapping breaks it -- but "against literals" named the mechanism more strongly than
+it is, and the distinction is the kind this file exists to keep straight.
+
+Rewritten at Task 2.4 of the shared-use-cases sub-plan, under DEC-019: the merge is
+permitted, and leaving a docstring claiming a detection the file can no longer perform is the
+defect that decision exists to prevent.
 """
 
 from datetime import UTC, datetime
 
 import pytest
 
-from remote_agents.adapters.telegram.service import _session_row_label
+# Both of these are now `application.session_views.session_row`, re-exported. The two import
+# paths are kept deliberately: they are what a surface would have to stop offering before it
+# could hold its own copy again, so importing them here still asserts something -- just not
+# what the assertions below appear to assert. See the module docstring.
+from remote_agents.adapters.telegram.service import session_row as _session_row_label
 from remote_agents.adapters.tui.model import session_row
 from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import (
@@ -79,7 +104,12 @@ def test_every_non_orphaned_state_still_reads_as_its_own_value(state) -> None:
 
 @pytest.mark.parametrize(("provenance", "expected"), _ORPHAN_CASES)
 def test_both_surfaces_render_the_same_row(provenance, expected) -> None:
-    """The parity half. Two copies of one format is how they broke together."""
+    """Now a tautology on its first line and a real assertion on its second.
+
+    The equality compares one function with itself and cannot fail. The `in` check below it
+    still pins the rendered word against a literal, which is what makes this parametrization
+    worth keeping at all.
+    """
     record = _record(SessionState.ORPHANED, provenance)
 
     assert session_row(record) == _session_row_label(record)
@@ -88,6 +118,8 @@ def test_both_surfaces_render_the_same_row(provenance, expected) -> None:
 
 @pytest.mark.parametrize("state", list(SessionState))
 def test_both_surfaces_agree_for_every_state(state) -> None:
+    """Kept as a resolution check, not a divergence check: it asserts that both import paths
+    still reach the shared function, and nothing more. It cannot fail on a format change."""
     record = _record(state)
 
     assert session_row(record) == _session_row_label(record)

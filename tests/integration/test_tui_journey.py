@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 from tui_filter import settle_filter
 from tui_positions import position
 
@@ -53,15 +54,19 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
         provider = ProjectCatalogueProvider(registry_path, dev_root)
         store = SQLiteSessionStore(connection)
         context = TuiContext(
-            launcher=SessionService(store, FakeTerminal()),
-            creator=ProjectCreationService(
-                FilesystemProjectWorkspace(dev_root),
-                RegistryProjectRecorder(registry_path, dev_root, today=lambda: date(2026, 8, 5)),
+            backend=backend_for(
+                sessions=SessionService(store, FakeTerminal()),
+                projects=ProjectCreationService(
+                    FilesystemProjectWorkspace(dev_root),
+                    RegistryProjectRecorder(
+                        registry_path, dev_root, today=lambda: date(2026, 8, 5)
+                    ),
+                ),
+                refresh_catalogue=lambda: provider.refresh().catalogue,
+                catalogue=provider.refresh().catalogue,
             ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: provider.refresh().catalogue,
             attach_argv=lambda session_id: ("tmux", "attach", "-t", f"={session_id}"),
-            catalogue=provider.refresh().catalogue,
         )
         app = RemoteAgentsTui(context)
 

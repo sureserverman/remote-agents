@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from backends import backend_for
 from stop_results import a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -69,11 +70,16 @@ class _RecordingLauncher:
     #: What `graceful_stop` reports back. Defaults to a clean exit, which is what every case
     #: written before BL-008 assumes — the surface discarded this value entirely.
     observation: TerminalObservation | None = None
+    #: How many times the store has been read. Counted so a test asserting that a refusal
+    #: never reached the store can say so, rather than leaving the claim in its own name.
+    reads: int = 0
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
         return self.records
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
         return self.records
 
     async def copy_attach(self, _session_id) -> str | None:
@@ -99,12 +105,14 @@ class _RecordingLauncher:
 
 def _context(launcher: _RecordingLauncher) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 
@@ -407,3 +415,76 @@ async def test_a_graceful_stop_that_worked_says_nothing_about_a_failure() -> Non
 
     assert reported == []
     assert "did not take effect" not in status
+
+
+async def test_a_session_value_that_is_not_a_session_id_refuses_as_a_miss_not_a_fault() -> None:
+    """The one branch Task 1.3 added, driven rather than reasoned about.
+
+    Routing this surface onto the shared use case needed a parsed `SessionId`, where the old
+    code passed the raw string to `current_record` and simply matched nothing. So an
+    unparseable value gained a place it could raise, and the guard maps it back to the
+    refusal `current_record` used to produce.
+
+    Unreachable through navigation today — every `session_value` originates as
+    `str(SessionId)` on a rendered row — which is exactly why it is pinned here. "This cannot
+    currently happen" is the kind of claim a later change invalidates quietly, and this is
+    the path that destroys sessions. Asked for by the Tier-1 review of Task 1.3, as its one
+    Important finding.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        # Counted from here, so the detail's own render is not mistaken for the stop's read.
+        reads_before = launcher.reads
+        await app.stop("graceful", "not-a-session-id", app.screen)
+        await pilot.pause()
+        reads_during = launcher.reads - reads_before
+        said = announcements(app)
+
+    # **Exactly one read, and that one is `refuse()`'s own redraw.** The Tier-2 review asked
+    # for a counter asserting *zero*, on the reading that the guard returns before
+    # `resolve_stop` and nothing else would read. Wiring the counter disproved it: `refuse()`
+    # ends in `on_reveal()`, which re-renders the detail from the store, and it did so on this
+    # path before this change too. So the earlier name — "without reading the store" — was the
+    # false part, and it is now gone.
+    #
+    # One is still the discriminating value rather than a shrug. Without the guard,
+    # `SessionId.parse` raises into `stop`'s own `except`, which reports a fault and
+    # deliberately does *not* redraw — so the count there is **zero**. The two outcomes are
+    # 1-read-and-silent versus 0-reads-and-"did not complete", and this asserts both halves.
+    assert reads_during == 1
+
+    assert launcher.issued == [], "nothing may be dispatched for a session never identified"
+    # `issued == []` alone does not discriminate, and that is the point of the second
+    # assertion. Without the guard `SessionId.parse` raises into `stop`'s own `except`, which
+    # also dispatches nothing — and then tells the owner "Stop and close did not complete:
+    # session ID must be a UUID", a fault report over a session that was never identified.
+    # `refuse()` with no message says nothing and redraws, which is what the old
+    # `current_record` miss produced. So what is pinned is the sentence, not the silence.
+    assert not any("did not complete" in one for one in said), said
+
+
+async def test_a_session_value_in_non_canonical_uuid_form_is_refused_too() -> None:
+    """`SessionId.parse` rejects a UUID that is not in canonical form, not only a non-UUID.
+
+    A separate case because it is a different rejection inside `parse` — the value *is* a
+    UUID, and `str(parsed) != value` is what refuses it — and because a guard written against
+    "not a UUID" alone would let this one through to raise.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        await app.stop("graceful", str(record.session_id).upper(), app.screen)
+        await pilot.pause()
+        said = announcements(app)
+
+    assert launcher.issued == []
+    assert not any("did not complete" in one for one in said), said

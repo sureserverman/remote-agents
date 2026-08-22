@@ -7,7 +7,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from stop_results import a_verified_force_stop
+from stop_results import (
+    a_reader_for,
+    a_verified_force_stop,
+)
 
 from remote_agents.adapters.telegram.authorization import (
     AuthorizationGate,
@@ -18,6 +21,7 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.tmux.capture import sanitize_capture
 from remote_agents.adapters.tmux.codec import exact_session_target
+from remote_agents.application.stops import execute_stop
 from remote_agents.config import ConfigError
 from remote_agents.domain.models import (
     ProfileId,
@@ -74,10 +78,17 @@ async def test_force_stop_rechecks_the_current_record_before_dispatch() -> None:
     service = RecordingForceService()
     changed = replace(_record(session_id, profile_id), state=SessionState.ENDED)
 
-    accepted = await controller.execute(request, service, changed)
+    accepted = await execute_stop(
+        request.action,
+        request.session_id,
+        sessions=service,
+        read_record=a_reader_for(changed),
+        profile_id=request.profile_id,
+    )
 
-    # `.dispatched`, never the result itself: `StopResult` refuses to be a bool precisely so
-    # this line cannot quietly stop checking anything, which is what it did for one commit.
+    # `.dispatched`, never the outcome itself: `StopOutcome` refuses to be a bool precisely
+    # so this line cannot quietly stop checking anything, which is what it did for one commit.
+    # The guarantee is inherited from the `StopResult` this merge retired, not reinvented.
     assert not accepted.dispatched
     assert service.calls == 0
 

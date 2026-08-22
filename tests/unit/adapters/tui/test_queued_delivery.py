@@ -44,6 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from backends import backend_for
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -189,13 +190,15 @@ class _UnusedCreator:
 
 def _context(launcher: _RecordingLauncher, *, conversations: object | None = None) -> TuiContext:
     return TuiContext(
-        conversations=conversations,  # type: ignore[arg-type]
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=_UnusedCreator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            conversations=conversations,  # type: ignore[arg-type]
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=_UnusedCreator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=_PROFILES,
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
     )
 
 

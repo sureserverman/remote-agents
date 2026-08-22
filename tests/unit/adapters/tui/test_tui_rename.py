@@ -18,6 +18,7 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
+from backends import backend_for
 from textual.widgets import Input, OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_positions import position
@@ -91,13 +92,15 @@ class _Listing:
 
 def _context(launcher: _Listing) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_EXISTING,),
+            catalogue=(_EXISTING,),
+            max_label_length=8,
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_EXISTING,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_EXISTING,),
-        max_label_length=8,
     )
 
 

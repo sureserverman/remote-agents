@@ -408,6 +408,29 @@ continuing the story — only once the old one has left the chat, which is what 
 `Open session` does. You have read those lines and acted on them; the next message is about
 what has happened since.
 
+**Which message a session owns is durable, so a restart does not start a second one.** It is a
+row in `standing_notifications` keyed on the chat and the session, written when the message is
+sent and rewritten whenever it is amended or replaced. Before it existed that record was
+process memory: the service restarted at 21:23 on 2026-08-20, the session it had already
+notified about reported again at 21:35, and the notifier — having forgotten which message was
+its — sent a second one. The live view could not tidy up after it either, because the screen it
+re-sends is also process memory, so the restart left one notification above the menu and one
+below it for a single session. Both halves are visible in the journal as a `Started` line
+between two observations for the same session; only the first half is fixed here, and the menu
+staying put after a restart until you next press something is unchanged.
+
+**A session that has finished loses its notification.** Every delivery pass asks the records
+which of the notified sessions are still `starting` or `running`; one you stopped, force-stopped
+or cleaned up has already answered the question its alert was asking, so the message is deleted
+and its `Open session` token pruned with it. A stop pressed in the bot collects it immediately;
+a stop made in the local console is collected by the next pass, within `activity_poll_seconds`,
+because that surface is a different process and this one only finds out by reading. If Telegram
+refuses the delete the row stays and the next pass tries again, and if the records cannot be
+read at all nothing is deleted — a failed read is not evidence that a session has ended. **The
+local feed is untouched by any of this**: it reads `agent_activity`, which is the append-only
+record of what agents did, so the observation stays visible in the console after the alert has
+gone from the chat.
+
 Two things follow from Telegram ordering a chat purely by send time, and both were added after
 the first real run showed what their absence feels like. **Pressing `Open session` deletes that
 notification**: it has been acted on, and left in place it becomes one of a growing pile of
@@ -749,13 +772,50 @@ the same two commands above. It is reachable because every pane process runs the
 start-time repair and the lock between them is per-process, so two callers reading the same
 stale arrangement can each split for the same missing slot.
 
-**What recovery can and cannot do.** When the dashboard process starts, it returns each pane to
-where it belongs, logging what it moved and printing what it could not put right. Some states it can only
-report, because `swap-pane` trades panes rather than moving one: if a displayed agent's pane was
-destroyed (a stop from Telegram, say), the projects surface is stranded in that session's window
-and trading it back would exile one of the console's own panes. The console says it is a pane
-short and asks to be restarted, and names any defunct `ra-<uuid>` still holding an old surface,
-which you can kill by hand.
+**A stop steps the console aside first, whichever surface issues it.** Stopping or cleaning up
+the session the console is showing kills the agent's pane — and that pane is physically *in* the
+console window. Both surfaces now bring the projects list back to the left slot before the kill
+lands, so the console never drops to two panes and there is nothing to watch repair itself. The
+emptied `ra-<uuid>` disappears on its own, since a window with no panes takes its session too.
+
+The local surface always did this. The bot did not — it is a different process, and DEC-005's
+premise was that only one process arranges these panes — so a stop from your phone used to leave
+the console a pane short, sessions and feed stretched across the full width, until its next
+sessions reload put the surface back up to **ten seconds** later. The bot now holds a composer
+of its own for that one operation. It never *builds* a console, and on a host that has never run
+`remote-agents` it does nothing at all.
+
+**Both processes take `~/.local/state/remote-agents/console.lock` while they arrange panes.**
+That file is the whole reason a second writer is safe: every arrangement here reads the pane
+layout and then acts on it a couple of tmux round trips later, so two processes deciding from
+one stale reading is not an untidy screen — it puts a live agent's pane into another session's
+window, where stopping *that* session destroys it. Nothing is ever written to the file; only the
+lock matters. If it cannot be created the surfaces fall back to per-process locking with a
+warning, which is the guarantee this had before. If one surface wedges while holding it the
+other waits five seconds, says the console is busy, and leaves the panes alone — a stop is never
+held up by a display.
+
+**The console still puts itself back together if something goes wrong.** A crash mid-exchange,
+a `swap-pane` by hand, or a kill that outruns the step-aside can still leave one of the
+console's panes stranded in a stopped session's window. The console moves it back in
+(`join-pane`, the one place this project uses it) and restores the window's proportions — on the
+next sessions reload, at the next start, or on the way through your next click on a row.
+
+This is repaired rather than reported because a swap could not do it: `swap-pane` trades, and
+there is nothing in a stopped session's window worth having, so trading would send a *second*
+console pane out to replace the first. Left unrepaired that compounded — with the projects pane
+gone, the pane sitting in position 0 is the **sessions list**, and showing an agent exchanged
+into *that*, so the console lost a second pane and the agent appeared across the top. Observed
+on 2026-08-21; the console now refuses to show a session at all rather than pay for it that way,
+and says so in the pane you pressed from.
+
+**What recovery still cannot do.** Two states are reported rather than repaired, because nothing
+safe distinguishes them. A console **predating the pane-slot marks** has nothing saying which
+slot a stranded pane is, so there is no position to move it back to. And a console that has lost
+**more than one** pane this way — possible only on a build without the repair above — cannot be
+put back either, because the pane a reclaimed one rejoins beside is itself missing. Both say the
+console is a pane short and ask to be restarted, and name any defunct `ra-<uuid>` still holding
+an old surface, which you can kill by hand.
 
 Note that *re-attaching* is not restarting: running `remote-agents` while the console already
 exists attaches a second client to the running dashboard, and does not re-run that repair.

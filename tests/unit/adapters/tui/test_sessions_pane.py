@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from backends import tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
 
@@ -61,15 +62,15 @@ def _record(session_id: SessionId = _SESSION, name: str = "existing") -> Session
 
 def _context(records: tuple[SessionRecord, ...] = (), **overrides) -> TuiContext:
     base = {
-        "launcher": _Launcher(records),
-        "creator": object(),
+        "sessions": _Launcher(records),
+        "projects": object(),
         "profiles": (ProfileChoice("claude", True),),
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
     }
     base.update(overrides)
-    return TuiContext(**base)  # type: ignore[arg-type]
+    return tui_context_for(**base)
 
 
 def test_the_sessions_pane_rests_on_the_sessions_list() -> None:
@@ -176,9 +177,9 @@ async def test_the_cursor_rests_painted_on_a_row_whose_enter_does_not_mutate() -
             for segment in choices.render_line(line)
             if segment.text.strip() and segment.style is not None
         ]
-        assert any(
-            segment.style.clear_meta_and_links() == cursor for segment in painted
-        ), "the sessions pane drew no cursor on its resting row"
+        assert any(segment.style.clear_meta_and_links() == cursor for segment in painted), (
+            "the sessions pane drew no cursor on its resting row"
+        )
 
         choices.focus()
         await pilot.press("enter")
@@ -304,7 +305,7 @@ async def test_a_failed_read_does_not_send_the_owner_somewhere_that_is_not_there
         async def list_sessions(self):
             raise RuntimeError("store contended")
 
-    app = SessionsPane(_context((), launcher=_Failing(())))
+    app = SessionsPane(_context((), sessions=_Failing(())))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         # Through the screen's own reload, which is the path that catches and reports.
@@ -341,3 +342,45 @@ async def test_the_pane_offers_no_flow_that_starts_by_choosing_a_project() -> No
         await app.action_sessions()
         await pilot.pause()
         assert position(app) == "SESSIONS_PANE", "a declined flow must not move the pane"
+
+
+async def test_a_session_that_cannot_be_shown_says_why_instead_of_doing_nothing() -> None:
+    """The bug an owner actually hit: click a row, watch nothing happen.
+
+    `ConsoleComposer.show` degrades to a log line by contract (DEC-040) and nothing in
+    `src/` configures logging, so a session it declined to display was silence. The
+    commonest reason is not a fault: a session launched before identity moved to the pane
+    (DEC-038) names no pane, so there is nothing to exchange. It is still listed, stoppable
+    and inspectable — it just cannot be shown, and now it says so and names the repair.
+    """
+
+    async def refuse(session_id: str) -> str:
+        return "This session started before ... Run: remote-agents upgrade-sessions"
+
+    app = SessionsPane(_context((_record(),), open_in_console=refuse))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        said = [str(note.message) for note in app._notifications]
+        assert any("upgrade-sessions" in line for line in said), said
+        assert app.is_running, "a refusal is not a reason to lose the pane"
+
+
+async def test_a_session_that_is_shown_says_nothing_at_all() -> None:
+    """Success is silent; only a refusal is worth interrupting for."""
+
+    async def show(session_id: str) -> None:
+        return None
+
+    app = SessionsPane(_context((_record(),), open_in_console=show))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert list(app._notifications) == []

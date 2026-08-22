@@ -9,6 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from backends import backend_for
+from stop_results import a_reader_for
 from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.projects.registry import RegisteredProject
@@ -16,7 +18,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -26,6 +28,7 @@ from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_actions import available_actions
+from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import ProfileId, ProjectId, SessionState
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 from remote_agents.ports.terminal import TerminalTargetMissing
@@ -60,7 +63,15 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         callbacks.bind_pending(11, 2)
         request = stop.claim(token, 7, 11, 2)
         assert request is not None
-        assert (await stop.execute(request, service, record)).dispatched
+        assert (
+            await execute_stop(
+                request.action,
+                request.session_id,
+                sessions=service,
+                read_record=a_reader_for(record),
+                profile_id=request.profile_id,
+            )
+        ).dispatched
         stopped = (await service.list_sessions())[0]
         # One button ended it: the graceful stop removed the tmux session it exited, so
         # there is no pane left to capture and no second step for the owner to confirm.
@@ -87,7 +98,15 @@ async def test_integrated_fake_journeys_use_real_sqlite_and_isolated_tmux(tmp_pa
         callbacks.bind_pending(11, 4)
         request = force.claim(token, 7, 11, 4)
         assert request is not None
-        assert (await force.execute(request, service, command)).dispatched
+        assert (
+            await execute_stop(
+                request.action,
+                request.session_id,
+                sessions=service,
+                read_record=a_reader_for(command),
+                profile_id=request.profile_id,
+            )
+        ).dispatched
     finally:
         for record in await service.list_sessions():
             try:
@@ -136,7 +155,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, launcher=service)
+    boundary = build_private_bot(7, 11, backend=backend_for(catalogue=catalogue, sessions=service))
 
     try:
         record = await service.launch(
@@ -184,12 +203,11 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=catalogue,
+        backend=backend_for(catalogue=catalogue, sessions=service),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
     )
 
     try:
@@ -256,13 +274,13 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=catalogue,
-        catalogue_source=lambda: catalogue,
+        backend=backend_for(
+            catalogue=catalogue, refresh_catalogue=lambda: catalogue, sessions=service
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=service,
     )
     assert [project.name for project in boundary.catalogue] == ["alpha", "opaque-editor"]
 

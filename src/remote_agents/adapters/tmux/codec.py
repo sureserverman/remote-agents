@@ -203,15 +203,32 @@ def pane_mark_args(
 
     The target is the session at launch time, when its only pane is the one being marked;
     thereafter the pane is addressed by the id `exact_pane_target` validates.
+
+    **The schema mark is written last, and the order is load-bearing.** These four are
+    separate `set-option` calls with no transaction around them, and `pane_owned_identity`
+    reads the schema alone to decide whether a pane owns its identity — so the schema *is*
+    the commit record for the other three. Written first, it would be true the instant it
+    landed: `raw_id` already reads non-empty on a schema-1 pane by tmux's pane -> session
+    fallback, so a run interrupted after the schema write would leave a pane reporting
+    `pane_scoped` with its project and profile still session-scoped, and
+    `upgrade_pane_identity` skips exactly those. The repair would then decline to repair it,
+    permanently, while the project mark resolved from whatever session the pane was later
+    displaced into — the crossing DEC-038 exists to prevent. (Named in prose rather than
+    spelled, because `test_the_mark_vocabulary_has_one_home` pins how many times each option
+    name appears here, and a mention is indistinguishable from a second vocabulary.)
+
+    Written last, a partial failure leaves the schema at 1, the pane is retried on the next
+    run, and the re-issued `set-option` calls are idempotent. Both callers get this: the
+    launch path and `upgrade_pane_identity`.
     """
     target = exact_session_target(f"ra-{session_id}")
     return tuple(
         ("set-option", "-p", "-t", target, option, value)
         for option, value in (
-            (_SCHEMA_OPTION, _PANE_SCHEMA_VERSION),
             (_ID_OPTION, str(session_id)),
             (_PROJECT_OPTION, str(project_id)),
             (_PROFILE_OPTION, str(profile_id)),
+            (_SCHEMA_OPTION, _PANE_SCHEMA_VERSION),
         )
     )
 
@@ -301,9 +318,6 @@ def console_attach_argv() -> tuple[str, ...]:
     return ("tmux", "-L", "remote-agents", "attach-session", "-t", console_target())
 
 
-
-
-
 #: Which characters a bindable key may be made of, once one optional modifier is stripped.
 _BINDABLE_KEY_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -361,8 +375,6 @@ def console_binding_args(
     return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
 
 
-
-
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
     """Return the full production argv that switches the current client to one session.
 
@@ -386,7 +398,6 @@ def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
         "-t",
         exact_session_target(f"ra-{session_id}"),
     )
-
 
 
 def display_message_args(text: str) -> tuple[str, ...]:
@@ -427,8 +438,6 @@ def console_zoom_args() -> tuple[str, ...]:
         console_target(),
         "#{window_zoomed_flag}|#{pane_id}",
     )
-
-
 
 
 def console_slot_mark_args(
@@ -533,6 +542,48 @@ def split_console_pane_args(
         "-F",
         "#{pane_id}",
         *command,
+    )
+
+
+def rejoin_console_pane_args(
+    pane_id: str,
+    beside_pane: str,
+    *,
+    vertical: bool,
+    percent: int,
+    before: bool = False,
+) -> tuple[str, ...]:
+    """Return the argv suffix that moves one pane into the window another pane is in.
+
+    `join-pane` rather than `swap-pane`, and the two are not interchangeable: a swap trades,
+    so it needs a partner worth having on the far end. This is for the case where there is
+    none — the window the console's pane was parked in has had its agent destroyed — and
+    trading there would just send a second console pane out to take its place.
+
+    The flags mirror `split_console_pane_args` on purpose, because this fills the position
+    that function would have built: `-h`/`-v` for the axis, `-l <percent>%` sizing the pane
+    being moved in, `-b` to put it *before* its neighbour, and `-d` to keep focus where it
+    was rather than following the pane. Probed on tmux 3.4 rather than read off the manual:
+    `join-pane -b -h -l 60% -s <surface> -t <sessions>` against a console reduced to two
+    panes restored it to three, and the emptied window took its defunct session with it. The
+    geometry afterwards was 108x29/71x29/180x14 -- correct order, wrong shape, because the
+    layout tree changed while the pane was away. That is `console_layout_args`' job and the
+    same one it already does after a rebuild; run after it, the three panes measured
+    107x44/72x29/72x14, which is a fresh build to the column.
+    """
+    if not 1 <= percent <= 99:
+        raise ValueError("a console pane rejoin takes a percentage strictly inside 0 and 100")
+    return (
+        "join-pane",
+        "-v" if vertical else "-h",
+        "-d",
+        *(("-b",) if before else ()),
+        "-l",
+        f"{percent}%",
+        "-s",
+        exact_pane_target(pane_id),
+        "-t",
+        exact_pane_target(beside_pane),
     )
 
 

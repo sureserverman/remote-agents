@@ -10,11 +10,10 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.notifications import (
     OPEN_SESSION_LABEL,
     ActivityNotifier,
-    SessionGroup,
-    grouped_for_delivery,
     render_activity,
 )
 from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
+from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
@@ -755,147 +754,6 @@ SESSION_A = "0191f2c2-0000-7000-8000-00000000aaaa"
 SESSION_B = "0191f2c2-0000-7000-8000-00000000bbbb"
 
 
-def _observed(
-    session_id: str,
-    kind: ActivityKind,
-    *,
-    detail: str | None = None,
-    minute: int = 0,
-) -> AgentActivity:
-    confidence = (
-        ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
-    )
-    return AgentActivity(
-        session_id=session_id,
-        kind=kind,
-        detail=detail,
-        observed_at=OBSERVED + timedelta(minutes=minute),
-        confidence=confidence,
-    )
-
-
-def test_two_sessions_whose_observations_interleave_come_back_in_first_appearance_order() -> None:
-    """The queue feeding this is FIFO and grouping must not quietly re-sort it.
-
-    The session heard from first is told first, whatever its identifier is and whatever the
-    clock says: here the session that speaks first carries the *latest* stamp in the batch, so
-    a grouping that ordered by time across sessions would put it second.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_B, ActivityKind.COMPLETED, detail="pushed the branch", minute=9),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=1),
-            _observed(SESSION_B, ActivityKind.NEEDS_ANSWER, detail="may I write here?", minute=2),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=3),
-        ]
-    )
-
-    assert [group.session_id for group in groups] == [SESSION_B, SESSION_A]
-    assert len(groups[0].activities) == 2
-    assert len(groups[1].activities) == 2
-
-
-def test_the_same_thing_said_twice_collapses_to_the_copy_carrying_the_newer_moment() -> None:
-    """A `Stop` hook fires per turn, so one instruction reports "finished" several times over.
-
-    Both reports are true and the owner needs one of them — the later, because it is the one
-    that is still true when the message arrives.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=1),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=6),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert groups[0].activities == (
-        _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=6),
-    )
-
-
-def test_the_same_kind_said_twice_is_one_sentence_carrying_the_newer_words() -> None:
-    """The owner's rule: just the last of them.
-
-    Keyed on `(kind, detail)` these were two distinct things and both were rendered, which is
-    how one session's message became a wall of "the agent has finished its work" with five
-    different last replies hanging off it. The sentence is what the notification says, and it
-    says the session stopped and wants them -- once, in whatever words are current.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=1),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Pushed the branch.", minute=2),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert [activity.detail for activity in groups[0].activities] == ["Pushed the branch."]
-
-
-def test_two_quiet_reports_collapse_even_though_neither_carries_any_agent_text() -> None:
-    """`QUIET` always carries `detail=None`, so a pair of `None`s is the real duplicate case.
-
-    It is the one that matters for the profiles watched by their panes: they have no hooks, so
-    quiet is the only observation they ever produce, and a rule that treated "nothing said it"
-    as unmatchable would collapse nothing for exactly those sessions.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=1),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=4),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert groups[0].activities == (_observed(SESSION_A, ActivityKind.QUIET, minute=4),)
-
-
-def test_a_single_observation_becomes_a_group_of_one() -> None:
-    """The ordinary case, and the one the delivery pass sees most: one session, one thing."""
-    only = _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=2)
-
-    assert grouped_for_delivery([only]) == (SessionGroup(SESSION_A, (only,)),)
-
-
-def test_a_group_reads_in_the_order_its_observations_were_made() -> None:
-    """One session's news is a small timeline, so it is told in the order it happened."""
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=7),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=2),
-            _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=5),
-        ]
-    )
-
-    assert [activity.kind for activity in groups[0].activities] == [
-        ActivityKind.COMPLETED,
-        ActivityKind.NEEDS_ANSWER,
-        ActivityKind.QUIET,
-    ]
-
-
-def test_a_collapsed_observation_takes_the_place_its_newest_copy_earned() -> None:
-    """Collapse first, order second, because a survivor carries its newest stamp.
-
-    Ordering first would leave the surviving line where its *earliest* copy sat, so a sentence
-    stamped 14:20 would be printed above one stamped 14:10 — a timeline that runs backwards
-    inside a single message.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=1),
-            _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=5),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=9),
-        ]
-    )
-
-    assert [activity.kind for activity in groups[0].activities] == [
-        ActivityKind.NEEDS_ANSWER,
-        ActivityKind.COMPLETED,
-    ]
-
-
 # Rendering a group -- one message per session, however much it has to say -----------------
 
 
@@ -1428,3 +1286,118 @@ async def test_a_kind_nobody_reports_any_more_is_still_forgotten() -> None:
     await notifier.deliver([])
 
     assert notifier._last_sent == {}, "a session that stopped reporting must not be kept for ever"
+
+
+# Pinned open decisions -- these tests exist to be DELETED ------------------------------------
+#
+# The two cases below assert behaviour nobody has defended. They pin BL-002 and BL-003 as they
+# stand so that a refactor cannot resolve either one as a side effect, because resolving an open
+# backlog item by accident takes a decision that is the owner's, and takes it invisibly: the
+# diff would read as a cleanup and every other test would still pass.
+#
+# When the owner takes either decision, the corresponding test is DELETED rather than adjusted.
+# A pin that gets "updated" to match new behaviour has stopped being a pin and become a
+# description, and the whole point of it was to make the change deliberate.
+
+
+async def test_bl_002_a_new_question_behind_a_repeating_kind_is_discarded() -> None:
+    """PIN, not an endorsement: BL-002, an open decision the owner must take.
+
+    **This pins what the code does, which is not what BL-002 says it does.** The entry describes
+    a genuinely new question *waiting* for the repeating kind's window, and -- since DEC-034 --
+    replacing the old question's text silently when it arrives. Measured here, it does neither:
+    the window gate in `_send` returns an empty "still owed" tuple, so the observation is
+    neither sent nor held, and `deliver` drops it. The owner is never told the question changed,
+    and no later pass carries it, because the drain deleted the record long ago.
+
+    That is a larger claim than the backlog entry makes, and it points the other way from the
+    principle this module states about itself at `_send`'s own docstring -- "neither shown nor
+    sent; discarding them loses agent output permanently" -- and from
+    `test_an_observation_the_message_could_not_hold_is_owed_not_spent`, which asserts exactly
+    the opposite disposition for an arrival the *line cap* could not carry.
+
+    **Pre-existing and untouched by this sub-plan.** The branch is byte-identical at `0e334c2`,
+    where this sub-plan started, and on `main`. It is pinned rather than repaired because
+    repairing it changes behaviour, which this sub-plan forbids, and because the repair needs a
+    policy nobody has chosen: an observation held past its window comes back every pass, so
+    "hold it instead" is a decision about how the backlog grows, not a one-line fix.
+
+    Delete this test when the owner settles it. Do not adjust it -- an adjusted pin is a
+    description, and a description is what let the entry and the code disagree unnoticed.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    session = SESSION_A
+
+    first = _for(session, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+    assert await notifier.deliver([first]) == 1
+    assert "Which file?" in _showing(view)
+    alerts_after_the_first = _messages(view)
+
+    clock.advance(30)
+    new_question = "May I force-push to main?"
+    assert (
+        await notifier.deliver(
+            [_for(session, ActivityKind.NEEDS_ANSWER, new_question, clock.moment)]
+        )
+        == 0
+    )
+
+    assert notifier.pending_count() == 0, (
+        "BL-002 pinned: the new question is not held. If this now reads 1, someone gave the "
+        "suppressed observation a debt -- that is the owner's decision; delete this test."
+    )
+
+    # Every later pass, however far past the window, still has nothing to deliver: the
+    # observation is gone rather than waiting.
+    clock.advance(600)
+    assert await notifier.deliver([]) == 0
+
+    assert new_question not in _showing(view), (
+        "BL-002 pinned: the owner is never shown the question that superseded the one they "
+        "are looking at -- not late, not silently, not at all."
+    )
+    assert "Which file?" in _showing(view)
+    assert _messages(view) == alerts_after_the_first
+
+
+async def test_bl_003_a_refused_group_holds_the_head_of_the_queue_for_ever() -> None:
+    """PIN, not an endorsement: BL-003, a deferred improvement.
+
+    `deliver` stops the pass on a refused send and holds the group at the head of the queue.
+    That is right for a 429 or an outage and wrong for a permanent refusal: the same group is
+    retried and refused every pass, and no other session in the chat is notified again.
+
+    Deferred because the fix needs a policy nobody has chosen -- how many refusals before a
+    group is abandoned, and what the owner is told when one is -- and the failure has not been
+    seen in the wild.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    async def always_refuse(_bot: object, _arguments: dict[str, object]) -> int:
+        raise TelegramError("permanent refusal, not a rate limit")
+
+    view.send_apart = always_refuse  # type: ignore[method-assign]
+
+    for _ in range(5):
+        clock.advance(120)
+        assert (
+            await notifier.deliver(
+                [
+                    _for(SESSION_A, ActivityKind.COMPLETED, "poisoned", clock.moment),
+                    _for(SESSION_B, ActivityKind.NEEDS_ANSWER, "am I ever told?", clock.moment),
+                ]
+            )
+            == 0
+        )
+
+    assert view.sent == [], "nothing was delivered, which is the premise"
+    assert notifier.pending_count() > 0, (
+        "BL-003 pinned: the refused group is held rather than abandoned"
+    )
+    assert SESSION_B in {activity.session_id for activity in notifier._pending}, (
+        "BL-003 pinned: a second session in the same chat is never notified while the head of "
+        "the queue keeps being refused. If this now fails, the decision was taken -- delete "
+        "this test."
+    )

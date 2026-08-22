@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 from telegram.error import BadRequest, TelegramError
 
@@ -21,6 +22,7 @@ from remote_agents.adapters.telegram.service import (
     _reply_arguments,
     _sync_owner_metadata,
     audit_bot_metadata,
+    build_private_bot,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
@@ -51,7 +53,7 @@ from remote_agents.ports.terminal import TerminalTargetMissing
 
 
 def test_private_bot_boundary_accepts_only_the_exact_configured_private_chat() -> None:
-    boundary = PrivateBotBoundary(7, 11)
+    boundary = build_private_bot(7, 11)
     trusted = SimpleNamespace(
         effective_user=SimpleNamespace(id=7), effective_chat=SimpleNamespace(id=11, type="private")
     )
@@ -127,7 +129,7 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
 
 @pytest.mark.asyncio
 async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_callbacks() -> None:
-    boundary = PrivateBotBoundary(7, 11)
+    boundary = build_private_bot(7, 11)
     message = _Message()
     update = _trusted_update(message=message)
 
@@ -155,12 +157,13 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 @pytest.mark.asyncio
 async def test_private_bot_boundary_launches_on_the_agent_press_and_drops_a_repeat() -> None:
     launcher = _Launcher()
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
         profiles=(ProfileAvailability("claude", True),),
-        launcher=launcher,
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
@@ -192,12 +195,13 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
     failed = _record(SessionState.FAILED, "failed", ProjectId("a" * 24))
     launcher = _Launcher()
     launcher.launch_result = failed
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
         profiles=(ProfileAvailability("cursor-agent", True),),
-        launcher=launcher,
     )
     token = boundary.callbacks.create(
         "launch.profile", "a" * 24 + "|cursor-agent", 7, 11, 1, mutation=True
@@ -216,7 +220,7 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
 
 @pytest.mark.asyncio
 async def test_private_bot_boundary_ignores_a_duplicate_telegram_edit() -> None:
-    boundary = PrivateBotBoundary(7, 11)
+    boundary = build_private_bot(7, 11)
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
     launch = _button(message.replies[0], "Launch")
@@ -234,11 +238,12 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
         _record(SessionState.RUNNING, "active", ProjectId("a" * 24)),
         _record(SessionState.ENDED, "ended", ProjectId("a" * 24)),
     ]
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
 
     reply = await boundary._sessions_reply()
@@ -252,15 +257,17 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 @pytest.mark.asyncio
 async def test_private_bot_boundary_searches_projects_and_launches_from_a_result() -> None:
     launcher = _Launcher()
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(
-            CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
-            CatalogProject("b" * 24, "opaque-verse", "writing", "Registered"),
+        backend=backend_for(
+            catalogue=(
+                CatalogProject("a" * 24, "opaque-editor", "writing", "Registered"),
+                CatalogProject("b" * 24, "opaque-verse", "writing", "Registered"),
+            ),
+            sessions=launcher,
         ),
         profiles=(ProfileAvailability("codex", True),),
-        launcher=launcher,
     )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
@@ -291,10 +298,10 @@ async def test_private_bot_boundary_searches_projects_and_launches_from_a_result
 
 @pytest.mark.asyncio
 async def test_owner_commands_render_only_the_private_chat_surface() -> None:
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+        backend=backend_for(catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),)),
     )
     launch = _Message()
     sessions = _Message()
@@ -310,9 +317,10 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     )
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.
-    assert [
-        button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]
-    ] == ["• Sessions", "Launch"]
+    assert [button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]] == [
+        "• Sessions",
+        "Launch",
+    ]
     # Help is a screen like any other now: it carries a keyboard and names the real actions.
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
@@ -329,7 +337,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
 
     launcher = _Launcher()
     launcher.records = [session]
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
     detail = await boundary._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
@@ -365,7 +373,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
 
     launcher = _Launcher()
     launcher.records = [session]
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher, capture=capture)
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher, capture=capture))
     await boundary.start(_trusted_update(message=_Message()), None)
     detail = await boundary._detail_reply(str(session.session_id), 1)
     boundary.callbacks.bind_pending(11, 1)
@@ -409,7 +417,9 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
         CatalogProject(f"{number:024d}", f"Project {number}", "tests", "Registered")
         for number in range(25)
     )
-    boundary = PrivateBotBoundary(7, 11, catalogue=catalogue, project_page_size=10)
+    boundary = build_private_bot(
+        7, 11, backend=backend_for(catalogue=catalogue), project_page_size=10
+    )
     message = _Message()
     await boundary.start(_trusted_update(message=message), None)
     launch = _button(message.replies[0], "Launch")
@@ -479,7 +489,7 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
         lambda _config, _connection, _paths: ServiceComposition(
-            PrivateBotBoundary(7, 11), _SilentTerminal(), _SilentReconciler()
+            build_private_bot(7, 11), _SilentTerminal(), _SilentReconciler()
         ),
     )
 
@@ -513,7 +523,7 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
     older = CatalogProject("a" * 24, "older", "tests", "Registered")
     newer = CatalogProject("b" * 24, "newer", "tests", "Registered")
 
-    class _UsageLauncher:
+    class _UsageLauncher(SessionUseCaseDouble):
         async def project_usage(self):
             return [
                 ProjectUsage(
@@ -528,12 +538,14 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
         async def refresh_readiness(self) -> None:
             return None
 
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(older, newer),
-        catalogue_source=lambda: (older, newer),
-        launcher=_UsageLauncher(),
+        backend=backend_for(
+            catalogue=(older, newer),
+            refresh_catalogue=lambda: (older, newer),
+            sessions=_UsageLauncher(),
+        ),
     )
     served: list[tuple[str, ...]] = []
 
@@ -627,7 +639,7 @@ class _Connection:
         return None
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self) -> None:
         self.commands = []
         self.records = []
@@ -834,7 +846,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     keyboard past 100 buttons, so the screen was a few projects away from not rendering.
     Both flows now share one renderer; only the action each button carries differs.
     """
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(94))
+    boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(94)))
 
     resume = boundary._resume_projects_reply()
     launch = boundary._projects_reply(boundary.catalogue, view_id="all")
@@ -852,7 +864,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
 
 def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
     """A project chosen after paging or searching must still resume, never launch."""
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(30)))
     boundary._resume_projects_reply()
 
     second = boundary._project_page_reply("all|2", flow="resume")
@@ -869,7 +881,7 @@ def test_a_resume_project_page_stays_inside_the_resume_flow() -> None:
 
 def test_the_two_flows_cannot_page_into_each_others_stored_views() -> None:
     """Launch and resume both store a view called "all"; keying by flow keeps them apart."""
-    boundary = PrivateBotBoundary(7, 11, catalogue=_catalogue(30))
+    boundary = build_private_bot(7, 11, backend=backend_for(catalogue=_catalogue(30)))
     boundary._projects_reply(_catalogue(30), view_id="search", flow="launch")
 
     # Resume never stored a "search" view, so paging into one is refused rather than
@@ -885,11 +897,12 @@ def _stop_boundary(*records: SessionRecord) -> tuple[PrivateBotBoundary, _Launch
     """A boundary holding `records`, ready to render and be pressed."""
     launcher = _Launcher()
     launcher.records = list(records)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -1070,7 +1083,7 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
 
 
 def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
-    boundary = PrivateBotBoundary(7, 11)
+    boundary = build_private_bot(7, 11)
 
     assert boundary._pending_notice("graceful") is not None
     # Selecting the agent is the launch now, so the wait it causes is announced there.
@@ -1278,13 +1291,13 @@ async def test_a_button_drawn_before_a_restart_still_works_after_one(tmp_path) -
     """
     database = tmp_path / "sessions.sqlite3"
     connection = open_database(database)
-    before = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(connection))
+    before = build_private_bot(7, 11, callbacks=SQLiteCallbackStateStore(connection))
     message = _Message()
     await before.start(_trusted_update(message=message), None)
     sessions = _button(message.replies[0], "Sessions")
     connection.close()
 
-    after = PrivateBotBoundary(7, 11, callbacks=SQLiteCallbackStateStore(open_database(database)))
+    after = build_private_bot(7, 11, callbacks=SQLiteCallbackStateStore(open_database(database)))
     callback = _Callback(sessions)
     await after.callback(_trusted_update(callback=callback), None)
 
@@ -1360,7 +1373,7 @@ def _spool(
 def _notified(*records: SessionRecord, **bot_arguments: object):
     launcher = _Launcher()
     launcher.records = list(records)
-    boundary = PrivateBotBoundary(7, 11, launcher=launcher)
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=launcher))
     bot = _NotifyBot(**bot_arguments)
     boundary.notifier.attach(bot)
     return boundary, bot
@@ -1574,7 +1587,7 @@ async def test_a_session_that_stops_while_its_notification_waits_is_not_notified
 
     # The owner presses Stop while the activity is held for retry. Nothing re-drains it; the
     # only copy left is the one in the notifier's queue.
-    boundary.launcher.records = [replace(record, state=SessionState.STOP_REQUESTED)]
+    boundary.backend.sessions.records = [replace(record, state=SessionState.STOP_REQUESTED)]
 
     await _watch_quiet_once(composition)
 
@@ -1854,9 +1867,7 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     session_id = str(record.session_id)
     _spool(spool, session_id, stamp="000001")
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
-    _spool(
-        spool, session_id, event="Notification", reason="permission_prompt", stamp="000003"
-    )
+    _spool(spool, session_id, event="Notification", reason="permission_prompt", stamp="000003")
 
     await _watch_quiet_once(
         ServiceComposition(

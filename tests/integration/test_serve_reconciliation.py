@@ -10,7 +10,7 @@ import pytest
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.activity import PaneQuietWatcher
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.bootstrap import ServiceComposition, _serve_with_reconciliation
@@ -61,7 +61,7 @@ def _stuck_record(session_id: SessionId, *, age: timedelta = timedelta(hours=1))
 
 
 def _composition(store: SQLiteSessionStore, terminal: StubTerminal) -> ServiceComposition:
-    return ServiceComposition(PrivateBotBoundary(7, 11), terminal, ReconciliationService(store))
+    return ServiceComposition(build_private_bot(7, 11), terminal, ReconciliationService(store))
 
 
 async def test_a_record_stuck_in_starting_is_resolved_before_polling_begins(
@@ -321,9 +321,7 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
         assert HOOK_SOURCED_PROFILES, "a frozenset that emptied would make this test vacuous"
-        hooked = {
-            profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES
-        }
+        hooked = {profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES}
         watched = await _running(store, "codex")
         terminal = CapturingTerminal()
         watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
@@ -402,7 +400,7 @@ async def test_activity_watching_runs_beside_the_poll_and_stops_with_it(tmp_path
         terminal.observations = (TerminalObservation(session_id, live=True, preserved=False),)
         watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=1)
         composition = ServiceComposition(
-            PrivateBotBoundary(7, 11), terminal, ReconciliationService(store), watcher
+            build_private_bot(7, 11), terminal, ReconciliationService(store), watcher
         )
 
         async def poll_briefly(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
@@ -432,7 +430,7 @@ async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) ->
 
         terminal = CapturingTerminal()
         composition = ServiceComposition(
-            PrivateBotBoundary(7, 11),
+            build_private_bot(7, 11),
             terminal,
             ReconciliationService(store),
             ExplodingWatcher(store, terminal.capture, quiet_polls=1),

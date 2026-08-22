@@ -13,6 +13,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from backends import backend_for
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -137,12 +138,14 @@ def _terminal(
 def _tui(service: SessionService) -> RemoteAgentsTui:
     return RemoteAgentsTui(
         TuiContext(
-            launcher=service,
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=service,
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=lambda: _CATALOGUE,
+                catalogue=_CATALOGUE,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=lambda: _CATALOGUE,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-            catalogue=_CATALOGUE,
         )
     )
 

@@ -13,12 +13,29 @@ nothing at all and left the session on screen still running; the bot inferred "I
 in time" from the session still being listed, which is right for one of the two causes and
 confidently wrong for the other.
 
-So there are three claims here and they fail separately:
+**What changed under this file, and what it still detects (DEC-019).** Both surfaces now
+dispatch through `application/stops.py`, so the `StopFailure` each one is handed is
+necessarily the same object — the *vocabulary* half of the parity below is structural now and
+can no longer fail. What remains genuinely testable, and is the reason this file drives two
+real UIs rather than comparing two function calls, is what each surface **does with it**: the
+bot escapes it into HTML and lands it on a notice, the local surface splits it across a status
+line and a toast. A surface that reworded the summary, dropped the remedy, or rendered either
+into a region nobody reads would still satisfy every object-level assertion, and this file
+would still catch it. That is the claim; the shared dispatch narrowed it rather than voiding
+it.
+
+So there are three claims about a **graceful** stop here, and they fail separately:
 
 * each surface **names the cause** — the fix on that surface;
 * the two surfaces **agree** — DEC-007, and the thing a single shared vocabulary buys;
 * the two causes **do not read alike** on either surface — the half BL-008 would otherwise
   close without answering, since one message for both causes satisfies the first two claims.
+
+**And a fourth, about force.** The force-stop tests below are not instances of the three:
+`test_a_force_that_killed_the_pane_still_reads_as_a_stop_that_worked` asserts the opposite
+direction — that a force which *did* work is never reported as a failure — which is the trap
+DEC-017 sets, since `preserved` is false on every force including the successful one. Counted
+separately because "three claims" read as the file's whole inventory and was not.
 
 The detail values are spelled as literals rather than imported as constants, deliberately.
 They are the strings `adapters/tmux/runtime.py` puts on the wire, and a contract test that
@@ -32,9 +49,10 @@ from datetime import UTC, datetime
 from html import unescape
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.domain.models import (
@@ -66,7 +84,7 @@ def _record() -> SessionRecord:
     )
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """A graceful stop that reports `detail` and leaves the session exactly where it was.
 
     Leaving it listed is not incidental — it is the evidence both surfaces used to have, and
@@ -107,11 +125,13 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
     agreement. Unescaping here rather than weakening the assertion keeps the comparison exact.
     """
     launcher = _Launcher(record, detail)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
+            sessions=launcher,
+        ),
     )
     token = boundary.stops.offer(
         record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
@@ -139,10 +159,12 @@ async def _tui_said(record: SessionRecord, detail: str) -> str:
     launcher = _Launcher(record, detail)
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=launcher,  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=launcher,  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -221,7 +243,7 @@ async def test_both_surfaces_name_the_same_cause(detail: str) -> None:
         )
 
 
-class _ForceLauncher:
+class _ForceLauncher(SessionUseCaseDouble):
     """A force stop that reports `detail` and leaves the session gone from the list.
 
     Gone, on both outcomes, and that is the point of BL-026 rather than a convenience.
@@ -264,11 +286,13 @@ async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
     from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 
     launcher = _ForceLauncher(record, detail)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject(str(_PROJECT_ID), "opaque-editor", "tests", "Registered"),),
+            sessions=launcher,
+        ),
     )
     # The *confirmed* token, because an unconfirmed force is refused at `claim` by design —
     # the second press is what makes it runnable, and this drives the press that runs.
@@ -299,10 +323,12 @@ async def _tui_said_force(record: SessionRecord, detail: str) -> str:
     launcher = _ForceLauncher(record, detail)
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=launcher,  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=launcher,  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

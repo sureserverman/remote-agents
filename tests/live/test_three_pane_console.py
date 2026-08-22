@@ -77,8 +77,14 @@ async def _run(*argv: str) -> str:
 
 async def _panes(socket: str) -> list[tuple[int, str, int, int]]:
     listing = await _run(
-        "tmux", "-L", socket, "list-panes", "-t", "ra-console:",
-        "-F", "#{pane_index}|#{pane_id}|#{pane_width}|#{pane_height}",
+        "tmux",
+        "-L",
+        socket,
+        "list-panes",
+        "-t",
+        "ra-console:",
+        "-F",
+        "#{pane_index}|#{pane_id}|#{pane_width}|#{pane_height}",
     )
     rows = []
     for line in listing.splitlines():
@@ -122,8 +128,14 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
 
         windows = (
             await _run(
-                "tmux", "-L", console_socket, "list-windows",
-                "-t", "ra-console:", "-F", "#{window_index}",
+                "tmux",
+                "-L",
+                console_socket,
+                "list-windows",
+                "-t",
+                "ra-console:",
+                "-F",
+                "#{window_index}",
             )
         ).split()
         assert windows == ["0"], f"the console is one window, not {windows}"
@@ -154,8 +166,23 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
 
         # A real client, so the bindings are exercised as bindings.
         await _run(
-            "tmux", "-L", host_socket, "new-session", "-d", "-s", "host", "-x", "200", "-y", "50",
-            "tmux", "-L", console_socket, "attach-session", "-t", "ra-console:",
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            "ra-console:",
         )
         await asyncio.sleep(2.0)
         assert await _active_pane(console_socket) == by_slot["surface"].pane_id, (
@@ -209,7 +236,8 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
             # What the projects key runs. `-c` so the child composer reaches this socket
             # rather than the owner's real one.
             projects_command=(
-                "python3", "-c",
+                "python3",
+                "-c",
                 "import asyncio,sys;"
                 "from remote_agents.adapters.tmux.gateway import TmuxGateway;"
                 "from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner;"
@@ -228,9 +256,7 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
 
         # A managed session, fabricated: what is under test is the exchange and the key.
         name = f"ra-{session_id}"
-        await _run(
-            "tmux", "-L", console_socket, "new-session", "-d", "-s", name, "sleep", "600"
-        )
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", name, "sleep", "600")
         agent_pane = (
             await _run(
                 "tmux", "-L", console_socket, "list-panes", "-t", f"={name}:", "-F", "#{pane_id}"
@@ -253,8 +279,23 @@ async def test_the_projects_key_brings_the_surface_back_from_a_displayed_agent(
         assert displayed and displayed[0].pane_id == agent_pane, "the agent was not displayed"
 
         await _run(
-            "tmux", "-L", host_socket, "new-session", "-d", "-s", "host", "-x", "200", "-y", "50",
-            "tmux", "-L", console_socket, "attach-session", "-t", "ra-console:",
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            "ra-console:",
         )
         await asyncio.sleep(2.0)
         await _type(host_socket, projects_key)
@@ -335,7 +376,6 @@ async def test_each_pane_surface_renders_its_own_content_in_the_console(
             await _run("tmux", "-L", console_socket, "kill-server")
         except RuntimeError:
             pass
-
 
 
 async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) -> None:
@@ -428,8 +468,23 @@ async def test_the_owner_journey_through_the_three_pane_console(tmp_path: Path) 
         surface = by_slot["surface"]
 
         await _run(
-            "tmux", "-L", host_socket, "new-session", "-d", "-s", "host", "-x", "200", "-y", "50",
-            "tmux", "-L", console_socket, "attach-session", "-t", "ra-console:",
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            "ra-console:",
         )
         await asyncio.sleep(3.0)
 
@@ -683,8 +738,14 @@ async def test_a_pane_surface_in_a_test_console_never_reaches_the_production_ser
         )
         inside = (
             await _run(
-                "tmux", "-L", console_socket, "display-message",
-                "-p", "-t", "ra-console:", "#{socket_path}",
+                "tmux",
+                "-L",
+                console_socket,
+                "display-message",
+                "-p",
+                "-t",
+                "ra-console:",
+                "#{socket_path}",
             )
         ).strip()
         assert hosting_mode({"TMUX": f"{inside},1,0"}) is HostingMode.FOREIGN, (

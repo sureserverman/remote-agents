@@ -54,10 +54,15 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionState
+from remote_agents.domain.models import OrphanProvenance, ProfileId, SessionRecord, SessionState
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
-from remote_agents.ports.terminal import GRACEFUL_TIMEOUT, OWNERSHIP_LOST, UNKNOWN_SESSION
+from remote_agents.ports.terminal import (
+    GRACEFUL_TIMEOUT,
+    OWNERSHIP_LOST,
+    UNKNOWN_SESSION,
+    TerminalObservation,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -547,3 +552,30 @@ def notifiable(state: SessionState) -> bool:
     hook having fired at all, which is itself evidence of an agent that ran.
     """
     return state in _NOTIFIABLE
+
+
+def pane_is_attachable(observation: TerminalObservation | None, record: SessionRecord) -> bool:
+    """Whether an observed pane is this session's, and in a condition worth handing over.
+
+    Lives here for the reason `available_actions` and `state_word` do (DEC-001, DEC-029), and
+    for one more that is specific to it: **DEC-021 requires both surfaces to offer a PRESERVED
+    pane its attach, or neither to.** A rule two surfaces must answer identically, written
+    twice, is one copy plus a future divergence — and this one had already been written twice,
+    once inside `SessionService.copy_attach` and once as `_can_copy_attach` in the Telegram
+    adapter, which is what let the bot inspect the same pane twice to reach one answer.
+
+    Preserved counts alongside live: the agent exited and tmux kept its output, which is the
+    thing PRESERVED exists to keep. The ownership half is what stops that being a widening —
+    a pane whose project or profile disagrees with the record is refused whether it is live or
+    preserved, so allowing more *conditions* never allows more *panes*.
+
+    Not a claim about read-only. `-r` is per-client and is chosen by whoever builds the command
+    (`adapters/tmux/runtime.copy_attach`), so a predicate that described itself as enforcing it
+    would be claiming something it cannot see.
+    """
+    return bool(
+        observation is not None
+        and (observation.live or observation.preserved)
+        and observation.project_id == record.project_id
+        and observation.profile_id == record.profile_id
+    )

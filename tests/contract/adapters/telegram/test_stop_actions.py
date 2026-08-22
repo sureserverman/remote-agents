@@ -5,10 +5,16 @@ from html import escape
 from uuid import UUID
 
 import pytest
-from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
+from backends import SessionUseCaseDouble, backend_for
+from stop_results import (
+    a_clean_stop,
+    a_reader_for,
+    a_stop_that_did_not_take,
+    a_verified_force_stop,
+)
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
@@ -16,6 +22,7 @@ from remote_agents.application.session_actions import (
     UNKNOWN_SESSION,
     stop_failure,
 )
+from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -117,8 +124,12 @@ async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup()
     assert request is not None
     service = FakeService()
 
-    forced = await controller.execute(
-        request, service, Record(session, SessionState.FAILED, ProfileId("codex"))
+    forced = await execute_stop(
+        request.action,
+        request.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.FAILED, ProfileId("codex"))),
+        profile_id=request.profile_id,
     )
     assert forced.dispatched
     assert service.actions == ["force"]
@@ -138,15 +149,24 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
     assert claimed is not None
     service = FakeService()
 
-    result = await controller.execute(
-        claimed, service, Record(session, SessionState.PRESERVED, ProfileId("claude"))
+    result = await execute_stop(
+        claimed.action,
+        claimed.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.PRESERVED, ProfileId("claude"))),
+        profile_id=claimed.profile_id,
     )
-    # `.dispatched`, not the result's own truthiness: `StopResult` is a dataclass, so a
-    # refusal is truthy as an object and `not result` would silently pass on every outcome.
+    # `.dispatched`, not the outcome's own truthiness. `StopOutcome` inherits the retired
+    # `StopResult`'s poison-pill `__bool__` for exactly this line: a dataclass instance is
+    # unconditionally truthy, so `not result` would silently pass on every outcome.
     assert not result.dispatched
     assert service.actions == []
-    mismatched = await controller.execute(
-        claimed, service, Record(session, SessionState.RUNNING, ProfileId("codex"))
+    mismatched = await execute_stop(
+        claimed.action,
+        claimed.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.RUNNING, ProfileId("codex"))),
+        profile_id=claimed.profile_id,
     )
     assert not mismatched.dispatched
 
@@ -154,18 +174,20 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
 def _stopped_boundary(*records: SessionRecord) -> PrivateBotBoundary:
     """A boundary whose list holds exactly `records` — what remains *after* the stop ran."""
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return list(records)
 
         async def refresh_readiness(self) -> None:
             return None
 
-    return PrivateBotBoundary(
+    return build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=_Launcher(),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
     )
 
 
@@ -310,7 +332,7 @@ async def test_every_stop_action_lands_on_list_with_its_own_lead_line(action, le
     assert "Back" not in _labels(with_survivor)
 
 
-class _MovedOnLauncher:
+class _MovedOnLauncher(SessionUseCaseDouble):
     """Lists the session in a state that no longer matches the one its token was offered at."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -341,11 +363,12 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     offered = _a_session(SessionState.RUNNING)
     moved_on = _a_session(SessionState.PRESERVED)
     launcher = _MovedOnLauncher(moved_on)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     token = boundary.stops.offer(
         offered.session_id, offered.profile_id, SessionState.RUNNING, None, "graceful", 7, 11
@@ -399,11 +422,12 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     """
     record = _a_session()
     launcher = _MovedOnLauncher(record)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     token = boundary.stops.offer(
         record.session_id, record.profile_id, record.state, None, "graceful", 7, 11

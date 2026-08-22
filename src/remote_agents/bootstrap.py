@@ -46,9 +46,13 @@ from remote_agents.adapters.sqlite.database import (
 )
 from remote_agents.adapters.sqlite.migrations import MIGRATIONS
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
+from remote_agents.adapters.sqlite.standing_notification_store import (
+    SQLiteStandingNotificationStore,
+)
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
+    build_private_bot,
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
@@ -71,6 +75,7 @@ if TYPE_CHECKING:
     from remote_agents.adapters.tui.model import AttachRequest
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
+from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
@@ -86,7 +91,7 @@ from remote_agents.config import (
     load_secrets,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.domain.profiles import closed_profiles
+from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.production import ProductionPaths
 
@@ -374,6 +379,10 @@ def main(
     # exchange brings the surface home. Not a surface — it arranges panes and exits.
     console_parser = subcommands.add_parser("console")
     console_parser.add_argument("action", choices=("projects",))
+    # A one-time repair for sessions launched before identity moved to the pane (DEC-038).
+    # They stayed manageable but gained no pane to exchange, so the console could not show
+    # them. Explicit rather than automatic: it writes onto a running agent's pane.
+    subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
@@ -498,6 +507,8 @@ def main(
         return _enter_pane(arguments.name, arguments.config)
     if arguments.command == "console":
         return _console_arrange(arguments.action)
+    if arguments.command == "upgrade-sessions":
+        return _upgrade_sessions()
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
@@ -530,6 +541,12 @@ class LocalRuntime:
 
     terminal: TmuxTerminal
     profiles: tuple[ProfileAvailability, ...]
+    # What the probe actually observed, before either surface narrowed it. `profiles` above
+    # is the Telegram wizard's type and the local surface converts it back again -- carried
+    # separately rather than replaced because both narrowings are still in use, and merging
+    # them is sub-plan 4's job (it has a recorded regression to avoid). `Backend` takes this
+    # one, so the backend states what was seen and each surface decides what to say.
+    compatibility: tuple[ProfileCompatibility, ...]
     # The gateway the terminal wraps, carried separately so the composition root can wire
     # console capabilities (client switching) without widening the terminal port for a
     # concern that is presentation, not lifecycle.
@@ -588,24 +605,124 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles, gateway)
+    return LocalRuntime(terminal, profiles, compatibility, gateway)
+
+
+def compose_backend(
+    config,
+    connection,
+    paths: ProductionPaths,
+    *,
+    projects: ProjectCatalogueProvider | None = None,
+    runtime: LocalRuntime | None = None,
+    store: SQLiteSessionStore | None = None,
+    locks: SessionLocks | None = None,
+    hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
+    activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None,
+) -> Backend:
+    """Build the one backend a process hands to its frontend (ARCH-B1, ARCH-B2).
+
+    Both compositions below are built from this. What used to be four call sites that
+    happened to agree — `ProjectCatalogueProvider`, `_local_runtime`, `_conversation_service`,
+    `_project_creator` — is now one function, so a capability added to one surface cannot
+    silently miss the other.
+
+    **The connection is the caller's, and this must never open one.** `serve` holds a single
+    connection for the life of the process; a surface holds one only for the duration of a
+    single store operation, which is the guarantee DEC-035 put in place of the old exec-away
+    contract and the README states in those words. DEC-005's five concurrent writers are
+    sound only because of that lease, so a backend that opened its own handle would not be a
+    simplification — it would remove the thing making the writer count safe.
+
+    **`projects` and `runtime` are parameters, not internals**, because the caller needs them
+    anyway for the wiring this function deliberately does not do: the service needs the
+    terminal and the gateway for its reconciler, quiet watcher and console composer, and the
+    surface needs the gateway for console hosting. Passing them in is what stops the profile
+    probe — which shells out once per profile — from running twice in one process. Omitted,
+    they are built here, which is what a test composing a bare backend wants.
+
+    Passing `projects` in does **not** save a catalogue refresh — this always calls
+    `refresh()`, deliberately, so the backend's snapshot is its own rather than whatever the
+    caller last read. That is a filesystem walk, not a probe, and the asymmetry with
+    `runtime` is intentional: do not "fix" the apparent double refresh by trusting the
+    caller's snapshot.
+
+    **`store` is a parameter for the same reason**: the service composition already builds
+    one for its reconciler and quiet watcher, and all three consumers are meant to be looking
+    at the same store.
+
+    **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
+    `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the
+    service load the terminal library at composition time — the exact property
+    `local_context`'s docstring promises it does not.
+    """
+    projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
+    catalogue = projects.refresh().catalogue
+    runtime = runtime or _local_runtime(config, paths, projects.paths)
+    return Backend(
+        sessions=SessionService(
+            store if store is not None else SQLiteSessionStore(connection),
+            runtime.terminal,
+            locks=locks,
+            hide_in_console=hide_in_console,
+        ),
+        projects=_project_creator(config),
+        conversations=_conversation_service(projects.paths),
+        catalogue=catalogue,
+        refresh_catalogue=lambda: projects.refresh().catalogue,
+        # The domain's record of what was probed, not either surface's narrowing of it —
+        # see `Backend.profiles` for why the two narrowings must not be merged in passing.
+        profiles=runtime.compatibility,
+        capture=runtime.terminal.capture,
+        activity_feed=activity_feed,
+        max_label_length=config.max_label_length,
+    )
 
 
 def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    catalogue = projects.refresh().catalogue
-    project_paths = projects.paths
-    runtime = _local_runtime(config, paths, project_paths)
+    runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal
-    conversations = _conversation_service(project_paths)
     secrets = load_secrets()
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
     # would look identical and repair nothing.
     locks = SessionLocks()
+    # **The bot arranges the console too, for one operation only: stepping it aside before a
+    # stop destroys a pane.** Without this the owner stopping a displayed session from their
+    # phone left the agent's pane to be killed *inside* the console window, so the console sat
+    # a pane short — sessions and feed stretched across the whole width — until its next
+    # reload put the projects surface back, up to ten seconds later.
+    #
+    # This is the half of DEC-005 that is answered rather than accepted. Its premise was one
+    # writer over the panes by construction, and what made a second one safe is
+    # `console_lock`: both composers are built by `_console_composer`, so both name the same
+    # lock file, and neither decides from a reading the other is about to invalidate. The bot
+    # never *builds* a console — nothing here calls `ensure` — and `hide` degrades to nothing
+    # on a host with no console at all, which is every host that has not run `remote-agents`.
+    console = _console_composer(runtime.gateway, paths.home)
+    # The one backend this process hands its frontend (ARCH-B1). `locks` and the console
+    # hide are the service's own wiring and go in here; the reconciler and quiet watcher
+    # below are not the frontend's to drive and stay outside it (ARCH-B3).
+    backend = compose_backend(
+        config,
+        connection,
+        paths,
+        projects=projects,
+        runtime=runtime,
+        # The same store the reconciler and quiet watcher below are given. Inert today --
+        # SQLiteSessionStore holds only its connection -- but two instances where there was
+        # one stops being inert the moment it gains a cache or a statement pool, and this
+        # composition is the one place all three consumers are meant to agree.
+        store=store,
+        locks=locks,
+        hide_in_console=console.hide,
+    )
     return ServiceComposition(
-        PrivateBotBoundary(
+        # The factory, not the class: it wires the stop controller, the live view and the
+        # notifier, which the boundary used to build for itself out of whatever it had.
+        build_private_bot(
             secrets.owner_user_id,
             secrets.owner_chat_id,
             # The durable store, not the in-memory default: a restart used to void every
@@ -615,15 +732,23 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # message the live view is would send a second one and leave the first above it,
             # still holding buttons that — since Stage 1 — still resolve.
             anchors=SQLiteChatViewStore(connection),
-            catalogue=catalogue,
+            # And the durable standing notifications, which close the other half of that
+            # same defect. A restart that forgot which message a session's notification is
+            # sent a *second* one on the session's next report and left the first above the
+            # live view — observed in the chat on 2026-08-20, when the 21:23 restart turned
+            # one session's alert into one message above the menu and one below.
+            standing=SQLiteStandingNotificationStore(connection),
+            # The whole backend, not five of its fields taken out and handed over one at a
+            # time. `catalogue` and `max_label_length` came through here too and are on it;
+            # the boundary seeds its render copy of the first from `Backend.catalogue`.
+            backend=backend,
+            # Except the profiles, which stay a separate argument on purpose:
+            # `Backend.profiles` is the domain `ProfileCompatibility` and this surface
+            # renders `ProfileAvailability`. `runtime.profiles` is that narrowing, and
+            # passing `backend.profiles` here instead is the plausible-looking line that
+            # breaks it — see `Backend.profiles`.
             profiles=runtime.profiles,
             project_page_size=config.project_page_size,
-            max_label_length=config.max_label_length,
-            launcher=SessionService(store, terminal, locks=locks),
-            conversations=conversations,
-            creator=_project_creator(config),
-            capture=terminal.capture,
-            catalogue_source=lambda: projects.refresh().catalogue,
         ),
         terminal,
         # Readiness is wired in deliberately: without it, reconciliation promotes any
@@ -709,13 +834,19 @@ def _projects_command() -> tuple[str, ...]:
 
 
 def _console_composer(gateway=None, home: Path | None = None):
-    """Build the one console composer shape, so three call sites cannot drift apart.
+    """Build the one console composer shape, so four call sites cannot drift apart.
 
     They already had: `_enter_console`, `_console_arrange` and `local_context` each construct
     one, and only the last has a gateway of its own to reuse. What must not differ between
     them is the dashboard command, the projects command and the home directory — a composer
     that disagreed with its siblings about any of those would install a binding running a
     different program, or create a console somewhere else.
+
+    **`_private_boundary` is the fourth, and it is why the lock file is supplied here rather
+    than by each caller.** The bot arranges the console too now — it steps it aside before a
+    stop destroys a pane — so the composers in two different processes have to be naming the
+    same file or the lock excludes nothing. One factory, one path, and a caller cannot forget
+    it. Derived from the owner's home the way every other production path is.
     """
     from remote_agents.application.console import ConsoleComposer
     from remote_agents.ports.console import ConsolePaneSlot
@@ -725,6 +856,9 @@ def _console_composer(gateway=None, home: Path | None = None):
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
+        arrangement_lock=ProductionPaths.for_home(
+            home if home is not None else Path.home()
+        ).console_lock_path,
         # One process per pane. Which entry point each pane runs is composition policy, the
         # same as which entry point *is* the dashboard, so it is decided here rather than
         # spelled inside the composer that arranges them.
@@ -753,6 +887,30 @@ def _console_arrange(action: str) -> int:
     return 0
 
 
+def _upgrade_sessions() -> int:
+    """Give every session still marked under the old scheme an identity on its own pane.
+
+    Says what it did, including when there was nothing to do, because "nothing happened" is
+    the failure mode this whole repair exists to end.
+    """
+    gateway = TmuxGateway("remote-agents", AsyncTmuxRunner())
+    try:
+        upgraded = asyncio.run(gateway.upgrade_pane_identity())
+    except Exception as error:  # noqa: BLE001 - reported, never a traceback at the terminal
+        print(f"The sessions could not be upgraded: {error}", file=sys.stderr)
+        return 1
+    if not upgraded:
+        print("Every managed session already carries its identity on its own pane.")
+        return 0
+    for session_id in upgraded:
+        print(f"upgraded ra-{session_id}")
+    print(
+        f"{len(upgraded)} session(s) upgraded. The console can show them now — no restart "
+        "needed, and nothing was interrupted."
+    )
+    return 0
+
+
 def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None:
     """Run the console's start-only repair and carry its report to the surface, or nothing.
 
@@ -776,7 +934,7 @@ def _console_notes(composer, resident_pane: str | None) -> RecoveryReport | None
         return None
 
 
-def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
+def _console_opener(composer) -> Callable[[str], Awaitable[str | None]]:
     """What "open this session" means under console hosting: an exchange of panes.
 
     A named seam rather than a closure inside `local_context`, so the wiring can be asserted
@@ -790,8 +948,8 @@ def _console_opener(composer) -> Callable[[str], Awaitable[None]]:
     exchanging its left pane, which follows the pane whatever is hosting it (DEC-040).
     """
 
-    async def open_in_console(session_id: str) -> None:
-        await composer.show(SessionId.parse(session_id))
+    async def open_in_console(session_id: str) -> str | None:
+        return await composer.show(SessionId.parse(session_id))
 
     return open_in_console
 
@@ -898,7 +1056,6 @@ def local_context(config, connection, paths: ProductionPaths):
     from remote_agents.adapters.tui.context import FEED_LIMIT, ProfileChoice, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
-    catalogue = projects.refresh().catalogue
     runtime = _local_runtime(config, paths, projects.paths)
 
     open_in_console = None
@@ -943,15 +1100,32 @@ def local_context(config, connection, paths: ProductionPaths):
         console_flash = composer.flash
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
-        # contract it has always had, and the bot — a different process with no composer —
-        # leaves a dead pane the next sync detects and clears.
+        # contract it has always had. The bot builds a composer of its own for this one
+        # operation (see `_private_boundary`), so both writers now hide before destroying;
+        # what still reaches `sync` is a hide that timed out, a degraded console, or a pane
+        # that ended without either writer asking.
         hide_in_console = composer.hide
 
+    # The same backend the service composes, over this process's leased connection
+    # (ARCH-B1, ARCH-B2). The console capabilities above are this surface's alone and stay
+    # out of it (ARCH-B3); `hide_in_console` is not one of those -- the bot wires its own,
+    # from a hide-only composer -- so it goes in as a parameter here.
+    backend = compose_backend(
+        config,
+        connection,
+        paths,
+        projects=projects,
+        runtime=runtime,
+        hide_in_console=hide_in_console,
+        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+    )
     return TuiContext(
-        launcher=SessionService(
-            SQLiteSessionStore(connection), runtime.terminal, hide_in_console=hide_in_console
-        ),
-        creator=_project_creator(config),
+        # The whole backend, as `_private_boundary` hands the bot the same object. What used
+        # to be eight arguments taken out of it one at a time -- launcher, creator,
+        # refresh_catalogue, catalogue, capture, conversations, activity_feed,
+        # max_label_length -- is one, so a capability added to the backend cannot reach one
+        # surface and miss the other.
+        backend=backend,
         profiles=tuple(
             # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
             # uses `reason` for two things -- why a profile is blocked, and a note about a
@@ -966,19 +1140,11 @@ def local_context(config, connection, paths: ProductionPaths):
             )
             for profile in runtime.profiles
         ),
-        refresh_catalogue=lambda: projects.refresh().catalogue,
+        # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
+        # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
-        max_label_length=config.max_label_length,
-        catalogue=catalogue,
-        # The same capture the service hands the bot. Redactions default to the empty set
-        # the bot also uses -- no configuration key sources them today.
-        capture=runtime.terminal.capture,
-        conversations=_conversation_service(projects.paths),
         open_in_console=open_in_console,
         console_sync=console_sync,
-        # A reader of the durable observation table, never a drainer: consuming the spool
-        # would starve the phone's notifications (see Task 5.2's correction note).
-        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
         console_flash=console_flash,
         console_recovery=console_recovery,
     )

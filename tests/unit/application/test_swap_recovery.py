@@ -21,10 +21,14 @@ of which two are recovered, three are reported, and one must produce no exchange
 
 *Reported, because no exchange can fix them and trying makes things worse:*
 
-- **The surface stranded outside a console that has lost the pane it was traded for.** The
-  other writer destroyed the displayed agent's pane. `swap-pane` trades rather than moves, so
-  bringing the surface back would exile one of the console's own panes into the defunct
-  session — a pane shorter every time. The console needs restarting, and says so.
+- **The surface stranded outside a console that has lost the pane it was traded for, and
+  carrying no slot mark.** The other writer destroyed the displayed agent's pane. `swap-pane`
+  trades rather than moves, so bringing the surface back by exchange would exile one of the
+  console's own panes into the defunct session — a pane shorter every time. A console whose
+  panes *are* marked no longer reaches this: `_reclaim_plan` moves the stranded pane home
+  instead of trading for it, and `test_console_pane_reclaim.py` covers that. What is left here
+  is the console that predates the marks, where nothing says which slot the stranded pane is,
+  so there is no position to move it back to. It needs restarting, and says so.
 - **The surface parked in a third session's window while the slot holds an agent.** Exchanging
   would push that agent into a stranger's window: a crossing created by the thing meant to
   remove crossings.
@@ -145,9 +149,7 @@ class RecordingConsole:
 
 
 def composer(console: RecordingConsole) -> ConsoleComposer:
-    return ConsoleComposer(
-        console, ("dashboard",), Path("/tmp"), projects_command=("projects",)
-    )
+    return ConsoleComposer(console, ("dashboard",), Path("/tmp"), projects_command=("projects",))
 
 
 def _at_rest(console: RecordingConsole) -> bool:
@@ -319,9 +321,7 @@ async def test_recovery_reports_every_move_it_made_and_never_writes_a_record() -
     The report is the return value — the caller decides whether the owner sees it. Recovery
     moving panes must never become something a session's state depends on.
     """
-    console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     report = await composer(console).recover()
 
@@ -339,8 +339,7 @@ async def test_a_broken_console_degrades_to_nothing_rather_than_raising() -> Non
     assert (report.moved, report.blocked, report.settled) == ((), (), False)
 
 
-async def test_settling_marks_the_left_slot_as_the_surface_when_nothing_carries_the_mark(
-) -> None:
+async def test_settling_marks_the_left_slot_as_the_surface_when_nothing_carries_the_mark() -> None:
     """The repair path for a console that predates the mark, and its precondition.
 
     On `settle` rather than `ensure`, deliberately: `ensure` is called by anything that needs
@@ -370,9 +369,7 @@ async def test_settling_marks_nothing_when_a_surface_pane_already_exists_anywher
     A console showing an agent has its surface in that agent's window. If `ensure` looked
     only at the console, it would find an unmarked-by-its-reckoning slot and mark the agent.
     """
-    console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).settle()
 
@@ -386,9 +383,7 @@ def _crossed_ring(count: int) -> tuple[HostedPane, ...]:
     the last exchange settles the final two together. Built as a real permutation rather than
     by asserting a number, so the count the test relies on is a property of the arrangement.
     """
-    agents = [
-        SessionId.parse(f"{index:08x}-0000-0000-0000-000000000001") for index in range(count)
-    ]
+    agents = [SessionId.parse(f"{index:08x}-0000-0000-0000-000000000001") for index in range(count)]
     return (
         _slot("%0", surface=True),
         _feed("%1"),
@@ -433,10 +428,6 @@ class _SyncingConsole(RecordingConsole):
     """A recording console that also answers the tab half of `sync`."""
 
 
-
-
-
-
 def _record(session_id: SessionId, state: SessionState) -> SessionRecord:
     return SessionRecord(
         session_id,
@@ -448,8 +439,9 @@ def _record(session_id: SessionId, state: SessionState) -> SessionRecord:
     )
 
 
-async def test_the_other_writer_ending_a_shown_session_restores_the_surface_on_the_next_sync(
-) -> None:
+async def test_the_other_writer_ending_a_shown_session_restores_the_surface_on_the_next_sync() -> (
+    None
+):
     """DEC-005's two-writer story, at the one place the swap model makes it visible.
 
     The bot is a different process with no composer, so it cannot ask the console to step
@@ -458,9 +450,7 @@ async def test_the_other_writer_ending_a_shown_session_restores_the_surface_on_t
     session has ended. Nothing tells the console — so the console has to notice, and `sync`
     is the pass that already runs on every sessions reload.
     """
-    console = _SyncingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = _SyncingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).sync((_record(_A, SessionState.ENDED),))
 
@@ -476,9 +466,7 @@ async def test_the_other_writer_leaves_a_live_shown_session_alone_on_sync() -> N
     the owner could never look at an agent for longer than one refresh — the console would
     yank itself back to the projects list under them.
     """
-    console = _SyncingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = _SyncingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).sync((_record(_A, SessionState.RUNNING),))
 
@@ -493,8 +481,7 @@ async def test_a_sync_on_a_resting_console_moves_nothing_for_the_other_writer() 
     assert console.swaps == []
 
 
-async def test_the_other_writer_restore_cannot_act_on_an_arrangement_that_has_since_moved(
-) -> None:
+async def test_the_other_writer_restore_cannot_act_on_an_arrangement_that_has_since_moved() -> None:
     """The restore decides and acts under one lock hold, like every other swap here.
 
     Deciding outside it and swapping inside is a stale-read: `sync` reads "session A is in the
@@ -604,6 +591,15 @@ async def test_a_stranded_surface_is_reported_rather_than_bought_back_by_exiling
     shorter, the defunct session is kept alive holding it, and repeating the sequence shaves
     the console again. The honest answer is to say the console is short a pane.
 
+    **What changed on 2026-08-21, and why this arrangement still reports.** A pane can now be
+    *moved* home rather than traded for (`_reclaim_plan`), which is the repair this state was
+    missing — but the move needs to know which position to put the pane back in, and it takes
+    that from the pane's own slot mark. Not one pane here carries one, which is a console
+    predating the marks: nothing says whether the stranded pane is the projects surface or
+    something else, and a guess would put it in the wrong place. So the report is still the
+    right answer *for this arrangement*, and the marked version of it is covered by
+    `test_console_pane_reclaim.py` rather than by weakening this.
+
     **This replaces a Task 2.3 test that asserted the exile as the desired behaviour** —
     `test_the_other_writer_killing_the_pane_outright_still_brings_the_surface_back`, named for
     an outcome that is real but costs a console pane every time it happens. The gate evaluator
@@ -623,17 +619,14 @@ async def test_a_stranded_surface_is_reported_rather_than_bought_back_by_exiling
     assert console.swaps == [], "the restore exiled a console pane into a dead session"
 
 
-async def test_an_agent_left_in_the_slot_is_still_exchanged_because_both_panes_go_home(
-) -> None:
+async def test_an_agent_left_in_the_slot_is_still_exchanged_because_both_panes_go_home() -> None:
     """The distinction that keeps the rule above from refusing the case it must handle.
 
     When the slot holds an agent and the surface is parked in *that agent's own window*, the
     exchange sends each pane exactly where it belongs. Nothing is exiled, so this one is
     always safe — and it is the ordinary crash state.
     """
-    console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     report = await composer(console).recover()
 
@@ -641,8 +634,9 @@ async def test_an_agent_left_in_the_slot_is_still_exchanged_because_both_panes_g
     assert report.settled and _at_rest(console)
 
 
-async def test_a_surface_parked_in_a_third_sessions_window_is_not_exchanged_into_a_crossing(
-) -> None:
+async def test_a_surface_parked_in_a_third_sessions_window_is_not_exchanged_into_a_crossing() -> (
+    None
+):
     """Exchanging would send the slot's agent into a window belonging to somebody else.
 
     The recovery loop would unwind that crossing on a later pass, so the end state converges —
@@ -672,9 +666,7 @@ async def test_a_new_console_disowns_a_surface_mark_left_by_one_that_was_destroy
     Told apart by what the host window holds: a surface parked during a live display sits in a
     window that still has its agent; an orphan's host has no managed pane at all.
     """
-    console = RecordingConsole(
-        (_slot("%5"), _feed("%6"), _orphaned(_A, "%0"))
-    )
+    console = RecordingConsole((_slot("%5"), _feed("%6"), _orphaned(_A, "%0")))
 
     report = await composer(console).settle()
 
@@ -688,9 +680,7 @@ async def test_a_new_console_disowns_a_surface_mark_left_by_one_that_was_destroy
 
 async def test_a_surface_parked_during_a_live_display_is_still_left_alone() -> None:
     """The other side of that test, so "disown an orphan" cannot become "disown anything"."""
-    console = RecordingConsole(
-        (_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True))
-    )
+    console = RecordingConsole((_slot("%3", _A), _feed("%2"), _home(_A, "%1", None, surface=True)))
 
     await composer(console).settle()
 
@@ -815,7 +805,7 @@ async def test_sending_an_agent_home_never_puts_it_in_a_third_sessions_window() 
 
 
 async def test_only_the_process_in_the_left_slot_may_settle_the_console() -> None:
-    """"Hosted by the console" is true of every pane on this server, which is not the same
+    """ "Hosted by the console" is true of every pane on this server, which is not the same
     thing as being the console's surface.
 
     `hosting_mode` decides by socket name, so a second console pane, an operator's hand-split,

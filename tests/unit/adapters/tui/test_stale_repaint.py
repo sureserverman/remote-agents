@@ -59,6 +59,7 @@ import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from backends import backend_for
 from test_tui_snapshots import settle
 from textual.widgets import Input, OptionList
 from tui_feedback import status
@@ -141,12 +142,14 @@ class _Creator:
 
 def _context(launcher: _GatedLauncher) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=_Creator(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=_Creator(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_ALPHA, _BETA),
+            catalogue=(_ALPHA, _BETA),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_ALPHA, _BETA),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_ALPHA, _BETA),
     )
 
 

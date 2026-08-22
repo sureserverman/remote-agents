@@ -59,6 +59,21 @@ class ProductionPaths:
         """
         return self.state_directory / "activity"
 
+    @property
+    def console_lock_path(self) -> Path:
+        """The file two surfaces take to take turns arranging the console's panes.
+
+        A file rather than a row, because the console writes no record by decision (DEC-006,
+        DEC-036) and coordinating it through the sessions database would make it one. Nothing
+        is ever read from this file — it is the `flock` that matters, and the bytes are
+        deliberately none.
+
+        Not in `ensure_directories`: `state_directory` is, and the lock is created on first
+        use by whoever takes it. A host where it cannot be created falls back to per-process
+        locking, which `console_lock` records as a deliberate degradation.
+        """
+        return self.state_directory / "console.lock"
+
     def ensure_directories(self) -> None:
         """Create only declared directories and repair their private modes."""
         for path in (

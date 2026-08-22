@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
-from stop_results import a_clean_stop, a_verified_force_stop
+from stop_results import (
+    a_clean_stop,
+    a_reader_for,
+    a_verified_force_stop,
+)
 from telegram.error import BadRequest
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -15,11 +21,13 @@ from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_actions import pane_is_attachable
+from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -30,6 +38,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
+from remote_agents.ports.terminal import TerminalObservation
 
 
 def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
@@ -129,29 +138,39 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
     request = stops.claim(token, 7, 11, 1)
     assert request is not None
     service = Service()
-    assert (await stops.execute(request, service, record)).dispatched
+    assert (
+        await execute_stop(
+            request.action,
+            request.session_id,
+            sessions=service,
+            read_record=a_reader_for(record),
+            profile_id=request.profile_id,
+        )
+    ).dispatched
     assert service.called
 
 
 def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
     """A boundary over a chat's worth of state, with no terminal behind it."""
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return list(records)
 
         async def refresh_readiness(self) -> None:
             return None
 
-    return PrivateBotBoundary(
+    return build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=_Launcher(),
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
+            sessions=_Launcher(),
+        ),
     )
 
 
-class _RenamingLauncher:
+class _RenamingLauncher(SessionUseCaseDouble):
     """Holds one record and applies renames to it, so the detail can be re-read after one."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -192,11 +211,12 @@ class _RenamingLauncher:
 
 def _renameable(record: SessionRecord) -> tuple[PrivateBotBoundary, _RenamingLauncher]:
     launcher = _RenamingLauncher(record)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -564,7 +584,7 @@ def _inspectable_boundary(record: SessionRecord, output: str) -> PrivateBotBound
     async def _capture(_session_id) -> str:
         return output
 
-    boundary.capture = _capture
+    boundary.backend = replace(boundary.backend, capture=_capture)
     return boundary
 
 
@@ -579,7 +599,7 @@ def _a_running_session(state: SessionState = SessionState.RUNNING) -> SessionRec
     )
 
 
-class _TrustLauncher:
+class _TrustLauncher(SessionUseCaseDouble):
     """One FAILED Claude session whose pane is waiting on the folder-trust question."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -607,11 +627,12 @@ class _TrustLauncher:
 
 def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
     launcher = _TrustLauncher(_a_running_session(SessionState.FAILED))
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),),
-        launcher=launcher,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
     )
     return boundary, launcher
 
@@ -724,7 +745,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
     session = _a_running_session()
     boundary = _boundary(session)
 
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [session]
 
@@ -734,7 +755,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
         async def launch(self, _command):
             raise RuntimeError("the profile could not be started")
 
-    boundary.launcher = _FailingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_FailingLauncher())
     # The launch guard checks the curated availability set before it reaches the launcher, so
     # without this the screen under test is "That agent is unavailable." and the except branch
     # is never entered.
@@ -770,7 +791,7 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
     session = _a_running_session()
     boundary = _boundary(session)
 
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [session]
 
@@ -780,7 +801,7 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
         async def graceful_stop(self, _command):
             raise RuntimeError("the terminal went away mid-stop")
 
-    boundary.launcher = _FailingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_FailingLauncher())
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
@@ -829,7 +850,7 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
 
     stopped: list[str] = []
 
-    class _StoppingLauncher:
+    class _StoppingLauncher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [] if stopped else [session]
 
@@ -847,7 +868,7 @@ async def test_stopping_an_inspected_session_takes_its_document_with_it(
             stopped.append("force")
             return a_verified_force_stop()
 
-    boundary.launcher = _StoppingLauncher()
+    boundary.backend = replace(boundary.backend, sessions=_StoppingLauncher())
     chat = FakeChat()
     await boundary.sessions_command(chat.message_update("/sessions"), None)
     anchor = chat.bot_messages[0].message_id
@@ -1327,17 +1348,17 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     database = tmp_path / "sessions.sqlite3"
     connection = open_database(database)
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [record]
 
         async def refresh_readiness(self) -> None:
             return None
 
-    before = PrivateBotBoundary(
+    before = build_private_bot(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(connection),
         anchors=SQLiteChatViewStore(connection),
     )
@@ -1348,10 +1369,10 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     connection.close()
 
     reopened = open_database(database)
-    after = PrivateBotBoundary(
+    after = build_private_bot(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(reopened),
         anchors=SQLiteChatViewStore(reopened),
     )
@@ -1380,7 +1401,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
     """
     record = _a_running_session()
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def list_sessions(self):
             return [record]
 
@@ -1388,10 +1409,10 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
             return None
 
     connection = open_database(tmp_path / "sessions.sqlite3")
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
-        launcher=_Launcher(),
+        backend=backend_for(sessions=_Launcher()),
         callbacks=SQLiteCallbackStateStore(connection),
         anchors=SQLiteChatViewStore(connection),
     )
@@ -1455,3 +1476,174 @@ async def test_a_session_with_several_things_to_say_costs_the_chat_one_message()
     assert "Overwrite config.toml?" in notification.text
     assert chat.bot_messages[-1].message_id == boundary.view.anchor()
     assert "Sessions" in chat.messages[boundary.view.anchor()].text
+
+
+class _AttachableLauncher(SessionUseCaseDouble):
+    """One session and one pane observation, counting who was asked what.
+
+    Faithful to `SessionService` on the point this test is about: `copy_attach` answers from
+    `pane_is_attachable` and then builds a command, exactly as the real one does, so a stub
+    that always said yes cannot absorb a change here.
+
+    What that does **not** buy, stated because the shape invites the wrong reading: because
+    this double applies the rule itself, the reply half never reaches the real
+    `SessionService.copy_attach` and so cannot notice *it* losing the ownership check. That is
+    covered where it lives — `tests/unit/application/test_commands.py` drives the real service
+    over four ownership cases.
+
+    The counters are the rest of the point. The detail's row gate is *one* `inspect`; pressing
+    the row is *one* `copy_attach` and no inspect at all. Before this task the press was three
+    pane reads for one answer, and nothing rendered could see it.
+    """
+
+    def __init__(self, record: SessionRecord, observation: TerminalObservation | None) -> None:
+        self.record = record
+        self.observation = observation
+        self.ended = False
+        self.inspects = 0
+        self.attach_calls = 0
+
+    async def list_sessions(self):
+        return [self.record]
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def inspect(self, query: object) -> TerminalObservation | None:
+        del query
+        self.inspects += 1
+        return self.observation
+
+    async def copy_attach(self, session_id: object) -> str | None:
+        del session_id
+        self.attach_calls += 1
+        if self.ended:
+            # What `SessionService.copy_attach` actually raises, from its own
+            # `_require_session`, when the row has gone since the row was drawn.
+            raise SessionNotFoundError(str(self.record.session_id))
+        if not pane_is_attachable(self.observation, self.record):
+            return None
+        return "tmux attach -t ra-demo"
+
+
+def _an_owned_pane(record: SessionRecord) -> TerminalObservation:
+    return TerminalObservation(
+        record.session_id,
+        True,
+        False,
+        project_id=record.project_id,
+        profile_id=record.profile_id,
+    )
+
+
+def _attachable(present: bool) -> tuple[PrivateBotBoundary, _AttachableLauncher]:
+    record = _a_running_session()
+    launcher = _AttachableLauncher(record, _an_owned_pane(record) if present else None)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+    )
+    return boundary, launcher
+
+
+async def _open_detail(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    return anchor
+
+
+def test_the_bot_keeps_no_ownership_predicate_of_its_own() -> None:
+    """The named predicate is gone. **Only the name** — this line proves nothing wider.
+
+    `_can_copy_attach` re-derived `application/services.copy_attach`'s ownership comparison —
+    live-or-preserved, same project, same profile — inside the adapter. Two copies of a rule
+    DEC-021 requires identical is one copy plus a future divergence, and the divergence would
+    be silent: both would keep answering the same way until the day the application's changed.
+
+    A `hasattr` check cannot say that. A re-derivation under any other name, or inline in
+    `_detail_reply`, passes it — which is exactly the trap Stage 2 recorded and every other
+    sweep in this stage is shaped around. The shape guard lives in
+    `tests/unit/adapters/test_attach_ownership_is_asked_not_restated.py`, which sweeps both
+    frontend trees for the pane conditions the rule is made of. This test keeps the narrow
+    claim its assertion supports: the old name is not back.
+    """
+    assert not hasattr(PrivateBotBoundary, "_can_copy_attach")
+
+
+@pytest.mark.asyncio
+async def test_pressing_copy_attach_asks_the_use_case_once() -> None:
+    """One question, one answer — and the pane is not inspected on the side to reach it."""
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    inspects_to_draw, attach_calls_to_draw = launcher.inspects, launcher.attach_calls
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert launcher.attach_calls - attach_calls_to_draw == 1, "the press asks exactly once"
+    assert launcher.inspects - inspects_to_draw == 0, "and never inspects the pane itself"
+    assert attach_calls_to_draw == 0, "drawing the row costs no command lookup"
+    assert inspects_to_draw == 1, "drawing the row costs one pane read, as it always did"
+    assert "tmux attach -t ra-demo" in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_the_row_is_offered_only_when_there_is_a_pane_behind_it() -> None:
+    """Row presence stays this surface's own choice; the rule behind it is now shared."""
+    offered, _ = _attachable(present=True)
+    withheld, _ = _attachable(present=False)
+    shown, hidden = FakeChat(), FakeChat()
+
+    shown_anchor = await _open_detail(shown, offered)
+    hidden_anchor = await _open_detail(hidden, withheld)
+
+    assert _button(shown.messages[shown_anchor], "Copy attach")
+    with pytest.raises(AssertionError, match="no 'Copy attach' button"):
+        _button(hidden.messages[hidden_anchor], "Copy attach")
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_wording_is_unchanged_when_the_pane_has_gone() -> None:
+    """Word for word, including the full stop — rewording this sentence is a UI change.
+
+    Reached by letting the pane go *between* the render and the press, which is the only way
+    to see this path now that the row is absent when the answer is already no.
+    """
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    launcher.observation = None
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert chat.messages[anchor].text == (
+        "Copy Attach is unavailable: this session has no pane on this host any more."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_between_the_row_and_the_press_is_refused_in_words() -> None:
+    """A refusal, not a traceback — the one behavioural delta Task 3.4 would have made.
+
+    The predicate this task removed reached only `inspect`, which answers `None` for a session
+    that has gone, so this landed on the sentence below. `copy_attach` opens with
+    `_require_session` and raises instead, and `session.attach` has no `_PENDING_NOTICES`
+    entry, so an uncaught raise reaches `callback`'s `if pending is None: raise` and costs the
+    owner their screen. Found by the Stage 3 gate's Tier-2 review.
+    """
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    launcher.ended = True
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert chat.messages[anchor].text == (
+        "Copy Attach is unavailable: this session has no pane on this host any more."
+    )

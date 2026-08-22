@@ -17,6 +17,14 @@ the assertion. That is a deliberate limit and not an oversight; see DEC-019, whi
 an allow-list of recognized rows on the grounds that it must be kept current and fails
 noisily when it is not.
 
+**This file carries a second contract the paragraphs above do not mention.**
+`test_both_surfaces_offer_the_same_remote_control_directions` compares the Remote Control
+direction rows across both surfaces, against `remote_control_directions`, and it fails
+separately from everything described so far. Named here because a reader taking this
+docstring as the file's inventory would not know that check lives in it — the understatement
+predates the shared-use-cases sub-plan and survived its Task 2.4 re-read, and was found by
+the Stage 2 gate's evaluator.
+
 What this test does NOT check: whether the policy itself is right. Both sides of the
 assertion derive from `available_actions`, so changing it moves them together and this file
 stays green — verified by mutation, not assumed. The policy's own correctness is pinned by
@@ -32,9 +40,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -80,7 +89,7 @@ SITUATIONS: list[tuple[SessionState, OrphanProvenance | None]] = [
 ]
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, record: SessionRecord) -> None:
         self.record = record
 
@@ -93,7 +102,7 @@ class _Launcher:
 
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
-    boundary = PrivateBotBoundary(7, 11, launcher=_Launcher(record))
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Launcher(record)))
     detail = await boundary._detail_reply(str(record.session_id))
     return {
         _LABEL_TO_ACTION[button.text]
@@ -108,7 +117,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
 
-    class _Launcher:
+    class _Launcher(SessionUseCaseDouble):
         async def refresh_readiness(self):
             return (record,)
 
@@ -120,10 +129,12 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
 
     app = RemoteAgentsTui(
         TuiContext(
-            launcher=_Launcher(),  # type: ignore[arg-type]
-            creator=object(),  # type: ignore[arg-type]
+            backend=backend_for(
+                sessions=_Launcher(),  # type: ignore[arg-type]
+                projects=object(),  # type: ignore[arg-type]
+                refresh_catalogue=tuple,
+            ),
             profiles=(ProfileChoice("claude", True),),
-            refresh_catalogue=tuple,
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -190,15 +201,15 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     """The Remote Control rows the bot's detail view actually puts on screen."""
     from remote_agents.adapters.telegram.wizard import ProfileAvailability
 
-    boundary = PrivateBotBoundary(
-        7, 11, profiles=(ProfileAvailability("claude", True, None),), launcher=_Launcher(record)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(sessions=_Launcher(record)),
+        profiles=(ProfileAvailability("claude", True, None),),
     )
     detail = await boundary._detail_reply(str(record.session_id))
     return [
-        button.text
-        for row in detail.keyboard
-        for button in row
-        if "Remote Control" in button.text
+        button.text for row in detail.keyboard for button in row if "Remote Control" in button.text
     ]
 
 

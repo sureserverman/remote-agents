@@ -14,12 +14,14 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
-from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.notifications import render_activity
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
@@ -60,7 +62,7 @@ class _Catalogue:
         return (ProfileResumeCapability(ProfileId("claude"), True, True),)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """One RUNNING session, so the list and the detail both have something to draw."""
 
     def __init__(self, record: SessionRecord) -> None:
@@ -110,14 +112,30 @@ def _resolved() -> ResolvedConversation:
 
 
 def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
-    return PrivateBotBoundary(
+    """The wired bot these thirty-two tests drive.
+
+    One backend, handed over whole. It was briefly two — a `backend_for(...)` assembled and
+    then taken apart into the boundary's separate fields — which was Task 3.1's scaffolding
+    while the boundary still declared them individually. Task 3.2 removed that need, and
+    leaving the copy in would have made this helper quietly lossy: a `capture=` or
+    `profiles=` added to the factory call would never have reached the bot, because only
+    four field names were being copied across.
+
+    `profiles` is deliberately not routed through the backend. `Backend.profiles` is the
+    domain `ProfileCompatibility`; this surface renders `ProfileAvailability`, and handing
+    the domain tuple straight over is the line that once took the local surface down on a
+    version probe that merely timed out.
+    """
+    return build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            sessions=_Launcher(_record()),
+            projects=_Creator(),
+            conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
+            catalogue=(PROJECT,),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
-        creator=_Creator(),
     )
 
 
@@ -187,11 +205,11 @@ async def _every_screen(
     await boundary.launch_command(chat.message_update("/launch"), None)
     snapshot(anchor)
 
-    if boundary.creator is not None:
+    if boundary.backend.projects is not None:
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Add Project")), None)
         snapshot(anchor)
 
-    if boundary.conversations is not None:
+    if boundary.backend.conversations is not None:
         await boundary.callback(chat.press(_button(chat.messages[anchor], "Resume")), None)
         snapshot(anchor)
 
@@ -284,12 +302,11 @@ async def test_the_pending_screen_stays_barless_while_it_waits() -> None:
     and the bar is not exempt from that. `callback` renders it through `render_message`
     directly rather than through `_message`, which is the mechanism, not an oversight."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_LaunchingLauncher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_LaunchingLauncher(_record()),
     )
     rendered = _recording(chat)
 
@@ -369,14 +386,16 @@ async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
     other button here already does, and a stranded input box — one the owner can still type
     into, attached to a step nothing is waiting on — is the worse of the two answers."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_Creator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_Creator(),
     )
 
     anchor = await _open_entry(chat, boundary, entry)
@@ -460,7 +479,9 @@ def _sessions_counts_boundary(states: list[SessionState]) -> PrivateBotBoundary:
         )
         for index, state in enumerate(states)
     ]
-    return PrivateBotBoundary(OWNER, CHAT, catalogue=(PROJECT,), launcher=_ManyLauncher(records))
+    return build_private_bot(
+        OWNER, CHAT, backend=backend_for(catalogue=(PROJECT,), sessions=_ManyLauncher(records))
+    )
 
 
 @pytest.mark.asyncio
@@ -527,14 +548,16 @@ async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> Non
 
 
 def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=creator,
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=creator,
     )
 
 
@@ -635,14 +658,16 @@ def _outcome_boundary(state: SessionState) -> PrivateBotBoundary:
         state,
         datetime(2026, 8, 17, tzinfo=UTC),
     )
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_OutcomeLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_RealCreator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_OutcomeLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_RealCreator(),
     )
 
 
@@ -761,13 +786,15 @@ class _ResumingLauncher(_Launcher):
 def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
     launcher = _ResumingLauncher(_record())
     return (
-        PrivateBotBoundary(
+        build_private_bot(
             OWNER,
             CHAT,
-            catalogue=(PROJECT,),
+            backend=backend_for(
+                catalogue=(PROJECT,),
+                sessions=launcher,
+                conversations=ConversationService(_Catalogue(_resolved())),
+            ),
             profiles=(ProfileAvailability("claude", True, None),),
-            launcher=launcher,
-            conversations=ConversationService(_Catalogue(_resolved())),
         ),
         launcher,
     )
@@ -875,14 +902,16 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
     """Pinned because it is the one mapping in `_FLOW_OF_PREFIX` whose truth is scheduled:
     the wizard is entered from Home today and moves onto the launch list in Task 2.2."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_Launcher(_record()),
+            conversations=ConversationService(_Catalogue(_resolved())),
+            projects=_Creator(),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())),
-        creator=_Creator(),
     )
 
     await boundary.launch_command(chat.message_update("/launch"), None)
@@ -970,13 +999,15 @@ async def test_resume_without_review_answers_every_state_it_can_return(
     both real recoveries.
     """
     record = replace(_record(), state=state)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -992,13 +1023,15 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
     """Migration 8 releases the conversation once its session ends, so the message must not
     say recovery is impossible — it was false for PRESERVED, which one Clean up releases."""
     record = replace(_record(), state=SessionState.PRESERVED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(record),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(record),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1023,13 +1056,15 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
     an impossible input proves nothing while reading as coverage.
     """
     stopping = replace(_record(), state=SessionState.STOP_REQUESTED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(stopping),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(stopping),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1054,13 +1089,15 @@ async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -
     FAILED branch entirely makes the row above report an attempt this press never made.
     """
     failed = replace(_record(), state=SessionState.FAILED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(
+            catalogue=(PROJECT,),
+            sessions=_BoundLauncher(failed, created=True),
+            conversations=ConversationService(_Catalogue(_resolved())),
+        ),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_BoundLauncher(failed, created=True),
-        conversations=ConversationService(_Catalogue(_resolved())),
     )
     token = boundary._callback("resume.confirm", "c-0123456789abcdef", mutation=True)
     boundary.callbacks.bind_pending(CHAT, 1)
@@ -1083,12 +1120,11 @@ async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> Non
     """
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     launcher = _LaunchingLauncher(_record())
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=launcher),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=launcher,
     )
     launcher.launched: list[object] = []
 
@@ -1139,12 +1175,11 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
     the owner has just passed a second confirmation on an irreversible kill, is told it
     already happened, and the pane survives.
     """
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
     )
     # `cleanup` is offered for PRESERVED and `graceful` for RUNNING (`available_actions`), so
     # each action is offered from the state that actually permits it rather than from one
@@ -1186,12 +1221,11 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
     token just the same. Pinned separately because a fix verified only through
     `StopController.claim` would leave this one to be rediscovered.
     """
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
     )
     record = _record()
     token = boundary.stops.offer(

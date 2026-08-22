@@ -99,9 +99,7 @@ def test_an_exec_that_cannot_run_leaves_the_owner_the_command(
     def refuse(program: str, argv: tuple[str, ...]) -> None:
         raise OSError("tmux is not on PATH")
 
-    code = bootstrap._enter_console(
-        environment={}, ensure_console=_ensured, exec_argv=refuse
-    )
+    code = bootstrap._enter_console(environment={}, ensure_console=_ensured, exec_argv=refuse)
     assert code == 1
     assert "attach-session -t ra-console:" in capsys.readouterr().err
 
@@ -308,3 +306,42 @@ def test_the_composition_gives_the_console_one_command_per_pane() -> None:
     for slot, command in commands.items():
         assert command[0] == sys.executable
         assert command[1:] == ("-m", "remote_agents", "pane", slot.name.lower())
+
+
+# --- `remote-agents upgrade-sessions` (the repair the console names) -------------------
+
+
+def test_the_upgrade_verb_reports_what_it_changed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from remote_agents.domain.models import SessionId
+
+    upgraded = (SessionId.parse("04c709b1-06be-4b7b-b3bc-a4423b524718"),)
+
+    class _Gateway:
+        def __init__(self, *args, **kwargs) -> None: ...
+
+        async def upgrade_pane_identity(self):
+            return upgraded
+
+    monkeypatch.setattr(bootstrap, "TmuxGateway", _Gateway)
+    assert bootstrap.main(["upgrade-sessions"]) == 0
+    out = capsys.readouterr().out
+    assert "04c709b1-06be-4b7b-b3bc-a4423b524718" in out
+    assert "1 session(s) upgraded" in out
+
+
+def test_the_upgrade_verb_says_so_when_there_is_nothing_to_do(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ "Nothing happened" with no explanation is the failure this repair exists to end."""
+
+    class _Gateway:
+        def __init__(self, *args, **kwargs) -> None: ...
+
+        async def upgrade_pane_identity(self):
+            return ()
+
+    monkeypatch.setattr(bootstrap, "TmuxGateway", _Gateway)
+    assert bootstrap.main(["upgrade-sessions"]) == 0
+    assert "already carries its identity" in capsys.readouterr().out

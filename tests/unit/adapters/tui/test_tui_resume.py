@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 import pytest
+from backends import backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -125,13 +126,15 @@ class _Launcher:
 
 def _context(conversations: _Conversations, launcher: _Launcher) -> TuiContext:
     return TuiContext(
-        launcher=launcher,  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=launcher,  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+            conversations=conversations,  # type: ignore[arg-type]
+        ),
         profiles=(ProfileChoice("claude", True), ProfileChoice("codex", True)),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
-        catalogue=(_PROJECT,),
-        conversations=conversations,  # type: ignore[arg-type]
     )
 
 
@@ -161,12 +164,14 @@ async def test_resume_is_offered_when_a_conversation_service_is_wired() -> None:
 
 async def test_a_context_without_conversations_offers_no_resume() -> None:
     context = TuiContext(
-        launcher=_Launcher(),  # type: ignore[arg-type]
-        creator=object(),  # type: ignore[arg-type]
+        backend=backend_for(
+            sessions=_Launcher(),  # type: ignore[arg-type]
+            projects=object(),  # type: ignore[arg-type]
+            refresh_catalogue=lambda: (_PROJECT,),
+            catalogue=(_PROJECT,),
+        ),
         profiles=(ProfileChoice("claude", True),),
-        refresh_catalogue=lambda: (_PROJECT,),
         attach_argv=lambda session_id: ("tmux",),
-        catalogue=(_PROJECT,),
     )
     app = RemoteAgentsTui(context)
 

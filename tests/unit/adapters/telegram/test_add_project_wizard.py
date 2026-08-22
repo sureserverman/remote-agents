@@ -6,9 +6,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from backends import backend_for
 from fake_telegram import LoneMessageBot
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
+from remote_agents.adapters.telegram.service import (
+    PrivateBotBoundary,
+    _TextEntry,
+    build_private_bot,
+)
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -79,8 +84,9 @@ class FakeUpdate:
         return self.message
 
 
-def _boundary(creator: FakeCreator | None = None, **extra: object) -> PrivateBotBoundary:
-    return PrivateBotBoundary(OWNER, CHAT, creator=creator, **extra)
+def _boundary(creator: FakeCreator | None = None, **wiring: object) -> PrivateBotBoundary:
+    """`wiring` goes to the backend, which is where the use cases live now."""
+    return build_private_bot(OWNER, CHAT, backend=backend_for(projects=creator, **wiring))
 
 
 def _buttons(rendered: dict[str, object]) -> list[str]:
@@ -210,7 +216,7 @@ async def test_a_refused_creation_is_reported_without_raising() -> None:
 async def test_a_created_project_is_offered_by_launch_without_a_restart() -> None:
     creator = FakeCreator()
     created = CatalogProject("opaque-new", "new-project", "infra", "Registered")
-    boundary = _boundary(creator, catalogue_source=lambda: (created,))
+    boundary = _boundary(creator, refresh_catalogue=lambda: (created,))
     token = boundary._callback("project.confirm", "infra|new-project", mutation=True)
 
     await boundary._reply_for("project.confirm", "infra|new-project", token=token)
@@ -234,7 +240,7 @@ async def test_opening_launch_re_reads_a_project_created_by_another_process() ->
         reads.append("read")
         return (created,)
 
-    boundary = _boundary(FakeCreator(), catalogue_source=source)
+    boundary = _boundary(FakeCreator(), refresh_catalogue=source)
 
     await boundary._reply_for("nav.home", "home")
     assert reads == []

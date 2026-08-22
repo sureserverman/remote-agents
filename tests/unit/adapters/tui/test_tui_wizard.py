@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from backends import tui_context_for
 from textual.widgets import Input, OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_feedback import status as _status
@@ -74,8 +75,8 @@ class FakeCreator:
 
 def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
-        "launcher": FakeLauncher(),
-        "creator": FakeCreator(),
+        "sessions": FakeLauncher(),
+        "projects": FakeCreator(),
         "profiles": (
             ProfileChoice("claude", True),
             ProfileChoice("cursor-agent", False, "executable_missing"),
@@ -92,7 +93,7 @@ def _context(**overrides: object) -> TuiContext:
         "catalogue": (_EXISTING, _OTHER),
     }
     arguments.update(overrides)
-    return TuiContext(**arguments)  # type: ignore[arg-type]
+    return tui_context_for(**arguments)
 
 
 def _rows(app: RemoteAgentsTui) -> list[str]:
@@ -154,7 +155,7 @@ async def test_the_agent_list_names_every_curated_profile_with_its_blocking_reas
 
 async def test_an_unavailable_agent_cannot_be_chosen() -> None:
     launcher = FakeLauncher()
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -208,7 +209,7 @@ async def test_review_names_the_project_and_the_agent_before_any_launch() -> Non
     `test_status_region.py`, which owns that sentence.
     """
     launcher = FakeLauncher()
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -226,7 +227,7 @@ async def test_review_names_the_project_and_the_agent_before_any_launch() -> Non
 
 async def test_cancel_at_review_returns_to_the_projects_without_launching() -> None:
     launcher = FakeLauncher()
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -274,7 +275,7 @@ async def test_back_from_review_returns_to_the_agent_choice() -> None:
 
 async def test_confirming_issues_one_launch_and_it_carries_no_label() -> None:
     launcher = FakeLauncher()
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -297,7 +298,7 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
     launcher = FakeLauncher()
     keys = []
     for _ in range(2):
-        app = RemoteAgentsTui(_context(launcher=launcher))
+        app = RemoteAgentsTui(_context(sessions=launcher))
         async with app.run_test() as pilot:
             await _choose(app, pilot, "opaque-existing")
             await _choose(app, pilot, "launch")
@@ -310,7 +311,7 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
 
 async def test_a_failed_launch_reports_and_returns_to_review_without_attaching() -> None:
     launcher = FakeLauncher(state=SessionState.FAILED)
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -327,7 +328,7 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
 
 
 async def test_the_area_list_comes_from_the_creation_service() -> None:
-    app = RemoteAgentsTui(_context(creator=FakeCreator(areas=("dev-area", "infra"))))
+    app = RemoteAgentsTui(_context(projects=FakeCreator(areas=("dev-area", "infra"))))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -338,7 +339,7 @@ async def test_the_area_list_comes_from_the_creation_service() -> None:
 
 
 async def test_no_eligible_area_is_reported_rather_than_shown_empty() -> None:
-    app = RemoteAgentsTui(_context(creator=FakeCreator(areas=())))
+    app = RemoteAgentsTui(_context(projects=FakeCreator(areas=())))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -351,7 +352,7 @@ async def test_no_eligible_area_is_reported_rather_than_shown_empty() -> None:
 @pytest.mark.parametrize("name", ["New Thing", "has space", "UPPER", "../escape", ""])
 async def test_a_new_project_name_outside_the_slug_rule_creates_nothing(name: str) -> None:
     creator = FakeCreator()
-    app = RemoteAgentsTui(_context(creator=creator))
+    app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -367,7 +368,7 @@ async def test_a_new_project_name_outside_the_slug_rule_creates_nothing(name: st
 async def test_a_created_project_is_selectable_without_leaving_the_app() -> None:
     creator = FakeCreator()
     created = CatalogProject("opaque-new", "brand-new", "infra", "Registered")
-    app = RemoteAgentsTui(_context(creator=creator, refresh_catalogue=lambda: (created,)))
+    app = RemoteAgentsTui(_context(projects=creator, refresh_catalogue=lambda: (created,)))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -386,7 +387,7 @@ async def test_a_created_project_is_selectable_without_leaving_the_app() -> None
 
 async def test_a_refused_creation_is_reported_and_leaves_the_catalogue_alone() -> None:
     creator = FakeCreator(error=ProjectCreationError("project directory already exists"))
-    app = RemoteAgentsTui(_context(creator=creator))
+    app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -435,7 +436,7 @@ def test_an_attach_request_carries_the_session_and_its_argument_vector() -> None
 async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method() -> None:
     """Private-method tests cannot see focus; only real keys prove the surface is usable."""
     launcher = FakeLauncher()
-    app = RemoteAgentsTui(_context(launcher=launcher))
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         # Filter -> rows, then the project. Two enters, because the keyboard starts in the
@@ -524,7 +525,7 @@ async def test_the_refresh_binding_re_reads_the_catalogue() -> None:
 
 async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -> None:
     creator = FakeCreator()
-    app = RemoteAgentsTui(_context(creator=creator))
+    app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
         await pilot.press("ctrl+n")
@@ -550,7 +551,7 @@ async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -
 
 async def test_cancelling_the_new_project_review_creates_nothing() -> None:
     creator = FakeCreator()
-    app = RemoteAgentsTui(_context(creator=creator))
+    app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -580,7 +581,7 @@ async def test_back_out_of_the_add_project_flow_stops_at_every_position() -> Non
     shortcut fails here instead of passing on the endpoint alone.
     """
     creator = FakeCreator()
-    app = RemoteAgentsTui(_context(creator=creator))
+    app = RemoteAgentsTui(_context(projects=creator))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -664,7 +665,7 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
 
 
 async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:
-    app = RemoteAgentsTui(_context(creator=FakeCreator(areas=("infra", "Not_A_Slug", "web"))))
+    app = RemoteAgentsTui(_context(projects=FakeCreator(areas=("infra", "Not_A_Slug", "web"))))
 
     async with app.run_test() as pilot:
         await app.action_add_project()
@@ -679,7 +680,7 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
         async def launch(self, command: LaunchCommand) -> FakeRecord:
             raise RuntimeError("the terminal port broke its contract")
 
-    app = RemoteAgentsTui(_context(launcher=Exploding()))
+    app = RemoteAgentsTui(_context(sessions=Exploding()))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
@@ -695,7 +696,7 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
 
 async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
     """A launch that never reported ready may still have left a pane running."""
-    app = RemoteAgentsTui(_context(launcher=FakeLauncher(state=SessionState.FAILED)))
+    app = RemoteAgentsTui(_context(sessions=FakeLauncher(state=SessionState.FAILED)))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")

@@ -84,7 +84,8 @@ def test_failed_migration_rolls_back_schema_version(tmp_path: Path) -> None:
                 (7, ""),
                 (8, ""),
                 (9, ""),
-                (10, "CREATE TABLE broken ("),
+                (10, ""),
+                (11, "CREATE TABLE broken ("),
             ),
         )
 
