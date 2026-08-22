@@ -126,3 +126,46 @@ def test_a_raw_boundary_is_unwired_rather_than_half_wired() -> None:
 
     for absent in ("stops", "view", "notifier"):
         assert not hasattr(raw, absent), f"{absent} was wired without the factory"
+
+
+def test_the_factory_is_the_only_place_src_constructs_a_boundary() -> None:
+    """The generalisation of `test_the_composition_root_goes_through_the_factory`.
+
+    That one watches `bootstrap.py`, because that is where the plan said the composition
+    root lives. It is not where the bug was. `run_private_bot` carries its own
+    `boundary: PrivateBotBoundary | None = None` default and built a bare one to fill it, so
+    moving the collaborators out of `__post_init__` left that path constructing a boundary
+    with no notifier and dereferencing `boundary.notifier` six lines later. Nothing in the
+    suite calls `run_private_bot`, and neither of the Stage 3 gate's sweeps could see it: it
+    is not a `getattr` probe and it is not in `bootstrap.py`.
+
+    So the rule is stated over the whole source tree rather than over the one file that
+    happened to be named. Any *other* module that grows a default boundary — or a second
+    entry point, or a convenience constructor — fails here on the day it is written, which
+    is the only moment the fix is cheap.
+    """
+    offenders = []
+    for path in sorted(_SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        factory = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "build_private_bot"
+            ),
+            None,
+        )
+        permitted = {id(node) for node in ast.walk(factory)} if factory else set()
+        offenders += [
+            f"{path.relative_to(_SRC)}:{node.lineno}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "PrivateBotBoundary"
+            and id(node) not in permitted
+        ]
+
+    assert offenders == [], (
+        "these construct a boundary without wiring its collaborators, so the first use of "
+        f"`.stops`, `.view` or `.notifier` raises: {offenders}. Call build_private_bot."
+    )

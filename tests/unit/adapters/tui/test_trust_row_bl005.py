@@ -116,6 +116,10 @@ async def test_the_trust_row_is_absent_even_when_the_pane_is_showing_the_dialog(
 
     rows = await _rendered_rows(launcher)
 
+    # Absence proves nothing about a screen that drew nothing. A detail view broken for an
+    # unrelated reason renders zero rows, and "Trust this project" is not among zero rows —
+    # so without this the pin below would go green on a surface that had stopped working.
+    assert rows, "the session detail rendered no rows at all; the assertion below is vacuous"
     assert TRUST_ROW not in rows, (
         "BL-005 has been repaired. That is a decision, not a refactor: delete this file, "
         "close BL-005, and re-read the bot's twin path in the same change (DEC-016)."

@@ -2259,7 +2259,12 @@ async def run_private_bot(
     secrets: TelegramSecrets, boundary: PrivateBotBoundary | None = None
 ) -> None:
     """Long-poll the approved bot until SIGTERM/SIGINT, refusing a competing webhook."""
-    boundary = boundary or PrivateBotBoundary(secrets.owner_user_id, secrets.owner_chat_id)
+    # The factory, not the class. This default used to be a bare `PrivateBotBoundary(...)`,
+    # which worked only while `__post_init__` built the collaborators for itself: a bare one
+    # now leaves `stops`, `view` and `notifier` unset, and `notifier.attach` below is six
+    # lines away. Nothing in the suite calls this function, so the AttributeError would have
+    # reached a real run first.
+    boundary = boundary or build_private_bot(secrets.owner_user_id, secrets.owner_chat_id)
     # Sequential update handling is load-bearing rather than incidental: a render mints its
     # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
     # unbound token in the chat. Two renders in flight at once would let one screen's buttons

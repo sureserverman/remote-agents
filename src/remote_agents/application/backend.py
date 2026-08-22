@@ -42,7 +42,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.domain.models import SessionId
+from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility
 from remote_agents.ports.agent_activity import AgentActivity
 
@@ -115,9 +115,15 @@ class Backend:
     """A bounded newest-first read of the durable activity table — a reader, never a
     drainer: consuming the spool would starve the phone's notifications (DEC-031/DEC-034)."""
 
-    max_label_length: int = 40
+    max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the
-    domain's."""
+    domain's.
+
+    The default is the domain constant rather than a copy of its value. Production never
+    reaches it -- `compose_backend` always passes `config.max_label_length` -- so the two
+    agreeing was coincidence rather than a rule, and a change to the domain ceiling would
+    have moved one and not the other.
+    """
 
     def __post_init__(self) -> None:
         if self.max_label_length < 1:
