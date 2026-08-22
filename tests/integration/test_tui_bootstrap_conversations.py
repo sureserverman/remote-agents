@@ -21,16 +21,28 @@ def test_conversations_is_optional_so_a_host_without_one_still_starts() -> None:
 
 
 def test_local_context_composes_the_same_service_the_bot_composes() -> None:
-    """Both compositions must build ConversationService from the same catalogue set.
+    """Both compositions take their conversation service from the one backend.
 
     Read from the source rather than executed, because composing it for real needs a
     configured host; what matters here is that neither path invents its own catalogue.
+
+    The second assertion used to look for the literal `conversations=conversations`, which
+    described how the two compositions happened to be written when each built its own
+    service. That is no longer how it is wired -- `compose_backend` builds it once and both
+    read `backend.conversations` -- so the old string checked a spelling rather than the
+    invariant. Claiming only what it checks, this now asserts the invariant directly
+    (DEC-019).
     """
     source = Path("src/remote_agents/bootstrap.py").read_text(encoding="utf-8")
     assert source.count("ProfileConversationCatalogue(") == 1, (
         "the two surfaces must share one catalogue composition, not each build their own"
     )
-    assert "conversations=conversations" in source
+    assert source.count("conversations=_conversation_service(") == 1, (
+        "the conversation service must be composed exactly once, in compose_backend"
+    )
+    assert source.count("conversations=backend.conversations") == 2, (
+        "both compositions must read that one service off the backend, not rebuild it"
+    )
 
 
 def test_local_context_needs_no_telegram_secrets() -> None:

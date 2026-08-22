@@ -407,3 +407,81 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
         assert context.launcher._hide_in_console is None  # noqa: SLF001
     finally:
         connection.close()
+
+
+def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_path, monkeypatch):
+    """DEC-030, and it was a production incident, not a theory.
+
+    The reconciler runs on a timer beside the service and writes `record_event` directly,
+    so without a lock in common it overwrites the state of a session whose graceful stop is
+    between its own two writes -- the InvalidTransition crashes. Constructing two
+    `SessionLocks` here would type-check, run, and fix nothing, which is exactly why this is
+    pinned rather than left to the comment beside it.
+
+    Pinned *now* because the refactor put one more layer of indirection between the
+    `SessionLocks()` call and the service: the locks reach `backend.sessions` through
+    `compose_backend`, so a future edit to its default handling (`locks or SessionLocks()`
+    lives inside `SessionService`) could hand the backend a private map while the reconciler
+    keeps the shared one, and nothing would fail.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import _private_boundary
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "7")
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = _private_boundary(config, connection, paths)
+
+        assert composition.boundary.launcher._locks is composition.reconciler._locks, (  # noqa: SLF001
+            "the service and the reconciler hold different lock maps (DEC-030)"
+        )
+    finally:
+        connection.close()
+
+
+def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
+    composed_home, tmp_path, monkeypatch
+):
+    """The two narrowings must not be merged in passing, and this is where that could happen.
+
+    `Backend.profiles` carries the domain `ProfileCompatibility`, which uses `reason` for two
+    things: why a profile is blocked, and a note about a probe that did not answer. The
+    surfaces' types read any reason as blocking. Forwarding `backend.profiles` into a surface
+    is therefore not a type error -- it is the bug that once took the whole local surface
+    down when a version probe merely timed out.
+
+    Pinned before Task 3.2 rather than after, because that task rewires
+    `PrivateBotBoundary` to take a `Backend`, and `profiles=backend.profiles` is precisely
+    the plausible-looking line it would write.
+    """
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.adapters.telegram.wizard import ProfileAvailability
+    from remote_agents.bootstrap import _private_boundary
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_USER_ID", "7")
+    monkeypatch.setenv("REMOTE_AGENTS_OWNER_CHAT_ID", "7")
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        composition = _private_boundary(config, connection, paths)
+
+        assert composition.boundary.profiles, "the wizard was offered no profiles at all"
+        for profile in composition.boundary.profiles:
+            assert isinstance(profile, ProfileAvailability), (
+                "the bot was handed the domain ProfileCompatibility rather than the "
+                "surface's narrowing of it -- see Backend.profiles"
+            )
+    finally:
+        connection.close()

@@ -614,9 +614,10 @@ def compose_backend(
     *,
     projects: ProjectCatalogueProvider | None = None,
     runtime: LocalRuntime | None = None,
-    locks=None,
-    hide_in_console=None,
-    activity_feed=None,
+    store: SQLiteSessionStore | None = None,
+    locks: SessionLocks | None = None,
+    hide_in_console: Callable[[SessionId], Awaitable[None]] | None = None,
+    activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None,
 ) -> Backend:
     """Build the one backend a process hands to its frontend (ARCH-B1, ARCH-B2).
 
@@ -645,6 +646,10 @@ def compose_backend(
     `runtime` is intentional: do not "fix" the apparent double refresh by trusting the
     caller's snapshot.
 
+    **`store` is a parameter for the same reason**: the service composition already builds
+    one for its reconciler and quiet watcher, and all three consumers are meant to be looking
+    at the same store.
+
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
     `FEED_LIMIT`, which lives in the terminal package, and importing it here would make the
     service load the terminal library at composition time — the exact property
@@ -655,7 +660,7 @@ def compose_backend(
     runtime = runtime or _local_runtime(config, paths, projects.paths)
     return Backend(
         sessions=SessionService(
-            SQLiteSessionStore(connection),
+            store if store is not None else SQLiteSessionStore(connection),
             runtime.terminal,
             locks=locks,
             hide_in_console=hide_in_console,
@@ -705,6 +710,11 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         paths,
         projects=projects,
         runtime=runtime,
+        # The same store the reconciler and quiet watcher below are given. Inert today --
+        # SQLiteSessionStore holds only its connection -- but two instances where there was
+        # one stops being inert the moment it gains a cache or a statement pool, and this
+        # composition is the one place all three consumers are meant to agree.
+        store=store,
         locks=locks,
         hide_in_console=console.hide,
     )
