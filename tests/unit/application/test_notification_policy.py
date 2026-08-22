@@ -1,9 +1,16 @@
 """The grouping half of the notification policy, now that it lives in the application layer.
 
 These cases were `tests/unit/adapters/telegram/test_notifications.py`'s and moved here with the
-functions they exercise; their assertions are relocated, not rewritten. What is new is the pair
-of guards at the top -- the purity sweep, and the sweep for the shape the limit rule cannot be
-expressed without (DEC-043).
+functions they exercise; their bodies and the `_observed` fixture that feeds them are relocated,
+not rewritten. What is new is the guards at the top -- the purity sweep, the clock sweep, and the
+sweep for the shape the limit rule cannot be expressed without (DEC-043).
+
+`_observed` derives `confidence` from the kind rather than taking it, and that is the fixture's
+one load-bearing detail: `QUIET` is the project's only inferred observation, and a flat
+`REPORTED` default here would stamp it wrongly. It is written this way because the Stage 1 gate's
+Tier-2 review found it written the other way -- the fixture had been rewritten while the move was
+being described as pure, and the cases could not see it, because they build *both* sides of every
+comparison with this helper and so drift together (DEC-019's recorded failure mode).
 """
 
 from __future__ import annotations
@@ -39,8 +46,10 @@ def _observed(
     *,
     detail: str | None = None,
     minute: int = 0,
-    confidence: ActivityConfidence = ActivityConfidence.REPORTED,
 ) -> AgentActivity:
+    confidence = (
+        ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
+    )
     return AgentActivity(
         session_id=session_id,
         kind=kind,
@@ -50,7 +59,7 @@ def _observed(
     )
 
 
-# The two guards ---------------------------------------------------------------------------
+# The guards ---------------------------------------------------------------------------
 
 
 def _imported_modules() -> set[str]:

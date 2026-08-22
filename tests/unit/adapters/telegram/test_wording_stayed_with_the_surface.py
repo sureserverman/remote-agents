@@ -43,8 +43,30 @@ def _functions(path: pathlib.Path) -> list[ast.FunctionDef | ast.AsyncFunctionDe
 
 
 def _returns_a_sentence(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    returns = node.returns
-    return isinstance(returns, ast.Name) and returns.id == "str"
+    """Whether this function hands back words: `str`, `str | None`, or `Optional[str]`.
+
+    Widened past a bare `-> str` at the Stage 1 gate, where the Tier-2 review pointed out that
+    `str | None` is exactly the shape a half-hearted re-derivation of the wording would take --
+    a renderer that returns the sentence or `None` when there is nothing to say.
+
+    Deliberately **top-level only**. `dict[str, int]` keyed by session id is not a sentence, and
+    a sweep that flagged any nested `str` would be one this module could not honestly satisfy.
+    """
+    return _is_str(node.returns)
+
+
+def _is_str(annotation: ast.expr | None) -> bool:
+    if isinstance(annotation, ast.Name):
+        return annotation.id == "str"
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _is_str(annotation.left) or _is_str(annotation.right)
+    if (
+        isinstance(annotation, ast.Subscript)
+        and isinstance(annotation.value, ast.Name)
+        and annotation.value.id == "Optional"
+    ):
+        return _is_str(annotation.slice)
+    return False
 
 
 def test_no_policy_function_ever_returns_a_sentence() -> None:
