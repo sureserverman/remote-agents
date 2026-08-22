@@ -125,8 +125,7 @@ async def advance_to_resume_profiles(screen: ChoiceScreen, project: CatalogProje
         except Exception as error:
             _LOG.exception("resume capabilities failed")
             screen.set_status(
-                "Resume is unavailable on this host. Press escape to return to the "
-                "project list.",
+                "Resume is unavailable on this host. Press escape to return to the project list.",
                 severity="error",
             )
             screen.announce(f"Resume is unavailable: {error}")

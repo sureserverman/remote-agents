@@ -268,9 +268,7 @@ class LiveView:
         this message id already, and `bind_pending` would hand it the live view's instead.
         """
         try:
-            await bot.edit_message_text(
-                chat_id=self._chat_id, message_id=message_id, **arguments
-            )
+            await bot.edit_message_text(chat_id=self._chat_id, message_id=message_id, **arguments)
         except BadRequest as error:
             if _UNMODIFIED in str(error):
                 _LOG.debug("message %d already says this", message_id)

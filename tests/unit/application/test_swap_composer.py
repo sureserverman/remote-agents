@@ -133,9 +133,7 @@ class RecordingConsole:
 def composer(console: RecordingConsole) -> ConsoleComposer:
     from pathlib import Path
 
-    return ConsoleComposer(
-        console, ("dashboard",), Path("/tmp"), projects_command=("projects",)
-    )
+    return ConsoleComposer(console, ("dashboard",), Path("/tmp"), projects_command=("projects",))
 
 
 def _hosts(console: RecordingConsole) -> dict[str, str]:
@@ -362,9 +360,9 @@ async def test_the_composer_never_holds_who_is_in_the_left_pane() -> None:
     # `self._slot_pane = "%1"`. The first version of this test collected strings and then
     # asserted only against the two rich types, so the one shape most likely to appear
     # slipped through the check named for catching it.
-    assert not any(
-        isinstance(value, str) and value.startswith("%") for value in held.values()
-    ), f"the composer is remembering a pane id: {held}"
+    assert not any(isinstance(value, str) and value.startswith("%") for value in held.values()), (
+        f"the composer is remembering a pane id: {held}"
+    )
 
 
 @pytest.mark.parametrize("missing", ["slot", "agent"])
@@ -415,9 +413,7 @@ class _StopTerminal:
         return TerminalObservation(session_id, live=False, preserved=False)
 
 
-def _running(
-    session_id: SessionId, state: SessionState = SessionState.RUNNING
-) -> SessionRecord:
+def _running(session_id: SessionId, state: SessionState = SessionState.RUNNING) -> SessionRecord:
     return SessionRecord(
         session_id,
         ProjectId("opaque"),
@@ -602,8 +598,6 @@ async def test_discarding_a_preserved_pane_also_steps_the_console_aside_before_t
     async def hide(session_id: SessionId) -> None:
         order.append(f"hide:{session_id}")
 
-    await _stop_service(order, hide=hide, state=SessionState.PRESERVED).cleanup(
-        CleanupCommand(_A)
-    )
+    await _stop_service(order, hide=hide, state=SessionState.PRESERVED).cleanup(CleanupCommand(_A))
 
     assert order == [f"hide:{_A}", "cleanup"], order

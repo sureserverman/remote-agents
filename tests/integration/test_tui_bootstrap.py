@@ -268,7 +268,9 @@ def test_a_pane_runs_over_a_lease_and_leaves_no_handle_behind(
 
 
 def test_a_pane_that_fails_says_where_its_sessions_are_and_exits_nonzero(
-    home: Path, paths: ProductionPaths, monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    paths: ProductionPaths,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A surface that dies must not take the owner's route to its sessions with it."""

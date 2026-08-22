@@ -99,9 +99,7 @@ def test_an_exec_that_cannot_run_leaves_the_owner_the_command(
     def refuse(program: str, argv: tuple[str, ...]) -> None:
         raise OSError("tmux is not on PATH")
 
-    code = bootstrap._enter_console(
-        environment={}, ensure_console=_ensured, exec_argv=refuse
-    )
+    code = bootstrap._enter_console(environment={}, ensure_console=_ensured, exec_argv=refuse)
     assert code == 1
     assert "attach-session -t ra-console:" in capsys.readouterr().err
 
@@ -336,7 +334,7 @@ def test_the_upgrade_verb_reports_what_it_changed(
 def test_the_upgrade_verb_says_so_when_there_is_nothing_to_do(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """"Nothing happened" with no explanation is the failure this repair exists to end."""
+    """ "Nothing happened" with no explanation is the failure this repair exists to end."""
 
     class _Gateway:
         def __init__(self, *args, **kwargs) -> None: ...

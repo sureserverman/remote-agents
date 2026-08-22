@@ -380,11 +380,7 @@ class ConsoleComposer:
         duplicated = sorted(
             slot.value
             for slot in ConsolePaneSlot
-            if sum(
-                1
-                for pane in arrangement
-                if pane.on_console and pane.console_slot == slot.value
-            )
+            if sum(1 for pane in arrangement if pane.on_console and pane.console_slot == slot.value)
             > 1
         )
 
@@ -405,9 +401,7 @@ class ConsoleComposer:
                     projects.percent,
                     feed.pane_id,
                     next(
-                        spec.percent
-                        for spec in CONSOLE_LAYOUT
-                        if spec.slot is ConsolePaneSlot.FEED
+                        spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.FEED
                     ),
                 )
         return tuple(
@@ -799,9 +793,7 @@ class ConsoleComposer:
         if feed is None:
             return
         await self._console.normalize_console_layout(
-            next(
-                spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS
-            ),
+            next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS),
             feed.pane_id,
             next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.FEED),
         )

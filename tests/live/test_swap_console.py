@@ -199,7 +199,6 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
         await console.teardown()
 
 
-
 async def test_changing_agents_never_hosts_one_agent_in_the_others_session(
     tmp_path: Path,
 ) -> None:
@@ -425,5 +424,3 @@ async def test_integration_the_record_of_a_displaced_agents_stop_is_honest(tmp_p
     finally:
         connection.close()
         await console.teardown()
-
-

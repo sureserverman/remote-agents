@@ -82,10 +82,6 @@ async def test_create_console_refuses_an_empty_command_or_a_bad_directory(
     assert runner.calls == []
 
 
-
-
-
-
 async def test_the_status_flash_uses_a_generated_target_only() -> None:
     """What is left of this once the tab mechanism's focus and switch operations are gone.
 
@@ -215,9 +211,7 @@ async def test_a_gone_target_is_typed_for_every_single_target_console_operation(
 
     gone = RuntimeError("can't find session: whatever")
     with pytest.raises(TerminalTargetMissing):
-        await gateway(RecordingRunner(error=gone)).mark_console_slot(
-            "%3", ConsolePaneSlot.FEED
-        )
+        await gateway(RecordingRunner(error=gone)).mark_console_slot("%3", ConsolePaneSlot.FEED)
     with pytest.raises(TerminalTargetMissing):
         await gateway(RecordingRunner(error=gone)).split_console_pane(
             "%1", ("true",), Path("/tmp"), vertical=True, percent=33

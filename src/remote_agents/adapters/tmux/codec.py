@@ -318,9 +318,6 @@ def console_attach_argv() -> tuple[str, ...]:
     return ("tmux", "-L", "remote-agents", "attach-session", "-t", console_target())
 
 
-
-
-
 #: Which characters a bindable key may be made of, once one optional modifier is stripped.
 _BINDABLE_KEY_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -378,8 +375,6 @@ def console_binding_args(
     return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
 
 
-
-
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
     """Return the full production argv that switches the current client to one session.
 
@@ -403,7 +398,6 @@ def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:
         "-t",
         exact_session_target(f"ra-{session_id}"),
     )
-
 
 
 def display_message_args(text: str) -> tuple[str, ...]:
@@ -444,8 +438,6 @@ def console_zoom_args() -> tuple[str, ...]:
         console_target(),
         "#{window_zoomed_flag}|#{pane_id}",
     )
-
-
 
 
 def console_slot_mark_args(

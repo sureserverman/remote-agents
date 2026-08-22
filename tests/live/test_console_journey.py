@@ -111,9 +111,10 @@ async def test_the_composer_journey_holds_on_real_tmux(tmp_path: Path) -> None:
         # The route back — what the projects key runs.
         await composer.show_projects()
         home = await gateway.pane_arrangement()
-        assert next(
-            pane for pane in home if pane.on_console and pane.pane_index == 0
-        ).pane_id == surface.pane_id, "the projects surface did not come back"
+        assert (
+            next(pane for pane in home if pane.on_console and pane.pane_index == 0).pane_id
+            == surface.pane_id
+        ), "the projects surface did not come back"
 
         # DEC-006, re-proved under the swap model: with nothing displayed, killing the
         # console leaves the session alive and observable.

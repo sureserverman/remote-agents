@@ -149,7 +149,6 @@ class RecordingConsole:
         self.calls.append(("install_console_binding", key, action, command))
         self._raise_if_armed()
 
-
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         """A console already at rest: its left slot holds the marked projects surface.
 
@@ -162,10 +161,6 @@ class RecordingConsole:
         if self._arrangement is not None:
             return self._arrangement
         return (HostedPane(None, True, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value),)
-
-
-
-
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         self.calls.append(("swap_panes", source_pane, target_pane))
@@ -306,9 +301,7 @@ async def test_a_displayed_agent_does_not_make_the_console_build_a_second_surfac
     beside the agent, leaving the owner with two and the original still parked elsewhere.
     """
     projects = ConsolePaneSlot.PROJECTS.value
-    displayed = tuple(
-        pane for pane in _three_pane_console() if pane.console_slot != projects
-    ) + (
+    displayed = tuple(pane for pane in _three_pane_console() if pane.console_slot != projects) + (
         HostedPane(
             host=None,
             on_console=True,
@@ -369,9 +362,7 @@ async def test_a_console_reduced_to_a_displayed_agent_is_reported_rather_than_re
     console = RecordingConsole(
         arrangement=(
             HostedPane(None, True, 0, 0, "%9", _RUNNING),
-            HostedPane(
-                _RUNNING, False, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value
-            ),
+            HostedPane(_RUNNING, False, 0, 0, "%0", None, True, ConsolePaneSlot.PROJECTS.value),
         )
     )
     await _composer(console).ensure()
@@ -564,15 +555,11 @@ async def test_a_console_that_cannot_be_built_is_still_a_failure() -> None:
     assert await _composer(console).ensure() is False
 
 
-
-
-
 async def test_a_raising_console_degrades_to_nothing_and_raises_into_no_caller() -> None:
     broken = RecordingConsole(error=RuntimeError("tmux exploded"))
     composer = _composer(broken)
     assert await composer.ensure() is False
     await composer.sync((_record(_RUNNING, SessionState.RUNNING),))  # must not raise
-
 
 
 async def test_flash_is_suppressed_while_the_feed_that_carries_it_is_on_screen() -> None:

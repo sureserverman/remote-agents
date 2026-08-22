@@ -60,6 +60,7 @@ _ABSENT_TARGET_SIGNATURES = ("can't find session", "can't find pane", "session n
 # C-/M- modifier. Deliberately narrower than what tmux accepts — a key is configuration, not
 # input, and the closed shape keeps shell metacharacters out of the argv by construction.
 
+
 def _retargeted(mark: tuple[str, ...], pane_id: str) -> tuple[str, ...]:
     """Point one codec-built pane mark at an exact pane id instead of its default target.
 
@@ -308,9 +309,7 @@ class TmuxGateway:
                 # launch path passes the session's own single pane, and here the pane id is
                 # already known and is the only correct target — a schema-1 session's window
                 # may hold an operator's hand-split pane beside the agent.
-                await self._runner.run(
-                    *self._base_argv(), *_retargeted(mark, pane.pane_id)
-                )
+                await self._runner.run(*self._base_argv(), *_retargeted(mark, pane.pane_id))
             upgraded.append(pane.session_id)
         return tuple(upgraded)
 
@@ -751,12 +750,6 @@ class TmuxGateway:
             str(cwd),
             *dashboard_command,
         )
-
-
-
-
-
-
 
     async def console_zoomed_pane(self) -> str | None:
         """The pane the console is zoomed onto, or None when it is not zoomed at all.

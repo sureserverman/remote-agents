@@ -73,6 +73,7 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
         for direction in remote_control_directions(record, record.remote_control_state)
     )
 
+
 #: How often the sessions list re-reads the store while it is the screen on top. Long enough
 #: that a host is not answering a tmux readiness probe continuously, short enough that a
 #: session another process started is visible before the owner thinks to press Ctrl+R.

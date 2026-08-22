@@ -97,9 +97,7 @@ def _argv_strings() -> set[str]:
     return {
         node.value
         for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and node not in docstrings
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node not in docstrings
     }
 
 
@@ -135,9 +133,7 @@ def _leads_with_a_docstring(node: ast.AsyncFunctionDef | ast.FunctionDef) -> boo
 
 def test_the_codec_never_builds_a_command_that_can_destroy_a_managed_session() -> None:
     built = {
-        pair
-        for pair in _argv_strings_by_function()
-        if pair[1] in _SESSION_DESTROYING_VERBS
+        pair for pair in _argv_strings_by_function() if pair[1] in _SESSION_DESTROYING_VERBS
     } - _PERMITTED
 
     assert built == set(), (

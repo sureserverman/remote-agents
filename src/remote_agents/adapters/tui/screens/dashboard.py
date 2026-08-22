@@ -230,9 +230,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             # this server and will act whatever surface is looking at it.
             self.sub_title = "F12 shows the console's projects pane"
         await self._reload_sessions_pane()
-        self._sessions_timer = self.set_interval(
-            _SESSIONS_AUTO_REFRESH, self._auto_reload_sessions
-        )
+        self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
 
     async def on_reveal(self) -> None:
         await super().on_reveal()

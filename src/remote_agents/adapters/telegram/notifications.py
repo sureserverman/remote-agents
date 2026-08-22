@@ -977,9 +977,7 @@ class ActivityNotifier:
                 # notification with no way to open the session it is about, which is most of
                 # what the message is for and would have degraded on the *second* report
                 # rather than the first.
-                amended = render_activity(
-                    updated, display=display, open_session=standing.token
-                )
+                amended = render_activity(updated, display=display, open_session=standing.token)
                 if await self._view.amend_apart(
                     self._bot,
                     standing.message_id,
@@ -989,9 +987,7 @@ class ActivityNotifier:
                         "reply_markup": _markup(amended.keyboard),
                     },
                 ):
-                    self._remember(
-                        group.session_id, standing.message_id, shown, standing.token
-                    )
+                    self._remember(group.session_id, standing.message_id, shown, standing.token)
                     self._record_sent(group.session_id, _told(group.activities, shown), moment)
                     return True, False, _unsaid(group.activities, shown)
                 self._standing.forget(self._view.chat_id, group.session_id)
@@ -1255,8 +1251,7 @@ class ActivityNotifier:
         expired = [
             key
             for key, sent in self._last_sent.items()
-            if moment - sent.sent_at
-            >= max(self._window(sent.repeats) * _RETENTION_WINDOWS, floor)
+            if moment - sent.sent_at >= max(self._window(sent.repeats) * _RETENTION_WINDOWS, floor)
         ]
         for key in expired:
             del self._last_sent[key]
