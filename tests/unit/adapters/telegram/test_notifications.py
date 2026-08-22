@@ -10,11 +10,10 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.notifications import (
     OPEN_SESSION_LABEL,
     ActivityNotifier,
-    SessionGroup,
-    grouped_for_delivery,
     render_activity,
 )
 from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
+from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
@@ -753,147 +752,6 @@ async def test_many_sessions_at_once_are_spread_across_passes_not_fired_at_the_c
 
 SESSION_A = "0191f2c2-0000-7000-8000-00000000aaaa"
 SESSION_B = "0191f2c2-0000-7000-8000-00000000bbbb"
-
-
-def _observed(
-    session_id: str,
-    kind: ActivityKind,
-    *,
-    detail: str | None = None,
-    minute: int = 0,
-) -> AgentActivity:
-    confidence = (
-        ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
-    )
-    return AgentActivity(
-        session_id=session_id,
-        kind=kind,
-        detail=detail,
-        observed_at=OBSERVED + timedelta(minutes=minute),
-        confidence=confidence,
-    )
-
-
-def test_two_sessions_whose_observations_interleave_come_back_in_first_appearance_order() -> None:
-    """The queue feeding this is FIFO and grouping must not quietly re-sort it.
-
-    The session heard from first is told first, whatever its identifier is and whatever the
-    clock says: here the session that speaks first carries the *latest* stamp in the batch, so
-    a grouping that ordered by time across sessions would put it second.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_B, ActivityKind.COMPLETED, detail="pushed the branch", minute=9),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=1),
-            _observed(SESSION_B, ActivityKind.NEEDS_ANSWER, detail="may I write here?", minute=2),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=3),
-        ]
-    )
-
-    assert [group.session_id for group in groups] == [SESSION_B, SESSION_A]
-    assert len(groups[0].activities) == 2
-    assert len(groups[1].activities) == 2
-
-
-def test_the_same_thing_said_twice_collapses_to_the_copy_carrying_the_newer_moment() -> None:
-    """A `Stop` hook fires per turn, so one instruction reports "finished" several times over.
-
-    Both reports are true and the owner needs one of them — the later, because it is the one
-    that is still true when the message arrives.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=1),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=6),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert groups[0].activities == (
-        _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=6),
-    )
-
-
-def test_the_same_kind_said_twice_is_one_sentence_carrying_the_newer_words() -> None:
-    """The owner's rule: just the last of them.
-
-    Keyed on `(kind, detail)` these were two distinct things and both were rendered, which is
-    how one session's message became a wall of "the agent has finished its work" with five
-    different last replies hanging off it. The sentence is what the notification says, and it
-    says the session stopped and wants them -- once, in whatever words are current.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Ran the suite.", minute=1),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="Pushed the branch.", minute=2),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert [activity.detail for activity in groups[0].activities] == ["Pushed the branch."]
-
-
-def test_two_quiet_reports_collapse_even_though_neither_carries_any_agent_text() -> None:
-    """`QUIET` always carries `detail=None`, so a pair of `None`s is the real duplicate case.
-
-    It is the one that matters for the profiles watched by their panes: they have no hooks, so
-    quiet is the only observation they ever produce, and a rule that treated "nothing said it"
-    as unmatchable would collapse nothing for exactly those sessions.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=1),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=4),
-        ]
-    )
-
-    assert len(groups) == 1
-    assert groups[0].activities == (_observed(SESSION_A, ActivityKind.QUIET, minute=4),)
-
-
-def test_a_single_observation_becomes_a_group_of_one() -> None:
-    """The ordinary case, and the one the delivery pass sees most: one session, one thing."""
-    only = _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=2)
-
-    assert grouped_for_delivery([only]) == (SessionGroup(SESSION_A, (only,)),)
-
-
-def test_a_group_reads_in_the_order_its_observations_were_made() -> None:
-    """One session's news is a small timeline, so it is told in the order it happened."""
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=7),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=2),
-            _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=5),
-        ]
-    )
-
-    assert [activity.kind for activity in groups[0].activities] == [
-        ActivityKind.COMPLETED,
-        ActivityKind.NEEDS_ANSWER,
-        ActivityKind.QUIET,
-    ]
-
-
-def test_a_collapsed_observation_takes_the_place_its_newest_copy_earned() -> None:
-    """Collapse first, order second, because a survivor carries its newest stamp.
-
-    Ordering first would leave the surviving line where its *earliest* copy sat, so a sentence
-    stamped 14:20 would be printed above one stamped 14:10 — a timeline that runs backwards
-    inside a single message.
-    """
-    groups = grouped_for_delivery(
-        [
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=1),
-            _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=5),
-            _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=9),
-        ]
-    )
-
-    assert [activity.kind for activity in groups[0].activities] == [
-        ActivityKind.NEEDS_ANSWER,
-        ActivityKind.COMPLETED,
-    ]
 
 
 # Rendering a group -- one message per session, however much it has to say -----------------

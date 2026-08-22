@@ -42,6 +42,16 @@ from remote_agents.adapters.telegram.presenters import (
     _validate_callback,
     render_message,
 )
+from remote_agents.application.notification_policy import (
+    SessionGroup,
+    for_update,
+    grouped_for_delivery,
+    merged,
+    shown_in_message,
+    told,
+    unheard,
+    unsaid,
+)
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
     ActivityConfidence,
@@ -144,26 +154,6 @@ cannot be acted on at all.
 """
 
 
-def shown_in_message(group: SessionGroup) -> tuple[AgentActivity, ...]:
-    """Which of a group's observations one message actually spells out.
-
-    The *newest* that fit, not the first. `grouped_for_delivery` orders a group oldest-first so
-    it reads as a timeline, and taking a prefix therefore spelled out the stalest lines and
-    folded the freshest into the counter -- a `needs_answer` arriving after five `completed`
-    reports is the one line worth a thumb, and it was the one being hidden.
-
-    **Public, and shared with the notifier, because the answer had two owners and they
-    disagreed.** `activity_text` rendered the newest five while `_send` stamped the rate limit
-    for every kind in the group, so an observation folded into "and N earlier" was recorded as
-    told to the owner and then dropped, having been neither. For `NEEDS_ANSWER` -- the highest
-    value signal this service has -- that is the agent waiting and nobody being told, with the
-    stamp then suppressing the next report of it too. It is the same silence-by-self-suppression
-    the window filter caused, reached through the line cap instead, which is the argument for
-    one function rather than two call sites that happen to agree.
-    """
-    return group.activities[-_MAXIMUM_LINES_PER_MESSAGE:]
-
-
 def activity_text(group: SessionGroup, *, display: str) -> str:
     """One session's news as the whole message the owner receives about it.
 
@@ -197,7 +187,7 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     the service were less sure this time -- when it is saying the same structural thing about
     the same kind.
     """
-    shown = shown_in_message(group)
+    shown = shown_in_message(group, limit=_MAXIMUM_LINES_PER_MESSAGE)
     hidden = len(group.activities) - len(shown)
     bulleted = len(shown) > 1
 
@@ -382,187 +372,22 @@ been down -- exactly the case `MAXIMUM_DRAIN`'s own docstring contemplates -- ev
 records inside `_enqueue` before a single send was attempted, and the drain had already unlinked
 them from disk. `drain_activity` goes to real trouble to take the *oldest* records so its bound
 cannot truncate whole sessions; the notifier then discarded exactly that oldest half. The two
-bounds were set against each other across the seam. It is not imported, because an adapter
-importing the application layer would invert the dependency this project is arranged around
-(DEC-001); it is written down here with the reason, and the drain's constant is the one to look
-at if either moves.
+bounds were set against each other across the seam. It is not imported, and the reason given
+here used to be that an adapter importing the application layer would invert this project's
+dependencies (DEC-001). That was false: `check_imports.py` has let the two *driver* adapters,
+`telegram` and `tui`, reach `remote_agents.application` since the local terminal landed, and
+this module imports `application.notification_policy` a few dozen lines above. The honest
+reason is smaller. The two bounds answer different questions -- how much one drain hands over
+in a call, how much this queue holds while Telegram is unreachable -- and they only happen to
+want the same number today, so the coupling is written down where a reader meets it rather than
+made structural. The drain's constant is still the one to look at if either moves, and if they
+are ever meant to be one number then importing it is permitted and is the better answer.
 
 That there is nothing *behind* this cap is DEC-026 rather than an omission. A durable queue was
 weighed and declined: it buys back a convenience at the price of a schema migration and a second
 spool that must then be drained, bounded and reasoned about forever. So this number is the only
 bound there is, and what it turns away is dropped rather than spilled anywhere.
 """
-
-
-@dataclass(frozen=True, slots=True)
-class SessionGroup:
-    """One session's news for one delivery pass, in the order it should be read."""
-
-    session_id: str
-    activities: tuple[AgentActivity, ...]
-
-
-def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGroup, ...]:
-    """Fold a pass's observations into one bundle per session, saying each thing once.
-
-    Pure and clock-free: it is handed everything the pass observed and reads nothing else, so
-    the three rules below are exercised without a Telegram, a session store or a sleep.
-
-    **Sessions come back in the order they were first heard from.** The queue behind this is
-    FIFO, and that fairness is what keeps a burst of twenty sessions spread across passes
-    rather than starving the unlucky ones -- a property that survives grouping only if grouping
-    preserves it. Ordering by session id would hand the chat to whoever's identifier sorts
-    early, every pass, for as long as the backlog lasts, and that identifier is not something
-    the owner chose or can see. Ordering by time across sessions is the subtler mistake: it
-    would decide a group's place from a stamp on one observation *inside* it, so the collapse
-    below -- which changes which observation that is -- would be quietly re-deciding an order
-    the queue had already settled.
-
-    **Within a session, a kind collapses to its newest observation.** A `Stop` hook fires per
-    turn rather than per task, so an agent working through one long instruction reports
-    "finished" repeatedly and every report is true; the pane watch has the same shape, since
-    `QUIET` carries no agent text at all and two quiet spells in one pass are indistinguishable
-    here.
-
-    **The kind is the identity, and the detail is not part of it (DEC-034).** This is the
-    owner's correction to the shape this had, and the reason is what a notification is *for*:
-    it tells them a session has stopped and wants them. Five "the agent has finished its work" lines
-    carrying five different last replies do not tell them that five times over -- they tell
-    them once, and then bury the sentence that matters under four stale copies of itself.
-    Keyed on `(kind, detail)` those five were five distinct things and every one was rendered,
-    which is how one session's message came to be a wall of the same sentence.
-
-    What is given up is real and was weighed: the older text of a kind is dropped rather than
-    shown, so a `completed` report whose reply the owner never read is gone. The session
-    itself is the authoritative record of what an agent said (DEC-013), the message is the
-    alert -- and the newest report of a kind is the one that describes the state the session
-    is actually in now.
-
-    **What survives is then ordered by `observed_at`.** After the collapse rather than before,
-    and the order matters: a survivor carries the newest stamp of its duplicates, so a sentence
-    first said at 14:00 and repeated at 14:20 belongs below whatever was said at 14:10. Sorted
-    first and collapsed after, it would print above it -- a timeline running backwards inside a
-    single message, which reads as the service having confused two sessions.
-
-    Ties fall back to the collapse order, which is first appearance of each kind; the sort is
-    stable and this relies on that. Two observations sharing an instant carry
-    no fact about which came first, so what is worth guaranteeing is not the true order but a
-    repeatable one: the same input has to produce the same bundle on a retry, because a message
-    that reshuffles itself between one send and the next reads as fresh news.
-    """
-    collapsed: dict[str, dict[ActivityKind, AgentActivity]] = {}
-    for activity in activities:
-        seen = collapsed.setdefault(activity.session_id, {})
-        key = activity.kind
-        held = seen.get(key)
-        if held is None or activity.observed_at > held.observed_at:
-            # Assignment to an existing key keeps its position, so replacing a duplicate does
-            # not move the survivor to the back of its group -- the collapse order stays first
-            # appearance, which is what the stable sort below falls back on.
-            seen[key] = activity
-    return tuple(
-        SessionGroup(
-            session_id,
-            tuple(sorted(observations.values(), key=lambda activity: activity.observed_at)),
-        )
-        for session_id, observations in collapsed.items()
-    )
-
-
-def _merged(
-    carried: tuple[AgentActivity, ...], arrived: tuple[AgentActivity, ...]
-) -> tuple[AgentActivity, ...]:
-    """Fold new observations into what a standing message already says.
-
-    Delegated to `grouped_for_delivery` rather than re-implemented, because the two rules that
-    matter here are its rules: a kind collapses to its newest observation, and what survives is
-    ordered by `observed_at`. A second copy of them would drift, and the
-    drift would be invisible -- a message whose lines are subtly out of order reads as the
-    service having confused two sessions, which is exactly what that function's docstring is
-    about.
-
-    Both arguments belong to one session, so there is exactly one group to unpack.
-    """
-    groups = grouped_for_delivery((*carried, *arrived))
-    return groups[0].activities if groups else ()
-
-
-def _for_update(
-    session_id: str,
-    carried: tuple[AgentActivity, ...],
-    arrived: tuple[AgentActivity, ...],
-) -> SessionGroup:
-    """Lay out a re-render so the lines nobody has seen yet are the ones it spells out.
-
-    `shown_in_message` takes the newest five, which is right for a message being sent for the
-    first time and wrong for one being amended. An observation that arrives *older* than five
-    the message already carries -- a `needs_answer` queued behind five newer `completed`
-    reports -- would be folded into "and N earlier" on this pass, and on every pass after it,
-    forever: the merge keeps putting it back in the same losing position. Under the old shape
-    it escaped because the next pass sent it as a message of its own. There is no next message
-    now, so the room has to be made here, and the drain deleted its record long ago.
-
-    So arrivals claim slots first, the previously-shown fill what is left, and the result is
-    laid out with those slots **last**, because the end of the tuple is where
-    `shown_in_message` looks. Ordering within the shown set stays by `observed_at`, so the
-    message still reads as a timeline.
-    """
-    fresh = tuple(activity for activity in carried if activity in arrived)
-    keep: list[AgentActivity] = list(fresh[-_MAXIMUM_LINES_PER_MESSAGE:])
-    for activity in reversed(carried):
-        if len(keep) >= _MAXIMUM_LINES_PER_MESSAGE:
-            break
-        if activity not in keep:
-            keep.append(activity)
-    shown = sorted(keep, key=lambda activity: activity.observed_at)
-    buried = [activity for activity in carried if activity not in keep]
-    return SessionGroup(session_id, (*buried, *shown))
-
-
-def _told(
-    arrived: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
-) -> tuple[ActivityKind, ...]:
-    """The kinds this pass both heard and put in front of the owner.
-
-    The rate limit's question is how often a session *reports* a kind, so a line the message
-    is merely still displaying is not an answer to it. See the call site for why narrowing to
-    this is not the narrowing `_record_sent` warns against.
-    """
-    return tuple(activity.kind for activity in shown if activity in arrived)
-
-
-def _unheard(
-    standing: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
-) -> tuple[ActivityKind, ...]:
-    """The kinds a re-render would put in front of the owner that its message does not carry.
-
-    The question is not "has anything changed" -- a fresher `completed` carrying a different
-    last reply changes the text and is still the same news -- but "is the owner being told
-    something they have not been alerted to". Non-empty is what earns a message that arrives;
-    empty is what a silent amendment is for.
-
-    Keyed on the kind because the kind is what the sentence says, and the sentence is what the
-    alert is: `completed` means the session stopped and wants them, and it means that exactly
-    once until it stops meaning it. Comparing the observations themselves instead would make
-    every repeat an alert again, which is the shape the owner asked to be rid of.
-    """
-    known = {activity.kind for activity in standing}
-    return tuple(activity.kind for activity in shown if activity.kind not in known)
-
-
-def _unsaid(
-    arrived: tuple[AgentActivity, ...], shown: tuple[AgentActivity, ...]
-) -> tuple[AgentActivity, ...]:
-    """Which of this pass's arrivals the message did not spell out, and therefore still owes.
-
-    Measured against the arrivals rather than against everything the message accounts for,
-    because those are two different sets once a message can be re-rendered. An observation
-    that has dropped out of the newest five was *shown* on an earlier pass -- it has been
-    told, and re-queueing it would print it a second time. One that arrived now and did not
-    fit has been told to nobody, and the drain has already deleted its record, so letting it
-    go loses agent output permanently.
-    """
-    return tuple(activity for activity in arrived if activity not in shown)
 
 
 class ActivityNotifier:
@@ -916,7 +741,7 @@ class ActivityNotifier:
         message keeps the chat at one message per session -- the whole of the previous fix, and it
         worked -- but every replacement is a `sendMessage`, so an agent finishing a turn every
         few minutes still buzzed the phone every few minutes and left the owner watching one
-        message jump to the bottom of the chat over and over. `_unheard` is the test: a kind the
+        message jump to the bottom of the chat over and over. `unheard` is the test: a kind the
         standing message does not already carry has never been put in front of them and earns a
         message that arrives, while a fresher `completed` behind a `completed` is the same news
         in newer words and is amended in silently. The first alert is as fast as it ever was;
@@ -954,7 +779,7 @@ class ActivityNotifier:
             return False, False, ()
 
         if standing is not None:
-            carried = _merged(standing.activities, group.activities)
+            carried = merged(standing.activities, group.activities)
             if carried == standing.activities:
                 # The re-render would say exactly what the message already says -- the burst
                 # case, an agent repeating one sentence. Nothing is sent, and nothing is held
@@ -962,9 +787,14 @@ class ActivityNotifier:
                 # finished business rather than a debt. This is the collapse the rate limit
                 # used to perform, now performed by comparing against what was actually said.
                 return False, False, ()
-            updated = _for_update(group.session_id, carried, group.activities)
-            shown = shown_in_message(updated)
-            if not _unheard(standing.activities, shown):
+            updated = for_update(
+                group.session_id,
+                carried,
+                group.activities,
+                limit=_MAXIMUM_LINES_PER_MESSAGE,
+            )
+            shown = shown_in_message(updated, limit=_MAXIMUM_LINES_PER_MESSAGE)
+            if not unheard(standing.activities, shown):
                 # Nothing here the owner has not already been alerted to, so this is the same
                 # news in newer words: written into the message they have rather than sent as
                 # one more. An amendment that answers False is not a failed delivery to retry
@@ -988,8 +818,8 @@ class ActivityNotifier:
                     },
                 ):
                     self._remember(group.session_id, standing.message_id, shown, standing.token)
-                    self._record_sent(group.session_id, _told(group.activities, shown), moment)
-                    return True, False, _unsaid(group.activities, shown)
+                    self._record_sent(group.session_id, told(group.activities, shown), moment)
+                    return True, False, unsaid(group.activities, shown)
                 self._standing.forget(self._view.chat_id, group.session_id)
                 return await self._send_afresh(updated, group, display=display, moment=moment)
             replacement = await self._replace(standing, updated, display=display)
@@ -1009,14 +839,14 @@ class ActivityNotifier:
                 # notifier read its own silence as the session having changed the subject.
                 # This narrows to what the session actually said this pass, which is the
                 # question the taper was always asking.
-                self._record_sent(group.session_id, _told(group.activities, shown), moment)
-                return True, True, _unsaid(group.activities, shown)
+                self._record_sent(group.session_id, told(group.activities, shown), moment)
+                return True, True, unsaid(group.activities, shown)
             # The replacement could not be given a working button, which is the one outcome
             # worth starting over for: `_replace` has already put the message in the chat, so
             # falling through would leave two. Forgetting instead means the *next* pass sends
             # a fresh one, and the buttonless message is superseded then rather than now.
             self._standing.forget(self._view.chat_id, group.session_id)
-            return True, True, _unsaid(group.activities, shown)
+            return True, True, unsaid(group.activities, shown)
 
         return await self._send_afresh(group, group, display=display, moment=moment)
 
@@ -1050,7 +880,7 @@ class ActivityNotifier:
         # N earlier" has not been told to anyone, and stamping it would both silence it and
         # suppress its next report. What it does cover is a kind that was rendered without
         # being due -- that one has now been said, and is a repeat from here on.
-        shown = shown_in_message(outgoing)
+        shown = shown_in_message(outgoing, limit=_MAXIMUM_LINES_PER_MESSAGE)
         self._record_sent(group.session_id, (a.kind for a in shown), moment)
         token = await self._mint(outgoing, message_id, display=display)
         if token is not None:
@@ -1060,7 +890,7 @@ class ActivityNotifier:
             # message after it, where a message not remembered is merely superseded by the next
             # piece of news -- degraded once instead of degraded for good.
             self._remember(group.session_id, message_id, shown, token)
-        return True, True, _unsaid(group.activities, shown)
+        return True, True, unsaid(group.activities, shown)
 
     async def _replace(
         self, standing: StandingNotification, group: SessionGroup, *, display: str
@@ -1075,7 +905,7 @@ class ActivityNotifier:
 
         A replacement rather than an amendment because an amendment is silent and stays where
         it was sent, and this path is only reached for news the owner has not been alerted to
-        (`_unheard`). That is where the trade now sits: the session occupies exactly one
+        (`unheard`). That is where the trade now sits: the session occupies exactly one
         message either way, and it is re-sent to the bottom of the chat only when there is
         something in it worth interrupting them for. A repeat never gets here.
 

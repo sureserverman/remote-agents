@@ -17,10 +17,11 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
-from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
+from remote_agents.adapters.telegram.notifications import render_activity
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.notification_policy import SessionGroup
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
