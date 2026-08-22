@@ -119,6 +119,94 @@ def test_a_version_probe_that_timed_out_does_not_stop_the_surface_starting(
         connection.close()
 
 
+def test_the_probe_note_survives_the_narrowing_the_surface_will_use() -> None:
+    """The half the workaround could not buy: the note is *carried*, not merely survived.
+
+    The test above asserts the surface still starts. It passes today for a reason worth
+    naming: `bootstrap.local_context` drops the reason outright whenever `available` is true
+    (`None if profile.available else profile.reason`), so there is no contradiction left to
+    raise — and no note left either. A diagnostic the probe went to the trouble of producing
+    is discarded at the boundary, and nothing downstream can tell "version unread because the
+    probe timed out" from "version unread for no reason at all".
+
+    `application.profiles.ProfileAvailability` is what makes carrying it possible, so this
+    pins the whole path the surface will use after Task 1.3: a real `probe_profiles` run
+    against a `--version` that raises, narrowed exactly as `local_context` will narrow it.
+
+    **It fails against the naive merge.** Collapse the type back to a single blocking
+    `reason` field — the shape both adapter types shared — and `blocked_reason` is the only
+    field left to put `version_probe_failed` in, which the available-profile invariant then
+    refuses. That is the recorded regression, and it is why this asserts the note's
+    destination rather than only its presence.
+    """
+    from remote_agents.adapters.tmux.profiles import probe_profiles
+    from remote_agents.application.profiles import ProfileAvailability
+    from remote_agents.domain.profiles import closed_profiles
+
+    def always_times_out(argv: tuple[str, ...]) -> str:
+        raise subprocess.TimeoutExpired(cmd=list(argv), timeout=5)
+
+    # `probe_profiles` takes both of these as keyword parameters for exactly this purpose, so
+    # the seam is used rather than reached past. The sibling test above monkeypatches the
+    # module privates instead because it goes through `local_context`, which offers no
+    # injection point; this one calls the probe directly and has no such excuse.
+    #
+    # `resolve` is pinned as well as `run_version` because otherwise the *host* decides what
+    # this measures: on a machine missing an agent binary that profile comes back
+    # `executable_missing` and the assertions below fail on it. Not vacuously -- loudly, and
+    # for a reason that has nothing to do with the regression -- which is worse than either,
+    # because it makes the test flip with whatever happens to be installed.
+    probed = probe_profiles(
+        closed_profiles(),
+        resolve=lambda executable: Path("/usr/bin") / executable,
+        run_version=always_times_out,
+    )
+    assert len(probed) == 5, "the curated set is what the surface narrows"
+
+    narrowed = tuple(
+        ProfileAvailability(
+            str(profile.profile_id),
+            profile.available,
+            blocked_reason=None if profile.available else profile.reason,
+            note=profile.reason if profile.available else None,
+        )
+        for profile in probed
+    )
+
+    for profile in narrowed:
+        assert profile.available is True, (
+            f"{profile.profile_id}: an installed executable is available; "
+            "a version probe is diagnostic, not a gate (DEC-002)"
+        )
+        assert profile.blocked_reason is None, (
+            f"{profile.profile_id}: a probe that did not answer is not a blocking reason"
+        )
+        assert profile.note == "version_probe_failed", (
+            f"{profile.profile_id}: the note the probe produced was discarded at the boundary"
+        )
+
+
+def test_the_naive_merge_is_what_the_type_refuses() -> None:
+    """The regression itself, stated as the thing that must keep raising.
+
+    One field for both meanings has exactly one place to put `version_probe_failed` on an
+    available profile, and that is the field the surface reads as blocking. This asserts the
+    refusal directly, so a future edit that "simplifies" the two fields back into one cannot
+    do it quietly: it has to delete this test, and deleting it says what it is doing.
+
+    **Deliberately redundant with `tests/unit/application/test_profiles.py`'s
+    `test_an_available_profile_has_no_blocking_reason`**, which asserts the same invariant with
+    a different reason string. It is kept for its position, not its coverage: this file is
+    where the outage is recalled, and the invariant is easier to weaken when the only thing
+    asserting it lives a directory away from the story explaining why it exists. Counted as
+    narration, not as a second guard.
+    """
+    from remote_agents.application.profiles import ProfileAvailability
+
+    with pytest.raises(ValueError, match="an available profile has no blocking reason"):
+        ProfileAvailability("claude", True, blocked_reason="version_probe_failed")
+
+
 def test_the_local_context_needs_no_telegram_credentials(
     home: Path, paths: ProductionPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
