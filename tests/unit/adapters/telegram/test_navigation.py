@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
+from backends import backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
@@ -110,14 +111,33 @@ def _resolved() -> ResolvedConversation:
 
 
 def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
+    """Built through `backend_for`, which is the shape Task 3.2 hands the boundary whole.
+
+    The unpacking below is the one task's worth of scaffolding it looks like: the boundary
+    still declares the use cases as separate fields, so the backend is assembled and then
+    taken apart again. What that buys now is that the factory is exercised by a real bot
+    test — thirty-two of them, through this helper — with the suite's own partial doubles,
+    before seventy-nine construction sites are rewritten to depend on it.
+
+    `profiles` is deliberately *not* routed through the backend. `Backend.profiles` is the
+    domain `ProfileCompatibility`; the bot renders the wizard's `ProfileAvailability`, and
+    the two narrow differently. Handing the domain tuple straight to the boundary is the
+    plausible-looking line that once took the local surface down on a timed-out probe.
+    """
+    backend = backend_for(
+        sessions=_Launcher(_record()),
+        projects=_Creator(),
+        conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
+        catalogue=(PROJECT,),
+    )
     return PrivateBotBoundary(
         OWNER,
         CHAT,
-        catalogue=(PROJECT,),
+        catalogue=backend.catalogue,
         profiles=(ProfileAvailability("claude", True, None),),
-        launcher=_Launcher(_record()),
-        conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
-        creator=_Creator(),
+        launcher=backend.sessions,
+        conversations=backend.conversations,
+        creator=backend.projects,
     )
 
 
