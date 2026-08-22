@@ -4,9 +4,11 @@ Ending a session was written twice. `adapters/telegram/stops.py: StopController.
 `adapters/tui/app.py: stop` + `_issue_stop` performed the same four steps — re-read the
 record, re-check the policy, send exactly one curated command, interpret what came back —
 against the same `application.session_actions` vocabulary, and drifted anyway: the TUI
-removed a fail-dangerous trailing `else` from its dispatch and the bot kept one for months
-afterwards, until a gate's adversarial pass found the asymmetry. Two copies of the only path
-that destroys a session is the arrangement this module retires (ARCH-B4).
+removed a fail-dangerous trailing `else` from its dispatch on 2026-08-09 (`7f5c6db`) and the
+bot kept one until 2026-08-15 (`6d75a85`), when a gate's adversarial pass found the asymmetry.
+Six days, in a repository whose first commit is 2026-07-30 — which is the point rather than a
+mitigation of it: a fifth of this project's life, on the one path that destroys a session, with
+each copy separately reviewed. Two copies is the arrangement this module retires (ARCH-B4).
 
 **The re-read lives here, not in the caller.** DEC-007's fourth mitigation and DEC-008's
 2026-08-08 correction both say the same thing: what refuses a second stop is re-reading the
@@ -227,8 +229,9 @@ async def dispatch_stop(resolution: StopResolution, *, sessions: _StopUseCase) -
     # only the three — but "anything I do not recognise is a kill" is a fail-dangerous default
     # in the one function that kills, and any future non-destructive member of
     # `available_actions` would silently have become a force stop. Both retired copies had
-    # removed this separately, months apart; merging them is the moment it could quietly come
-    # back, so the guarantee is pinned by a test rather than by this comment.
+    # removed this separately, six days apart (`7f5c6db` then `6d75a85`); merging them is the
+    # moment it could quietly come back, so the guarantee is pinned by a test rather than by
+    # this comment.
     raise ValueError(f"no command is curated for the action {resolution.action!r}")
 
 

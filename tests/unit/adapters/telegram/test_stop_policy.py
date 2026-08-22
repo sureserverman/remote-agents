@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pathlib
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
@@ -40,8 +39,6 @@ from remote_agents.ports.terminal import TerminalObservation
 
 OWNER = 7
 CHAT = 11
-
-_ADAPTER_ROOT = pathlib.Path(__file__).resolve().parents[4] / "src" / "remote_agents" / "adapters"
 
 
 def _controller() -> StopController:

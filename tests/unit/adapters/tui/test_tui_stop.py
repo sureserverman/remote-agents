@@ -70,11 +70,16 @@ class _RecordingLauncher:
     #: What `graceful_stop` reports back. Defaults to a clean exit, which is what every case
     #: written before BL-008 assumes — the surface discarded this value entirely.
     observation: TerminalObservation | None = None
+    #: How many times the store has been read. Counted so a test asserting that a refusal
+    #: never reached the store can say so, rather than leaving the claim in its own name.
+    reads: int = 0
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
         return self.records
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.reads += 1
         return self.records
 
     async def copy_attach(self, _session_id) -> str | None:
@@ -412,7 +417,7 @@ async def test_a_graceful_stop_that_worked_says_nothing_about_a_failure() -> Non
     assert "did not take effect" not in status
 
 
-async def test_a_session_value_that_is_not_a_session_id_refuses_without_reading_the_store() -> None:
+async def test_a_session_value_that_is_not_a_session_id_refuses_as_a_miss_not_a_fault() -> None:
     """The one branch Task 1.3 added, driven rather than reasoned about.
 
     Routing this surface onto the shared use case needed a parsed `SessionId`, where the old
@@ -433,9 +438,25 @@ async def test_a_session_value_that_is_not_a_session_id_refuses_without_reading_
     async with app.run_test() as pilot:
         await app.show_detail(str(record.session_id))
         await pilot.pause()
+        # Counted from here, so the detail's own render is not mistaken for the stop's read.
+        reads_before = launcher.reads
         await app.stop("graceful", "not-a-session-id", app.screen)
         await pilot.pause()
+        reads_during = launcher.reads - reads_before
         said = announcements(app)
+
+    # **Exactly one read, and that one is `refuse()`'s own redraw.** The Tier-2 review asked
+    # for a counter asserting *zero*, on the reading that the guard returns before
+    # `resolve_stop` and nothing else would read. Wiring the counter disproved it: `refuse()`
+    # ends in `on_reveal()`, which re-renders the detail from the store, and it did so on this
+    # path before this change too. So the earlier name — "without reading the store" — was the
+    # false part, and it is now gone.
+    #
+    # One is still the discriminating value rather than a shrug. Without the guard,
+    # `SessionId.parse` raises into `stop`'s own `except`, which reports a fault and
+    # deliberately does *not* redraw — so the count there is **zero**. The two outcomes are
+    # 1-read-and-silent versus 0-reads-and-"did not complete", and this asserts both halves.
+    assert reads_during == 1
 
     assert launcher.issued == [], "nothing may be dispatched for a session never identified"
     # `issued == []` alone does not discriminate, and that is the point of the second

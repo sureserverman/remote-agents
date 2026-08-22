@@ -284,7 +284,9 @@ async def test_an_unrecognised_action_raises_rather_than_force_stopping(monkeypa
 
     `available_actions` never returns `retire`, so in production the refusal below is what
     fires and this raise is unreachable — which is exactly the condition under which a
-    fail-dangerous `else` survives unnoticed for a year. The scenario being pinned is the
+    fail-dangerous `else` survives unnoticed. It did: the TUI dropped its own on 2026-08-09
+    and the bot's stood until 2026-08-15, found by a gate's adversarial pass rather than by
+    anything that ran. The scenario being pinned is the
     one the code comments on both retired copies describe: **a future non-destructive
     member of `available_actions`**, offered by the policy and absent from the dispatch. It
     must raise, not fall through to the kill.
@@ -418,26 +420,41 @@ async def test_dispatch_refuses_to_run_a_resolution_that_was_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    "reader_records, action",
+    "reader_records, action, observations",
     [
-        ((a_record(),), "graceful"),
-        ((a_record(SessionState.PRESERVED),), "cleanup"),
-        ((a_record(),), "force"),
-        ((a_record(SessionState.ENDED),), "graceful"),
-        ((None,), "graceful"),
+        ((a_record(),), "graceful", {}),
+        ((a_record(SessionState.PRESERVED),), "cleanup", {}),
+        ((a_record(),), "force", {}),
+        ((a_record(SessionState.ENDED),), "graceful", {}),
+        ((None,), "graceful", {}),
+        # The cases that make the `failure` comparison mean something. Without one of these
+        # every parameter set above answers `failure is None`, so comparing the field is
+        # `None == None` five times — a fix for an under-assertion that was itself an
+        # under-assertion. A force that found no pane is included because force reads a
+        # *different* function (DEC-017), so a composition that routed one phase through
+        # `stop_failure` would show up here and nowhere else in this test.
+        ((a_record(),), "graceful", {"graceful": a_stop_that_did_not_take(GRACEFUL_TIMEOUT)}),
+        ((a_record(),), "graceful", {"graceful": a_stop_that_did_not_take(UNKNOWN_SESSION)}),
+        ((a_record(),), "force", {"force": a_force_stop_that_found_nothing()}),
     ],
 )
-async def test_execute_is_exactly_resolve_then_dispatch(reader_records, action) -> None:
+async def test_execute_is_exactly_resolve_then_dispatch(
+    reader_records, action, observations
+) -> None:
     """The seam cannot drift, because the one-call form is built from the two-call form.
 
-    Asserted over every outcome shape — dispatched, policy-refused, and record-missing — so
-    a future change that special-cases one of them inside `execute_stop` fails here.
+    Asserted over every outcome shape — dispatched clean, dispatched with each kind of
+    failure, policy-refused, and record-missing — so a future change that special-cases any
+    one of them inside `execute_stop` fails here.
     """
     one_call = await execute_stop(
-        action, SESSION, sessions=_UseCase(), read_record=_Reader(*reader_records)
+        action,
+        SESSION,
+        sessions=_UseCase(**observations),
+        read_record=_Reader(*reader_records),
     )
 
-    two_calls_use_case = _UseCase()
+    two_calls_use_case = _UseCase(**observations)
     resolution = await resolve_stop(action, SESSION, read_record=_Reader(*reader_records))
     two_calls = (
         await dispatch_stop(resolution, sessions=two_calls_use_case)
@@ -445,8 +462,15 @@ async def test_execute_is_exactly_resolve_then_dispatch(reader_records, action) 
         else StopOutcome(False, resolution.record, resolution.refusal)
     )
 
-    assert (one_call.dispatched, one_call.refusal) == (two_calls.dispatched, two_calls.refusal)
-    assert (one_call.record is None) == (two_calls.record is None)
+    # Every field, by value. An earlier version compared `dispatched` and `refusal` by value
+    # but `record` only by `is None` — and `failure` not at all — so a composition that
+    # returned the *wrong* non-None record, or that diverged on the failure it reported, would
+    # have passed the one test whose entire purpose is to catch that. Found by the Stage 1
+    # gate's Tier-2 review, which is the pass that reads a claim against its own assertions.
+    assert one_call.dispatched == two_calls.dispatched
+    assert one_call.refusal == two_calls.refusal
+    assert one_call.record == two_calls.record
+    assert one_call.failure == two_calls.failure
 
 
 def test_a_stop_outcome_refuses_to_be_a_bool() -> None:
@@ -460,6 +484,22 @@ def test_a_stop_outcome_refuses_to_be_a_bool() -> None:
         bool(StopOutcome(False))
 
 
+#: What an adapter may not construct. The three commands are the dispatch itself. **The
+#: fourth is the one a reader would not think of**, and it was found by the Stage 1 gate's
+#: evaluator: `StopResolution` is `dispatch_stop`'s only argument, and `dispatch_stop`
+#: rejects one whose `refusal` is set — but not one hand-built with `refusal=None` around a
+#: record the adapter already had. That route constructs the command *inside* `application/`,
+#: where the first three names would never appear, so the sweep would stay green while a
+#: drawn row reached a kill. Nothing does this today; the point of a safety net is that it
+#: covers the move before somebody makes it.
+_FORBIDDEN_IN_ADAPTERS = (
+    "GracefulStopCommand(",
+    "CleanupCommand(",
+    "ForceStopCommand(",
+    "StopResolution(",
+)
+
+
 def test_no_adapter_builds_a_stop_command_of_its_own() -> None:
     """The three typed commands are constructed in `application/` and nowhere else.
 
@@ -467,7 +507,7 @@ def test_no_adapter_builds_a_stop_command_of_its_own() -> None:
     gate that checked it once. A stop command built inside an adapter is a second dispatch by
     definition — it is the thing the merged use case exists to be the only one of — and a
     grep of this exact shape would have found the two copies this sub-plan retired on any day
-    of the year before it.
+    they both existed.
 
     Deferred from Task 1.2 rather than narrowed to the Telegram tree: it went red there on
     `adapters/tui/app.py`, which was Task 1.3's half, and a test that changes meaning between
@@ -479,14 +519,7 @@ def test_no_adapter_builds_a_stop_command_of_its_own() -> None:
     offenders = {
         path.relative_to(adapters).as_posix(): sorted(found)
         for path, found in (
-            (
-                path,
-                {
-                    name
-                    for name in ("GracefulStopCommand(", "CleanupCommand(", "ForceStopCommand(")
-                    if name in path.read_text(encoding="utf-8")
-                },
-            )
+            (path, {name for name in _FORBIDDEN_IN_ADAPTERS if name in path.read_text("utf-8")})
             for path in sorted(adapters.rglob("*.py"))
         )
         if found
