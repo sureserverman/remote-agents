@@ -31,6 +31,25 @@ _SRC = pathlib.Path(__file__).resolve().parents[4] / "src" / "remote_agents"
 _POLICY = _SRC / "application" / "notification_policy.py"
 _ADAPTER = _SRC / "adapters" / "telegram" / "notifications.py"
 
+#: Every sentence this module said to an operator at `0e334c2`, the commit this sub-plan began
+#: from. Written out rather than read back from git, so this is a claim about what the module
+#: says today and not the tree being compared with itself.
+_AT_THE_BASE = frozenset(
+    {
+        "a notification the owner pressed was not this session's current one; "
+        "the standing message is kept",
+        "an activity notification was sent without its Open session button",
+        "could not ask which notified sessions have finished",
+        "could not deliver an activity notification; holding it for retry",
+        "could not move the live view below the notifications",
+        "could not remove the notification a replacement supersedes",
+        "could not remove the notification of a session that has finished",
+        "dropping an activity this service will not speak about",
+        "holding %d undelivered notification(s) in memory; a restart now loses them",
+        "the notification queue is full; dropping the oldest held for one session (%d held)",
+    }
+)
+
 
 def _functions(path: pathlib.Path) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     assert path.is_file(), f"{path} must exist or this sweep runs over nothing"
@@ -89,10 +108,19 @@ def test_the_adapter_still_owns_the_wording() -> None:
 
     DEC-034 accepted cost 3: the amendment's keyboard-carrying obligation is presentation and
     stays here. If this ever reads zero, the wording did not stay with the surface -- it left.
-    """
-    sentences = [node.name for node in _functions(_ADAPTER) if _returns_a_sentence(node)]
 
-    assert sentences, "the adapter words nothing; the surface's half of the split is gone"
+    **Named, not counted.** A bare "at least one function returns a string" was satisfied by
+    `_mint`, which returns `str | None` and is a token, not a sentence -- the close-out
+    evaluator rewrote every renderer's annotation to `-> object:` and this still passed on the
+    minter alone. So the renderers are named. They are the things DEC-043 says must not follow
+    the policy across, and naming them is the only way this case can fail for its own reason.
+    """
+    wording = {node.name for node in _functions(_ADAPTER) if _returns_a_sentence(node)}
+
+    assert {"activity_text", "_sentence"} <= wording, (
+        "the adapter stopped wording things; the renderers named here are the surface's half "
+        f"of DEC-043's split and must stay. Found: {sorted(wording)}"
+    )
 
 
 def test_the_line_budget_is_the_adapters_number() -> None:
@@ -122,14 +150,22 @@ def test_every_operator_facing_sentence_is_the_one_it_has_always_been() -> None:
 
     The rules for grouping, the taper, retention and the backlog all moved to
     `application/notification_policy` across this sub-plan. None of the sentences did. This
-    asserts the whole set rather than the one that changed, because the failure mode is a
-    *rewording* -- no assertion anywhere else in the suite reads this text, so a nicer sentence
-    ships inside a refactor with nothing objecting and a diff that reads as cleanup.
+    compares the whole set, because the failure mode is a *rewording* -- no assertion anywhere
+    else in the suite reads this text, so a nicer sentence ships inside a refactor with nothing
+    objecting and a diff that reads as cleanup.
+
+    **Set equality, and the first version of this test did not have it.** It asserted that the
+    eviction sentence was present and that the count was still ten -- which pins one of the ten
+    and leaves the other nine held by a number. The close-out evaluator reworded a different
+    line, changing one word's case, and every case here passed. That is the same defect the
+    Stage 1 gate fixed one file over and described as a check overstating its coverage, so the
+    lesson is evidently cheaper to state than to learn: a guard whose docstring names a set has
+    to compare the set.
 
     The eviction line is the reason this exists. The policy now returns which session paid, so
     naming it in the warning is one interpolation away and was briefly written that way; the
     stage's own evaluator caught it as the single behaviour delta in an otherwise exact
-    relocation. BL-008 holds that improvement so it can be taken deliberately.
+    relocation. BL-032 holds that improvement so it can be taken deliberately.
 
     Pinned as an exact set, so adding a line fails here too and has to be an intentional edit.
     """
@@ -143,10 +179,8 @@ def test_every_operator_facing_sentence_is_the_one_it_has_always_been() -> None:
         and isinstance(node.args[0], ast.Constant)
     }
 
-    assert "the notification queue is full; dropping the oldest held for one session (%d held)" in (
-        sentences
-    ), "the eviction warning was reworded; the rule moved, the sentence does not"
-    assert len(sentences) == 10, (
-        f"this module says {len(sentences)} things to an operator, and it said 10 before the "
-        "policy moved out of it -- a line added or removed here is an intentional edit"
+    assert sentences == _AT_THE_BASE, (
+        "an operator-facing sentence changed. The rules moved out of this module; the words "
+        f"did not.\n  gone: {sorted(_AT_THE_BASE - sentences)}"
+        f"\n  new:  {sorted(sentences - _AT_THE_BASE)}"
     )

@@ -107,14 +107,25 @@ def test_the_policy_module_reads_no_clock() -> None:
     A relocation that quietly acquired a clock would be untestable in exactly the way the
     grouping rules below are testable: they are handed everything a pass observed and read
     nothing else, which is why none of these cases needs a fake clock or a sleep.
+
+    Matches a bare name as well as an attribute, because `from time import monotonic` then
+    `monotonic()` parses as neither an attribute nor anything `datetime.now()` would catch --
+    the close-out evaluator found that hole.
+
+    **Disclosed limit.** A clock reached through an alias this list does not name
+    (`from time import monotonic as tick`) still slips past. Naming the readings is the only
+    sweep available short of forbidding every zero-argument call, and that would forbid most of
+    the module.
     """
     source = pathlib.Path(notification_policy.__file__).read_text(encoding="utf-8")
+    reading = {"now", "utcnow", "today", "monotonic", "perf_counter", "time"}
     clock_calls = [
         ast.unparse(node)
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"now", "utcnow", "today", "monotonic", "time"}
+        and (
+            getattr(node.func, "attr", None) in reading or getattr(node.func, "id", None) in reading
+        )
     ]
 
     assert clock_calls == [], f"the policy module reads a clock: {clock_calls}"

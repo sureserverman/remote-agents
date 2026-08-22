@@ -564,7 +564,14 @@ class ActivityNotifier:
             # is exactly why this is spelled out. Relocating a rule is not licence to reword the
             # line an operator greps for, and a nicer sentence is the easiest kind of behaviour
             # change to ship inside a refactor: no test sees it and the diff reads as cleanup.
-            # BL-008 holds the improvement, to be taken on its own or not at all.
+            # BL-032 holds the improvement, to be taken on its own or not at all.
+            #
+            # One thing here *did* move: the line used to be written inside `_evict`, as each
+            # deletion happened, and is now written once per batch after `enqueue` returns.
+            # Text, count, order and the pre-deletion tally are identical and nothing else logs
+            # in between, so no operator can tell -- but it is the only ordering change in the
+            # whole relocation, and a comment this careful about what did not change should say
+            # what did.
             _LOG.warning(
                 "the notification queue is full; dropping the oldest held for one "
                 "session (%d held)",
