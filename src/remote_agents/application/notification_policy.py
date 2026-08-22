@@ -1,10 +1,18 @@
 """Which of an agent's observations the owner is told about, and how they are bundled.
 
-Policy, not delivery. Everything here is pure and clock-free: it is handed what a pass observed
-and reads nothing else -- no bot, no session store, no `datetime.now`, no sleep -- so the rules
-below are exercised directly rather than through a fake Telegram. `ActivityNotifier` in
-`adapters/telegram/notifications.py` is the driver that asks these questions and then does the
-sending; it kept the PTB verbs, the token minting (DEC-011) and the wording.
+Policy, not delivery. Nothing here reads a clock, a bot, a session store or a socket: every
+moment a rule reasons about arrives as an argument, which is what lets the eight-hour taper
+proof be a loop over integers instead of a fake clock threaded through a Telegram double.
+`ActivityNotifier` in `adapters/telegram/notifications.py` is the driver that asks these
+questions and then does the sending; it kept the PTB verbs, the token minting (DEC-011) and the
+wording.
+
+**Clock-free is not the same as side-effect-free, and the difference is deliberate.**
+`grouped_for_delivery` and its neighbours are pure functions. `record_sent`, `forget_expired`
+and `enqueue` are not: they mutate a mapping or a sequence the *surface* owns and passes in.
+That is the split this module is built on -- the rules moved, the state did not, on the same
+reading DEC-026 already applied to the backlog -- and calling the whole module "pure" would
+paper over the one thing a reader most needs to know about it.
 
 **What this module may not do is say anything.** A function here returns a bundle, a tuple of
 kinds, a selection -- a signal -- and never a sentence (DEC-043). The sentence is the surface's,

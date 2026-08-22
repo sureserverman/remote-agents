@@ -118,14 +118,18 @@ def test_the_adapter_never_doubles_anything() -> None:
 
     Swept for the operator rather than for `window`'s name (DEC-043), because a re-derivation
     comes back as `self._rate_limit * 2 ** n` inline, or as a fresh helper, and neither wears
-    the old identifier. DEC-031 is the reason this is worth a guard at all: the failure here was
+    the old identifier. `<<` is swept alongside `**` because `rate_limit * (1 << n)` is the
+    same taper written by someone avoiding a float, and the stage's evaluator pointed out that
+    the first version of this sweep let it through.
+
+    DEC-031 is the reason this is worth a guard at all: the failure here was
     measured at 96 messages over eight hours where the taper intends twelve, and it was
     invisible in every unit test that checked a single doubling.
     """
     offenders = [
         _where(path, node)
         for path, node in _nodes()
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow | ast.LShift)
     ]
 
     assert offenders == [], f"the adapter is computing a backoff itself: {offenders}"
@@ -138,14 +142,34 @@ def test_the_adapter_never_stamps_a_repeat_count() -> None:
     for the backlog -- so it reads entries freely. What it may not do is decide what goes in
     one, because that decision is where "a different kind resets the session" lives, and a
     second copy of it would be a second answer to when the owner stops being told.
+
+    Two sweeps, because the first is a name check and the stage's evaluator was right that a
+    name check does not hold: a re-derivation storing `(moment, count)` as a plain tuple, or as
+    its own dataclass, walks straight past `Sent(`. The second is representation-independent --
+    it forbids *writing into* `_last_sent` at all, whatever the value happens to be.
+
+    **Disclosed limit.** Neither sweep catches a re-derivation that keeps its own parallel map
+    under a different name and never touches `_last_sent`. That shape is not expressible as a
+    sweep over this module without also forbidding every ordinary dictionary in it, so it is
+    named here rather than left to look covered.
     """
-    offenders = [
+    constructions = [
         _where(path, node)
         for path, node in _nodes()
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Sent"
     ]
+    writes = [
+        _where(path, node)
+        for path, node in _nodes()
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Attribute)
+        and target.value.attr == "_last_sent"
+    ]
 
-    assert offenders == [], f"the adapter is stamping repeat counts itself: {offenders}"
+    assert constructions == [], f"the adapter is stamping repeat counts itself: {constructions}"
+    assert writes == [], f"the adapter is writing into the suppression map itself: {writes}"
 
 
 def test_the_adapter_never_ages_an_entry_against_a_horizon() -> None:

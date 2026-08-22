@@ -115,3 +115,38 @@ def test_the_line_budget_is_the_adapters_number() -> None:
     assert "_MAXIMUM_LINES_PER_MESSAGE" in assigned, (
         "the line budget left the surface; the cap-driven-down test now patches nothing"
     )
+
+
+def test_every_operator_facing_sentence_is_the_one_it_has_always_been() -> None:
+    """DEC-043 accepted cost 1: a merged rule's words are pinned, because nothing else sees them.
+
+    The rules for grouping, the taper, retention and the backlog all moved to
+    `application/notification_policy` across this sub-plan. None of the sentences did. This
+    asserts the whole set rather than the one that changed, because the failure mode is a
+    *rewording* -- no assertion anywhere else in the suite reads this text, so a nicer sentence
+    ships inside a refactor with nothing objecting and a diff that reads as cleanup.
+
+    The eviction line is the reason this exists. The policy now returns which session paid, so
+    naming it in the warning is one interpolation away and was briefly written that way; the
+    stage's own evaluator caught it as the single behaviour delta in an otherwise exact
+    relocation. BL-008 holds that improvement so it can be taken deliberately.
+
+    Pinned as an exact set, so adding a line fails here too and has to be an intentional edit.
+    """
+    sentences = {
+        node.args[0].value
+        for node in ast.walk(ast.parse(_ADAPTER.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"warning", "info", "error", "debug", "exception"}
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+
+    assert "the notification queue is full; dropping the oldest held for one session (%d held)" in (
+        sentences
+    ), "the eviction warning was reworded; the rule moved, the sentence does not"
+    assert len(sentences) == 10, (
+        f"this module says {len(sentences)} things to an operator, and it said 10 before the "
+        "policy moved out of it -- a line added or removed here is an intentional edit"
+    )

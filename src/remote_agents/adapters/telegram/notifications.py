@@ -391,7 +391,10 @@ class ActivityNotifier:
       dropping it, and the next pass tries again. *Nowhere else* includes disk: DEC-026 keeps
       this queue in memory with no durable counterpart, so a restart takes whatever it is
       holding with it.
-    - **`_last_sent`** is the rate limit, keyed by session *and* kind.
+    - **`_last_sent`** is the rate limit, keyed by session *and* kind. The map lives here;
+      the rules for it -- the taper, the repeat counters, the retention floor -- live in
+      `application/notification_policy` and are handed this map to apply. Residence is not
+      policy, the same split DEC-026 makes for the queue below.
     - **`_standing`** is which message each session's notification is, and it is the one piece
       of this object's state that is *not* process-local. It has to outlive the process for the
       same reason the live view's anchor does: a restart that forgets which message a session
@@ -554,15 +557,17 @@ class ActivityNotifier:
         Never raises. This runs on the periodic task beside the one that serves the owner, and
         a notification failing is not a reason for the service to stop noticing things.
         """
-        for session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
-            # The rule is the policy's; the sentence is this surface's (DEC-043). One line per
-            # eviction, naming who paid, because a cap that costs a session its only report
-            # must be visible in the journal while it is happening rather than inferred later
-            # from a notification that never came.
+        for _session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
+            # The rule is the policy's; the sentence is this surface's (DEC-043). Word for word
+            # what it was before the rule moved, including *not* naming the session -- the
+            # policy now hands back who paid and it would be one interpolation to say so, which
+            # is exactly why this is spelled out. Relocating a rule is not licence to reword the
+            # line an operator greps for, and a nicer sentence is the easiest kind of behaviour
+            # change to ship inside a refactor: no test sees it and the diff reads as cleanup.
+            # BL-008 holds the improvement, to be taken on its own or not at all.
             _LOG.warning(
-                "the notification queue is full; dropping the oldest held for one session "
-                "(%s, %d held)",
-                session_id,
+                "the notification queue is full; dropping the oldest held for one "
+                "session (%d held)",
                 held,
             )
         if self._bot is None:
