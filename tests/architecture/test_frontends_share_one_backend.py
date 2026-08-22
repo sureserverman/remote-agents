@@ -205,10 +205,21 @@ def _capability_probes(tree: ast.Module, capabilities: frozenset[str]) -> set[tu
     still, the probed name, since `getattr(x, "sessions")` is the same mistake from the other
     end.
 
-    Limit, disclosed rather than implied: a probe whose receiver is named neither `backend`
-    nor after a capability, and whose attribute is not a capability name, is invisible here.
-    `getattr(self._svc, "rename")` is the shape that gets through. Closing it would mean
-    forbidding `getattr` outright, which this codebase legitimately uses on Textual objects.
+    **Limits, both directions, disclosed rather than implied.**
+
+    It misses: a probe whose receiver is named neither `backend` nor after a capability, and
+    whose attribute is not a capability name. `getattr(self._svc, "rename")` is the shape
+    that gets through. Closing it would mean forbidding `getattr` outright, which this
+    codebase legitimately uses on Textual objects.
+
+    It over-reports: any receiver *spelled* `backend` is taken to be one, so
+    `getattr(backend, "unrelated_attr", None)` is flagged; and several capability names are
+    ordinary words, so `getattr(config, "capture", None)` is flagged on the attribute arm
+    though `config` is not a `Backend`. Both are false positives, both are loud, and both are
+    one line to resolve — which is the trade this rule takes deliberately, since the
+    alternative is inferring the receiver's type from a static parse. Naming them here rather
+    than only naming the misses, because a limits section that lists one direction reads as
+    if the other has none. Added at the Stage 2 gate's Tier-2 re-review.
     """
     probes: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
@@ -243,12 +254,27 @@ def _defined_names(tree: ast.Module) -> set[str]:
     It is an unusual way to redefine a use case, which is what makes it worth catching rather
     than worth ignoring: the ordinary spellings are already refused, so what is left is
     exactly the spelling someone reaches for when the ordinary one is.
+
+    **Assignments count at module scope only, and `def`/`class` at any depth.** The first
+    version of this fix swept assignments with `ast.walk` too, and that was a new defect
+    rather than a stricter rule: several of the eighteen shared names are ordinary English —
+    `available_actions`, `state_word`, `notifiable` — so a screen writing
+    `available_actions = self._compute_rows()` for an unrelated local list would have failed
+    this rule with no re-duplication anywhere. A local binding cannot redefine the use case
+    for any other reader in any case; it is scoped. The defect this arm exists for
+    (`dispatch_stop = _impl`) was a module-level rebind, which is the only place an
+    assignment can do the damage. Found by the Stage 2 gate's Tier-2 re-review.
+
+    The cost, disclosed: `class Screen: resolve_stop = _impl` is a class-attribute rebind and
+    is not caught. It is not a module-level redefinition, and pricing it in would reopen the
+    false positive one scope down.
     """
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
-        elif isinstance(node, ast.Assign):
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
             names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             names.add(node.target.id)
@@ -396,6 +422,37 @@ def test_each_shared_use_case_module_contributes_names(filename: str) -> None:
         and not node.name.startswith("_")
     }
     assert public, f"{filename} defines no public use case; the set above is now short one module"
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "caught"),
+    [
+        ("module-level rebind", "dispatch_stop = _impl\n", True),
+        ("module-level lambda", "state_word = lambda s: 'x'\n", True),
+        ("module-level annotated", "resolve_stop: object = _impl\n", True),
+        ("a def, at any depth", "def f():\n    def notifiable(s):\n        return True\n", True),
+        ("an ordinary local list", "def f(rows):\n    available_actions = list(rows)\n", False),
+        (
+            "an ordinary local word",
+            "def f(s):\n    state_word = s.upper()\n    return state_word\n",
+            False,
+        ),
+    ],
+)
+def test_rule_three_separates_a_redefinition_from_a_local_variable(
+    label: str, source: str, caught: bool
+) -> None:
+    """The scope line, pinned from both sides.
+
+    Assignments count at module scope; `def`/`class` count anywhere. The two negative cases
+    are the reason: `available_actions`, `state_word` and `notifiable` are ordinary English,
+    and an earlier version of this rule swept assignments at every depth, so a screen holding
+    a local list would have failed it with no re-duplication anywhere. A guard that fails
+    honest code gets deleted, not fixed.
+    """
+    shared = _shared_use_case_names()
+    hit = bool(_defined_names(ast.parse(source)) & shared)
+    assert hit is caught, f"{label}: expected caught={caught}"
 
 
 def test_no_adapter_redefines_a_shared_use_case() -> None:
