@@ -23,9 +23,11 @@ re-grow any of it at any time, and each regression would look like an ordinary c
 **These rules parse; they do not grep** (DEC-040, DEC-041). The distinction is not
 stylistic. Sub-plan 3's gate found that the authored DEC-011 grep returned four hits and all
 four were prose -- a substring match cannot tell a mention from a call. Sub-plan 2 paid the
-same cost three times over, and DEC-043's corollary is the generalization: **guard the shape
-a rule cannot be expressed without, never its name.** Rule 1 in particular resolves import
-aliases, because sub-plan 3 recorded a name collision that forced an aliased import, and a
+same cost four times, once at its Stage 2 and three more at its Stage 3, and DEC-043's
+corollary is the generalization: **guard the shape a rule cannot be expressed without, never
+its name.** Rule 1 in particular resolves import
+aliases, because sub-plan 2's Stage 3 recorded a name collision that forced an aliased import,
+and a
 name-matching check walks straight past `import ForceStopCommand as Force`.
 
 **Every set this file enumerates is pinned by its length** (DEC-041's practice on
@@ -48,6 +50,15 @@ its scope** (DEC-019):
 
 What these prove is that no *lexically visible* path re-grows the duplication. That is what
 they are worth, and no more.
+
+**Four gaps were closed at the Stage 2 gate**, and are recorded because each was a rule that
+read as holding while the property it names was violable: Rule 1 followed `as` aliases but
+not `from package import module`, the most ordinary spelling of the four; Rule 2 checked
+`Backend`'s field names when the regression it cites probed *method* names on the objects
+those fields hold, so that commit would have reintroduced cleanly; Rule 3 read only
+`def`/`class` and missed rebinding by assignment; Rule 4 missed `**{"exclusive": True}`.
+Each now has a parametrized test per spelling, and each of those spellings was verified to
+fail before the fix.
 """
 
 from __future__ import annotations
@@ -75,8 +86,9 @@ _COMMANDS_MODULE = "remote_agents.application.commands"
 def _parsed_modules(root: Path) -> list[tuple[str, ast.Module]]:
     """Every module under `root`, parsed, sorted by path.
 
-    **Raises rather than returning nothing**, which is the whole of DEC-010's lesson. That
-    entry records an AST sweep in this repository that "was found to glob a relative path and
+    **Raises rather than returning nothing.** DEC-010's own position is about severity as a
+    second signal; this is its enforcement clause, which records an AST sweep in this
+    repository that "was found to glob a relative path and
     pass having read nothing": every one of its assertions was of the form *no offender was
     found*, and over an empty file list every one of those is true. The check reported green,
     for months, having examined zero bytes.
@@ -122,53 +134,85 @@ def _surface_modules() -> list[tuple[str, ast.Module]]:
     ]
 
 
-def _local_names_for(tree: ast.Module, imported: frozenset[str], module: str) -> set[str]:
-    """The names `imported` are bound to *in this module*, following `as` aliases.
+def _stop_command_constructions(tree: ast.Module) -> set[str]:
+    """Every stop command constructed in this module, however the module was imported.
 
-    A name-matching check reads the import list and stops. This follows the binding, because
-    sub-plan 3 recorded a name collision that forced an aliased import — and against
-    `from remote_agents.application.commands import ForceStopCommand as Force`, a check
-    looking for `ForceStopCommand(` sees nothing at all while the call is right there.
+    Three spellings reach the same class, and a check that follows only one of them is a
+    check that can be walked past by writing the import differently:
+
+        from remote_agents.application.commands import ForceStopCommand
+        from remote_agents.application.commands import ForceStopCommand as Force
+        from remote_agents.application import commands          # commands.ForceStopCommand(...)
+        import remote_agents.application.commands as cmds       # cmds.ForceStopCommand(...)
+
+    **The middle one is the ordinary way to write it in Python, and the first version of this
+    file missed it** — its `bound` set stayed empty for that import, so the intersection with
+    the called names was empty and a plain, undisguised `commands.ForceStopCommand(sid, pid)`
+    passed. Worse, a comment asserted the case was covered "by its trailing attribute", which
+    was false: the trailing attribute *was* recorded, but it was then ANDed against the empty
+    `bound`. A wrong comment on a guard is worse than no comment, because the next reader
+    stops looking exactly where the hole is. Found by the Stage 2 gate's Tier-2 pass and
+    independently by its evaluator.
+
+    So the attribute arm no longer depends on resolving the receiver at all: **any** call
+    whose trailing attribute names a stop command counts. That over-approximates — some
+    unrelated object with a `ForceStopCommand` attribute would be reported — and that is the
+    safe direction, because a false positive here is loud and one line to fix while a false
+    negative is a guard that silently guards nothing.
     """
-    bound: set[str] = set()
+    direct: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == module:
+        if isinstance(node, ast.ImportFrom) and node.module == _COMMANDS_MODULE:
             for alias in node.names:
-                if alias.name in imported:
-                    bound.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == module and alias.asname is None:
-                    # `import remote_agents.application.commands` — calls then read
-                    # `remote_agents.application.commands.ForceStopCommand(...)`, which
-                    # `_called_names` catches by its trailing attribute.
-                    bound |= imported
-    return bound
+                if alias.name in _STOP_COMMANDS:
+                    direct.add(alias.asname or alias.name)
+
+    built: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target = node.func
+        if isinstance(target, ast.Name) and target.id in direct:
+            built.add(target.id)
+        elif isinstance(target, ast.Attribute) and target.attr in _STOP_COMMANDS:
+            built.add(target.attr)
+    return built
 
 
-def _called_names(tree: ast.Module) -> set[str]:
-    """Every name this module calls, by bare name or by trailing attribute.
+def _capability_probes(tree: ast.Module, capabilities: frozenset[str]) -> set[tuple[int, str]]:
+    """Every `getattr`/`hasattr` that discovers a backend capability rather than reading one.
 
-    Over-approximates on purpose: the question is whether a construction is written here at
-    all, and over-approximating is the safe direction for a check whose failure mode is
-    missing one.
+    **The first version of this rule checked the wrong noun, and the regression it cites
+    would have reintroduced cleanly.** It flagged a probe whose *attribute string* was a
+    `Backend` field name. But `75c86b6` — the commit named in this file as the defended
+    regression — removed these:
+
+        getattr(self.launcher, "project_usage", None)
+        getattr(self.launcher, "rename", None)
+        getattr(self.launcher, "copy_attach", None)
+        getattr(self.launcher, "trust_state", None)
+        getattr(self.launcher, "inspect", None)
+
+    Not one of those five strings is a `Backend` field name; the overlap with
+    `{sessions, projects, conversations, catalogue, refresh_catalogue, profiles, capture,
+    activity_feed, max_label_length}` is empty. They are *method* names on the object a field
+    holds. So the rule watched a vocabulary the defect never used, and
+    `getattr(self.backend.sessions, "rename", None)` sailed past it. Found by the Stage 2
+    gate's Tier-2 pass.
+
+    What actually names the class is the **receiver**: a probe aimed at the backend, or at
+    one of the capabilities it holds. So both arms are checked — the receiver expression and,
+    still, the probed name, since `getattr(x, "sessions")` is the same mistake from the other
+    end.
+
+    Limit, disclosed rather than implied: a probe whose receiver is named neither `backend`
+    nor after a capability, and whose attribute is not a capability name, is invisible here.
+    `getattr(self._svc, "rename")` is the shape that gets through. Closing it would mean
+    forbidding `getattr` outright, which this codebase legitimately uses on Textual objects.
     """
-    names: set[str] = set()
+    probes: set[tuple[int, str]] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            target = node.func
-            if isinstance(target, ast.Attribute):
-                names.add(target.attr)
-            elif isinstance(target, ast.Name):
-                names.add(target.id)
-    return names
-
-
-def _literal_probes(tree: ast.Module) -> set[tuple[str, int]]:
-    """Every `getattr`/`hasattr` on a string-literal attribute name, with its line."""
-    probes: set[tuple[str, int]] = set()
-    for node in ast.walk(tree):
-        if (
+        if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in {"getattr", "hasattr"}
@@ -176,17 +220,39 @@ def _literal_probes(tree: ast.Module) -> set[tuple[str, int]]:
             and isinstance(node.args[1], ast.Constant)
             and isinstance(node.args[1].value, str)
         ):
-            probes.add((node.args[1].value, node.lineno))
+            continue
+        receiver = ast.unparse(node.args[0])
+        probed = node.args[1].value
+        parts = set(receiver.replace("(", ".").replace(")", ".").split("."))
+        if "backend" in parts or (parts & capabilities):
+            probes.add((node.lineno, f"{receiver}.{probed} — probes a backend capability"))
+        elif probed in capabilities:
+            probes.add((node.lineno, f"{receiver}.{probed} — probes for a capability by name"))
     return probes
 
 
 def _defined_names(tree: ast.Module) -> set[str]:
-    """Every function and class this module defines, at any nesting depth."""
-    return {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
-    }
+    """Every name this module binds to a definition, at any nesting depth.
+
+    `def`, `async def` and `class` are the obvious three. **Assignment is the fourth, and the
+    first version of this file missed it** — `dispatch_stop = _impl` and
+    `state_word = lambda s: "x"` both rebind a shared use-case name in an adapter, are
+    statically visible, and passed. Found by the Stage 2 gate's Tier-2 pass and reproduced
+    independently by its evaluator.
+
+    It is an unusual way to redefine a use case, which is what makes it worth catching rather
+    than worth ignoring: the ordinary spellings are already refused, so what is left is
+    exactly the spelling someone reaches for when the ordinary one is.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
 
 
 def _shared_use_case_names() -> set[str]:
@@ -230,9 +296,10 @@ def test_every_named_stop_command_exists() -> None:
 def test_no_adapter_constructs_a_stop_command() -> None:
     offenders = []
     for module, tree in _adapter_modules():
-        bound = _local_names_for(tree, _STOP_COMMANDS, _COMMANDS_MODULE)
-        built = bound & _called_names(tree)
-        offenders.extend(f"adapters/{module}: builds {name}" for name in sorted(built))
+        offenders.extend(
+            f"adapters/{module}: builds {name}"
+            for name in sorted(_stop_command_constructions(tree))
+        )
 
     assert not offenders, (
         "a stop command is constructed inside an adapter; ending a session is "
@@ -256,18 +323,52 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
 
 
 def test_no_adapter_discovers_a_backend_capability_by_probing() -> None:
-    capabilities = set(_backend_fields())
-    offenders = []
-    for module, tree in _adapter_modules():
-        for attribute, line in sorted(_literal_probes(tree)):
-            if attribute in capabilities:
-                offenders.append(f"adapters/{module}:{line}: probes for {attribute!r}")
+    capabilities = frozenset(_backend_fields())
+    offenders = [
+        f"adapters/{module}:{line}: {detail}"
+        for module, tree in _adapter_modules()
+        for line, detail in sorted(_capability_probes(tree, capabilities))
+    ]
 
     assert not offenders, (
         "a backend capability is discovered by probing rather than read as a declared field. "
         "Absence is a field that is None; a probe cannot tell a host that wired nothing from "
         "an object that never had the method (sub-plan 1 removed the last one in 75c86b6):\n  "
         + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        ("the 75c86b6 shape, on today's type", 'getattr(self.backend.sessions, "rename", None)'),
+        ("hasattr, same shape", 'hasattr(self.backend.conversations, "resume")'),
+        ("a bare backend receiver", 'getattr(backend, "capture", None)'),
+        ("a capability held directly", 'getattr(self.sessions, "rename", None)'),
+        ("probing for a capability by name", 'getattr(host, "activity_feed", None)'),
+    ],
+)
+def test_rule_two_sees_the_regression_it_names(label: str, source: str) -> None:
+    """The five shapes, including the one the first version could not see.
+
+    `75c86b6` probed method names on the object a field holds, and the rule was checking
+    field names — so the exact commit this file cites as its reason to exist would have
+    passed. Each case here is a real probe, and the first is that commit's own shape written
+    against the post-refactor type.
+    """
+    caught = _capability_probes(ast.parse(source), frozenset(_backend_fields()))
+    assert caught, f"{label} was not caught"
+
+
+def test_rule_two_leaves_an_unrelated_getattr_alone() -> None:
+    """The bound. Textual objects are legitimately probed, and the rule must not own them.
+
+    Without this the receiver arm could be widened until it flagged every `getattr` in the
+    TUI, which is how a guard gets deleted rather than fixed.
+    """
+    assert not _capability_probes(
+        ast.parse('getattr(self.screen, "can_refresh", False)'),
+        frozenset(_backend_fields()),
     )
 
 
@@ -362,9 +463,9 @@ def test_a_root_holding_no_python_fails_too(tmp_path: Path) -> None:
 def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
     """The positive half: the rules do fire on a tree they are pointed at.
 
-    The three tests above prove the sweep refuses an empty root. This proves the refusal is
-    not the *only* thing it can do — a guard that raised on every input would satisfy them
-    all and still be useless. One synthetic adapter, one real violation, caught.
+    The tests above prove the sweep refuses an empty root. This proves the refusal is not the
+    *only* thing it can do — a guard that raised on every input would satisfy them all and
+    still be useless. One synthetic adapter, one real violation, caught.
     """
     (tmp_path / "fake.py").write_text(
         "from remote_agents.application.commands import ForceStopCommand as Force\n"
@@ -377,9 +478,71 @@ def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
     assert len(modules) == 1
 
     _, tree = modules[0]
-    bound = _local_names_for(tree, _STOP_COMMANDS, _COMMANDS_MODULE)
-    assert bound == {"Force"}, "the alias was not followed to its binding"
-    assert bound & _called_names(tree) == {"Force"}, "the aliased construction was not seen"
+    assert _stop_command_constructions(tree) == {"Force"}, "the aliased construction was missed"
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        (
+            "direct import",
+            "from remote_agents.application.commands import ForceStopCommand\n"
+            "def go(a, b):\n    return ForceStopCommand(a, b)\n",
+        ),
+        (
+            "aliased class",
+            "from remote_agents.application.commands import ForceStopCommand as Force\n"
+            "def go(a, b):\n    return Force(a, b)\n",
+        ),
+        (
+            "package import, module attribute",
+            "from remote_agents.application import commands\n"
+            "def go(a, b):\n    return commands.ForceStopCommand(a, b)\n",
+        ),
+        (
+            "aliased module",
+            "import remote_agents.application.commands as cmds\n"
+            "def go(a, b):\n    return cmds.ForceStopCommand(a, b)\n",
+        ),
+        (
+            "fully dotted path",
+            "import remote_agents.application.commands\n"
+            "def go(a, b):\n"
+            "    return remote_agents.application.commands.ForceStopCommand(a, b)\n",
+        ),
+        (
+            "imported inside the function",
+            "def go(a, b):\n"
+            "    from remote_agents.application.commands import CleanupCommand\n"
+            "    return CleanupCommand(a)\n",
+        ),
+    ],
+)
+def test_rule_one_sees_every_way_the_command_can_be_reached(label: str, source: str) -> None:
+    """Each import spelling, pinned — because three of these were missed by the first version.
+
+    The `package import, module attribute` case is the one that mattered: it is the most
+    ordinary way to write this in Python, it was undisclosed by the file's stated limits, and
+    it passed. A guard that follows `as` aliases but not `from package import module` is not
+    following imports, it is matching two spellings out of six.
+    """
+    assert _stop_command_constructions(ast.parse(source)), f"{label} was not caught"
+
+
+def test_rule_one_does_not_fire_on_a_module_that_only_mentions_a_command() -> None:
+    """The other direction: over-approximation has to stop somewhere legible.
+
+    Importing a stop command for a type annotation, or naming one in prose, is not building
+    one. Without this, the safe-direction choice above could quietly become "any file that
+    says the word", which would train readers to ignore the rule.
+    """
+    source = (
+        "from remote_agents.application.commands import ForceStopCommand\n"
+        "def go(command: ForceStopCommand) -> None:\n"
+        '    """Takes a ForceStopCommand; does not build one."""\n'
+        "    return None\n"
+    )
+    assert not _stop_command_constructions(ast.parse(source))
 
 
 # --- Rule 4: a destructive action drops a repeat; it never cancels the one in flight ------
@@ -400,8 +563,9 @@ def _cancel_on_re_entry(tree: ast.Module) -> set[tuple[int, str]]:
     **Not matched against `True` either.** The authored gate check was
     `grep -rn 'exclusive=True'`, and this repository has already been bitten twice by
     substring checks that could not tell a mention from a call (DEC-011's four prose hits) or
-    a value from its spelling (sub-plan 2's anonymous comprehension, sub-plan 3's bare
-    literal). `exclusive=flag`, `exclusive=not read_only` and `exclusive = True` all defeat
+    a value from its spelling (sub-plan 2's Stage 2 missed an anonymous comprehension, and its
+    Stage 3 found a bare literal argument, an ordering between two awaits, and an aliased
+    import). `exclusive=flag`, `exclusive=not read_only` and `exclusive = True` all defeat
     the grep and all mean the same thing here, so anything that is not the literal `False` is
     reported and a deliberate `False` stays legible.
     """
@@ -413,6 +577,18 @@ def _cancel_on_re_entry(tree: ast.Module) -> set[tuple[int, str]]:
         if not keywords:
             continue
         for keyword in keywords:
+            if keyword.arg is None:
+                # `**{"exclusive": True}` — the name lives in a dict literal rather than on
+                # the node, so a check reading `keyword.arg` skips it without noticing.
+                if isinstance(keyword.value, ast.Dict):
+                    for key, value in zip(keyword.value.keys, keyword.value.values, strict=False):
+                        if (
+                            isinstance(key, ast.Constant)
+                            and key.value == "exclusive"
+                            and not (isinstance(value, ast.Constant) and value.value is False)
+                        ):
+                            found.add((keyword.lineno, f"**{{'exclusive': {ast.unparse(value)}}}"))
+                continue
             if keyword.arg != "exclusive":
                 continue
             value = keyword.value
@@ -435,6 +611,16 @@ def test_no_surface_cancels_a_destructive_action_on_re_entry() -> None:
     What this does buy over the grep is the two things a substring cannot do: it reads the
     *argument* rather than a spelling of it, and it covers both trees, so the rule follows
     the code the next time the body moves rather than having to be noticed and re-aimed.
+
+    **This rule is deliberately broader than DEC-008, and says so.** That entry forbids
+    cancel-on-re-entry for a *destructive* action, and explicitly allows it for "a
+    non-destructive, idempotent read — a debounced filter or a catalogue refresh — where
+    abandoning a stale call is the desired behaviour". This sweep bans every non-`False`
+    `exclusive=` in both trees, so it would refuse a legitimate debounced filter too. That
+    scope is inherited from the authored gate check rather than introduced here, and it is
+    kept because narrowing it means deciding per call site which actions are destructive —
+    the judgment a blanket sweep exists to avoid making silently. A future debounced filter
+    is a decision to record, not a check to weaken quietly.
 
     The behavioural half is not here. `tests/unit/adapters/tui/test_tui_worker_exclusivity.py`
     drives real workers and pins what actually refuses a second stop — a re-read of the record
@@ -461,17 +647,28 @@ def test_the_cancel_rule_covers_both_trees_and_reads_the_argument() -> None:
     Without this, "widened to both trees" and "reads the argument, not the spelling" are
     assertions in a docstring, which is the shape DEC-019 exists to refuse.
     """
-    covered = {module.split("/")[0] for module, _ in _surface_modules()}
-    assert covered == {"adapters", "application"}
+    # Not `{m.split("/")[0] for m in _surface_modules()}` — `_surface_modules` writes those
+    # prefixes itself, so that assertion could only fail if a half returned nothing, which
+    # the vacuity guard already raises on first. It would have read like coverage and
+    # measured a pair of string literals. Both halves are counted against the filesystem
+    # instead.
+    adapters = _parsed_modules(_ADAPTERS)
+    application = _parsed_modules(_APPLICATION)
+    assert len(_surface_modules()) == len(adapters) + len(application)
+    assert len(application) >= 20, (
+        f"the application sweep found {len(application)} modules; Rule 4 depends on this half "
+        "too, and it had no floor of its own until the Stage 2 gate pointed out the asymmetry"
+    )
 
     spellings = ast.parse(
         "run_worker(work, exclusive=True)\n"
         "run_worker(work, exclusive=flag)\n"
         "run_worker(work, exclusive=not read_only)\n"
+        'run_worker(work, **{"exclusive": True})\n'
         "run_worker(work, exclusive=False)\n"
     )
     caught = {value for _, value in _cancel_on_re_entry(spellings)}
-    assert caught == {"True", "flag", "not read_only"}, (
+    assert caught == {"True", "flag", "not read_only", "**{'exclusive': True}"}, (
         "the rule must catch every non-False spelling and leave a deliberate False alone; "
         f"it caught {sorted(caught)}"
     )
