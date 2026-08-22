@@ -80,6 +80,7 @@ from remote_agents.application.session_actions import (
     available_actions,
     explain_state,
     notifiable,
+    pane_is_attachable,
     remote_control_directions,
     state_word,
     trust_available,
@@ -1284,9 +1285,10 @@ class PrivateBotBoundary:
         #      Rename;
         #   2. Inspect is unconditional here and gated on `backend.capture is not None`
         #      there;
-        #   3. Copy attach is gated on `_can_copy_attach` here and unconditional there,
-        #      which is the row's *presence* and is a separate question from DEC-021's
-        #      ownership predicate that Task 3.4 consolidates;
+        #   3. Copy attach is gated on `_attach_row_is_offered` here and unconditional
+        #      there, which is the row's *presence* and is a separate question from DEC-021's
+        #      ownership predicate — that rule is now `pane_is_attachable`, shared, and the
+        #      gate applies it rather than restating it (Task 3.4);
         #   4. the label — "Inspect" here, "Inspect output" there.
         #
         # Everything *below* these rows is already shared: the trust row reads
@@ -1303,7 +1305,7 @@ class PrivateBotBoundary:
             # what the session is called and nothing about what it is doing.
             (Button("Rename", self._callback("session.rename", session_value)),),
         ]
-        if await self._can_copy_attach(record):
+        if await self._attach_row_is_offered(record):
             buttons.append(
                 (Button("Copy attach", self._callback("session.attach", session_value)),)
             )
@@ -1368,16 +1370,12 @@ class PrivateBotBoundary:
     async def _attach_reply(self, session_value: str) -> RenderedMessage:
         record = await self._record(session_value)
         back = self._callback("session.detail", session_value)
-        if record is None or not await self._can_copy_attach(record):
-            return self._message(
-                "Copy Attach is unavailable: this session has no pane on this host any more.",
-                back=back,
-            )
-        # No None check: `_can_copy_attach` above returns False when there is no session use
-        # case, so reaching here establishes one. The check that used to stand here was the
-        # old `getattr` probe's None arm, kept by reflex when the probe went; it read as
-        # though this could still be an unwired host, which after Stage 3 it cannot be.
-        command = await self.backend.sessions.copy_attach(record.session_id)
+        # One question, asked once. This used to check `_can_copy_attach` and *then* call
+        # `copy_attach`, so it inspected the same pane twice to reach one answer — and the
+        # first of those two asked a rule the adapter had restated for itself. `copy_attach`
+        # applies `pane_is_attachable` and returns nothing when it does not hold, which is the
+        # same refusal by the same rule, so the extra round trip bought exactly nothing.
+        command = await self._attach_command(record)
         if command is None:
             return self._message(
                 "Copy Attach is unavailable: this session has no pane on this host any more.",
@@ -1386,6 +1384,39 @@ class PrivateBotBoundary:
         return self._message(
             f"<b>Copy attach command</b>\n<code>{escape(command)}</code>", back=back
         )
+
+    async def _attach_command(self, record: SessionRecord | None) -> str | None:
+        """The copyable command for this pane, or `None` when the owner may not be given one.
+
+        `sessions is None` is a host with no session use case, which cannot answer at all; it
+        is the arm the removed predicate opened with, kept because the answer is still "no
+        command" rather than an attribute error mid-render.
+        """
+        if record is None or self.backend.sessions is None:
+            return None
+        return await self.backend.sessions.copy_attach(record.session_id)
+
+    async def _attach_row_is_offered(self, record: SessionRecord) -> bool:
+        """Whether the detail draws a Copy attach row at all — this surface's own choice.
+
+        **Named for the question it answers rather than for the rule it applies**, because the
+        two are genuinely different and Task 2.3 wrote the difference down: the local surface
+        renders this row unconditionally and explains when it is chosen, so *row presence* is
+        the bot's alone (axis 3 of the four the detail's read-only head diverges on). What is
+        no longer the bot's is the rule inside it — `pane_is_attachable` is the one DEC-021
+        requires identical on both surfaces, and it is now asked rather than restated.
+
+        Still one `inspect` and no store read, which is what the removed `_can_copy_attach`
+        cost. Asking `copy_attach` here instead would have been the shorter diff and the wrong
+        one: it re-reads the record and builds a command string a row-presence test then
+        throws away, turning every detail render into two pane inspections. It would also move
+        a question from action time to render time, which `tests/support/backends.py` records
+        as a real distinction rather than an incidental one.
+        """
+        if self.backend.sessions is None:
+            return False
+        observation = await self.backend.sessions.inspect(InspectQuery(record.session_id))
+        return pane_is_attachable(observation, record)
 
     async def _remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
         session_value, separator, state_value = entity_id.partition("|")
@@ -1493,24 +1524,6 @@ class PrivateBotBoundary:
             )
         return _reply_arguments(
             self._message("Trusted. The agent can continue; relaunch if it already gave up.")
-        )
-
-    async def _can_copy_attach(self, record: SessionRecord) -> bool:
-        """Whether this session has a pane the owner can be handed a command for.
-
-        Preserved counts as well as live (DEC-021). This surface *hides* the button when the
-        answer is no, where the local one renders the row always and explains when chosen — so
-        this predicate is what decides whether the bot offers a PRESERVED session its attach
-        at all, and DEC-021 requires both surfaces to offer it or neither.
-        """
-        if self.backend.sessions is None:
-            return False
-        observation = await self.backend.sessions.inspect(InspectQuery(record.session_id))
-        return bool(
-            observation is not None
-            and (observation.live or observation.preserved)
-            and observation.project_id == record.project_id
-            and observation.profile_id == record.profile_id
         )
 
     async def _inspect_reply(self, session_value: str) -> RenderedMessage:

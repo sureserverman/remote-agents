@@ -26,6 +26,7 @@ from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_actions import pane_is_attachable
 from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
@@ -37,6 +38,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
+from remote_agents.ports.terminal import TerminalObservation
 
 
 def test_telegram_action_audit_accepts_the_closed_adapter_surface() -> None:
@@ -1474,3 +1476,135 @@ async def test_a_session_with_several_things_to_say_costs_the_chat_one_message()
     assert "Overwrite config.toml?" in notification.text
     assert chat.bot_messages[-1].message_id == boundary.view.anchor()
     assert "Sessions" in chat.messages[boundary.view.anchor()].text
+
+
+class _AttachableLauncher(SessionUseCaseDouble):
+    """One session and one pane observation, counting who was asked what.
+
+    Faithful to `SessionService` on the point this test is about: `copy_attach` answers from
+    `pane_is_attachable` and then builds a command, exactly as the real one does, so a change
+    that stops the bot asking the shared rule shows up here rather than being absorbed by a
+    stub that always says yes.
+
+    The counters are the rest of the point. The detail's row gate is *one* `inspect`; pressing
+    the row is *one* `copy_attach` and no inspect at all. Before this task the press was three
+    pane reads for one answer, and nothing rendered could see it.
+    """
+
+    def __init__(self, record: SessionRecord, observation: TerminalObservation | None) -> None:
+        self.record = record
+        self.observation = observation
+        self.inspects = 0
+        self.attach_calls = 0
+
+    async def list_sessions(self):
+        return [self.record]
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def inspect(self, query: object) -> TerminalObservation | None:
+        del query
+        self.inspects += 1
+        return self.observation
+
+    async def copy_attach(self, session_id: object) -> str | None:
+        del session_id
+        self.attach_calls += 1
+        if not pane_is_attachable(self.observation, self.record):
+            return None
+        return "tmux attach -t ra-demo"
+
+
+def _an_owned_pane(record: SessionRecord) -> TerminalObservation:
+    return TerminalObservation(
+        record.session_id,
+        True,
+        False,
+        project_id=record.project_id,
+        profile_id=record.profile_id,
+    )
+
+
+def _attachable(present: bool) -> tuple[PrivateBotBoundary, _AttachableLauncher]:
+    record = _a_running_session()
+    launcher = _AttachableLauncher(record, _an_owned_pane(record) if present else None)
+    boundary = build_private_bot(
+        7,
+        11,
+        backend=backend_for(
+            catalogue=(CatalogProject("a" * 24, "Demo", "tests", "Registered"),), sessions=launcher
+        ),
+    )
+    return boundary, launcher
+
+
+async def _open_detail(chat: FakeChat, boundary: PrivateBotBoundary) -> int:
+    await boundary.sessions_command(chat.message_update("/sessions"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(
+        chat.press(_button(chat.messages[anchor], "Demo · Claude · regular · #1")), None
+    )
+    return anchor
+
+
+def test_the_bot_keeps_no_ownership_predicate_of_its_own() -> None:
+    """DEC-021 requires the predicate identical on both surfaces, so there is one of it.
+
+    `_can_copy_attach` re-derived `application/services.copy_attach`'s ownership comparison —
+    live-or-preserved, same project, same profile — inside the adapter. Two copies of a rule
+    DEC-021 requires identical is one copy plus a future divergence, and the divergence would
+    be silent: both would keep answering the same way until the day the application's changed.
+    """
+    assert not hasattr(PrivateBotBoundary, "_can_copy_attach")
+
+
+@pytest.mark.asyncio
+async def test_pressing_copy_attach_asks_the_use_case_once() -> None:
+    """One question, one answer — and the pane is not inspected on the side to reach it."""
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    inspects_to_draw, attach_calls_to_draw = launcher.inspects, launcher.attach_calls
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert launcher.attach_calls - attach_calls_to_draw == 1, "the press asks exactly once"
+    assert launcher.inspects - inspects_to_draw == 0, "and never inspects the pane itself"
+    assert attach_calls_to_draw == 0, "drawing the row costs no command lookup"
+    assert inspects_to_draw == 1, "drawing the row costs one pane read, as it always did"
+    assert "tmux attach -t ra-demo" in chat.messages[anchor].text
+
+
+@pytest.mark.asyncio
+async def test_the_row_is_offered_only_when_there_is_a_pane_behind_it() -> None:
+    """Row presence stays this surface's own choice; the rule behind it is now shared."""
+    offered, _ = _attachable(present=True)
+    withheld, _ = _attachable(present=False)
+    shown, hidden = FakeChat(), FakeChat()
+
+    shown_anchor = await _open_detail(shown, offered)
+    hidden_anchor = await _open_detail(hidden, withheld)
+
+    assert _button(shown.messages[shown_anchor], "Copy attach")
+    with pytest.raises(AssertionError, match="no 'Copy attach' button"):
+        _button(hidden.messages[hidden_anchor], "Copy attach")
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_wording_is_unchanged_when_the_pane_has_gone() -> None:
+    """Word for word, including the full stop — rewording this sentence is a UI change.
+
+    Reached by letting the pane go *between* the render and the press, which is the only way
+    to see this path now that the row is absent when the answer is already no.
+    """
+    boundary, launcher = _attachable(present=True)
+    chat = FakeChat()
+    anchor = await _open_detail(chat, boundary)
+    launcher.observation = None
+
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Copy attach")), None)
+
+    assert chat.messages[anchor].text == (
+        "Copy Attach is unavailable: this session has no pane on this host any more."
+    )
