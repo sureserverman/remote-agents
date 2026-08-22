@@ -350,7 +350,8 @@ so the oldest is dropped and said out loud.
 **Two hundred, and the number is `application.activity.MAXIMUM_DRAIN`'s rather than a taste.**
 At a hundred it was half of what one drain may hand over in a single call, so a service that had
 been down -- exactly the case `MAXIMUM_DRAIN`'s own docstring contemplates -- evicted a hundred
-records inside `_enqueue` before a single send was attempted, and the drain had already unlinked
+records inside `application.notification_policy.enqueue` before a single send was
+attempted, and the drain had already unlinked
 them from disk. `drain_activity` goes to real trouble to take the *oldest* records so its bound
 cannot truncate whole sessions; the notifier then discarded exactly that oldest half. The two
 bounds were set against each other across the seam. It is not imported, and the reason given

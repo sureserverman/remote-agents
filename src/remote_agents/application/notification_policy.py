@@ -442,17 +442,20 @@ def enqueue(
     evicted: list[tuple[str, int]] = []
     for activity in activities:
         if len(pending) >= maximum:
-            report = _evict_loudest(pending)
-            if report is not None:
-                evicted.append(report)
+            evicted.append(_evict_loudest(pending))
         pending.append(activity)
     return tuple(evicted)
 
 
-def _evict_loudest(pending: MutableSequence[AgentActivity]) -> tuple[str, int] | None:
-    """Drop one observation from whichever session is using the most of the queue."""
-    if not pending:
-        return None
+def _evict_loudest(pending: MutableSequence[AgentActivity]) -> tuple[str, int]:
+    """Drop one observation from whichever session is using the most of the queue.
+
+    Deliberately without an empty-queue guard, because the original had none and this is a
+    relocation. A guard here would be unreachable at the production cap and would, at
+    `maximum=0`, turn a raise into a silent no-op -- swapping a loud failure for a quiet one
+    in the one case nobody has thought about. Reached only from `enqueue`, and only when the
+    queue is already at its bound.
+    """
     counts: dict[str, int] = {}
     for held in pending:
         counts[held.session_id] = counts.get(held.session_id, 0) + 1
