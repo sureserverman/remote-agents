@@ -63,7 +63,8 @@ class Backend:
 
     **Optional because the bot's existing contract needs it to be, and only the bot's.**
     `PrivateBotBoundary` answers "that is unavailable" rather than failing to start, at
-    thirteen guarded entry points, and it has always done so. This type records what a
+    thirteen guarded entry points -- the handlers that answer the operator, not the internal
+    predicates behind them -- and it has always done so. This type records what a
     process wired, so it has to be able to record one that wired nothing — otherwise typing
     the seam would change behaviour on the hosts relying on that absence, which is the one
     thing this refactor may not do.

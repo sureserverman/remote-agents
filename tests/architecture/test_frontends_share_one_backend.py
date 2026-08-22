@@ -1,4 +1,4 @@
-"""Three boundaries the one-backend-two-frontends refactor built, pinned as rules.
+"""Four boundaries the one-backend-two-frontends refactor built, pinned as rules.
 
 Sub-plans 1 to 4 moved work out of two frontends and into one `Backend` plus a set of shared
 use cases. Nothing about that arrangement is enforced by the type system: an adapter can
@@ -19,6 +19,11 @@ re-grow any of it at any time, and each regression would look like an ordinary c
    `application/stops.py`, `session_actions.py` and `resume_flow.py` are the decisions both
    surfaces ask rather than restate (DEC-043). An adapter defining one of those names again
    is the re-duplication those sub-plans undid.
+4. **No worker cancels a peer on re-entry.** DEC-008 forbids `exclusive=True` on a worker
+   that can destroy a session, and the rule absorbs the `grep` that used to enforce it --
+   widened from `adapters/tui/` to both adapter trees plus `application/`, and reading the
+   `run_worker`/`@work` call rather than the string. The header said "three" until the Stage
+   3 gate counted, which is the same undercount this file exists to refuse.
 
 **These rules parse; they do not grep** (DEC-040, DEC-041). The distinction is not
 stylistic. Sub-plan 3's gate found that the authored DEC-011 grep returned four hits and all

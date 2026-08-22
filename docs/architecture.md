@@ -46,8 +46,12 @@ Two exceptions are written into the checker, and both are narrow:
   as a second root precisely so the hook command installed into the operator's global agent
   settings — which fires in every Claude session on the machine — does not import
   `bootstrap` to be told it has nothing to do. Two constraints travel with that entry and are
-  live in the tree: `agent_event` imports nothing from `bootstrap` (its only imports are
-  `argparse`, `sys` and `pathlib`), and `__main__.main` stays at module scope, because
+  live in the tree: `agent_event` imports nothing from `bootstrap` — its module-level imports
+  are `argparse`, `sys` and `pathlib`, and it defers
+  `adapters.agents.activity_spool`, `config` and `production` into `run_agent_event`, which is
+  *why* it needs to be in the set at all: `check_imports.py` walks the whole tree, so a
+  function-scope adapter import is an import like any other — and `__main__.main` stays at
+  module scope, because
   `[project.scripts]` resolves `remote_agents.__main__:main` and deferring the *definition*
   rather than the imports breaks the console script and the systemd unit with it.
 
@@ -86,7 +90,10 @@ than as annotated on those three.
 
 **Optionality is a record of what a process wired, not a licence to skip wiring.** The bot's
 boundary has always answered "that is unavailable" rather than failing to start — at thirteen
-guarded entry points, on the count `backend.py` and `TuiContext` both record — so the type has
+guarded entry points, meaning the handlers that answer the operator; nineteen functions in
+`adapters/telegram/service.py` carry a `backend.<field> is None` guard once the internal
+predicates and readers behind those handlers are counted too, which is the number a plain
+sweep returns. The count `backend.py` and `TuiContext` both record — so the type has
 to be able to represent a host that wired nothing. The
 local surface takes the opposite contract and enforces it: `TuiContext.__post_init__` refuses
 a backend missing `sessions` or `projects`. Nothing anywhere probes for a capability by name
@@ -219,10 +226,17 @@ sweeps for the *write into the container* rather than for the type of what is wr
 
 ## The process model — one `serve`, three pane processes, one SQLite file
 
-Every process this project runs opens the same database file, and refuses to open any other:
-both `serve` and `_run_surface` go through `_private_state_config`, which raises unless
-`config.database_path` is exactly the private state directory's. Sharing the store is not a
-configuration accident.
+The processes that *serve* the owner all open the same database file and refuse to open any
+other: `serve`, `_run_surface` and `doctor --history` go through `_private_state_config`,
+which raises unless `config.database_path` is exactly the private state directory's. Sharing
+the store is not a configuration accident.
+
+The confinement is applied per entry point rather than universally, and two commands sit
+outside it deliberately: `doctor` loads its config with a plain `load_config` and opens
+whatever `database_path` names **read-only** (`database_is_ready` → `_read_only_connection`),
+and `restore-database --database <path>` writes the path it is given. Both are owner-invoked
+diagnostics rather than surfaces, which is the line — `doctor --history` reads *session
+content* and is confined for that reason, in a comment that says so at `bootstrap.py:1285`.
 
 - **`remote-agents serve`** — one process. It holds one long-lived connection and runs the
   Telegram bot, the reconciler, the pane quiet watcher and the activity poller over it.
