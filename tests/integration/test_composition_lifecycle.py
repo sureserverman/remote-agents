@@ -449,20 +449,23 @@ def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_pa
 def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
     composed_home, tmp_path, monkeypatch
 ):
-    """The two narrowings must not be merged in passing, and this is where that could happen.
+    """The bot is handed the narrowed type, never the domain record.
 
-    `Backend.profiles` carries the domain `ProfileCompatibility`, which uses `reason` for two
-    things: why a profile is blocked, and a note about a probe that did not answer. The
-    surfaces' types read any reason as blocking. Forwarding `backend.profiles` into a surface
-    is therefore not a type error -- it is the bug that once took the whole local surface
-    down when a version probe merely timed out.
+    **This pin has outlived the bug it was written for, and now guards the repair.** It was
+    written when `Backend.profiles` carried the domain `ProfileCompatibility`, whose `reason`
+    field answers two questions at once, and when each surface narrowed that separately with a
+    type that read any reason as blocking. Back then `profiles=backend.profiles` was the
+    plausible-looking line that would have taken the local surface down on a probe that merely
+    timed out, and this asserted nobody had written it.
 
-    Pinned before Task 3.2 rather than after, because that task rewires
-    `PrivateBotBoundary` to take a `Backend`, and `profiles=backend.profiles` is precisely
-    the plausible-looking line it would write.
+    Sub-plan 4 made that line the correct one. `bootstrap._narrow_profiles` narrows once, into
+    `application.profiles.ProfileAvailability`, and both surfaces read `Backend.profiles` --
+    so what this now asserts is that the narrowing still happens *before* the boundary, and
+    that a future edit cannot quietly put the domain tuple back on the field. The assertion is
+    unchanged; only which direction it is guarding is.
     """
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.adapters.telegram.wizard import ProfileAvailability
+    from remote_agents.application.profiles import ProfileAvailability
     from remote_agents.bootstrap import _private_boundary
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
@@ -480,8 +483,8 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
         assert composition.boundary.profiles, "the wizard was offered no profiles at all"
         for profile in composition.boundary.profiles:
             assert isinstance(profile, ProfileAvailability), (
-                "the bot was handed the domain ProfileCompatibility rather than the "
-                "surface's narrowing of it -- see Backend.profiles"
+                "the bot was handed the domain ProfileCompatibility rather than the one "
+                "narrowing both surfaces share -- see Backend.profiles"
             )
     finally:
         connection.close()

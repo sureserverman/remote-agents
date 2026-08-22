@@ -24,12 +24,13 @@ from backends import tui_context_for
 from textual.widgets import Input, OptionList, Static
 from tui_positions import position
 
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import ProjectsPane
 from remote_agents.adapters.tui.screens.dashboard import (
     ProjectChooserScreen,
     ProjectsPaneScreen,
 )
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -82,7 +83,7 @@ def _context(**overrides) -> TuiContext:
     base = {
         "sessions": _Launcher((_record(),)),
         "projects": _Creator(),
-        "profiles": (ProfileChoice("claude", True),),
+        "profiles": (ProfileAvailability("claude", True),),
         "refresh_catalogue": lambda: (_INFRA, _TOOLS),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_INFRA, _TOOLS),

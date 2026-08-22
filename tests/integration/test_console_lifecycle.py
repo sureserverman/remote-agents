@@ -23,8 +23,9 @@ from pathlib import Path
 from backends import backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.console import ConsoleComposer
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -94,7 +95,7 @@ def _context(launcher: _Launcher, composer: ConsoleComposer) -> TuiContext:
             projects=object(),  # type: ignore[arg-type]
             refresh_catalogue=lambda: (_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         open_in_console=open_in_console,
         console_sync=composer.sync,

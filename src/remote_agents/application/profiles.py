@@ -25,14 +25,13 @@ the curated-id check from the wizard, the no-blocking-reason-when-available chec
 local surface — and the state that satisfied one type and crashed the other is now
 representable.
 
-**It lives in `application/` because `Backend` is where it is going**, and DEC-015/ARCH-02
-forbids `application/` importing an adapter type — so the merged type could not have lived in
-either adapter it replaces. As of this module's own commit nothing is wired to it yet:
-`Backend.profiles` still carries the domain `ProfileCompatibility` and both adapters still
-define their own narrowing. Task 1.3 is what retires them onto this. The curated set is read
-from `domain.profiles`, which `application/` may import; the *labels* for those ids stay in
-the Telegram wizard, because DEC-043 puts the shared decision here and leaves each surface its
-own sentence.
+**It lives in `application/` because `Backend` carries it**, and DEC-015/ARCH-02 forbids
+`application/` importing an adapter type — so the merged type could not have lived in either
+adapter it replaces. `bootstrap._narrow_profiles` is the single place the domain record
+becomes this, and both surfaces read `Backend.profiles`; profiles were the one capability
+composed twice, and are not any more. The curated set is read from `domain.profiles`, which
+`application/` may import; the *labels* for those ids stay in the surfaces, because DEC-043
+puts the shared decision here and leaves each surface its own sentence.
 """
 
 from __future__ import annotations
@@ -81,13 +80,12 @@ class ProfileAvailability:
         """The blocking reason if there is one, otherwise the diagnostic note.
 
         This exists for a surface that renders one string for "why this row is not offered"
-        without distinguishing the two cases. **Nothing calls it yet** — `service.py` still
-        reads a single `.reason` off the adapter type this replaces, and Task 1.3 is what
-        moves it. It is written for that caller because the caller's shape is already known:
-        the Telegram resume list composes `profile.reason or <catalogue fallback>`
-        (`adapters/telegram/service.py:2081-2083`) and reaches that branch with `available`
-        true whenever the catalogue is not resume-capable, so it has always shown a probe note
-        there. `blocked_reason or note` is that same string, split at the source.
+        without distinguishing the two cases. Its one caller is the Telegram resume list,
+        which composes `profile.any_reason or <catalogue fallback>` and reaches that branch
+        with `available` true whenever the catalogue is not resume-capable — so it has always
+        shown a probe note there. Before the field was split it read a single `.reason`, and
+        `any_reason` is that same string: the property exists so the split costs that caller
+        nothing.
 
         A reader's convenience, not a third state: nothing constructs from it.
         """

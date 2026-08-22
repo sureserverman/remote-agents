@@ -7,26 +7,12 @@ from dataclasses import dataclass, field
 
 from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
+from remote_agents.application.profiles import ProfileAvailability
 
 #: How many observations the feed shows and its reader fetches — one number, imported by
 #: both the composition root (the reader's LIMIT) and the dashboard (the render slice), so
 #: the two can never drift.
 FEED_LIMIT = 20
-
-
-@dataclass(frozen=True, slots=True)
-class ProfileChoice:
-    """One curated agent, with the reason it cannot be launched when it cannot."""
-
-    profile_id: str
-    available: bool
-    reason: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.profile_id:
-            raise ValueError("profile identifier must be present")
-        if self.available and self.reason is not None:
-            raise ValueError("an available profile has no blocking reason")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,14 +28,17 @@ class TuiContext:
     twice, composed twice, and only one of the two namings kept honest. A capability added
     to one surface could miss the other with nothing to say so.
 
-    `profiles` stays outside it, and so do `attach_argv` and the four console fields. The
-    first because `Backend.profiles` is the domain `ProfileCompatibility` and this surface
-    renders `ProfileChoice`, which refuses any reason alongside `available=True` — the rule
-    that once took this surface down on a version probe that merely timed out. The rest
-    because they are this surface's alone: DEC-039 keeps the attach route per-surface, and
-    DEC-040 keeps console hosting out of anything the bot shares.
+    `attach_argv` and the four console fields stay outside it because they are this
+    surface's alone: DEC-039 keeps the attach route per-surface, and DEC-040 keeps console
+    hosting out of anything the bot shares.
+
+    `profiles` used to stand outside it too, for a reason that no longer holds:
+    `Backend.profiles` was the domain `ProfileCompatibility` and this surface rendered its
+    own `ProfileChoice`, which refused any reason alongside `available=True` — the rule that
+    once took this surface down on a version probe that merely timed out. Both narrowings
+    are now one, in `application/profiles.py`, and it is read off the backend.
     """
-    profiles: tuple[ProfileChoice, ...]
+    profiles: tuple[ProfileAvailability, ...]
     attach_argv: Callable[[str], tuple[str, ...]]
     # `capture_redactions` is not a capability but a parameter of one: it tunes
     # `backend.capture`, can only remove text from what is rendered, and is inert when

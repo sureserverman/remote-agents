@@ -54,8 +54,9 @@ from tui_feedback import announcements, status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import ALL_SCREENS, RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.projects import ProjectIdentity
@@ -80,7 +81,7 @@ def _context() -> TuiContext:
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

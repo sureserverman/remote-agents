@@ -84,7 +84,8 @@ class _PaneIsAwaitingTrust(SessionUseCaseDouble):
 
 async def _rendered_rows(launcher: _PaneIsAwaitingTrust) -> list[str]:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     app = RemoteAgentsTui(
         TuiContext(
@@ -93,7 +94,7 @@ async def _rendered_rows(launcher: _PaneIsAwaitingTrust) -> list[str]:
                 projects=object(),
                 refresh_catalogue=tuple,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

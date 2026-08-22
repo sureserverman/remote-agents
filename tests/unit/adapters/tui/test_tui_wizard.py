@@ -18,10 +18,11 @@ from remote_agents.adapters.tui.app import (
     RemoteAgentsTui,
     label_or_error,
 )
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import _BACK, _CANCEL
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import SessionId, SessionState
@@ -78,8 +79,8 @@ def _context(**overrides: object) -> TuiContext:
         "sessions": FakeLauncher(),
         "projects": FakeCreator(),
         "profiles": (
-            ProfileChoice("claude", True),
-            ProfileChoice("cursor-agent", False, "executable_missing"),
+            ProfileAvailability("claude", True),
+            ProfileAvailability("cursor-agent", False, "executable_missing"),
         ),
         "refresh_catalogue": lambda: (_EXISTING, _OTHER),
         "attach_argv": lambda session_id: (

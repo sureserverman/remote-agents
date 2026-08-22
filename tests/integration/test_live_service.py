@@ -25,7 +25,7 @@ from remote_agents.adapters.telegram.service import (
     build_private_bot,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.bootstrap import (

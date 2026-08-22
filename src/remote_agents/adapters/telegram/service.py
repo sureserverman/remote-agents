@@ -48,7 +48,6 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -62,6 +61,7 @@ from remote_agents.application.conversations import (
     resume_available,
 )
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -280,11 +280,12 @@ class PrivateBotBoundary:
     difference is that the absence now has a name and a declared field, instead of being the
     answer a probe gives when it cannot find a method.
 
-    `profiles` is deliberately **not** in here. `Backend.profiles` is the domain
-    `ProfileCompatibility`; this surface renders `ProfileAvailability`, which requires a
-    curated id, and the local surface narrows the same domain tuple differently again.
-    Handing the domain type straight to a frontend is what once took the local surface down
-    on a version probe that merely timed out.
+    `profiles` is a field here rather than on `Backend` for a reason that has since been
+    answered: `Backend.profiles` held the domain `ProfileCompatibility` and each surface
+    narrowed it separately, which is how a version probe that merely timed out once took the
+    local surface down. `compose_backend` now narrows once into
+    `application.profiles.ProfileAvailability`, and this field is seeded straight from
+    `backend.profiles`.
     """
     profiles: tuple[ProfileAvailability, ...] = ()
     catalogue: tuple[CatalogProject, ...] = field(init=False)
@@ -2078,7 +2079,10 @@ class PrivateBotBoundary:
                     )
                 )
             else:
-                reason = profile.reason or (
+                # `any_reason` is the blocking reason when there is one and the probe note
+                # otherwise -- this branch is reached with `available` true whenever the
+                # catalogue is not resume-capable, and it has always shown the note there.
+                reason = profile.any_reason or (
                     capability.reason if capability is not None else "catalogue_unavailable"
                 )
                 unavailable.append(f"{_profile_name(profile.profile_id)} ({reason})")

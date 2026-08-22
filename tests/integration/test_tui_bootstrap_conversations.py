@@ -138,8 +138,9 @@ def test_no_further_capability_leaked_into_the_context() -> None:
     """
     surface = {
         "backend",
-        # The profile narrowing this surface applies: `ProfileChoice` refuses any reason
-        # alongside `available=True`, which the domain's `ProfileCompatibility` does not.
+        # Read straight off the backend now. It is still named here because the surface
+        # declares its own field for it, not because it narrows it a second time -- that
+        # second narrowing is what sub-plan 4 removed.
         "profiles",
         # DEC-039: deliberately not host-following, unlike the bot's.
         "attach_argv",
@@ -166,9 +167,10 @@ def test_no_further_capability_leaked_into_the_context() -> None:
     assert set(TuiContext.__dataclass_fields__) == surface
     assert set(Backend.__dataclass_fields__) == shared
     assert surface & shared == {"profiles"}, (
-        "`profiles` is the one name on both, and deliberately: the backend's is the domain "
-        "`ProfileCompatibility` and the context's is this surface's `ProfileChoice`. Any "
-        "other overlap is a capability composed twice."
+        "`profiles` is the one name on both, and deliberately -- but no longer because the "
+        "two hold different types. They hold the same tuple: the surface's field is seeded "
+        "from `Backend.profiles`, which is the whole of sub-plan 4's profile work. Any other "
+        "overlap is a capability composed twice."
     )
 
 

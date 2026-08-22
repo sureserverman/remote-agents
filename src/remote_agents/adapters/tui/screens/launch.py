@@ -248,7 +248,7 @@ class ProfilesScreen(ChoiceScreen):
                     profile.profile_id,
                     profile.profile_id
                     if profile.available
-                    else f"{profile.profile_id}  (unavailable: {profile.reason})",
+                    else f"{profile.profile_id}  (unavailable: {profile.blocked_reason})",
                 )
                 for profile in self.services.profiles
             )
@@ -257,7 +257,7 @@ class ProfilesScreen(ChoiceScreen):
     async def choose(self, key: str) -> None:
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:
-            reason = profile.reason if profile is not None else "unknown profile"
+            reason = profile.blocked_reason if profile is not None else "unknown profile"
             self.announce(f"That agent cannot be launched here: {reason}", severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)

@@ -15,7 +15,7 @@ from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.worker import WorkerCancelled, WorkerFailed
 
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import (
     _BACK,
     AttachRequest,
@@ -45,6 +45,7 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
@@ -78,7 +79,7 @@ __all__ = [
     "AttachRequest",
     "LaunchFailure",
     "LaunchSelection",
-    "ProfileChoice",
+    "ProfileAvailability",
     "RemoteAgentsTui",
     "TuiContext",
     "age",

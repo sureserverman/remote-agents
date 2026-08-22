@@ -24,9 +24,10 @@ the writer count safe.
 **Application, domain and ports only** (ARCH-B1). `application/` may not import an adapter
 (ARCH-02, DEC-015), and `check_imports.py` enforces it, but the rule is easy to break here
 in particular: the natural instinct when adding a field is to type it against whichever
-frontend consumes it. That is not hypothetical — `bootstrap.LocalRuntime` is typed against
-`adapters.telegram.wizard.ProfileAvailability` and hands it to the local surface, which
-converts it back. Hence `profiles` below.
+frontend consumes it. That is not hypothetical — `bootstrap.LocalRuntime` used to be typed
+against `adapters.telegram.wizard.ProfileAvailability` and handed it to the local surface,
+which converted it back. `profiles` below is what that instinct cost, and what replaced it:
+one `application/` type both surfaces read.
 
 **What is deliberately absent.** Anything only one surface has: the reconciler and
 `SessionLocks` (the service's, composed at the root per DEC-030), console hosting and
@@ -41,9 +42,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
-from remote_agents.domain.profiles import ProfileCompatibility
 from remote_agents.ports.agent_activity import AgentActivity
 
 
@@ -101,30 +102,23 @@ class Backend:
     """Re-scan the registry and dev root. A read of the filesystem, so both frontends run
     it off the event loop; neither may call it from a render."""
 
-    profiles: tuple[ProfileCompatibility, ...] = ()
-    """Installed-agent availability as the **domain** records it, not as either surface
-    shows it.
+    profiles: tuple[ProfileAvailability, ...] = ()
+    """Installed-agent availability, narrowed once for both surfaces.
 
-    `ProfileCompatibility` carries `available`, `status`, `version` and `reason` separately.
-    Each frontend narrows it differently: the Telegram wizard's `ProfileAvailability`
-    requires a curated id, while the surface's `ProfileChoice` refuses any reason alongside
-    `available=True`. That second rule is why a version probe which merely timed out once
-    took the whole local surface down — `bootstrap` still carries the note.
+    `compose_backend` is the only place the domain's `ProfileCompatibility` becomes this, so
+    a profile is probed once per process and narrowed once per process. That was not true
+    until sub-plan 4: the bot was handed `LocalRuntime.profiles` and the local surface
+    re-narrowed `LocalRuntime.profiles` again, so profiles were the one capability composed
+    twice and free to diverge — the single exception to the promise the rest of this type
+    makes.
 
-    **This field is written and not yet read, and that is the one exception to the promise
-    the rest of this type makes.** Everywhere else, a capability added here reaches both
-    surfaces or neither. Profiles do not: `compose_backend` records `runtime.compatibility`
-    on this field, and then the bot is handed `runtime.profiles` separately
-    (`bootstrap._private_boundary`) and the surface narrows `runtime.profiles` again into
-    `ProfileChoice` (`bootstrap.local_context`). So profiles are still composed twice and
-    can still diverge.
-
-    It is left that way deliberately. Routing both narrowings through this field means
-    designing the unified type that carries both semantics — a curated-id check plus a
-    tri-state reason separating "blocked" from "probe did not answer" — which is sub-plan
-    4's stage and its own gate, precisely because merging them naively is what took the
-    local surface down before. The field is the seam that work lands on; until then, do not
-    read it and conclude the two surfaces agree.
+    Merging the two narrowings needed a type that could hold what both surfaces meant, which
+    is why it waited for its own stage. `ProfileCompatibility.reason` answers two questions
+    at once — why a profile is blocked, and why no version is being shown — and the local
+    surface's old type read any reason as blocking, so a version probe that merely timed out
+    took it down. `ProfileAvailability` splits that field, and each surface reads the part it
+    means: `blocked_reason` alone for the local surface, `any_reason` for the bot's one-string
+    row. DEC-043 — the decision is shared, the sentence stays the surface's.
     """
 
     capture: Callable[[SessionId], Awaitable[str]] | None = None

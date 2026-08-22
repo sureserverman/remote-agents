@@ -20,11 +20,11 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.activity import PaneQuietWatcher
 from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import build_catalogue
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_actions import available_actions

@@ -49,7 +49,7 @@ from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import _CANCEL
 from remote_agents.adapters.tui.screens import ALL_CONFIRMS
 from remote_agents.adapters.tui.screens.confirm import (
@@ -58,6 +58,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     RemoteControlConfirmModal,
 )
 from remote_agents.application.commands import ForceStopCommand, RemoteControlCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     FORCE,
@@ -142,7 +143,7 @@ def _context(launcher: _Launcher) -> TuiContext:
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

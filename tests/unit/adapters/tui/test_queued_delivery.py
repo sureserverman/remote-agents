@@ -51,8 +51,9 @@ from tui_feedback import announcements
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import ResumeConversationsScreen
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
@@ -80,8 +81,8 @@ _SESSION_ID = SessionId.new()
 #: agent is the one row in this surface that says something out loud and then leaves the owner
 #: exactly where they were — so a second dispatch of it is *visible* rather than idempotent.
 _PROFILES = (
-    ProfileChoice("claude", True),
-    ProfileChoice("codex", False, "no such profile on this host"),
+    ProfileAvailability("claude", True),
+    ProfileAvailability("codex", False, "no such profile on this host"),
 )
 
 

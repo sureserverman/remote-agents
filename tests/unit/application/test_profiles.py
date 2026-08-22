@@ -9,12 +9,12 @@ them has to survive the trip to a surface:
    down**, because the type it was narrowed into read any reason as blocking.
 3. `(available=True, "AVAILABLE", None)` — available, nothing to say.
 
-The two adapter types this replaces each modelled two of the three. `wizard.ProfileAvailability`
-had no rule about reasons at all and could hold state 2, but required a curated id;
-`tui.ProfileChoice` enforced "an available profile has no blocking reason" and therefore could
-not hold state 2, but accepted any non-empty id. Neither was wrong for its own surface, and
-that is why DEC-042 says a look-alike pair is merged by carrying both invariants rather than by
-picking one.
+The two adapter types this replaces each modelled two of the three. The Telegram wizard's
+`ProfileAvailability` had no rule about reasons at all and could hold state 2, but required a
+curated id; the local surface's `ProfileChoice` enforced "an available profile has no blocking
+reason" and therefore could not hold state 2, but accepted any non-empty id. Neither was wrong
+for its own surface, and that is why DEC-042 says a look-alike pair is merged by carrying both
+invariants rather than by picking one.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from remote_agents.application.profiles import ProfileAvailability
 
 
 class TestTheCuratedIdCheck:
-    """`wizard.ProfileAvailability`'s invariant: launch profiles must be curated."""
+    """The Telegram wizard's invariant: launch profiles must be curated."""
 
     @pytest.mark.parametrize(
         "profile_id",
@@ -65,7 +65,7 @@ class TestTheTriStateReason:
 
         A version probe that merely timed out is diagnostic, not a gate (DEC-002): the
         executable is installed, so the profile is available and the note explains only why
-        no version is being shown. `ProfileChoice` raised here.
+        no version is being shown. The local surface's retired `ProfileChoice` raised here.
         """
         profile = ProfileAvailability("claude", True, note="version_probe_failed")
         assert profile.available is True
@@ -99,12 +99,12 @@ class TestTheTriStateReason:
 class TestWhatEachSurfaceReads:
     """DEC-043: the decision is shared, the sentence stays the surface's.
 
-    The type carries machine tokens and each frontend words them. **Neither frontend reads
-    these fields yet** — both still narrow into their own adapter type, and Task 1.3 is what
-    moves them. What is asserted here is that the two reading *shapes* the frontends already
-    have are both expressible on this type, which is the property that decides whether the
-    merge can preserve their behaviour at all. The migration itself is pinned by Task 1.2 at
-    `tests/integration/test_tui_bootstrap.py` and by the parity suites, not here.
+    The type carries machine tokens and each frontend words them. What is asserted here is
+    that the two reading *shapes* the frontends have are both expressible on this type — the
+    property that decided whether the merge could preserve their behaviour at all. That the
+    frontends genuinely read them is pinned elsewhere, end to end: `local_context` is driven
+    for real in `tests/integration/test_tui_bootstrap.py` and the two surfaces are asserted to
+    receive the same tuple there.
     """
 
     def test_the_bot_reads_any_reason_blocking_or_not(self) -> None:

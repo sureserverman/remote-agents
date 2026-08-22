@@ -11,7 +11,8 @@ from tui_feedback import announcements
 from tui_feedback import status as _status
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -62,7 +63,7 @@ def _context(launcher: _Listing) -> TuiContext:
             refresh_catalogue=lambda: (_EXISTING,),
             catalogue=(_EXISTING,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: (*_ARGV, f"={session_id}"),
     )
 

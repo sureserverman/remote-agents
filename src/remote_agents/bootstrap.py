@@ -55,7 +55,6 @@ from remote_agents.adapters.telegram.service import (
     build_private_bot,
     run_private_bot,
 )
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.codec import attach_argv, switch_client_argv
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.profiles import (
@@ -79,6 +78,7 @@ from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.doctor import production_doctor, profile_doctor
 from remote_agents.application.errors import ProjectCreationError
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
@@ -540,12 +540,10 @@ class LocalRuntime:
     """The terminal and profile availability every local surface composes identically."""
 
     terminal: TmuxTerminal
-    profiles: tuple[ProfileAvailability, ...]
-    # What the probe actually observed, before either surface narrowed it. `profiles` above
-    # is the Telegram wizard's type and the local surface converts it back again -- carried
-    # separately rather than replaced because both narrowings are still in use, and merging
-    # them is sub-plan 4's job (it has a recorded regression to avoid). `Backend` takes this
-    # one, so the backend states what was seen and each surface decides what to say.
+    # What the probe observed, before anything narrowed it. This used to sit beside a
+    # `profiles` field holding the Telegram wizard's narrowing, which the local surface then
+    # converted back -- two narrowings of one probe, free to diverge. `compose_backend` now
+    # narrows this once into `Backend.profiles` and both surfaces read that.
     compatibility: tuple[ProfileCompatibility, ...]
     # The gateway the terminal wraps, carried separately so the composition root can wire
     # console capabilities (client switching) without widening the terminal port for a
@@ -559,10 +557,6 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
     compatibility = probe_profiles(
         definitions,
         resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
-    )
-    profiles = tuple(
-        ProfileAvailability(str(result.profile_id), result.available, result.reason)
-        for result in compatibility
     )
     definitions_by_id = {definition.profile_id: definition for definition in definitions}
     executables = {
@@ -605,7 +599,36 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
         profile_factories=profile_factories,
         resume_profile_factories=resume_profile_factories,
     )
-    return LocalRuntime(terminal, profiles, compatibility, gateway)
+    return LocalRuntime(terminal, compatibility, gateway)
+
+
+def _narrow_profiles(
+    compatibility: tuple[ProfileCompatibility, ...],
+) -> tuple[ProfileAvailability, ...]:
+    """Narrow the probe's record into the one type both surfaces read.
+
+    `ProfileCompatibility.reason` carries two different facts in one field, and which one it
+    is holding is decided by `available`: on a blocked profile it says why it is blocked, on
+    an available one it says why no version is being shown. `probe_profiles` produces exactly
+    those two plus the quiet case, so the split is total and this is the only place it needs
+    to be made.
+
+    `status` and `version` are deliberately not carried through. Neither surface renders
+    them: the bot shows a label and one reason string, the local surface shows a label and a
+    reason only where it refuses. The reader that does want them is `doctor`, and it does not
+    take them from here -- `main`'s `--profiles` path runs its own `probe_profiles` and hands
+    the domain tuple straight to `profile_doctor`. Narrowing them away costs that reader
+    nothing (DEC-002 -- a version is diagnosis, not a gate).
+    """
+    return tuple(
+        ProfileAvailability(
+            str(profile.profile_id),
+            profile.available,
+            blocked_reason=None if profile.available else profile.reason,
+            note=profile.reason if profile.available else None,
+        )
+        for profile in compatibility
+    )
 
 
 def compose_backend(
@@ -670,9 +693,11 @@ def compose_backend(
         conversations=_conversation_service(projects.paths),
         catalogue=catalogue,
         refresh_catalogue=lambda: projects.refresh().catalogue,
-        # The domain's record of what was probed, not either surface's narrowing of it —
-        # see `Backend.profiles` for why the two narrowings must not be merged in passing.
-        profiles=runtime.compatibility,
+        # The one narrowing, for both surfaces. `ProfileCompatibility.reason` answers two
+        # questions in one field -- why a profile is blocked, and why no version is shown --
+        # so it is split here rather than at each surface, which is what let the two drift
+        # and what took the local surface down on a probe that merely timed out.
+        profiles=_narrow_profiles(runtime.compatibility),
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
         max_label_length=config.max_label_length,
@@ -742,12 +767,11 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
             # time. `catalogue` and `max_label_length` came through here too and are on it;
             # the boundary seeds its render copy of the first from `Backend.catalogue`.
             backend=backend,
-            # Except the profiles, which stay a separate argument on purpose:
-            # `Backend.profiles` is the domain `ProfileCompatibility` and this surface
-            # renders `ProfileAvailability`. `runtime.profiles` is that narrowing, and
-            # passing `backend.profiles` here instead is the plausible-looking line that
-            # breaks it — see `Backend.profiles`.
-            profiles=runtime.profiles,
+            # Profiles come off the backend like everything else now. They were a separate
+            # argument for as long as `Backend.profiles` held the domain type and this
+            # surface needed its own narrowing; `compose_backend` does that narrowing once,
+            # so the line that used to be the plausible-looking mistake is the correct one.
+            profiles=backend.profiles,
             project_page_size=config.project_page_size,
         ),
         terminal,
@@ -1053,7 +1077,7 @@ def local_context(config, connection, paths: ProductionPaths):
     service never loads the terminal library and a failure in it cannot reach serve.
     """
     from remote_agents.adapters.tui.attach import HostingMode, hosting_mode
-    from remote_agents.adapters.tui.context import FEED_LIMIT, ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import FEED_LIMIT, TuiContext
 
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     runtime = _local_runtime(config, paths, projects.paths)
@@ -1126,20 +1150,14 @@ def local_context(config, connection, paths: ProductionPaths):
         # max_label_length -- is one, so a capability added to the backend cannot reach one
         # surface and miss the other.
         backend=backend,
-        profiles=tuple(
-            # A reason only travels with an *unavailable* profile. `ProfileCompatibility`
-            # uses `reason` for two things -- why a profile is blocked, and a note about a
-            # probe that did not answer -- while `ProfileChoice` reads any reason as
-            # blocking and refuses to construct alongside `available=True`. Passing it
-            # through unconditionally meant a version probe that merely timed out took the
-            # whole local surface down with `an available profile has no blocking reason`.
-            ProfileChoice(
-                profile.profile_id,
-                profile.available,
-                None if profile.available else profile.reason,
-            )
-            for profile in runtime.profiles
-        ),
+        # The same tuple the bot gets, from the same narrowing (`_narrow_profiles`). This
+        # was a second narrowing, and its comment recorded why it had to drop the reason:
+        # `ProfileCompatibility.reason` meant either "blocked because" or "no version
+        # because", and this surface's old type read any reason as blocking, so passing it
+        # through unconditionally took the whole surface down with `an available profile has
+        # no blocking reason` when a version probe merely timed out. Dropping the note
+        # avoided the crash and lost the diagnostic. Splitting the field keeps both.
+        profiles=backend.profiles,
         # Per-surface, and staying that way: DEC-039 keeps the attach route this surface's
         # own rather than following the host the way the bot's does.
         attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),

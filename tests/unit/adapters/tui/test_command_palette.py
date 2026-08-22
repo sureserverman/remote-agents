@@ -18,8 +18,9 @@ from backends import tui_context_for
 from textual.command import DiscoveryHit, Hit
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.palette import NAVIGATION_COMMANDS, NavigationCommands
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import ACTION_LABELS
 from remote_agents.domain.conversations import (
@@ -59,7 +60,7 @@ def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
         "sessions": _Listing(),
         "projects": object(),
-        "profiles": (ProfileChoice("claude", True),),
+        "profiles": (ProfileAvailability("claude", True),),
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
