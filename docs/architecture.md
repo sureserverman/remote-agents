@@ -57,7 +57,8 @@ tests in `tests/architecture/`.
 
 ## ARCH-B1 — one `Backend`, and both frontends receive it
 
-`application/backend.py: Backend` is a frozen, slotted dataclass carrying nine fields:
+`application/backend.py: Backend` is a frozen, slotted dataclass carrying nine fields
+(DEC-046):
 `sessions`, `projects`, `conversations`, `catalogue`, `refresh_catalogue`, `profiles`,
 `capture`, `activity_feed`, `max_label_length`. It is the whole set of use cases a frontend
 may drive. Before it, `bootstrap` composed the Telegram service and the local surface
@@ -68,7 +69,9 @@ composition root forgot to wire produced no error, just a row that quietly stopp
 offered on one surface.
 
 The module imports `application.profiles`, `application.project_catalog`, `domain.models` and
-`ports.agent_activity`, and nothing else from the package. An adapter type here would be an
+`ports.agent_activity`, and nothing else from the package. `application.profiles` is where the
+two per-surface profile types were merged into one that keeps both their invariants and splits
+the field they disagreed about (DEC-045). An adapter type here would be an
 ARCH-02 violation the checker fails on (DEC-015), and the mistake is not hypothetical:
 `bootstrap.LocalRuntime` used to be typed against a Telegram wizard type and hand it to the
 local surface, which converted it back.
@@ -93,7 +96,7 @@ any more — absence is a declared field checked as `is None`, which is what
 ## ARCH-B2 — composed once per process, not once globally
 
 `bootstrap.compose_backend(config, connection, paths, ...)` is the single function that builds
-a `Backend`, and it is called twice in production: once from `_private_boundary` (the `serve`
+a `Backend`, and it is called twice in production (DEC-046): once from `_private_boundary` (the `serve`
 composition) and once from `local_context` (the local surface composition). What used to be
 four call sites that happened to agree is one, so a capability added for one surface cannot
 miss the other.
@@ -180,7 +183,7 @@ The three modules the refactor created or consolidated under this shape:
   case taking a confirmation callback would be the forbidden shape with an extra step. The bot
   keeps its two-press force confirmation and the surface keeps its modal. It reports rather
   than renders — the outcome carries which refusal happened, and each surface writes its own
-  sentence from it.
+  sentence from it. That is DEC-043: the decision is shared, the sentence stays the surface's.
 - `application/session_actions.py` — the single authority over which lifecycle actions a
   session offers. Availability is a narrowing of the domain's legal transitions, never a
   widening, and `tests/architecture/test_policy_matches_domain.py` enforces that direction.

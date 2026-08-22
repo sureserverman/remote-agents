@@ -46,7 +46,15 @@ its scope** (DEC-019):
   `getattr` outright, which this codebase legitimately uses on Textual objects.
 - Rule 3 compares **names**, which is the one place a name is the right unit -- a
   redefinition under the same name is precisely the failure. It does not detect a shared use
-  case copied into an adapter under a *different* name; nothing static can.
+  case copied into an adapter under a *different* name; nothing static can. It counts
+  bindings at **module scope**, so a class-attribute rebind and an `import ... as` are both
+  outside it, each for a stated reason (`_defined_names`).
+- Rule 1 matches the import's module by equality on `remote_agents.application.commands`, so
+  a command reached through a package-level re-export (`from remote_agents.application import
+  ForceStopCommand`) would arrive as a bare name and pass. Not reachable today -- no
+  `__init__.py` under `src/remote_agents/` re-exports anything, and `ruff`'s `F403` refuses
+  the star-import spelling -- and recorded rather than fixed because closing it means
+  resolving re-exports, which is a different kind of check. Found by the Stage 3 gate.
 
 What these prove is that no *lexically visible* path re-grows the duplication. That is what
 they are worth, and no more.
@@ -59,11 +67,19 @@ those fields hold, so that commit would have reintroduced cleanly; Rule 3 read o
 `def`/`class` and missed rebinding by assignment; Rule 4 missed `**{"exclusive": True}`.
 Each now has a parametrized test per spelling, and each of those spellings was verified to
 fail before the fix.
+
+**A fifth was closed at the Stage 3 gate**, in Rule 3 and of the same kind: `_defined_names`
+read `tree.body`, so it saw only a direct top-level statement with a bare `Name` target while
+its docstring said "at module scope". A rebind inside a module-level `if` or an import
+fallback's `except`, and a tuple target, all bind module globals and all passed. The walk now
+descends every block that opens no scope; the false positive one scope down is pinned from
+the other side by two negative cases.
 """
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -255,7 +271,7 @@ def _defined_names(tree: ast.Module) -> set[str]:
     than worth ignoring: the ordinary spellings are already refused, so what is left is
     exactly the spelling someone reaches for when the ordinary one is.
 
-    **Assignments count at module scope only, and `def`/`class` at any depth.** The first
+    **Bindings count at module scope only, and `def`/`class` at any depth.** The first
     version of this fix swept assignments with `ast.walk` too, and that was a new defect
     rather than a stricter rule: several of the eighteen shared names are ordinary English —
     `available_actions`, `state_word`, `notifiable` — so a screen writing
@@ -265,20 +281,99 @@ def _defined_names(tree: ast.Module) -> set[str]:
     (`dispatch_stop = _impl`) was a module-level rebind, which is the only place an
     assignment can do the damage. Found by the Stage 2 gate's Tier-2 re-review.
 
-    The cost, disclosed: `class Screen: resolve_stop = _impl` is a class-attribute rebind and
-    is not caught. It is not a module-level redefinition, and pricing it in would reopen the
-    false positive one scope down.
+    **Module scope is not the module's top-level statement list**, and the version that
+    followed read `tree.body` directly — so it saw only a direct top-level statement with a
+    bare `Name` target. `if`, `try`, `with`, `for` and `while` open no scope of their own, so
+    each of these binds a module global and none of them was caught:
+
+        if _fast: dispatch_stop = _impl           # a feature-branch definition
+        try: from x import dispatch_stop          # an import fallback, rebound in the handler
+        except ImportError: dispatch_stop = _impl
+        dispatch_stop, _other = _impl, None       # a tuple target
+
+    Meanwhile the docstring said "at module scope", which a reader takes to mean all of it:
+    a contract claiming more than it checks (DEC-019), in the file whose whole subject is
+    guards that do exactly that. Found by the Stage 3 gate's second independent pass, which
+    drove this function against hand-written fragments rather than reading it.
+
+    So the walk descends through every block that opens no scope and stops at the five kinds
+    that do — `def`, `async def`, `class`, `lambda` and a comprehension, each with its own
+    namespace in Python 3. The false positive above is one scope down and stays refused: a
+    name bound inside a function body is invisible here, nested blocks or not, which is what
+    the `a local inside a module-level "if"` case pins from the other side.
+
+    Two costs, disclosed:
+
+    1. `class Screen: resolve_stop = _impl` is a class-attribute rebind and is not caught. A
+       class body is its own namespace, so this is the same line drawn consistently rather
+       than an omission, and pricing it in would reopen the false positive one scope down.
+    2. An `import ... as` binding is deliberately not a definition here. An adapter importing
+       `dispatch_stop` in order to *call* it is the behaviour this rule exists to encourage,
+       so counting the import would fail every honest caller.
     """
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
-    for node in tree.body:
+    for node in _module_scope_nodes(tree):
         if isinstance(node, ast.Assign):
-            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
+            for target in node.targets:
+                names |= _bound_names(target)
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign | ast.NamedExpr):
+            names |= _bound_names(node.target)
+        elif isinstance(node, ast.For | ast.AsyncFor):
+            names |= _bound_names(node.target)
+        elif isinstance(node, ast.With | ast.AsyncWith):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    names |= _bound_names(item.optional_vars)
     return names
+
+
+#: The node types that open a namespace of their own. Everything else — `if`, `try`, `with`,
+#: `for`, `while`, `match` — executes in the scope enclosing it, so a name bound inside one
+#: at module level is a module global.
+_OPENS_A_SCOPE = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _module_scope_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """Every node executing in the module's own scope, however deeply nested in blocks.
+
+    Takes any node rather than a `Module` because it recurses into the blocks it descends
+    through; call it with the module.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _OPENS_A_SCOPE):
+            continue
+        yield child
+        yield from _module_scope_nodes(child)
+
+
+def _bound_names(target: ast.AST) -> set[str]:
+    """The names one assignment target binds, unpacking tuple, list and starred targets.
+
+    `obj.attr = x` and `d[k] = x` bind nothing new and return the empty set: they mutate
+    something that already exists, which a shared use-case name is not at module scope.
+    """
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, ast.Starred):
+        return _bound_names(target.value)
+    if isinstance(target, ast.Tuple | ast.List):
+        names: set[str] = set()
+        for element in target.elts:
+            names |= _bound_names(element)
+        return names
+    return set()
 
 
 def _shared_use_case_names() -> set[str]:
@@ -437,6 +532,31 @@ def test_each_shared_use_case_module_contributes_names(filename: str) -> None:
             "def f(s):\n    state_word = s.upper()\n    return state_word\n",
             False,
         ),
+        # Module scope is not the same as the module's top-level statement list. Everything
+        # below binds a module global -- an `if`, a `try`, a `with` and a `for` open no scope
+        # of their own -- and the first version of this arm read `tree.body` directly, so it
+        # saw none of them. Found by the Stage 3 gate's second independent pass.
+        ("a rebind inside a module-level `if`", "if True:\n    dispatch_stop = _impl\n", True),
+        (
+            "a rebind in an import fallback",
+            "try:\n    from x import dispatch_stop\n"
+            "except ImportError:\n    dispatch_stop = _impl\n",
+            True,
+        ),
+        ("a tuple target", "dispatch_stop, _other = _impl, None\n", True),
+        ("a starred target", "*resolve_stop, _rest = _impls\n", True),
+        ("a `with ... as` binding", "with _swap() as execute_stop:\n    pass\n", True),
+        ("a module-level `for` target", "for notifiable in _flags:\n    pass\n", True),
+        ("a walrus at module scope", "if (state_word := _w()):\n    pass\n", True),
+        # ...and the scope line still holds from the other side. A nested block does not make
+        # a function body module scope, and a class body is a scope of its own -- the second
+        # is the cost this rule discloses rather than prices in.
+        (
+            "a local inside a module-level `if`",
+            "if True:\n    def f(rows):\n        available_actions = list(rows)\n",
+            False,
+        ),
+        ("a class-attribute rebind", "class Screen:\n    resolve_stop = _impl\n", False),
     ],
 )
 def test_rule_three_separates_a_redefinition_from_a_local_variable(

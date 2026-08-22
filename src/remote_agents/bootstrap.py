@@ -616,7 +616,7 @@ def _narrow_profiles(
     `status` and `version` are deliberately not carried through. Neither surface renders
     them: the bot shows a label and one reason string, the local surface shows a label and a
     reason only where it refuses. The reader that does want them is `doctor`, and it does not
-    take them from here -- `main`'s `--profiles` path runs its own `probe_profiles` and hands
+    take them from here -- `doctor --profiles` runs its own `probe_profiles` and hands
     the domain tuple straight to `profile_doctor`. Narrowing them away costs that reader
     nothing (DEC-002 -- a version is diagnosis, not a gate).
     """
