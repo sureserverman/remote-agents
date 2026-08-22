@@ -72,8 +72,8 @@ _STOP_COMMANDS = frozenset({"GracefulStopCommand", "ForceStopCommand", "CleanupC
 _COMMANDS_MODULE = "remote_agents.application.commands"
 
 
-def _adapter_modules(root: Path = _ADAPTERS) -> list[tuple[str, ast.Module]]:
-    """Every adapter module under `root`, parsed, sorted by path.
+def _parsed_modules(root: Path) -> list[tuple[str, ast.Module]]:
+    """Every module under `root`, parsed, sorted by path.
 
     **Raises rather than returning nothing**, which is the whole of DEC-010's lesson. That
     entry records an AST sweep in this repository that "was found to glob a relative path and
@@ -86,8 +86,8 @@ def _adapter_modules(root: Path = _ADAPTERS) -> list[tuple[str, ast.Module]]:
     asserted about elsewhere: the three rules below cannot run over an empty set, because
     building the set is what fails first.
 
-    `root` is a parameter solely so `test_an_empty_source_root_fails_rather_than_passing` can
-    drive this over a tree it controls. Production callers pass nothing.
+    `root` is explicit so the vacuity tests can drive this over a tree they control, and so
+    the DEC-008 rule below can sweep `application/` as well as `adapters/`.
     """
     modules = sorted(
         (
@@ -98,10 +98,28 @@ def _adapter_modules(root: Path = _ADAPTERS) -> list[tuple[str, ast.Module]]:
     )
     if not modules:
         raise AssertionError(
-            f"the adapter sweep parsed no modules under {root} — every rule below would "
+            f"the sweep parsed no modules under {root} — every rule below would "
             "have passed by reading nothing at all (DEC-010)"
         )
     return modules
+
+
+def _adapter_modules() -> list[tuple[str, ast.Module]]:
+    """The three rules above sweep the adapter tree."""
+    return _parsed_modules(_ADAPTERS)
+
+
+def _surface_modules() -> list[tuple[str, ast.Module]]:
+    """Both trees a surface's code can live in, for the cancel-on-re-entry rule.
+
+    `adapters/` because that is where Textual is imported and therefore the only place
+    `exclusive=` can currently be written; `application/` because sub-plan 2 moved stop
+    dispatch's *body* there, and a rule that follows the code is worth more than one that
+    followed it once.
+    """
+    return [(f"adapters/{name}", tree) for name, tree in _parsed_modules(_ADAPTERS)] + [
+        (f"application/{name}", tree) for name, tree in _parsed_modules(_APPLICATION)
+    ]
 
 
 def _local_names_for(tree: ast.Module, imported: frozenset[str], module: str) -> set[str]:
@@ -324,7 +342,7 @@ def test_an_empty_source_root_fails_rather_than_passing(tmp_path: Path) -> None:
     rules are all "no offender was found", and an empty set satisfies all three.
     """
     with pytest.raises(AssertionError, match="parsed no modules"):
-        _adapter_modules(tmp_path)
+        _parsed_modules(tmp_path)
 
 
 def test_a_root_holding_no_python_fails_too(tmp_path: Path) -> None:
@@ -338,7 +356,7 @@ def test_a_root_holding_no_python_fails_too(tmp_path: Path) -> None:
     (tmp_path / "adapters" / "README.md").write_text("not python", encoding="utf-8")
 
     with pytest.raises(AssertionError, match="parsed no modules"):
-        _adapter_modules(tmp_path / "adapters")
+        _parsed_modules(tmp_path / "adapters")
 
 
 def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
@@ -355,10 +373,105 @@ def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    modules = _adapter_modules(tmp_path)
+    modules = _parsed_modules(tmp_path)
     assert len(modules) == 1
 
     _, tree = modules[0]
     bound = _local_names_for(tree, _STOP_COMMANDS, _COMMANDS_MODULE)
     assert bound == {"Force"}, "the alias was not followed to its binding"
     assert bound & _called_names(tree) == {"Force"}, "the aliased construction was not seen"
+
+
+# --- Rule 4: a destructive action drops a repeat; it never cancels the one in flight ------
+
+
+def _cancel_on_re_entry(tree: ast.Module) -> set[tuple[int, str]]:
+    """Every `exclusive=` argument whose value is not literally `False`, with its line.
+
+    Textual's `run_worker` and `@work` take `exclusive`, and `exclusive=True` means a second
+    entry **cancels the first**. DEC-008 forbids that for a destructive action: cancel-and-
+    restart would mean the profile's exit sequence has already reached the pane, the kill
+    abandoned midway, and a second issued.
+
+    **Not matched by name of the callee**, deliberately. Binding this to `run_worker` would
+    miss `@work(exclusive=True)`, miss a helper that forwards `**kwargs`, and miss whatever
+    Textual adds next; the shape that matters is the argument, not who receives it.
+
+    **Not matched against `True` either.** The authored gate check was
+    `grep -rn 'exclusive=True'`, and this repository has already been bitten twice by
+    substring checks that could not tell a mention from a call (DEC-011's four prose hits) or
+    a value from its spelling (sub-plan 2's anonymous comprehension, sub-plan 3's bare
+    literal). `exclusive=flag`, `exclusive=not read_only` and `exclusive = True` all defeat
+    the grep and all mean the same thing here, so anything that is not the literal `False` is
+    reported and a deliberate `False` stays legible.
+    """
+    found: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        keywords = []
+        if isinstance(node, ast.Call):
+            keywords = node.keywords
+        if not keywords:
+            continue
+        for keyword in keywords:
+            if keyword.arg != "exclusive":
+                continue
+            value = keyword.value
+            if isinstance(value, ast.Constant) and value.value is False:
+                continue
+            found.add((keyword.lineno, ast.unparse(value)))
+    return found
+
+
+def test_no_surface_cancels_a_destructive_action_on_re_entry() -> None:
+    """DEC-008, absorbed from a grep whose scope the plan believed had gone stale.
+
+    **The plan's premise for this task was wrong, and is recorded here rather than worked
+    around.** It held that sub-plan 2 moved stop dispatch out of `adapters/tui/`, leaving the
+    authored sweep guarding nothing. What moved was the *body*: `application/stops.py` holds
+    the dispatch, but `adapters/tui/app.py` still calls it from inside the app's own worker
+    helper, and that helper is where an `exclusive=` would be written. The sweep was never
+    stale — `application/stops.py` has no worker to pass the argument to at all.
+
+    What this does buy over the grep is the two things a substring cannot do: it reads the
+    *argument* rather than a spelling of it, and it covers both trees, so the rule follows
+    the code the next time the body moves rather than having to be noticed and re-aimed.
+
+    The behavioural half is not here. `tests/unit/adapters/tui/test_tui_worker_exclusivity.py`
+    drives real workers and pins what actually refuses a second stop — a re-read of the record
+    at issue time, per DEC-007's fourth mitigation. This is the static half: it says nobody
+    reintroduced the argument, and nothing more.
+    """
+    offenders = [
+        f"{module}:{line}: exclusive={value}"
+        for module, tree in _surface_modules()
+        for line, value in sorted(_cancel_on_re_entry(tree))
+    ]
+
+    assert not offenders, (
+        "a worker is declared exclusive, so a second entry cancels the first. DEC-008: a "
+        "destructive action drops a repeat, it never cancels the one in flight — cancelling "
+        "means the exit sequence already reached the pane and the kill was abandoned "
+        "midway:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_cancel_rule_covers_both_trees_and_reads_the_argument() -> None:
+    """The rule's own two claims, each pinned — it is wider than the grep, and it parses.
+
+    Without this, "widened to both trees" and "reads the argument, not the spelling" are
+    assertions in a docstring, which is the shape DEC-019 exists to refuse.
+    """
+    covered = {module.split("/")[0] for module, _ in _surface_modules()}
+    assert covered == {"adapters", "application"}
+
+    spellings = ast.parse(
+        "run_worker(work, exclusive=True)\n"
+        "run_worker(work, exclusive=flag)\n"
+        "run_worker(work, exclusive=not read_only)\n"
+        "run_worker(work, exclusive=False)\n"
+    )
+    caught = {value for _, value in _cancel_on_re_entry(spellings)}
+    assert caught == {"True", "flag", "not read_only"}, (
+        "the rule must catch every non-False spelling and leave a deliberate False alone; "
+        f"it caught {sorted(caught)}"
+    )
