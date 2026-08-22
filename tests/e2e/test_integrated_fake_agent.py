@@ -17,7 +17,7 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -137,7 +137,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(7, 11, backend=backend_for(catalogue=catalogue, sessions=service))
+    boundary = build_private_bot(7, 11, backend=backend_for(catalogue=catalogue, sessions=service))
 
     try:
         record = await service.launch(
@@ -185,7 +185,7 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(catalogue=catalogue, sessions=service),
@@ -256,7 +256,7 @@ async def test_a_real_launch_reorders_the_catalogue_it_was_launched_from(tmp_pat
     service = SessionService(
         SQLiteSessionStore(open_database(tmp_path / "sessions.sqlite3")), terminal
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

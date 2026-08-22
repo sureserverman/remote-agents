@@ -296,6 +296,14 @@ class PrivateBotBoundary:
     stops: StopController = field(init=False)
     view: LiveView = field(init=False)
     notifier: ActivityNotifier = field(init=False)
+    """The three collaborators, filled by `build_private_bot` rather than by this class.
+
+    `init=False` and genuinely unset until the factory runs, which is the honest state: a
+    bare `PrivateBotBoundary(...)` is a boundary nobody has wired. Defaulting them instead
+    would be worse than either — it would give a composition root that never chose a live
+    view one that silently works, which is exactly the situation moving the wiring out was
+    meant to end.
+    """
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
@@ -342,21 +350,6 @@ class PrivateBotBoundary:
         # Seeded, not aliased. `Backend.catalogue` is the snapshot the process composed
         # with; this is the one on screen, and `_refresh_catalogue` replaces it.
         self.catalogue = self.backend.catalogue
-        self.stops = StopController(self.callbacks)
-        self.view = LiveView(
-            chat_id=self.owner_chat_id, callbacks=self.callbacks, anchors=self.anchors
-        )
-        # Built here rather than by the composition root because everything it needs is
-        # already assembled here, and because a boundary without one would leave every
-        # caller checking whether the service can speak before telling it to.
-        self.notifier = ActivityNotifier(
-            view=self.view,
-            callbacks=self.callbacks,
-            owner_user_id=self.owner_user_id,
-            display=self._display_for,
-            standing=self.standing,
-            finished=self._finished_sessions,
-        )
 
     async def refresh_catalogue(self) -> None:
         """Re-read the projects so one created at runtime becomes selectable immediately.
@@ -2209,6 +2202,57 @@ class PrivateBotBoundary:
             "text": text or instruction,
             "reply_markup": ForceReply(input_field_placeholder=placeholder),
         }
+
+
+def build_private_bot(
+    owner_user_id: int,
+    owner_chat_id: int,
+    *,
+    stops: StopController | None = None,
+    view: LiveView | None = None,
+    notifier: ActivityNotifier | None = None,
+    **boundary: object,
+) -> PrivateBotBoundary:
+    """Compose a working bot: the boundary, and the three collaborators it drives.
+
+    These used to be built by `PrivateBotBoundary.__post_init__`, out of whatever the
+    boundary had been handed. Convenient, because everything they need is already there —
+    and wrong for the same reason, since it left the one object whose job is deciding how
+    the pieces fit with no say in three of them. A composition root that wanted a different
+    live view, or a notifier over a second callback store, had nowhere to say so.
+
+    **The ports are the boundary's, not fresh ones.** All three are read off the constructed
+    boundary rather than from this function's arguments, so the defaults it applied — the
+    in-memory `CallbackStateStore`, `ChatViewStore` and `StandingNotificationStore` — are
+    the ones they share. Building a `CallbackStateStore()` here instead would run, would
+    pass every screen test, and would silently drop every button the boundary had minted.
+
+    **The notifier is attached after construction, and the cycle is real.** It takes
+    `display` and `finished`, which name a session for a message the owner did not ask for;
+    naming one needs the catalogue the boundary is holding and the liveness rule it applies
+    at send time. So it cannot precede the boundary, and the choice is where to pay for
+    that — here, in the open, or hidden inside the object it entangles. Here.
+    """
+    bot = PrivateBotBoundary(owner_user_id, owner_chat_id, **boundary)  # type: ignore[arg-type]
+    bot.stops = stops if stops is not None else StopController(bot.callbacks)
+    bot.view = (
+        view
+        if view is not None
+        else LiveView(chat_id=owner_chat_id, callbacks=bot.callbacks, anchors=bot.anchors)
+    )
+    bot.notifier = (
+        notifier
+        if notifier is not None
+        else ActivityNotifier(
+            view=bot.view,
+            callbacks=bot.callbacks,
+            owner_user_id=owner_user_id,
+            display=bot._display_for,  # noqa: SLF001 -- the cycle this factory exists to pay
+            standing=bot.standing,
+            finished=bot._finished_sessions,  # noqa: SLF001
+        )
+    )
+    return bot
 
 
 async def run_private_bot(

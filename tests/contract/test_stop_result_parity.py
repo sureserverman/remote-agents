@@ -35,7 +35,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.domain.models import (
@@ -108,7 +108,7 @@ async def _telegram_said(record: SessionRecord, detail: str) -> str:
     agreement. Unescaping here rather than weakening the assertion keeps the comparison exact.
     """
     launcher = _Launcher(record, detail)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -267,7 +267,7 @@ async def _telegram_said_force(record: SessionRecord, detail: str) -> str:
     from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 
     launcher = _ForceLauncher(record, detail)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

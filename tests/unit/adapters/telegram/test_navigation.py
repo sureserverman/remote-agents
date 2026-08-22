@@ -18,7 +18,7 @@ from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.notifications import SessionGroup, render_activity
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
@@ -130,7 +130,7 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
         conversations=ConversationService(_Catalogue(_resolved())) if with_resume else None,
         catalogue=(PROJECT,),
     )
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -306,7 +306,7 @@ async def test_the_pending_screen_stays_barless_while_it_waits() -> None:
     and the bar is not exempt from that. `callback` renders it through `render_message`
     directly rather than through `_message`, which is the mechanism, not an oversight."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_LaunchingLauncher(_record())),
@@ -390,7 +390,7 @@ async def test_the_bar_abandons_entry_rather_than_stranding_its_input_box(
     other button here already does, and a stranded input box — one the owner can still type
     into, attached to a step nothing is waiting on — is the worse of the two answers."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -483,7 +483,7 @@ def _sessions_counts_boundary(states: list[SessionState]) -> PrivateBotBoundary:
         )
         for index, state in enumerate(states)
     ]
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER, CHAT, backend=backend_for(catalogue=(PROJECT,), sessions=_ManyLauncher(records))
     )
 
@@ -552,7 +552,7 @@ async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> Non
 
 
 def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -662,7 +662,7 @@ def _outcome_boundary(state: SessionState) -> PrivateBotBoundary:
         state,
         datetime(2026, 8, 17, tzinfo=UTC),
     )
-    return PrivateBotBoundary(
+    return build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -790,7 +790,7 @@ class _ResumingLauncher(_Launcher):
 def _resume_boundary() -> tuple[PrivateBotBoundary, _ResumingLauncher]:
     launcher = _ResumingLauncher(_record())
     return (
-        PrivateBotBoundary(
+        build_private_bot(
             OWNER,
             CHAT,
             backend=backend_for(
@@ -906,7 +906,7 @@ async def test_the_add_project_wizard_is_marked_as_the_launch_flow() -> None:
     """Pinned because it is the one mapping in `_FLOW_OF_PREFIX` whose truth is scheduled:
     the wizard is entered from Home today and moves onto the launch list in Task 2.2."""
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -1003,7 +1003,7 @@ async def test_resume_without_review_answers_every_state_it_can_return(
     both real recoveries.
     """
     record = replace(_record(), state=state)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -1027,7 +1027,7 @@ async def test_resume_without_review_does_not_claim_an_attachment_is_final() -> 
     """Migration 8 releases the conversation once its session ends, so the message must not
     say recovery is impossible — it was false for PRESERVED, which one Clean up releases."""
     record = replace(_record(), state=SessionState.PRESERVED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -1060,7 +1060,7 @@ async def test_resume_without_review_says_when_nothing_was_started() -> None:
     an impossible input proves nothing while reading as coverage.
     """
     stopping = replace(_record(), state=SessionState.STOP_REQUESTED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -1093,7 +1093,7 @@ async def test_a_created_resume_that_failed_to_come_up_keeps_its_own_message() -
     FAILED branch entirely makes the row above report an attempt this press never made.
     """
     failed = replace(_record(), state=SessionState.FAILED)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(
@@ -1124,7 +1124,7 @@ async def test_a_launch_survives_a_notification_arriving_while_it_waits() -> Non
     """
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
     launcher = _LaunchingLauncher(_record())
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=launcher),
@@ -1179,7 +1179,7 @@ def test_a_stop_survives_a_notification_arriving_while_it_waits(action: str) -> 
     the owner has just passed a second confirmation on an irreversible kill, is told it
     already happened, and the pane survives.
     """
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),
@@ -1225,7 +1225,7 @@ async def test_the_force_confirmation_survives_a_notification_arriving_while_it_
     token just the same. Pinned separately because a fix verified only through
     `StopController.claim` would leave this one to be rediscovered.
     """
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         OWNER,
         CHAT,
         backend=backend_for(catalogue=(PROJECT,), sessions=_Launcher(_record())),

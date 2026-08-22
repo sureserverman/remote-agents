@@ -52,6 +52,7 @@ from remote_agents.adapters.sqlite.standing_notification_store import (
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
+    build_private_bot,
     run_private_bot,
 )
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
@@ -719,7 +720,9 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
         hide_in_console=console.hide,
     )
     return ServiceComposition(
-        PrivateBotBoundary(
+        # The factory, not the class: it wires the stop controller, the live view and the
+        # notifier, which the boundary used to build for itself out of whatever it had.
+        build_private_bot(
             secrets.owner_user_id,
             secrets.owner_chat_id,
             # The durable store, not the in-memory default: a restart used to void every

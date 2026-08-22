@@ -14,7 +14,10 @@ from remote_agents.adapters.projects.registry_writer import RegistryProjectRecor
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
+from remote_agents.adapters.telegram.service import (
+    _TextEntry,
+    build_private_bot,
+)
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.application.project_admin import ProjectCreationService
@@ -101,7 +104,7 @@ async def test_a_project_created_in_the_wizard_launches_through_the_ordinary_pat
     try:
         provider = ProjectCatalogueProvider(registry_path, dev_root)
         terminal = FakeTerminal()
-        boundary = PrivateBotBoundary(
+        boundary = build_private_bot(
             OWNER,
             CHAT,
             backend=backend_for(

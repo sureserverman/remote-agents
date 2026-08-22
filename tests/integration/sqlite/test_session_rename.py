@@ -173,7 +173,7 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     """
     from fake_telegram import FakeChat
 
-    from remote_agents.adapters.telegram.service import PrivateBotBoundary
+    from remote_agents.adapters.telegram.service import build_private_bot
     from remote_agents.application.project_catalog import CatalogProject
     from remote_agents.application.services import SessionService
 
@@ -196,7 +196,7 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
     store = _store(tmp_path)
     await store.save(_record())
     service = SessionService(store, _NoTerminal())
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

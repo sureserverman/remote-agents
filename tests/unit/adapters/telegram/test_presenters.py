@@ -14,7 +14,7 @@ from remote_agents.adapters.telegram.presenters import (
     bounded_text,
     render_message,
 )
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -76,7 +76,7 @@ def _sessions_boundary(*records: SessionRecord) -> PrivateBotBoundary:
         async def refresh_readiness(self) -> None:
             return None
 
-    return PrivateBotBoundary(
+    return build_private_bot(
         7,
         11,
         backend=backend_for(

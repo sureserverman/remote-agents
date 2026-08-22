@@ -9,7 +9,11 @@ import pytest
 from backends import backend_for
 from fake_telegram import LoneMessageBot
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary, _TextEntry
+from remote_agents.adapters.telegram.service import (
+    PrivateBotBoundary,
+    _TextEntry,
+    build_private_bot,
+)
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -82,7 +86,7 @@ class FakeUpdate:
 
 def _boundary(creator: FakeCreator | None = None, **wiring: object) -> PrivateBotBoundary:
     """`wiring` goes to the backend, which is where the use cases live now."""
-    return PrivateBotBoundary(OWNER, CHAT, backend=backend_for(projects=creator, **wiring))
+    return build_private_bot(OWNER, CHAT, backend=backend_for(projects=creator, **wiring))
 
 
 def _buttons(rendered: dict[str, object]) -> list[str]:

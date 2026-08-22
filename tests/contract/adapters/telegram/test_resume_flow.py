@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from backends import SessionUseCaseDouble, backend_for
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.project_catalog import CatalogProject
@@ -82,7 +82,7 @@ async def test_resume_picker_is_opaque_paginated_and_is_a_single_mutating_press(
     )
     resolved = ResolvedConversation(summary, ProviderConversationId("provider-private-id"))
     launcher = Launcher()
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -124,7 +124,7 @@ async def test_resume_picker_renders_a_bounded_provider_title_without_its_source
         "A useful title that comfortably identifies this conversation",
     )
     resolved = ResolvedConversation(summary, ProviderConversationId("provider-private-id"))
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

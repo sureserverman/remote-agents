@@ -35,7 +35,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -94,7 +94,7 @@ class _Launcher(SessionUseCaseDouble):
 
 async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
-    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=_Launcher(record)))
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Launcher(record)))
     detail = await boundary._detail_reply(str(record.session_id))
     return {
         _LABEL_TO_ACTION[button.text]
@@ -191,7 +191,7 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     """The Remote Control rows the bot's detail view actually puts on screen."""
     from remote_agents.adapters.telegram.wizard import ProfileAvailability
 
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(sessions=_Launcher(record)),

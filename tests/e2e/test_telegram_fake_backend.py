@@ -17,7 +17,7 @@ from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.errors import SessionNotFoundError
@@ -145,7 +145,7 @@ def _boundary(*records: SessionRecord) -> PrivateBotBoundary:
         async def refresh_readiness(self) -> None:
             return None
 
-    return PrivateBotBoundary(
+    return build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -196,7 +196,7 @@ class _RenamingLauncher(SessionUseCaseDouble):
 
 def _renameable(record: SessionRecord) -> tuple[PrivateBotBoundary, _RenamingLauncher]:
     launcher = _RenamingLauncher(record)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -612,7 +612,7 @@ class _TrustLauncher(SessionUseCaseDouble):
 
 def _trust_blocked() -> tuple[PrivateBotBoundary, _TrustLauncher]:
     launcher = _TrustLauncher(_a_running_session(SessionState.FAILED))
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -1340,7 +1340,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
         async def refresh_readiness(self) -> None:
             return None
 
-    before = PrivateBotBoundary(
+    before = build_private_bot(
         7,
         11,
         backend=backend_for(sessions=_Launcher()),
@@ -1354,7 +1354,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     connection.close()
 
     reopened = open_database(database)
-    after = PrivateBotBoundary(
+    after = build_private_bot(
         7,
         11,
         backend=backend_for(sessions=_Launcher()),
@@ -1394,7 +1394,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
             return None
 
     connection = open_database(tmp_path / "sessions.sqlite3")
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(sessions=_Launcher()),

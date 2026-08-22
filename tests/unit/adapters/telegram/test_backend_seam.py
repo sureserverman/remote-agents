@@ -27,7 +27,7 @@ import pytest
 from backends import backend_for
 from fake_telegram import FakeChat
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 
 OWNER = 7
 CHAT = 11
@@ -99,7 +99,7 @@ async def test_the_boundary_drives_the_backend_it_was_given() -> None:
     """The seam is real, not just renamed: the object handed in is the one that gets used."""
     launcher = _Launcher()
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    boundary = PrivateBotBoundary(OWNER, CHAT, backend=backend_for(sessions=launcher))
+    boundary = build_private_bot(OWNER, CHAT, backend=backend_for(sessions=launcher))
 
     await boundary.sessions_command(chat.message_update("/sessions"), None)
 
@@ -121,8 +121,8 @@ async def test_help_advertises_only_what_the_backend_carries(wired: str, adverti
     where the two are held apart.
     """
     chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
-    without = PrivateBotBoundary(OWNER, CHAT, backend=backend_for(sessions=_Launcher()))
-    with_it = PrivateBotBoundary(
+    without = build_private_bot(OWNER, CHAT, backend=backend_for(sessions=_Launcher()))
+    with_it = build_private_bot(
         OWNER, CHAT, backend=backend_for(sessions=_Launcher(), **{wired: object()})
     )
 

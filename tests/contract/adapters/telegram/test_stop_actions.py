@@ -9,7 +9,7 @@ from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
@@ -162,7 +162,7 @@ def _stopped_boundary(*records: SessionRecord) -> PrivateBotBoundary:
         async def refresh_readiness(self) -> None:
             return None
 
-    return PrivateBotBoundary(
+    return build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -344,7 +344,7 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     offered = _a_session(SessionState.RUNNING)
     moved_on = _a_session(SessionState.PRESERVED)
     launcher = _MovedOnLauncher(moved_on)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -403,7 +403,7 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     """
     record = _a_session()
     launcher = _MovedOnLauncher(record)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

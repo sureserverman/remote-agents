@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from backends import SessionUseCaseDouble, backend_for
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.adapters.tmux.codec import attach_command
 from remote_agents.application.commands import InspectQuery
 from remote_agents.application.project_catalog import CatalogProject
@@ -52,7 +52,7 @@ async def test_copy_attach_requires_live_matching_project_and_profile_evidence()
         SessionState.RUNNING,
         datetime.now(UTC),
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -100,7 +100,7 @@ async def test_a_preserved_pane_is_offered_a_read_only_attach() -> None:
         SessionState.PRESERVED,
         datetime.now(UTC),
     )
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(
@@ -141,7 +141,7 @@ async def test_copy_attach_is_hidden_when_the_pane_is_not_currently_live() -> No
         SessionState.RUNNING,
         datetime.now(UTC),
     )
-    boundary = PrivateBotBoundary(7, 11, backend=backend_for(sessions=Launcher(record, None)))
+    boundary = build_private_bot(7, 11, backend=backend_for(sessions=Launcher(record, None)))
 
     detail = await boundary._detail_reply(str(session_id))
 

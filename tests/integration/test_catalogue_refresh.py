@@ -13,7 +13,7 @@ from remote_agents.adapters.projects.registry_writer import RegistryProjectRecor
 from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.adapters.tmux.gateway import TmuxGateway
@@ -246,7 +246,7 @@ async def test_boundary_refresh_replaces_the_catalogue_and_clears_cached_views(
     dev_root: Path, registry_path: Path
 ) -> None:
     provider = ProjectCatalogueProvider(registry_path, dev_root)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         1,
         2,
         backend=backend_for(
@@ -264,7 +264,7 @@ async def test_boundary_refresh_replaces_the_catalogue_and_clears_cached_views(
 
 
 async def test_boundary_refresh_is_inert_without_a_catalogue_source() -> None:
-    boundary = PrivateBotBoundary(1, 2, backend=backend_for(catalogue=()))
+    boundary = build_private_bot(1, 2, backend=backend_for(catalogue=()))
 
     await boundary.refresh_catalogue()
 
@@ -296,7 +296,7 @@ def _usage(opaque_id: str, count: int, days_ago: int) -> ProjectUsage:
 async def _ranked_boundary(dev_root: Path, registry_path: Path, usage) -> PrivateBotBoundary:
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     launcher = _UsageLauncher(usage)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         1,
         2,
         backend=backend_for(
@@ -352,7 +352,7 @@ async def test_a_ranked_catalogue_is_re_read_on_the_next_refresh(
     newest = next(project for project in catalogue if project.name == "new-project")
     existing = next(project for project in catalogue if project.name == "existing")
     launcher = _UsageLauncher([_usage(existing.opaque_id, 5, 1)])
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         1,
         2,
         backend=backend_for(
@@ -400,7 +400,7 @@ def _picker_boundary(
 ) -> tuple[PrivateBotBoundary, _CountingSource]:
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     source = _CountingSource(provider)
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         1, 2, backend=backend_for(catalogue=provider.refresh().catalogue, refresh_catalogue=source)
     )
     return boundary, source
@@ -460,7 +460,7 @@ async def test_an_unranked_catalogue_survives_a_launcher_that_cannot_report_usag
     """Not a degraded mode: it is the composition every TUI-less test uses."""
     provider = ProjectCatalogueProvider(registry_path, dev_root)
     unranked = provider.refresh().catalogue
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         1,
         2,
         backend=backend_for(

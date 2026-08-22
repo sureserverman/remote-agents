@@ -32,7 +32,7 @@ import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import PrivateBotBoundary
+from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.conversations import resume_available
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
@@ -96,7 +96,7 @@ class _Conversations:
 
 async def _telegram_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
     """The conversation references the bot renders as choosable rows."""
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
     reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
@@ -147,7 +147,7 @@ async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
 
 async def _telegram_said(summaries: tuple[ConversationSummary, ...]) -> str:
     """Everything the bot's conversation list put in front of the owner."""
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7, 11, backend=backend_for(catalogue=(_PROJECT,), conversations=_Conversations(summaries))
     )
     reply = await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
@@ -288,7 +288,7 @@ async def test_neither_surface_resumes_a_conversation_the_policy_refuses() -> No
     refused = _summary(_FutureConversationState.ARCHIVED)
     conversations = _Conversations((refused,))
 
-    boundary = PrivateBotBoundary(
+    boundary = build_private_bot(
         7,
         11,
         backend=backend_for(

@@ -1,6 +1,6 @@
 """The test factory that builds a `Backend` the way the composition root does.
 
-Stage 3 types both frontends against `Backend`, and there are 79 `PrivateBotBoundary(`
+Stage 3 types both frontends against `Backend`, and there are 79 boundary
 construction sites plus 48 `TuiContext(` ones across the suite. Almost none of them care
 about the backend as a whole: a navigation test wants one launcher that lists one session,
 a wizard test wants a project creator and nothing else. Without a factory, typing the
