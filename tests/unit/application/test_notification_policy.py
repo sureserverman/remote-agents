@@ -28,6 +28,7 @@ from remote_agents.application.notification_policy import (
     SessionGroup,
     due,
     for_update,
+    forget_expired,
     grouped_for_delivery,
     record_sent,
     shown_in_message,
@@ -367,3 +368,69 @@ def test_news_is_due_when_its_own_window_has_passed_and_not_before() -> None:
         "at two repeats the window is eight minutes, and seven is inside it"
     )
     assert due(activity, sent, OBSERVED + timedelta(minutes=8), rate_limit=rate_limit)
+
+
+# Retention: how long a lapsed entry's repeat count is kept ---------------------------------
+
+
+def test_an_entry_at_zero_repeats_is_kept_for_the_floor_not_for_its_own_window() -> None:
+    """DEC-031's carried correction, asserted at the exact point the old rule broke.
+
+    Under a horizon of `window(repeats) * 2` a fresh entry lived four minutes. This asserts the
+    floor instead: at zero repeats the entry is still held well past that, because the horizon
+    does not consult the count at all.
+
+    The bootstrapping problem is why a proportional horizon cannot fix itself -- the entry must
+    already have a high count to be kept long enough to earn a high count -- and it is why this
+    case is written at `repeats=0` rather than anywhere more comfortable.
+    """
+    rate_limit = timedelta(seconds=120)
+    sent = {(SESSION_A, ActivityKind.COMPLETED): Sent(OBSERVED, 0)}
+
+    forget_expired(sent, OBSERVED + timedelta(minutes=5), rate_limit=rate_limit)
+
+    assert sent, "a fresh entry was discarded on a horizon computed from its own zero count"
+
+
+def test_a_kind_reporting_slower_than_its_first_window_still_reaches_the_taper() -> None:
+    """DEC-031's measurement, run: 12 messages over eight hours, not 96.
+
+    A `Stop` fires per turn and a turn routinely takes longer than four minutes, so a kind
+    reporting every five is the *ordinary* case rather than a corner. Under the old horizon its
+    entry was always already discarded, was re-created at zero, and so could never reach the
+    first doubling -- 96 notifications over eight hours, every one of them individually true.
+
+    Simulated end to end rather than asserted step by step, because the defect is a property of
+    the whole run: every individual step was correct, and only the total was wrong.
+    """
+    rate_limit = timedelta(seconds=120)
+    sent: dict[tuple[str, ActivityKind], Sent] = {}
+    activity = _observed(SESSION_A, ActivityKind.COMPLETED, detail="finished a turn")
+    delivered = 0
+
+    for step in range(0, 8 * 60, 5):
+        moment = OBSERVED + timedelta(minutes=step)
+        forget_expired(sent, moment, rate_limit=rate_limit)
+        if due(activity, sent, moment, rate_limit=rate_limit):
+            record_sent(sent, SESSION_A, [ActivityKind.COMPLETED], moment)
+            delivered += 1
+
+    assert delivered == 12, (
+        f"the taper delivered {delivered} messages over eight hours; it intends 12, "
+        "and the defect DEC-031 records produced 96"
+    )
+
+
+def test_a_kind_that_genuinely_stopped_reporting_is_eventually_forgotten() -> None:
+    """The floor is a floor, not a removal: the map is still bounded.
+
+    One entry per (session, kind) is small and unbounded over the life of a service launching
+    sessions all day, so forgetting is what bounds it. The whole price of the floor is that a
+    silent kind is forgotten an hour or so later than it used to be.
+    """
+    rate_limit = timedelta(seconds=120)
+    sent = {(SESSION_A, ActivityKind.COMPLETED): Sent(OBSERVED, 0)}
+
+    forget_expired(sent, OBSERVED + timedelta(hours=3), rate_limit=rate_limit)
+
+    assert sent == {}, "a session that stopped reporting must not be kept for ever"

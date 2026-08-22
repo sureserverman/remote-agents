@@ -334,3 +334,70 @@ def record_sent(
     for other, entry in sent.items():
         if other[0] == session_id and other[1] not in carried and entry.repeats:
             sent[other] = Sent(entry.sent_at, 0)
+
+
+RETENTION_WINDOWS = 2
+"""How many of its own windows an entry is kept for after its suppression has lapsed.
+
+Two, so a repeat arriving any time before the window has passed *again* is still recognised as
+a repeat. One would mean the count died with the suppression it caused, and the backoff could
+never reach its second step.
+"""
+
+
+def forget_expired(
+    sent: MutableMapping[tuple[str, ActivityKind], Sent],
+    moment: datetime,
+    *,
+    rate_limit: timedelta,
+) -> None:
+    """Keep the suppression map the size of what it is still suppressing.
+
+    One entry per (session, kind) is small, but it is unbounded over the life of a service
+    that launches sessions all day, and an entry older than its window suppresses nothing.
+
+    Measured against **its own** window rather than the base one. Under a fixed horizon a
+    backed-off entry -- the ones that matter, because they are the repeating ones -- was
+    forgotten while it was still suppressing, which silently restored the every-two-minutes
+    behaviour the backoff exists to remove, and did it only for standing conditions.
+
+    And kept for `RETENTION_WINDOWS` times that, because the repeat count has to outlive
+    the suppression it produced. Dropped the instant the window closed, the entry took the
+    count with it, so the very next repeat looked like a first sighting and reset the
+    backoff to two minutes -- a backoff that could never reach its second step, which is
+    exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
+    one; the entry is inert during it, since the window has already passed.
+
+    **Under a floor, and the floor is the whole of the taper working at all.** Both terms
+    above scale with the count they exist to preserve, so at zero repeats the horizon was
+    four minutes -- and a kind observed less often than *that* always found its own entry
+    already discarded, was re-created at zero, and could never reach the first doubling.
+    The counter is what makes each wait longer, and it could not climb. `Stop` fires per
+    turn and a turn routinely takes longer than four minutes, so this was the ordinary
+    case: a lone `Stop` every five minutes produced 96 messages over eight hours against a
+    taper intending twelve, and every notification in the pile was individually true.
+
+    The bootstrapping problem is why a proportional horizon cannot fix itself: the entry
+    must already have a high count to be kept long enough to earn a high count. So the
+    floor is a fixed quantity that does not consult the count at all -- the widest window
+    the backoff can ever reach. Anything reporting more often than that hourly cap now
+    accumulates, which is every case the cap was designed for.
+
+    It is a floor rather than a removal because the map is still unbounded over the life
+    of a service launching sessions all day, and forgetting is what bounds it. A kind that
+    genuinely stops reporting is still forgotten -- an hour or so later than before, one
+    small entry per (session, kind) -- and that is the whole price.
+
+    `moment` is a parameter rather than a clock read here, which is what lets the eight-hour
+    run in `tests/unit/application/test_notification_policy.py` be a loop over integers
+    instead of a fake clock threaded through a notifier.
+    """
+    floor = window(MAXIMUM_BACKOFF_DOUBLINGS, rate_limit=rate_limit)
+    expired = [
+        key
+        for key, entry in sent.items()
+        if moment - entry.sent_at
+        >= max(window(entry.repeats, rate_limit=rate_limit) * RETENTION_WINDOWS, floor)
+    ]
+    for key in expired:
+        del sent[key]

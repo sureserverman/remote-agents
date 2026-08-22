@@ -42,11 +42,11 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.application.notification_policy import (
-    MAXIMUM_BACKOFF_DOUBLINGS,
     Sent,
     SessionGroup,
     due,
     for_update,
+    forget_expired,
     grouped_for_delivery,
     merged,
     record_sent,
@@ -54,7 +54,6 @@ from remote_agents.application.notification_policy import (
     told,
     unheard,
     unsaid,
-    window,
 )
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
@@ -316,14 +315,6 @@ class StandingNotificationStore:
         self._standing.pop((chat_id, session_id), None)
 
 
-_RETENTION_WINDOWS = 2
-"""How many of its own windows an entry is kept for after its suppression has lapsed.
-
-Two, so a repeat arriving any time before the window has passed *again* is still recognised as
-a repeat. One would mean the count died with the suppression it caused, and the backoff could
-never reach its second step.
-"""
-
 _MAXIMUM_SENDS_PER_PASS = 10
 """The ceiling the per-(session, kind) limit cannot provide, because it is per key.
 
@@ -564,7 +555,7 @@ class ActivityNotifier:
         self._enqueue(activities)
         if self._bot is None:
             return 0
-        self._forget_expired_limits()
+        forget_expired(self._last_sent, self._now(), rate_limit=self._rate_limit)
         # Before the sends, not after. A session the owner has just stopped may also be
         # holding an observation in the queue; retiring first means its message leaves the
         # chat and `_display_for` then declines the leftover, rather than the pass amending a
@@ -736,14 +727,16 @@ class ActivityNotifier:
         in newer words and is amended in silently. The first alert is as fast as it ever was;
         what is taken away is the second and later copies of it.
 
-        **It closes them and does not restore the taper**, which is worth stating here because
-        the numbers above invite the opposite reading. `_forget_expired_limits` prunes an entry
-        at `window(repeats) * _RETENTION_WINDOWS`, which at zero repeats is four minutes -- so
-        a kind observed less often than that finds no entry, is re-created at zero, and never
-        doubles at all. Measured after this change: a lone `Stop` every four minutes still
-        produces 120 messages in eight hours. That defect is older than this module's grouping
-        and is `_forget_expired_limits`' to answer, not this method's; it is named here so the
-        next reader does not take "the storm is closed" for "the backoff works".
+        **It closes them, and the taper is now restored too** -- which is worth stating here
+        because this paragraph used to say the opposite and was left behind by the fix. It read
+        that retention prunes an entry at `window(repeats) * RETENTION_WINDOWS`, four minutes at
+        zero repeats, so a kind observed less often than that never doubles at all, and that a
+        lone `Stop` every four minutes "still produces 120 messages in eight hours". DEC-031's
+        count-independent floor answered that, and the horizon has not been that expression on
+        its own since. Measured against the policy as it stands, a lone `Stop` every four
+        minutes now produces **12** messages in eight hours, which is what the taper intends;
+        `application/notification_policy.forget_expired` is where the floor lives and
+        `test_a_kind_reporting_slower_than_its_first_window_still_reaches_the_taper` is the run.
         """
         moment = self._now()
         standing = self._recall(group.session_id)
@@ -970,55 +963,6 @@ class ActivityNotifier:
             _LOG.warning("an activity notification was sent without its Open session button")
             return None
         return token
-
-    def _forget_expired_limits(self) -> None:
-        """Keep the rate-limit map the size of what it is still suppressing.
-
-        One entry per (session, kind) is small, but it is unbounded over the life of a service
-        that launches sessions all day, and an entry older than its window suppresses nothing.
-
-        Measured against **its own** window rather than the base one. Under a fixed horizon a
-        backed-off entry -- the ones that matter, because they are the repeating ones -- was
-        forgotten while it was still suppressing, which silently restored the every-two-minutes
-        behaviour the backoff exists to remove, and did it only for standing conditions.
-
-        And kept for `_RETENTION_WINDOWS` times that, because the repeat count has to outlive
-        the suppression it produced. Dropped the instant the window closed, the entry took the
-        count with it, so the very next repeat looked like a first sighting and reset the
-        backoff to two minutes -- a backoff that could never reach its second step, which is
-        exactly as good as no backoff. The extra life is what makes a repeat recognisable *as*
-        one; the entry is inert during it, since the window has already passed.
-
-        **Under a floor, and the floor is the whole of the taper working at all.** Both terms
-        above scale with the count they exist to preserve, so at zero repeats the horizon was
-        four minutes -- and a kind observed less often than *that* always found its own entry
-        already discarded, was re-created at zero, and could never reach the first doubling.
-        The counter is what makes each wait longer, and it could not climb. `Stop` fires per
-        turn and a turn routinely takes longer than four minutes, so this was the ordinary
-        case: a lone `Stop` every five minutes produced 96 messages over eight hours against a
-        taper intending twelve, and every notification in the pile was individually true.
-
-        The bootstrapping problem is why a proportional horizon cannot fix itself: the entry
-        must already have a high count to be kept long enough to earn a high count. So the
-        floor is a fixed quantity that does not consult the count at all -- the widest window
-        the backoff can ever reach. Anything reporting more often than that hourly cap now
-        accumulates, which is every case the cap was designed for.
-
-        It is a floor rather than a removal because the map is still unbounded over the life
-        of a service launching sessions all day, and forgetting is what bounds it. A kind that
-        genuinely stops reporting is still forgotten -- an hour or so later than before, one
-        small entry per (session, kind) -- and that is the whole price.
-        """
-        moment = self._now()
-        floor = window(MAXIMUM_BACKOFF_DOUBLINGS, rate_limit=self._rate_limit)
-        expired = [
-            key
-            for key, sent in self._last_sent.items()
-            if moment - sent.sent_at
-            >= max(window(sent.repeats, rate_limit=self._rate_limit) * _RETENTION_WINDOWS, floor)
-        ]
-        for key in expired:
-            del self._last_sent[key]
 
 
 def _markup(keyboard: tuple[tuple[Button, ...], ...]) -> InlineKeyboardMarkup:

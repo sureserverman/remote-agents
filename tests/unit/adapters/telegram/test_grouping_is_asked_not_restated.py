@@ -146,3 +146,22 @@ def test_the_adapter_never_stamps_a_repeat_count() -> None:
     ]
 
     assert offenders == [], f"the adapter is stamping repeat counts itself: {offenders}"
+
+
+def test_the_adapter_never_ages_an_entry_against_a_horizon() -> None:
+    """Retention and dueness both reduce to "how old is this entry", and both moved.
+
+    `sent_at` is what neither can be written without: a horizon is a comparison against it, and
+    `due` is the same comparison with a different threshold. The adapter still *holds* the map
+    -- residence is not policy -- and passes it whole, so it never needs to read inside an
+    entry. The moment it does, the count-independent floor DEC-031 records has a second
+    implementation, and that one will be the proportional horizon again, because the
+    proportional horizon is the obvious thing to write.
+    """
+    offenders = [
+        _where(path, node)
+        for path, node in _nodes()
+        if isinstance(node, ast.Attribute) and node.attr in {"sent_at", "repeats"}
+    ]
+
+    assert offenders == [], f"the adapter is reading inside a suppression entry: {offenders}"
