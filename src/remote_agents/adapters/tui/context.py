@@ -77,8 +77,8 @@ class TuiContext:
 
         So the guarantee is restored rather than described. It is the contract this class
         already had; the bot keeps the optional one because it genuinely degrades, answering
-        "that is unavailable" at thirteen guarded entry points -- the handlers that answer
-        the operator, not the internal predicates behind them.
+        "that is unavailable" at thirteen guarded entry points -- an inherited figure no test
+        asserts; the sweep for `backend.<field> is None` returns 20 sites.
         """
         # Spelled out rather than looped over a tuple of field names. The loop wanted an
         # attribute lookup by name, which is not a capability probe here — the names are

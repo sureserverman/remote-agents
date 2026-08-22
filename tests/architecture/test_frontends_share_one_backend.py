@@ -42,13 +42,21 @@ the source set and the literal grow together, which is exactly what a careless e
 **Stated limits, because a check that overstates its coverage is worse than one that admits
 its scope** (DEC-019):
 
-- This is a **static, lexical** sweep over `src/remote_agents/adapters/`. It sees a call
-  written in an adapter's own source, and nothing else.
+- This is a **static, lexical** sweep. Rules 1-3 read `src/remote_agents/adapters/`; **rule 4
+  reads `application/` as well**, which is the widening it exists for. It sees a call written
+  in those trees' own source, and nothing else. (This bullet said "over
+  `src/remote_agents/adapters/`" flatly until the close-out evaluator noticed it contradicted
+  rule 4 four bullets down.)
 - It cannot see a construction reached through a variable holding a class, through
   `globals()`, through an import performed at runtime, or from outside this package.
 - Rule 2 catches a probe whose attribute name is a **string literal**. A probe built from a
   computed string is invisible to it, and deliberately so: the alternative is forbidding
   `getattr` outright, which this codebase legitimately uses on Textual objects.
+- Rule 4 reads a `**` splat only when the mapping is a literal at the call site. A mapping
+  built first (`opts = {"exclusive": True}; run_worker(work, **opts)`) or keyed by a
+  computed name (`**{K: True}`) is invisible to it; a module constant as the *value*
+  (`exclusive=EXCL`) is caught, because the argument is still named. Found by the close-out
+  evaluator.
 - Rule 3 compares **names**, which is the one place a name is the right unit -- a
   redefinition under the same name is precisely the failure. It does not detect a shared use
   case copied into an adapter under a *different* name; nothing static can. It counts
@@ -56,10 +64,15 @@ its scope** (DEC-019):
   outside it, each for a stated reason (`_defined_names`).
 - Rule 1 matches the import's module by equality on `remote_agents.application.commands`, so
   a command reached through a package-level re-export (`from remote_agents.application import
-  ForceStopCommand`) would arrive as a bare name and pass. Not reachable today -- no
-  `__init__.py` under `src/remote_agents/` re-exports anything, and `ruff`'s `F403` refuses
-  the star-import spelling -- and recorded rather than fixed because closing it means
-  resolving re-exports, which is a different kind of check. Found by the Stage 3 gate.
+  ForceStopCommand`) would arrive as a bare name and pass. Not reachable today, but **not for
+  the reason first written here**: this bullet claimed no `__init__.py` under
+  `src/remote_agents/` re-exports anything, and three do -- `adapters/tui/screens/` re-exports
+  21 names, `domain/` 11, `adapters/tui/` one. The conclusion survives on the narrower fact
+  that `application/__init__.py` is a bare docstring, and `ruff`'s `F403` refuses the
+  star-import spelling. Recorded rather than fixed because closing it means resolving
+  re-exports, a different kind of check. Found by the Stage 3 gate; its false reason found by
+  the close-out evaluator, which is this file's own hazard -- a wrong comment on a guard --
+  landing on the guard's own limits section.
 
 What these prove is that no *lexically visible* path re-grows the duplication. That is what
 they are worth, and no more.
@@ -155,6 +168,22 @@ def _surface_modules() -> list[tuple[str, ast.Module]]:
     ]
 
 
+def _names_the_commands_module(node: ast.ImportFrom) -> bool:
+    """Whether an `ImportFrom` names `application.commands`, absolutely or relatively.
+
+    An absolute import carries the full dotted path and `level=0`. A relative one carries
+    only the tail -- `from ...application.commands import X` is `module="application.commands",
+    level=3` -- so equality against the absolute path silently fails to match it. Matching the
+    tail over-approximates by exactly one shape: some *other* package's `application.commands`
+    reached relatively. Nothing like that exists here, and the direction is the safe one.
+    """
+    if node.module is None:
+        return False
+    if node.level == 0:
+        return node.module == _COMMANDS_MODULE
+    return _COMMANDS_MODULE == node.module or _COMMANDS_MODULE.endswith(f".{node.module}")
+
+
 def _stop_command_constructions(tree: ast.Module) -> set[str]:
     """Every stop command constructed in this module, however the module was imported.
 
@@ -165,6 +194,7 @@ def _stop_command_constructions(tree: ast.Module) -> set[str]:
         from remote_agents.application.commands import ForceStopCommand as Force
         from remote_agents.application import commands          # commands.ForceStopCommand(...)
         import remote_agents.application.commands as cmds       # cmds.ForceStopCommand(...)
+        from ...application.commands import ForceStopCommand    # relative, `level=3`
 
     **The middle one is the ordinary way to write it in Python, and the first version of this
     file missed it** — its `bound` set stayed empty for that import, so the intersection with
@@ -180,10 +210,18 @@ def _stop_command_constructions(tree: ast.Module) -> set[str]:
     unrelated object with a `ForceStopCommand` attribute would be reported — and that is the
     safe direction, because a false positive here is loud and one line to fix while a false
     negative is a guard that silently guards nothing.
+
+    **The fifth spelling was missed for the same reason as the third**, and found by the
+    close-out evaluator: a relative import carries `module="application.commands"` with a
+    non-zero `level`, so an equality test against the absolute path never fires. It is
+    reachable today rather than theoretical -- `pyproject.toml` selects `E`, `F`, `I` and
+    `UP`, and `TID252` (ban-relative-imports) is not among them, so nothing in the toolchain
+    refuses the spelling. `_names_the_commands_module` resolves it by tail rather than by
+    equality.
     """
     direct: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == _COMMANDS_MODULE:
+        if isinstance(node, ast.ImportFrom) and _names_the_commands_module(node):
             for alias in node.names:
                 if alias.name in _STOP_COMMANDS:
                     direct.add(alias.asname or alias.name)
@@ -307,7 +345,14 @@ def _defined_names(tree: ast.Module) -> set[str]:
     name bound inside a function body is invisible here, nested blocks or not, which is what
     the `a local inside a module-level "if"` case pins from the other side.
 
-    Two costs, disclosed:
+    **`global` is the exception that proves the scope rule**, and it was missed until the
+    close-out evaluator wrote one: `def _install(impl): global dispatch_stop; dispatch_stop =
+    impl` binds a module global from inside a function body, which is the one statement that
+    reaches out of its own scope, and the walk above stops at every `def`. So `ast.Global` is
+    collected separately, at any depth. It over-approximates by one shape -- a bare `global X`
+    that never assigns -- and that is the safe direction, and the same one Rule 1 takes.
+
+    Three costs, disclosed:
 
     1. `class Screen: resolve_stop = _impl` is a class-attribute rebind and is not caught. A
        class body is its own namespace, so this is the same line drawn consistently rather
@@ -315,11 +360,20 @@ def _defined_names(tree: ast.Module) -> set[str]:
     2. An `import ... as` binding is deliberately not a definition here. An adapter importing
        `dispatch_stop` in order to *call* it is the behaviour this rule exists to encourage,
        so counting the import would fail every honest caller.
+    3. **The false-positive class this arm closed for assignments stays open for `def`.**
+       Assignments were narrowed to module scope because `available_actions`, `state_word` and
+       `notifiable` are ordinary English -- but `def`/`class` still count at any depth, so a
+       screen writing `def state_word(self, s)` as a method *is* reported. That is deliberate,
+       a method named after a shared use case being the re-duplication the rule is for, but it
+       is the same asymmetry, and it is recorded here rather than left for the next reader to
+       rediscover. Raised by the close-out evaluator.
     """
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
+        elif isinstance(node, ast.Global):
+            names.update(node.names)
     for node in _module_scope_nodes(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
@@ -562,6 +616,21 @@ def test_each_shared_use_case_module_contributes_names(filename: str) -> None:
             False,
         ),
         ("a class-attribute rebind", "class Screen:\n    resolve_stop = _impl\n", False),
+        # `global` is the one way a function body binds a module global, so the scope rule
+        # has to reach into a function for exactly this statement and no other. Found by the
+        # close-out evaluator, which noted the rule caught walrus and starred targets while
+        # missing the commonest spelling of the three.
+        (
+            "a `global` rebind from a function body",
+            "def _install(impl):\n    global dispatch_stop\n    dispatch_stop = impl\n",
+            True,
+        ),
+        (
+            "an ordinary local beside a `global` of another name",
+            "def f(rows):\n    global _cache\n    available_actions = list(rows)\n"
+            "    _cache = available_actions\n",
+            False,
+        ),
     ],
 )
 def test_rule_three_separates_a_redefinition_from_a_local_variable(
@@ -697,6 +766,20 @@ def test_each_rule_runs_over_a_root_it_can_actually_see(tmp_path: Path) -> None:
             "def go(a, b):\n"
             "    from remote_agents.application.commands import CleanupCommand\n"
             "    return CleanupCommand(a)\n",
+        ),
+        # A relative import carries `module="application.commands"` with a non-zero `level`,
+        # so an equality check against the absolute path walks straight past it. Reachable
+        # today: ruff selects E, F, I, UP, and TID252 (ban-relative-imports) is not among
+        # them. Found by the close-out evaluator.
+        (
+            "relative import",
+            "from ...application.commands import ForceStopCommand\n"
+            "def go(a, b):\n    return ForceStopCommand(a, b)\n",
+        ),
+        (
+            "relative import, aliased",
+            "from ...application.commands import ForceStopCommand as Force\n"
+            "def go(a, b):\n    return Force(a, b)\n",
         ),
     ],
 )

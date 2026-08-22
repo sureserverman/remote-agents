@@ -90,10 +90,12 @@ than as annotated on those three.
 
 **Optionality is a record of what a process wired, not a licence to skip wiring.** The bot's
 boundary has always answered "that is unavailable" rather than failing to start — at thirteen
-guarded entry points, meaning the handlers that answer the operator; nineteen functions in
-`adapters/telegram/service.py` carry a `backend.<field> is None` guard once the internal
-predicates and readers behind those handlers are counted too, which is the number a plain
-sweep returns. The count `backend.py` and `TuiContext` both record — so the type has
+guarded entry points. **Take the number as inherited rather than as checked**: it is stated in
+`backend.py:66` and `context.py:80`, no test asserts it, and it is not reproducible from any
+mechanical partition of the guards -- two readers tried. What *is* reproducible is twenty:
+`grep -c 'backend\.[a-z_]* is None' src/remote_agents/adapters/telegram/service.py` returns 20
+lines, in 20 distinct functions, handlers and internal predicates together. This document said
+"nineteen" for one commit, which was simply a miscount. The figure `backend.py` and `TuiContext` both record — so the type has
 to be able to represent a host that wired nothing. The
 local surface takes the opposite contract and enforces it: `TuiContext.__post_init__` refuses
 a backend missing `sessions` or `projects`. Nothing anywhere probes for a capability by name
@@ -201,9 +203,9 @@ The three modules the refactor created or consolidated under this shape:
 
 `tests/architecture/test_frontends_share_one_backend.py` rule 3 pins that these names are
 defined once, under `application/`, and that an adapter does not redefine one. That file also
-states its own limits, at length: it is a static lexical sweep over
-`src/remote_agents/adapters/`, and it does not see a shared use case copied into an adapter
-under a different name.
+states its own limits, at length: it is a static lexical sweep -- over
+`src/remote_agents/adapters/` for rules 1 to 3, and over `application/` as well for rule 4 --
+and it does not see a shared use case copied into an adapter under a different name.
 
 ## DEC-044 — the rule moves, its state does not
 

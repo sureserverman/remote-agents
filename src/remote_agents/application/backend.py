@@ -63,8 +63,10 @@ class Backend:
 
     **Optional because the bot's existing contract needs it to be, and only the bot's.**
     `PrivateBotBoundary` answers "that is unavailable" rather than failing to start, at
-    thirteen guarded entry points -- the handlers that answer the operator, not the internal
-    predicates behind them -- and it has always done so. This type records what a
+    thirteen guarded entry points, and it has always done so. (The figure predates this type
+    and no test asserts it; a sweep for `backend.<field> is None` in `service.py` returns 20
+    sites, handlers and internal predicates together. Read it as "many, everywhere", which is
+    the part that matters here.) This type records what a
     process wired, so it has to be able to record one that wired nothing — otherwise typing
     the seam would change behaviour on the hosts relying on that absence, which is the one
     thing this refactor may not do.
