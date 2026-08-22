@@ -69,7 +69,6 @@ from remote_agents.application.project_catalog import (
     rank_by_recent_use,
     search_catalogue,
 )
-from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     CLEANUP,
@@ -83,6 +82,11 @@ from remote_agents.application.session_actions import (
     remote_control_directions,
     state_word,
     trust_available,
+)
+from remote_agents.application.session_views import (
+    only_listed,
+    selectable_area,
+    session_row,
 )
 from remote_agents.application.stops import execute_stop
 from remote_agents.config import TelegramSecrets
@@ -1094,7 +1098,7 @@ class PrivateBotBoundary:
         areas = tuple(
             area
             for area in await asyncio.to_thread(self.backend.projects.available_areas)
-            if _selectable_area(area)
+            if selectable_area(area)
         )
         if not areas:
             return self._message("No area is available for a new project.")
@@ -1221,7 +1225,7 @@ class PrivateBotBoundary:
         buttons = [
             (
                 Button(
-                    _session_row_label(record),
+                    session_row(record),
                     self._callback("session.detail", str(record.session_id)),
                 ),
             )
@@ -1821,8 +1825,7 @@ class PrivateBotBoundary:
         project_names = {project.opaque_id: project.name for project in self.catalogue}
         return tuple(
             _with_project_name(record, project_names.get(str(record.project_id)))
-            for record in await self.backend.sessions.list_sessions()
-            if record.state is not SessionState.ENDED
+            for record in only_listed(await self.backend.sessions.list_sessions())
         )
 
     async def _record(self, session_value: str) -> SessionRecord | None:
@@ -2427,15 +2430,6 @@ def _entry_instruction(action: str) -> str:
     return _ENTRY_INSTRUCTIONS.get(action, "Reply below with an optional session label.")
 
 
-def _selectable_area(value: str) -> bool:
-    """Offer an existing directory only when the project identity rule also accepts it."""
-    try:
-        ProjectIdentity(area=value, name=value)
-    except ValueError:
-        return False
-    return True
-
-
 def _split_resume_page(value: str) -> tuple[str, str, int] | None:
     project_id, separator, remainder = value.partition("|")
     profile_id, separator2, page_value = remainder.partition("|")
@@ -2531,13 +2525,6 @@ def _tab(label: str, active: bool) -> str:
 
 def _button_rows(buttons: tuple[Button, ...], width: int = 2) -> tuple[tuple[Button, ...], ...]:
     return tuple(tuple(buttons[index : index + width]) for index in range(0, len(buttons), width))
-
-
-def _session_row_label(record: SessionRecord) -> str:
-    # The shared authority, not `state.value` -- the identical line in `adapters/tui/model.py`
-    # is why both surfaces rendered the two kinds of ORPHANED the same way (BL-031).
-    word = state_word(record.state, record.orphan_provenance)
-    return f"{record.display.rendered} · {word} · {age(record.created_at)}"
 
 
 def _state_explanation(state: SessionState, orphan_provenance: OrphanProvenance | None) -> str:

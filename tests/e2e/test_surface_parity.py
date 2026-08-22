@@ -7,6 +7,14 @@ checkable claim rather than a summary sentence, and losing one names itself in t
 
 Every probe drives the real app through Pilot and asserts an observable effect — a rendered
 screen, or a command that reached the launcher. None of them can pass by falling through.
+
+**"Parity" here names a checklist, not a comparison, and the file has never done otherwise.**
+Only the local surface is driven below — there is no Telegram boundary in this module. What
+is asserted is that the terminal *has* each capability the bot had, one probe per item; what
+is not asserted is that the two produce the same words for it. The cross-surface comparisons
+live in `tests/contract/*_parity.py`, and several of those now compare one shared function
+with itself and say so. Stated because a file named `test_surface_parity` is otherwise read
+as the thing that would catch a divergence, and it is not (DEC-019).
 """
 
 from __future__ import annotations

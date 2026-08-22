@@ -13,6 +13,17 @@ nothing at all and left the session on screen still running; the bot inferred "I
 in time" from the session still being listed, which is right for one of the two causes and
 confidently wrong for the other.
 
+**What changed under this file, and what it still detects (DEC-019).** Both surfaces now
+dispatch through `application/stops.py`, so the `StopFailure` each one is handed is
+necessarily the same object — the *vocabulary* half of the parity below is structural now and
+can no longer fail. What remains genuinely testable, and is the reason this file drives two
+real UIs rather than comparing two function calls, is what each surface **does with it**: the
+bot escapes it into HTML and lands it on a notice, the local surface splits it across a status
+line and a toast. A surface that reworded the summary, dropped the remedy, or rendered either
+into a region nobody reads would still satisfy every object-level assertion, and this file
+would still catch it. That is the claim; the shared dispatch narrowed it rather than voiding
+it.
+
 So there are three claims here and they fail separately:
 
 * each surface **names the cause** — the fix on that surface;

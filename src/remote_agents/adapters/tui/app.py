@@ -54,6 +54,7 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
+from remote_agents.application.session_views import only_listed
 from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import (
@@ -1098,10 +1099,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
-        records = await self._services.backend.sessions.list_sessions()
-        # ENDED is filtered exactly as the bot filters it: the record is retained for audit
-        # but there is nothing left to reach, inspect, or stop.
-        return tuple(record for record in records if record.state is not SessionState.ENDED)
+        # The comment this replaces claimed the filter matched the bot's "exactly", which was
+        # true and checked by nothing — the two were separate generator expressions over the
+        # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
+        # asserted over the whole `SessionState` set rather than over the states a reader
+        # thought to name.
+        return only_listed(await self._services.backend.sessions.list_sessions())
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.

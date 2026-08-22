@@ -20,6 +20,13 @@ evidence, it is the defect restated. So the refusal half injects a synthetic sec
 through the port, which is the only way to ask either surface what it does with one. If a real
 second state is added later, this file should keep its synthetic one anyway: it asserts the
 *mechanism*, and a real state would be one instance of it.
+
+**Still a real comparison, as of the shared-use-cases sub-plan's Stage 2 (DEC-019).** Its
+three sibling contracts were re-read at Task 2.4 and two of them had their claims narrowed,
+because the functions they compare had become one. Resume has not been merged yet — that is
+Stage 3 Task 3.2 — so both sides below are genuinely separate implementations and this file
+can genuinely fail. Re-read it when the merge lands; it is the file most likely to quietly
+become a tautology next.
 """
 
 from __future__ import annotations
