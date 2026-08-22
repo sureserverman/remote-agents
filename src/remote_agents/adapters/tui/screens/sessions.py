@@ -476,25 +476,30 @@ class SessionDetailScreen(ChoiceScreen):
         self.show_choices(self.detail_entries(record, await self._observed_trust(record)))
 
     async def _observed_trust(self, record: SessionRecord) -> TrustState:
-        """Always UNKNOWN, so "Trust this project" never renders here. **BL-005, left as found.**
+        """Always UNKNOWN, so "Trust this project" never renders here. **DEC-047, deliberate.**
 
-        This used to reach for a `trust_state` attribute on `self.services` by name, and
-        `self.services` is a `TuiContext`: no version of that class has ever had one --
-        `SessionService.trust_state` is a *backend* method. So the probe always returned None,
-        the state was always UNKNOWN, and `trust_available` always said no: the row, its
-        handler and its command are all written and none of them has ever been reachable.
+        The owner is looking at the dialog. DEC-040 has the console exchange its left pane with
+        the agent's, so on this surface the Claude Code trust prompt is on screen and is
+        answered by typing into it, exactly as it would be at any terminal. A row that re-asks
+        it would be duplication -- and worse than redundant, because it puts a second,
+        differently-worded route to a security-relevant answer beside the real one.
 
-        DEC-016 says both surfaces offer this row, so that is a defect, and it is deliberately
-        not repaired here. Typing this context against `Backend` is exactly the change that
-        would fix it by accident -- `self.services.backend.sessions.trust_state(...)` is one
-        plausible line away -- and the owner's decision on 2026-08-21 was that this refactor
-        changes no functionality. Repairing it is a separate decision, taken with the bot's
-        twin path re-read beside it.
+        The bot's twin path is not duplication and stays: there is no pane on Telegram, so a
+        trust-blocked launch surfaces as a FAILED record with nothing actionable behind it.
+        That asymmetry is the whole of DEC-047, which supersedes DEC-016's "both surfaces"
+        clause -- every argued sentence in DEC-016 was about the remote case.
 
-        Written out rather than left as a probe because the probe *looked* like a capability
-        check, and a reader could reasonably conclude the surface was asking and being told
-        no. It never asked. `tests/unit/adapters/tui/test_trust_row_bl005.py` pins both
-        halves and is deleted when BL-005 is closed.
+        **This was recorded as a defect for a day**, on the reading that DEC-016 required
+        parity, and this docstring said so. It was not a defect; the owner's reasoning had
+        simply never been written down. Spelled out here because getting it wrong in the safe
+        direction is cheap and the reverse is not: a reader who "repairs" this is adding a
+        second answer path to a security question, not restoring a missing feature.
+
+        Written out rather than left as a probe because the original probe reached for a
+        `trust_state` attribute on `self.services` by name -- and `TuiContext` has never
+        carried one, `SessionService.trust_state` being a *backend* method -- so it *looked*
+        like a capability check being told no. It never asked. Now it does not pretend to.
+        `test_the_local_surface_does_not_re_ask_for_trust.py` pins it.
 
         The `trust_available` gate below is what the guard used to be and is kept for the
         same reason the docstring above it gave: a trust-blocked `claude-remote` launch can
