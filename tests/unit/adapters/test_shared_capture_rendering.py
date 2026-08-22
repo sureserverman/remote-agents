@@ -71,9 +71,9 @@ def test_the_pane_passes_its_own_bounds_to_the_shared_renderer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[_Call] = []
-    monkeypatch.setattr(sessions, "render_bounded_capture", _recording_into(calls))
+    monkeypatch.setattr(sessions, "render_capture", _recording_into(calls))
 
-    sessions.render_capture("agent output", ("secret",))
+    sessions.capture_for_pane("agent output", ("secret",))
 
     assert calls == [_Call(b"agent output", _PANE_MAX_LINES, _PANE_MAX_BYTES, ("secret",))]
 
@@ -82,10 +82,10 @@ def test_the_two_surfaces_do_not_share_a_bound(monkeypatch: pytest.MonkeyPatch) 
     """Stated as its own claim, so unifying the numbers cannot pass by editing one constant."""
     calls: list[_Call] = []
     monkeypatch.setattr(inspection, "render_capture", _recording_into(calls))
-    monkeypatch.setattr(sessions, "render_bounded_capture", _recording_into(calls))
+    monkeypatch.setattr(sessions, "render_capture", _recording_into(calls))
 
     inspect_capture(b"agent output")
-    sessions.render_capture("agent output", ())
+    sessions.capture_for_pane("agent output", ())
 
     assert calls[0].max_lines != calls[1].max_lines
     assert calls[0].max_bytes != calls[1].max_bytes
@@ -93,7 +93,7 @@ def test_the_two_surfaces_do_not_share_a_bound(monkeypatch: pytest.MonkeyPatch) 
 
 def test_each_surface_still_words_the_binary_refusal_for_itself() -> None:
     bot = inspect_capture(b"safe\x00binary")
-    pane = sessions.render_capture("safe\x00binary", ())
+    pane = sessions.capture_for_pane("safe\x00binary", ())
 
     assert bot.kind == "refused"
     assert bot.text == "binary output cannot be displayed."
@@ -112,12 +112,12 @@ def test_the_bot_keeps_its_truncation_notice_and_the_pane_never_grows_one(
     )
     monkeypatch.setattr(
         sessions,
-        "render_bounded_capture",
+        "render_capture",
         lambda raw, **_: RenderedCapture("recorded output", True),
     )
 
     bot = inspect_capture(b"agent output")
-    pane = sessions.render_capture("agent output", ())
+    pane = sessions.capture_for_pane("agent output", ())
 
     assert bot.truncated is True
     assert bot.text == "recorded output\n[output truncated]"

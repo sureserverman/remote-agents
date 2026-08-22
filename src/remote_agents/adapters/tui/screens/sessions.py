@@ -29,11 +29,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
-
-# Aliased because this module keeps a `render_capture` of its own: the shared function is
-# the bounded rendering both surfaces share, and the local one is this surface's presenter
-# around it, which owns the wording of a refusal.
-from remote_agents.application.captures import render_capture as render_bounded_capture
+from remote_agents.application.captures import render_capture
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -788,7 +784,7 @@ class SessionDetailScreen(ChoiceScreen):
                 _LOG.exception("capture failed")
                 self.announce(f"The output could not be captured: {error}")
                 return
-            text = render_capture(captured, self.services.capture_redactions)
+            text = capture_for_pane(captured, self.services.capture_redactions)
             await self.advance_to(InspectScreen(text or "This session has produced no output yet."))
 
     async def show_rename(self) -> None:
@@ -1098,7 +1094,7 @@ class InspectScreen(ChoiceScreen):
         return super().check_action(action, parameters)
 
 
-def render_capture(captured: str, redactions: tuple[str, ...]) -> str:
+def capture_for_pane(captured: str, redactions: tuple[str, ...]) -> str:
     """Turn a raw capture into what the output pane should show.
 
     `application/captures.render_capture` is the shared bounded rendering, so nothing is
@@ -1107,11 +1103,18 @@ def render_capture(captured: str, redactions: tuple[str, ...]) -> str:
     wrapper: its 4096-UTF-16-unit inline cap and session-output.txt attachment fallback exist
     because Telegram messages are bounded, and a scrollable local pane is not.
 
+    **Named for the pane rather than for the rendering**, so that `render_capture` means one
+    thing across the project. This was `render_capture` too, which made the shared function
+    something this module had to import under an alias — two functions, one name, different
+    signatures, one calling the other. The Stage 3 gate's own sweep for a second definition is
+    what surfaced it: a collision that has to be explained in a comment is one a reader has to
+    re-resolve every time.
+
     The shared renderer only *signals* that a capture was binary, because the two surfaces
     refuse in different sentences. This one is the pane's, worded for a full screen; the bot
     words its own.
     """
-    rendered = render_bounded_capture(
+    rendered = render_capture(
         captured.encode(),
         max_lines=_INSPECT_MAX_LINES,
         max_bytes=_INSPECT_MAX_BYTES,
