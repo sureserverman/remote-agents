@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import inspect
 import pathlib
+from collections import deque
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -27,6 +28,7 @@ from remote_agents.application.notification_policy import (
     Sent,
     SessionGroup,
     due,
+    enqueue,
     for_update,
     forget_expired,
     grouped_for_delivery,
@@ -43,6 +45,12 @@ from remote_agents.ports.agent_activity import (
 SESSION_A = "0191f2c2-0000-7000-8000-00000000aaaa"
 SESSION_B = "0191f2c2-0000-7000-8000-00000000bbbb"
 OBSERVED = datetime(2026, 8, 11, 14, 5, tzinfo=UTC)
+EVERY_KIND_IN_ORDER = (
+    ActivityKind.COMPLETED,
+    ActivityKind.LIMIT_REACHED,
+    ActivityKind.OUTPUT_LIMIT,
+    ActivityKind.NEEDS_ANSWER,
+)
 
 
 def _observed(
@@ -434,3 +442,83 @@ def test_a_kind_that_genuinely_stopped_reporting_is_eventually_forgotten() -> No
     forget_expired(sent, OBSERVED + timedelta(hours=3), rate_limit=rate_limit)
 
     assert sent == {}, "a session that stopped reporting must not be kept for ever"
+
+
+# The bounded backlog: what a full queue costs, and whom ------------------------------------
+
+
+def test_the_backlog_holds_up_to_its_cap_without_evicting_anything() -> None:
+    """Nothing is dropped until the cap is actually reached."""
+    held: deque[AgentActivity] = deque()
+
+    reports = enqueue(
+        held,
+        [_observed(SESSION_A, ActivityKind.COMPLETED, minute=n) for n in range(5)],
+        maximum=5,
+    )
+
+    assert reports == ()
+    assert len(held) == 5
+
+
+def test_the_cap_costs_the_session_that_filled_it() -> None:
+    """DEC-031: eviction falls on the session using the most of the queue, not on its head.
+
+    Delivery is per session and so is fairness -- grouping orders by first appearance precisely
+    so a burst cannot starve a quiet session -- but retention used to be global and per
+    observation. Simulated then: five sessions reporting `QUIET` once against one session
+    emitting twenty-five records a pass ended with the queue holding only the loud session, and
+    the quiet reports were destroyed permanently, because `observe_quiet` fires once per spell
+    and the drain had already deleted the files.
+    """
+    held: deque[AgentActivity] = deque()
+    enqueue(held, [_observed(SESSION_B, ActivityKind.QUIET, minute=1)], maximum=4)
+    enqueue(
+        held,
+        [_observed(SESSION_A, ActivityKind.COMPLETED, minute=n) for n in range(2, 5)],
+        maximum=4,
+    )
+
+    reports = enqueue(held, [_observed(SESSION_A, ActivityKind.NEEDS_ANSWER, minute=9)], maximum=4)
+
+    assert reports == ((SESSION_A, 3),), "the loudest session pays, and the report says who"
+    assert SESSION_B in {activity.session_id for activity in held}, (
+        "the quiet session's only report was evicted by a louder neighbour"
+    )
+
+
+def test_the_evicted_observation_is_the_loudest_sessions_oldest() -> None:
+    """Within one session the newest news is the news worth keeping."""
+    held: deque[AgentActivity] = deque()
+    enqueue(
+        held,
+        [_observed(SESSION_A, kind, minute=n) for n, kind in enumerate(EVERY_KIND_IN_ORDER)],
+        maximum=len(EVERY_KIND_IN_ORDER),
+    )
+    oldest = held[0]
+
+    enqueue(held, [_observed(SESSION_A, ActivityKind.QUIET, minute=99)], maximum=len(held))
+
+    assert oldest not in held
+    assert len(held) == len(EVERY_KIND_IN_ORDER)
+
+
+def test_eviction_reports_rather_than_says() -> None:
+    """DEC-043: the policy hands back a signal; the sentence in the journal is the surface's.
+
+    `enqueue` returns `(session_id, how_many_it_held)` per eviction and writes no message. The
+    warning the operator reads is `ActivityNotifier`'s, because the wording is sized for a
+    journal line and a second frontend would size it differently -- or, having no journal of
+    its own, would not write one at all.
+    """
+    held: deque[AgentActivity] = deque()
+    enqueue(
+        held, [_observed(SESSION_A, ActivityKind.COMPLETED, minute=n) for n in range(3)], maximum=3
+    )
+
+    reports = enqueue(held, [_observed(SESSION_A, ActivityKind.QUIET, minute=9)], maximum=3)
+
+    assert reports == ((SESSION_A, 3),)
+    session_id, count = reports[0]
+    assert " " not in session_id, "a session id, not a sentence about one"
+    assert isinstance(count, int), "a count the surface may word however it likes"

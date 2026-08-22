@@ -45,6 +45,7 @@ from remote_agents.application.notification_policy import (
     Sent,
     SessionGroup,
     due,
+    enqueue,
     for_update,
     forget_expired,
     grouped_for_delivery,
@@ -552,7 +553,17 @@ class ActivityNotifier:
         Never raises. This runs on the periodic task beside the one that serves the owner, and
         a notification failing is not a reason for the service to stop noticing things.
         """
-        self._enqueue(activities)
+        for session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
+            # The rule is the policy's; the sentence is this surface's (DEC-043). One line per
+            # eviction, naming who paid, because a cap that costs a session its only report
+            # must be visible in the journal while it is happening rather than inferred later
+            # from a notification that never came.
+            _LOG.warning(
+                "the notification queue is full; dropping the oldest held for one session "
+                "(%s, %d held)",
+                session_id,
+                held,
+            )
         if self._bot is None:
             return 0
         forget_expired(self._last_sent, self._now(), rate_limit=self._rate_limit)
@@ -642,43 +653,6 @@ class ActivityNotifier:
                 "holding %d undelivered notification(s) in memory; a restart now loses them",
                 len(self._pending),
             )
-
-    def _enqueue(self, activities: Iterable[AgentActivity]) -> None:
-        """Take a pass's observations, dropping the loudest session's oldest when full.
-
-        **Not the queue's oldest, which is what this did.** Delivery is per session and so is
-        fairness -- `grouped_for_delivery` orders by first appearance precisely so a burst
-        cannot starve a quiet session -- but retention was global and per observation, so one
-        chatty session could own all hundred slots and evict every other session's news from
-        the head. Simulated: five sessions each reporting `QUIET` once, against one session
-        emitting twenty-five distinct records a pass, ended with the queue holding a hundred
-        observations from the loud session and nothing from the other five. Their reports were
-        destroyed permanently -- `observe_quiet` fires once per spell and re-arms only on a
-        pane change, so there is no second chance, and the drain had already deleted the files.
-
-        Evicting from the session with the most queued observations makes the cap cost the
-        session that filled it. Its *oldest* goes, because within one session the newest news
-        is the news worth keeping.
-        """
-        for activity in activities:
-            if len(self._pending) >= _MAXIMUM_PENDING:
-                self._evict()
-            self._pending.append(activity)
-
-    def _evict(self) -> None:
-        """Drop one observation from whichever session is using the most of the queue."""
-        counts: dict[str, int] = {}
-        for held in self._pending:
-            counts[held.session_id] = counts.get(held.session_id, 0) + 1
-        loudest = max(counts, key=lambda session_id: counts[session_id])
-        for index, held in enumerate(self._pending):
-            if held.session_id == loudest:
-                del self._pending[index]
-                break
-        _LOG.warning(
-            "the notification queue is full; dropping the oldest held for one session (%d held)",
-            counts[loudest],
-        )
 
     async def _send(self, group: SessionGroup) -> tuple[bool, tuple[AgentActivity, ...]]:
         """Deliver one session's news as one message, and answer what is still owed.

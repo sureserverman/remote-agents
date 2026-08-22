@@ -18,7 +18,7 @@ opinion about a number the surface owns (DEC-034 accepted cost 4).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, MutableMapping
+from collections.abc import Iterable, Mapping, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -401,3 +401,64 @@ def forget_expired(
     ]
     for key in expired:
         del sent[key]
+
+
+# The bounded backlog -----------------------------------------------------------------------
+#
+# The queue itself stays in the adapter's memory, with no table behind it and nothing spilled
+# anywhere (DEC-026). What moves is the rule for what a full queue costs and whom.
+
+
+def enqueue(
+    pending: MutableSequence[AgentActivity],
+    activities: Iterable[AgentActivity],
+    *,
+    maximum: int,
+) -> tuple[tuple[str, int], ...]:
+    """Take a pass's observations, dropping the loudest session's oldest when full.
+
+    **Not the queue's oldest, which is what this did.** Delivery is per session and so is
+    fairness -- `grouped_for_delivery` orders by first appearance precisely so a burst
+    cannot starve a quiet session -- but retention was global and per observation, so one
+    chatty session could own all hundred slots and evict every other session's news from
+    the head. Simulated: five sessions each reporting `QUIET` once, against one session
+    emitting twenty-five distinct records a pass, ended with the queue holding a hundred
+    observations from the loud session and nothing from the other five. Their reports were
+    destroyed permanently -- `observe_quiet` fires once per spell and re-arms only on a
+    pane change, so there is no second chance, and the drain had already deleted the files.
+
+    Evicting from the session with the most queued observations makes the cap cost the
+    session that filled it. Its *oldest* goes, because within one session the newest news
+    is the news worth keeping.
+
+    **Reports rather than says (DEC-043).** Each eviction comes back as
+    `(session_id, how many that session was holding)` and nothing here writes a sentence: the
+    operator-facing warning is sized for a journal line, which is the surface's business, and a
+    frontend with no journal would not write one at all.
+
+    `maximum` is asked for on the same argument as every other bound in this module -- it is
+    the surface's number, written down beside the drain's own cap that it was sized against.
+    """
+    evicted: list[tuple[str, int]] = []
+    for activity in activities:
+        if len(pending) >= maximum:
+            report = _evict_loudest(pending)
+            if report is not None:
+                evicted.append(report)
+        pending.append(activity)
+    return tuple(evicted)
+
+
+def _evict_loudest(pending: MutableSequence[AgentActivity]) -> tuple[str, int] | None:
+    """Drop one observation from whichever session is using the most of the queue."""
+    if not pending:
+        return None
+    counts: dict[str, int] = {}
+    for held in pending:
+        counts[held.session_id] = counts.get(held.session_id, 0) + 1
+    loudest = max(counts, key=lambda session_id: counts[session_id])
+    for index, held in enumerate(pending):
+        if held.session_id == loudest:
+            del pending[index]
+            break
+    return loudest, counts[loudest]
