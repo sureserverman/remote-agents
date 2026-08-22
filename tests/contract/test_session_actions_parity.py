@@ -115,7 +115,8 @@ async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
 async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the local terminal's detail view actually puts on screen."""
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     class _Launcher(SessionUseCaseDouble):
         async def refresh_readiness(self):
@@ -134,7 +135,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
                 projects=object(),  # type: ignore[arg-type]
                 refresh_catalogue=tuple,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -199,7 +200,7 @@ async def test_the_policy_is_actually_exercised_by_this_test(surface_name: str, 
 
 async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     """The Remote Control rows the bot's detail view actually puts on screen."""
-    from remote_agents.adapters.telegram.wizard import ProfileAvailability
+    from remote_agents.application.profiles import ProfileAvailability
 
     boundary = build_private_bot(
         7,

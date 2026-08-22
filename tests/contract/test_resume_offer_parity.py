@@ -145,7 +145,8 @@ async def _telegram_offers(summaries: tuple[ConversationSummary, ...]) -> set[st
 async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
     """The conversation references the local surface renders as choosable rows."""
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     app = RemoteAgentsTui(
         TuiContext(
@@ -156,7 +157,7 @@ async def _tui_offers(summaries: tuple[ConversationSummary, ...]) -> set[str]:
                 conversations=_Conversations(summaries),  # type: ignore[arg-type]
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -184,7 +185,8 @@ async def _telegram_said(summaries: tuple[ConversationSummary, ...]) -> str:
 async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
     """Everything the local surface's conversation list put in front of the owner."""
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     app = RemoteAgentsTui(
         TuiContext(
@@ -195,7 +197,7 @@ async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
                 conversations=_Conversations(summaries),  # type: ignore[arg-type]
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -391,7 +393,8 @@ async def test_both_surfaces_ask_the_catalogue_for_the_same_page_size() -> None:
     await boundary._resume_catalogue_reply(f"{_PROJECT_ID}|claude|1")
 
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     tui_port = _Conversations((resumable,))
     app = RemoteAgentsTui(
@@ -403,7 +406,7 @@ async def test_both_surfaces_ask_the_catalogue_for_the_same_page_size() -> None:
                 conversations=tui_port,  # type: ignore[arg-type]
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

@@ -15,10 +15,11 @@ from backends import backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.dashboard import DashboardScreen, ProjectChooserScreen
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen
 from remote_agents.adapters.tui.screens.resume import ResumeProfilesScreen
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import ProfileResumeCapability
@@ -59,7 +60,7 @@ def _context(*, conversations: object | None = None) -> TuiContext:
             catalogue=(_PROJECT,),
             conversations=conversations,  # type: ignore[arg-type]
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

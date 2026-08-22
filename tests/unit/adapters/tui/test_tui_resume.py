@@ -14,8 +14,9 @@ from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.commands import ResumeCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
@@ -133,7 +134,7 @@ def _context(conversations: _Conversations, launcher: _Launcher) -> TuiContext:
             catalogue=(_PROJECT,),
             conversations=conversations,  # type: ignore[arg-type]
         ),
-        profiles=(ProfileChoice("claude", True), ProfileChoice("codex", True)),
+        profiles=(ProfileAvailability("claude", True), ProfileAvailability("codex", True)),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 
@@ -170,7 +171,7 @@ async def test_a_context_without_conversations_offers_no_resume() -> None:
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux",),
     )
     app = RemoteAgentsTui(context)

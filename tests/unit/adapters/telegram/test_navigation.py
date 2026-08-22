@@ -19,9 +19,9 @@ from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.notifications import render_activity
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.notification_policy import SessionGroup
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
 from remote_agents.domain.conversations import (
@@ -121,10 +121,11 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
     `profiles=` added to the factory call would never have reached the bot, because only
     four field names were being copied across.
 
-    `profiles` is deliberately not routed through the backend. `Backend.profiles` is the
-    domain `ProfileCompatibility`; this surface renders `ProfileAvailability`, and handing
-    the domain tuple straight over is the line that once took the local surface down on a
-    version probe that merely timed out.
+    `profiles` is routed through the backend, as of sub-plan 4. It was not, for as long as
+    `Backend.profiles` held the domain `ProfileCompatibility` and each surface narrowed it
+    separately -- handing that tuple straight over was the line that once took the local
+    surface down on a version probe that merely timed out. `compose_backend` narrows once
+    now, so the boundary and the surface are given the same one.
     """
     return build_private_bot(
         OWNER,

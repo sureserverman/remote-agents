@@ -22,8 +22,9 @@ from remote_agents.adapters.tmux.gateway import TmuxInventory
 from remote_agents.adapters.tmux.profiles import build_launch_profile
 from remote_agents.adapters.tmux.runtime import TmuxTerminal
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId, SessionState
@@ -144,7 +145,7 @@ def _tui(service: SessionService) -> RemoteAgentsTui:
                 refresh_catalogue=lambda: _CATALOGUE,
                 catalogue=_CATALOGUE,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

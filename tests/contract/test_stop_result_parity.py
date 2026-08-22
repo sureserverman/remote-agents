@@ -154,7 +154,8 @@ async def _tui_said(record: SessionRecord, detail: str) -> str:
     instead of the rendered rows.
     """
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     launcher = _Launcher(record, detail)
     app = RemoteAgentsTui(
@@ -164,7 +165,7 @@ async def _tui_said(record: SessionRecord, detail: str) -> str:
                 projects=object(),  # type: ignore[arg-type]
                 refresh_catalogue=tuple,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )
@@ -318,7 +319,8 @@ async def _tui_said_force(record: SessionRecord, detail: str) -> str:
     import asyncio
 
     from remote_agents.adapters.tui.app import RemoteAgentsTui
-    from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.application.profiles import ProfileAvailability
 
     launcher = _ForceLauncher(record, detail)
     app = RemoteAgentsTui(
@@ -328,7 +330,7 @@ async def _tui_said_force(record: SessionRecord, detail: str) -> str:
                 projects=object(),  # type: ignore[arg-type]
                 refresh_catalogue=tuple,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         )
     )

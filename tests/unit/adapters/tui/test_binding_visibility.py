@@ -26,8 +26,9 @@ from tui_feedback import announcements
 from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import ALL_SCREENS
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -117,7 +118,7 @@ def _context(*, conversations: bool = True) -> TuiContext:
             capture=lambda _session_id: _captured(),
             conversations=_Conversations() if conversations else None,  # type: ignore[arg-type]
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

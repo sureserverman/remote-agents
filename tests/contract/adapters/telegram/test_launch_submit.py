@@ -7,7 +7,7 @@ from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 
 _PROJECT = "a" * 24

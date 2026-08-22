@@ -25,7 +25,8 @@ from backends import backend_for
 from remote_agents.adapters.tmux.codec import switch_client_argv
 from remote_agents.adapters.tui.app import AttachRequest, RemoteAgentsTui
 from remote_agents.adapters.tui.attach import HostingMode, attach_to, hosting_mode
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.projects import ProjectIdentity
@@ -52,7 +53,7 @@ def _context(open_in_console=None) -> TuiContext:
             projects=_Creator(),  # type: ignore[arg-type]
             refresh_catalogue=lambda: (_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         open_in_console=open_in_console,
     )

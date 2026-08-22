@@ -87,9 +87,11 @@ def test_a_version_probe_that_timed_out_does_not_stop_the_surface_starting(
 
     `probe_profiles` answers a probe that raised with `available=True` and the note
     `version_probe_failed` -- available because the executable resolved; the version is
-    simply unread. `ProfileChoice` treats any reason on an available profile as a
-    contradiction and refuses to construct, so `local_context` raised `ValueError: an
-    available profile has no blocking reason` and the local surface would not start at all.
+    simply unread. The surface's own `ProfileChoice` -- retired by this sub-plan -- treated
+    any reason on an available profile as a contradiction and refused to construct, so
+    `local_context` raised `ValueError: an available profile has no blocking reason` and the
+    local surface would not start at all. `application.profiles.ProfileAvailability` keeps
+    that rule, on `blocked_reason`, which is the field that actually means "blocking".
 
     Reached in the real world by `_run_version`'s `subprocess.run(..., timeout=5)` expiring
     under load -- `TimeoutExpired` is a `SubprocessError` -- which is a statement about the
@@ -112,11 +114,126 @@ def test_a_version_probe_that_timed_out_does_not_stop_the_surface_starting(
 
         assert context.profiles, "the surface must still be offered its profiles"
         for profile in context.profiles:
-            assert not (profile.available and profile.reason), (
+            assert not (profile.available and profile.blocked_reason), (
                 f"{profile.profile_id} is available and carries a blocking reason"
             )
     finally:
         connection.close()
+
+
+def test_the_probe_note_survives_all_the_way_to_the_surface(
+    home: Path, paths: ProductionPaths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The half the workaround could not buy: the note is *carried*, not merely survived.
+
+    The test above asserts the surface still starts. It passed, before Task 1.3, for a reason
+    worth naming: `local_context` dropped the reason outright whenever `available` was true
+    (`None if profile.available else profile.reason`), so there was no contradiction left to
+    raise -- and no note left either. A diagnostic the probe went to the trouble of producing
+    was discarded at the boundary, and nothing downstream could tell "version unread because
+    the probe timed out" from "version unread for no reason at all".
+
+    So this drives `local_context` itself, all the way through the real composition, and
+    asserts where the note lands. **It deliberately does not restate the narrowing.** An
+    earlier draft replicated `local_context`'s conversion inline, because the merged type did
+    not reach the surface yet; a reviewer pointed out that such a test re-asserts its own copy
+    of the logic against itself and stays green against a divergent real one. It is the real
+    one or it is nothing.
+
+    **It fails against the naive merge.** Collapse the type back to a single blocking
+    `reason` field -- the shape both retired adapter types shared -- and `blocked_reason` is
+    the only field left to hold `version_probe_failed`, which the available-profile invariant
+    then refuses, and `local_context` raises before it can return.
+    """
+    from remote_agents.adapters.tmux import profiles as profiles_module
+    from remote_agents.config import load_config
+
+    def always_times_out(argv: tuple[str, ...]) -> str:
+        raise subprocess.TimeoutExpired(cmd=list(argv), timeout=5)
+
+    monkeypatch.setattr(profiles_module, "_run_version", always_times_out)
+    # `resolve` is pinned as well as `run_version` because otherwise the *host* decides what
+    # this measures: on a machine missing an agent binary that profile comes back
+    # `executable_missing` and the assertions below fail on it -- not vacuously, loudly, and
+    # for a reason with nothing to do with the regression, which makes the test flip with
+    # whatever happens to be installed. `local_context` offers no injection seam, so this is
+    # the module private rather than `probe_profiles`'s public keyword.
+    monkeypatch.setattr(
+        profiles_module, "_resolve_executable", lambda executable: Path("/usr/bin") / executable
+    )
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+
+        assert len(context.profiles) == 5, "the curated set is what the surface renders"
+        for profile in context.profiles:
+            assert profile.available is True, (
+                f"{profile.profile_id}: an installed executable is available; "
+                "a version probe is diagnostic, not a gate (DEC-002)"
+            )
+            assert profile.blocked_reason is None, (
+                f"{profile.profile_id}: a probe that did not answer is not a blocking reason"
+            )
+            assert profile.note == "version_probe_failed", (
+                f"{profile.profile_id}: the note the probe produced was discarded on the way"
+            )
+    finally:
+        connection.close()
+
+
+def test_both_surfaces_are_handed_the_same_profile_tuple(
+    home: Path, paths: ProductionPaths, tmp_path: Path
+) -> None:
+    """One probe, one narrowing, two surfaces — the field's whole point (ARCH-B1).
+
+    Profiles were the single capability `Backend` composed twice: the bot was handed
+    `LocalRuntime.profiles` and the local surface re-narrowed `LocalRuntime.profiles` again,
+    so the two could diverge with nothing to say so.
+
+    **What this actually compares, stated precisely.** It composes twice on purpose --
+    `local_context` and `compose_backend` each run their own probe and their own
+    `_narrow_profiles` -- and asserts the two results are equal. So its teeth are that the two
+    composition paths do not drift *from each other*, which is exactly the failure that was
+    possible before and is not now. It is not the same object read twice, and it would not
+    catch a `_narrow_profiles` wrong in the same way on both paths; the tri-state itself is
+    pinned by its neighbour above, which drives one path end to end with a probe that fails.
+    """
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+        backend = compose_backend(config, connection, paths)
+
+        assert context.profiles == backend.profiles
+        assert len(backend.profiles) == 5
+    finally:
+        connection.close()
+
+
+def test_the_naive_merge_is_what_the_type_refuses() -> None:
+    """The regression itself, stated as the thing that must keep raising.
+
+    One field for both meanings has exactly one place to put `version_probe_failed` on an
+    available profile, and that is the field the surface reads as blocking. This asserts the
+    refusal directly, so a future edit that "simplifies" the two fields back into one cannot
+    do it quietly: it has to delete this test, and deleting it says what it is doing.
+
+    **Deliberately redundant with `tests/unit/application/test_profile_availability.py`'s
+    `test_an_available_profile_has_no_blocking_reason`**, which asserts the same invariant with
+    a different reason string. It is kept for its position, not its coverage: this file is
+    where the outage is recalled, and the invariant is easier to weaken when the only thing
+    asserting it lives a directory away from the story explaining why it exists. Counted as
+    narration, not as a second guard.
+    """
+    from remote_agents.application.profiles import ProfileAvailability
+
+    with pytest.raises(ValueError, match="an available profile has no blocking reason"):
+        ProfileAvailability("claude", True, blocked_reason="version_probe_failed")
 
 
 def test_the_local_context_needs_no_telegram_credentials(

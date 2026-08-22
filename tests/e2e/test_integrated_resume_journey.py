@@ -14,10 +14,10 @@ from test_terminal_launch import STARTUP_BUDGET
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import build_private_bot
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_actions import ACTION_LABELS, GRACEFUL

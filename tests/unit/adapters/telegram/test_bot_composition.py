@@ -169,3 +169,68 @@ def test_the_factory_is_the_only_place_src_constructs_a_boundary() -> None:
         "these construct a boundary without wiring its collaborators, so the first use of "
         f"`.stops`, `.view` or `.notifier` raises: {offenders}. Call build_private_bot."
     )
+
+
+def _run_private_bot() -> ast.AsyncFunctionDef:
+    tree = ast.parse((_SRC / "adapters" / "telegram" / "service.py").read_text())
+    return next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run_private_bot"
+    )
+
+
+def test_the_bot_handles_updates_sequentially() -> None:
+    """`concurrent_updates(False)` is a correctness constraint, not a throughput setting.
+
+    A render mints its keyboard **unbound** and binds it once Telegram answers, and
+    `bind_pending` adopts every unbound token in the chat. With two renders in flight at
+    once there is no way to tell whose tokens are whose, so one screen's buttons can be
+    adopted by the other's message -- and the buttons on this bot include force stop. The
+    failure is a destructive action on the session the owner was not looking at.
+
+    Until this test, the whole defence was a comment addressed to whoever might raise the
+    setting for throughput. `run_private_bot` is called by **no test in the suite** (BL-006),
+    so the value reaching `ApplicationBuilder` was never observed by anything; the comment
+    was the guard. This is the one clause of BL-006's gap cheap enough to close without the
+    `ApplicationBuilder` fake that the rest of it needs -- the argument is written down, so
+    the literal is worth pinning even though the call itself stays unexecuted.
+
+    **Absence is a failure, not a pass.** python-telegram-bot's own default is sequential
+    today, so deleting the call would keep the behaviour and lose the statement of it -- and
+    the next major version is free to change a default nobody is asserting. The same reason
+    the setting is written out in the first place.
+
+    **A non-literal argument is a failure too.** `concurrent_updates(flag)` puts the value
+    somewhere this test cannot read, and a guard that cannot see its subject reports green
+    over it. That is the DEC-010 failure mode, and the safe direction is to refuse.
+
+    Stated limit: this parses the literal at the call site. It does not run the builder, so
+    it cannot see a value overridden afterwards through some other path -- closing that is
+    BL-006's harness, not this test.
+    """
+    calls = [
+        node
+        for node in ast.walk(_run_private_bot())
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "concurrent_updates"
+    ]
+
+    assert len(calls) == 1, (
+        f"expected exactly one `concurrent_updates(...)` in run_private_bot, found {len(calls)}. "
+        "Sequential update handling is load-bearing: two renders in flight let `bind_pending` "
+        "adopt one screen's buttons onto the other's message, and the buttons include force stop."
+    )
+
+    (argument,) = calls[0].args
+    assert isinstance(argument, ast.Constant), (
+        f"`concurrent_updates(...)` is passed `{ast.unparse(argument)}`, which this check cannot "
+        "read. Pass the literal `False` so the constraint is visible where it is set."
+    )
+    assert argument.value is False, (
+        "`concurrent_updates(True)` lets two renders be in flight at once, and `bind_pending` "
+        "adopts every unbound token in the chat -- so one screen's buttons can be adopted by "
+        "the other's message, force stop among them. If throughput really needs this, the "
+        "token binding has to stop being chat-scoped first."
+    )

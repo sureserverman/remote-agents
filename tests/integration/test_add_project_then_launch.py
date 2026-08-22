@@ -18,8 +18,8 @@ from remote_agents.adapters.telegram.service import (
     _TextEntry,
     build_private_bot,
 )
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.adapters.tmux.fake import FakeTerminal
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import ProjectCatalogueProvider

@@ -44,10 +44,11 @@ from tui_feedback import status as _status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import ALL_SCREENS
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -131,7 +132,7 @@ def _context(**overrides: object) -> TuiContext:
     arguments: dict[str, object] = {
         "sessions": _FakeLauncher(),
         "projects": _FakeCreator(),
-        "profiles": (ProfileChoice("claude", True),),
+        "profiles": (ProfileAvailability("claude", True),),
         "refresh_catalogue": lambda: (_EXISTING,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_EXISTING,),

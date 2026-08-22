@@ -10,7 +10,8 @@ that silently stopped being offered.
 port types (ARCH-B1): `application/` may not import an adapter (ARCH-02, DEC-015), and the
 checker enforces that, but the rule is easy to break here by reaching for whichever
 presentation type happened to be nearest — which is exactly how `LocalRuntime` came to be
-typed against the Telegram wizard's `ProfileAvailability`.
+typed against the Telegram wizard's `ProfileAvailability`, before sub-plan 4 moved that type
+into `application/` and gave both surfaces the one narrowing.
 """
 
 from __future__ import annotations

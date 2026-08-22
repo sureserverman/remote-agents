@@ -33,8 +33,9 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.codec import attach_argv
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.commands import LaunchCommand
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
@@ -81,7 +82,7 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
                 refresh_catalogue=lambda: (_PROJECT,),
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         )
         app = RemoteAgentsTui(context)
@@ -147,7 +148,7 @@ async def test_a_rename_typed_locally_is_on_disk_for_the_other_writer_to_read(
                 refresh_catalogue=lambda: (_PROJECT,),
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         )
         app = RemoteAgentsTui(context)
@@ -206,7 +207,7 @@ async def test_a_session_stopped_by_the_service_leaves_the_terminal_list(
                 refresh_catalogue=lambda: (_PROJECT,),
                 catalogue=(_PROJECT,),
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: attach_argv(SessionId.parse(session_id)),
         )
         app = RemoteAgentsTui(context)

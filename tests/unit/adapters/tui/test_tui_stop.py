@@ -13,12 +13,13 @@ from tui_feedback import announcements
 from tui_feedback import status as _status
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
     GracefulStopCommand,
 )
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import (
     GRACEFUL_TIMEOUT,
@@ -111,7 +112,7 @@ def _context(launcher: _RecordingLauncher) -> TuiContext:
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

@@ -16,7 +16,8 @@ from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tmux.fake import FakeTerminal
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.services import SessionService
 from remote_agents.bootstrap import ProjectCatalogueProvider
@@ -65,7 +66,7 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
                 refresh_catalogue=lambda: provider.refresh().catalogue,
                 catalogue=provider.refresh().catalogue,
             ),
-            profiles=(ProfileChoice("claude", True),),
+            profiles=(ProfileAvailability("claude", True),),
             attach_argv=lambda session_id: ("tmux", "attach", "-t", f"={session_id}"),
         )
         app = RemoteAgentsTui(context)

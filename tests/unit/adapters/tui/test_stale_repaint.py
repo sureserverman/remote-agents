@@ -66,8 +66,9 @@ from tui_feedback import status
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import SessionsScreen
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
     ProfileId,
@@ -148,7 +149,7 @@ def _context(launcher: _GatedLauncher) -> TuiContext:
             refresh_catalogue=lambda: (_ALPHA, _BETA),
             catalogue=(_ALPHA, _BETA),
         ),
-        profiles=(ProfileChoice("claude", True),),
+        profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
     )
 

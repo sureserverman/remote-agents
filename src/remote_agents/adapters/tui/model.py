@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from remote_agents.adapters.tui.context import ProfileChoice
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_views import selectable_area, session_row
@@ -45,7 +45,7 @@ class LaunchSelection:
     """
 
     project: CatalogProject | None = None
-    profile: ProfileChoice | None = None
+    profile: ProfileAvailability | None = None
 
 
 @dataclass(frozen=True, slots=True)

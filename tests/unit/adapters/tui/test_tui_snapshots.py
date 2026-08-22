@@ -89,8 +89,9 @@ from textual.widgets import Input
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
-from remote_agents.adapters.tui.context import ProfileChoice, TuiContext
+from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens import ALL_SCREENS
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
@@ -319,8 +320,8 @@ def _context(
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
         ),
         profiles=(
-            ProfileChoice("claude", True),
-            ProfileChoice("codex", False, "not installed on this host"),
+            ProfileAvailability("claude", True),
+            ProfileAvailability("codex", False, "not installed on this host"),
         ),
         attach_argv=lambda session_id: (
             "tmux",

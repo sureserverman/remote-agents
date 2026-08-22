@@ -686,7 +686,9 @@ uv run --locked remote-agents
 The terminal and the service are separate processes writing one SQLite file. The terminal refuses
 any `database_path` outside the private state directory exactly as `serve` does, so sharing the
 store is not a configuration accident; two consequences of it must be understood before a second
-surface is used.
+surface is used. The structure those processes share — the layers, which of them may depend on
+which, and what each surface owns — is in [`docs/architecture.md`](architecture.md); what follows
+is the operational half, what sharing one store costs the operator.
 
 Duplicate-command protection is durable and does hold across processes: every launch claims an
 idempotency key with a unique insert into the database, so a key one process has claimed is

@@ -23,8 +23,8 @@ from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.errors import SessionNotFoundError
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import pane_is_attachable
 from remote_agents.application.stops import execute_stop

@@ -48,7 +48,6 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
-from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.backend import Backend
 from remote_agents.application.commands import (
     AnswerTrustCommand,
@@ -62,6 +61,7 @@ from remote_agents.application.conversations import (
     resume_available,
 )
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
+from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -280,11 +280,12 @@ class PrivateBotBoundary:
     difference is that the absence now has a name and a declared field, instead of being the
     answer a probe gives when it cannot find a method.
 
-    `profiles` is deliberately **not** in here. `Backend.profiles` is the domain
-    `ProfileCompatibility`; this surface renders `ProfileAvailability`, which requires a
-    curated id, and the local surface narrows the same domain tuple differently again.
-    Handing the domain type straight to a frontend is what once took the local surface down
-    on a version probe that merely timed out.
+    `profiles` is a field here rather than on `Backend` for a reason that has since been
+    answered: `Backend.profiles` held the domain `ProfileCompatibility` and each surface
+    narrowed it separately, which is how a version probe that merely timed out once took the
+    local surface down. `compose_backend` now narrows once into
+    `application.profiles.ProfileAvailability`, and this field is seeded straight from
+    `backend.profiles`.
     """
     profiles: tuple[ProfileAvailability, ...] = ()
     catalogue: tuple[CatalogProject, ...] = field(init=False)
@@ -332,7 +333,8 @@ class PrivateBotBoundary:
     `concurrent_updates(False)`, so updates are handled one at a time. That is already
     load-bearing for token binding — the comment there says so — and this field now rests
     on it too. A change made for throughput would give two interleaved presses one shared
-    marker, which is the cheap half of what it would break.
+    marker, which is the cheap half of what it would break. Both arguments were comments
+    only until `test_the_bot_handles_updates_sequentially` pinned the literal.
     """
     _sessions_page: int = 1
     """The page number the sessions list is currently drawn at, so Back can return to it.
@@ -2078,7 +2080,10 @@ class PrivateBotBoundary:
                     )
                 )
             else:
-                reason = profile.reason or (
+                # `any_reason` is the blocking reason when there is one and the probe note
+                # otherwise -- this branch is reached with `available` true whenever the
+                # catalogue is not resume-capable, and it has always shown the note there.
+                reason = profile.any_reason or (
                     capability.reason if capability is not None else "catalogue_unavailable"
                 )
                 unavailable.append(f"{_profile_name(profile.profile_id)} ({reason})")
@@ -2358,7 +2363,10 @@ async def run_private_bot(
     # keyboard unbound and binds it once Telegram answers, and `bind_pending` adopts every
     # unbound token in the chat. Two renders in flight at once would let one screen's buttons
     # be adopted by the other's message. This is python-telegram-bot's default; it is written
-    # out so a change made for throughput cannot quietly reopen that interleaving.
+    # out so a change made for throughput cannot quietly reopen that interleaving -- and
+    # `test_the_bot_handles_updates_sequentially` now fails on `True`, on a non-literal, and
+    # on the call being deleted, because until it existed this comment was the whole guard.
+    # A second argument rests on the same setting at `_sessions_page` above.
     application = ApplicationBuilder().token(secrets.bot_token).concurrent_updates(False).build()
     application.add_handler(CommandHandler("start", boundary.start))
     application.add_handler(CommandHandler("launch", boundary.launch_command))
