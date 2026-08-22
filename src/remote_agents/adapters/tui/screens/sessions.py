@@ -29,6 +29,11 @@ from remote_agents.adapters.tui.screens.confirm import (
     RemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.validation import LabelWithinBound
+
+# Aliased because this module keeps a `render_capture` of its own: the shared function is
+# the bounded rendering both surfaces share, and the local one is this surface's presenter
+# around it, which owns the wording of a refusal.
+from remote_agents.application.captures import render_capture as render_bounded_capture
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
     FORCE,
@@ -42,7 +47,6 @@ from remote_agents.application.session_actions import (
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TrustState
-from remote_agents.ports.terminal_text import sanitize_terminal_text
 
 _LOG = logging.getLogger(__name__)
 
@@ -1097,19 +1101,24 @@ class InspectScreen(ChoiceScreen):
 def render_capture(captured: str, redactions: tuple[str, ...]) -> str:
     """Turn a raw capture into what the output pane should show.
 
-    `ports/terminal_text.sanitize_terminal_text` is the shared safety transformation, so
-    nothing is re-implemented here. What is deliberately *not* reused is the Telegram
-    presentation wrapper: its 4096-UTF-16-unit inline cap and session-output.txt attachment
-    fallback exist because Telegram messages are bounded, and a scrollable local pane is not.
+    `application/captures.render_capture` is the shared bounded rendering, so nothing is
+    re-implemented here — including the bounds, which it takes from this surface rather than
+    holding any of its own. What is deliberately *not* reused is the Telegram presentation
+    wrapper: its 4096-UTF-16-unit inline cap and session-output.txt attachment fallback exist
+    because Telegram messages are bounded, and a scrollable local pane is not.
+
+    The shared renderer only *signals* that a capture was binary, because the two surfaces
+    refuse in different sentences. This one is the pane's, worded for a full screen; the bot
+    words its own.
     """
-    raw = captured.encode()
-    if b"\x00" in raw:
-        # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
-        # rendering text, and printing it to a terminal can corrupt the display.
-        return "This session's output is binary and cannot be displayed."
-    return sanitize_terminal_text(
-        raw,
+    rendered = render_bounded_capture(
+        captured.encode(),
         max_lines=_INSPECT_MAX_LINES,
         max_bytes=_INSPECT_MAX_BYTES,
         redactions=redactions,
     )
+    if rendered.text is None:
+        # Matching the bot's refusal, for the same reason: a pane emitting NUL is not
+        # rendering text, and printing it to a terminal can corrupt the display.
+        return "This session's output is binary and cannot be displayed."
+    return rendered.text

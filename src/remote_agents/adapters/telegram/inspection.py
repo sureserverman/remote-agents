@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from remote_agents.ports.terminal_text import sanitize_terminal_text
+from remote_agents.application.captures import render_capture
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,12 +27,13 @@ def inspect_capture(
 
     if telegram_limit < 1:
         raise ValueError("Telegram text limit must be positive")
-    if b"\x00" in raw:
+    rendered = render_capture(raw, max_lines=500, max_bytes=128 * 1024, redactions=redactions)
+    if rendered.text is None:
         return InspectionResult(
             "refused", "binary output cannot be displayed.", None, None, False, False
         )
-    truncated = len(raw) > 128 * 1024 or raw.count(b"\n") + 1 > 500
-    text = sanitize_terminal_text(raw, max_lines=500, max_bytes=128 * 1024, redactions=redactions)
+    text = rendered.text
+    truncated = rendered.truncated
     redacted = "[REDACTED]" in text
     inline_text = text + ("\n[output truncated]" if truncated else "")
     if len(inline_text.encode("utf-16-le")) // 2 <= telegram_limit:
