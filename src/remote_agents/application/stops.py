@@ -102,6 +102,29 @@ class StopOutcome:
     refusal: str | None = None
     failure: StopFailure | None = None
 
+    def __bool__(self) -> bool:
+        """Refuse to be a bool at all, inherited from the type this one replaces.
+
+        Not a convenience — a poison pill, and it is carried over rather than reinvented.
+        `StopController.execute` returned a plain bool until BL-008; when it became a
+        dataclass every `assert await execute(...)` and `if not await execute(...)` left
+        behind kept *running* and stopped *checking*, because a dataclass instance is
+        unconditionally truthy. Nothing in Python signals that — there is no type checker
+        configured in this project — so the retired `StopResult` defined this method, and
+        raising found three surviving assertions the moment the suite ran, in two files that
+        change never touched.
+
+        The same hazard applies verbatim to this merge, which rewrites thirteen call sites
+        across five test files by hand. Dropping the guard because the new type has no legacy
+        callers would be dropping it exactly where the mistake is being made.
+
+        Defining it to mirror `dispatched` would be worse than leaving it undefined: it
+        resurrects the ambiguity the fields exist to remove, since `if outcome:` could fairly
+        mean "the command ran" or "the command worked", and for a graceful stop those are
+        different questions with different answers.
+        """
+        raise TypeError("StopOutcome has no truth value; read .dispatched or .failure")
+
 
 async def execute_stop(
     action: str,

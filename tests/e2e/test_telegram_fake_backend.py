@@ -9,7 +9,11 @@ from uuid import UUID
 import pytest
 from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
-from stop_results import a_clean_stop, a_verified_force_stop
+from stop_results import (
+    a_clean_stop,
+    a_reader_for,
+    a_verified_force_stop,
+)
 from telegram.error import BadRequest
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
@@ -22,6 +26,7 @@ from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.adapters.telegram.wizard import ProfileAvailability
 from remote_agents.application.errors import SessionNotFoundError
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -131,7 +136,15 @@ async def test_stop_controller_rechecks_and_dispatches_against_fakes() -> None:
     request = stops.claim(token, 7, 11, 1)
     assert request is not None
     service = Service()
-    assert (await stops.execute(request, service, record)).dispatched
+    assert (
+        await execute_stop(
+            request.action,
+            request.session_id,
+            sessions=service,
+            read_record=a_reader_for(record),
+            profile_id=request.profile_id,
+        )
+    ).dispatched
     assert service.called
 
 

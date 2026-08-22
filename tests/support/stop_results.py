@@ -75,3 +75,22 @@ def a_force_stop_that_found_nothing(session_id: SessionId | None = None) -> Term
     return TerminalObservation(
         session_id or SessionId.new(), live=False, preserved=False, detail="ownership_lost"
     )
+
+
+def a_reader_for(record):
+    """A `read_record` callable for `application.stops.execute_stop`, over a fixed record.
+
+    `execute_stop` performs the re-read itself rather than trusting one handed in — that is
+    the whole of DEC-007's fourth mitigation and DEC-008's 2026-08-08 correction — so every
+    caller supplies the store read rather than the record. In a test the read is usually a
+    constant, and this is that constant wearing the right shape.
+
+    Shared for the reason the observation helpers above are: the dispatch's callers live in
+    five test files across four suites, and a signature change should have one place to
+    update rather than a dozen chances to miss one.
+    """
+
+    async def read():
+        return record
+
+    return read

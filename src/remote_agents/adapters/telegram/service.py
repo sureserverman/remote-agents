@@ -84,6 +84,7 @@ from remote_agents.application.session_actions import (
     state_word,
     trust_available,
 )
+from remote_agents.application.stops import execute_stop
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.conversations import ConversationReference
 from remote_agents.domain.models import (
@@ -1613,18 +1614,30 @@ class PrivateBotBoundary:
             return _reply_arguments(
                 await self._sessions_reply(notice="That action has already run.")
             )
-        record = await self._record(str(request.session_id))
-        result = (
-            await self.stops.execute(request, self.backend.sessions, record)
-            if record is not None
-            else None
+        # `profile_id` is passed rather than omitted, and that is DEC-006 rather than a
+        # detail: `execute_stop` takes it optionally, because the local surface acts on the
+        # record under its cursor and has nothing separate to compare. This surface *does* —
+        # the token carries the profile the action was offered against — so omitting it here
+        # would skip the fail-closed check silently instead of failing. Pinned by
+        # `test_a_press_whose_record_changed_profile_never_reaches_the_service`, which drives
+        # this press rather than the shared function, because nothing that calls the shared
+        # function directly can see whether this call site supplies the argument.
+        outcome = await execute_stop(
+            request.action,
+            request.session_id,
+            sessions=self.backend.sessions,
+            read_record=lambda: self._record(str(request.session_id)),
+            profile_id=request.profile_id,
         )
-        if result is None or not result.dispatched:
-            # Lands on the list like every other outcome. Covers both halves of the guard:
-            # the session moved on between the offer and the press, or its record is gone
-            # entirely. The second sentence this used to carry — "Open the list again to see
-            # where it is now." — was an instruction to navigate somewhere the owner now
-            # already is, so the refusal keeps only the half that says what happened.
+        if not outcome.dispatched:
+            # Lands on the list like every other outcome. Covers all three halves of the
+            # guard: the session moved on between the offer and the press, its record is gone
+            # entirely, or the profile behind the press is no longer the one in the store.
+            # The bot collapses them into one notice deliberately — the local surface words
+            # them apart, which is why `execute_stop` reports *which* refusal it was rather
+            # than a bare false. The second sentence this used to carry — "Open the list again
+            # to see where it is now." — was an instruction to navigate somewhere the owner
+            # now already is, so the refusal keeps only the half that says what happened.
             return _reply_arguments(
                 await self._sessions_reply(
                     notice="That session moved on before this could run, so nothing was done."
@@ -1632,8 +1645,9 @@ class PrivateBotBoundary:
             )
         # `request.action` rather than the pressed one: a confirmed force arrives under an
         # adapter-internal action name, and the outcome is reported in the domain's terms.
+        # The record is the one `execute_stop` re-read, not a second read of the store.
         return _reply_arguments(
-            await self._stop_outcome_landing(request.action, record, result.failure)
+            await self._stop_outcome_landing(request.action, outcome.record, outcome.failure)
         )
 
     async def _force_confirm_reply(self, token: str, message_id: int) -> RenderedMessage:

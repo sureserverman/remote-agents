@@ -6,7 +6,12 @@ from uuid import UUID
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
-from stop_results import a_clean_stop, a_stop_that_did_not_take, a_verified_force_stop
+from stop_results import (
+    a_clean_stop,
+    a_reader_for,
+    a_stop_that_did_not_take,
+    a_verified_force_stop,
+)
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
@@ -17,6 +22,7 @@ from remote_agents.application.session_actions import (
     UNKNOWN_SESSION,
     stop_failure,
 )
+from remote_agents.application.stops import execute_stop
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -118,8 +124,12 @@ async def test_force_stop_is_available_for_a_failed_session_that_needs_cleanup()
     assert request is not None
     service = FakeService()
 
-    forced = await controller.execute(
-        request, service, Record(session, SessionState.FAILED, ProfileId("codex"))
+    forced = await execute_stop(
+        request.action,
+        request.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.FAILED, ProfileId("codex"))),
+        profile_id=request.profile_id,
     )
     assert forced.dispatched
     assert service.actions == ["force"]
@@ -139,15 +149,24 @@ async def test_claimed_action_rechecks_current_state_before_typed_service_dispat
     assert claimed is not None
     service = FakeService()
 
-    result = await controller.execute(
-        claimed, service, Record(session, SessionState.PRESERVED, ProfileId("claude"))
+    result = await execute_stop(
+        claimed.action,
+        claimed.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.PRESERVED, ProfileId("claude"))),
+        profile_id=claimed.profile_id,
     )
-    # `.dispatched`, not the result's own truthiness: `StopResult` is a dataclass, so a
-    # refusal is truthy as an object and `not result` would silently pass on every outcome.
+    # `.dispatched`, not the outcome's own truthiness. `StopOutcome` inherits the retired
+    # `StopResult`'s poison-pill `__bool__` for exactly this line: a dataclass instance is
+    # unconditionally truthy, so `not result` would silently pass on every outcome.
     assert not result.dispatched
     assert service.actions == []
-    mismatched = await controller.execute(
-        claimed, service, Record(session, SessionState.RUNNING, ProfileId("codex"))
+    mismatched = await execute_stop(
+        claimed.action,
+        claimed.session_id,
+        sessions=service,
+        read_record=a_reader_for(Record(session, SessionState.RUNNING, ProfileId("codex"))),
+        profile_id=claimed.profile_id,
     )
     assert not mismatched.dispatched
 
