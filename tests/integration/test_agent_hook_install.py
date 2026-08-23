@@ -25,7 +25,9 @@ import pytest
 from remote_agents.adapters.agents import hook_install
 from remote_agents.adapters.agents.hook_install import (
     INSTALLED_EVENTS,
+    RETIRED_EVENTS,
     HookInstallError,
+    _without_our_groups,
     agent_event_command,
     install_agent_hooks,
     remove_agent_hooks,
@@ -109,7 +111,12 @@ def test_installing_twice_leaves_exactly_one_entry_for_each_event(tmp_path: Path
     assert path.read_bytes() == after_first
     for event in INSTALLED_EVENTS:
         assert len(_installed_commands(path, event)) == 1
-    assert len(json.loads(path.read_text(encoding="utf-8"))["hooks"]["SessionEnd"]) == 2
+    # `SessionEnd` is retired (DEC-051), so the operator's own hook is the only thing left
+    # under it — this installer neither adds to it nor takes the stranger away.
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["hooks"]["SessionEnd"]
+        == (_LIVED_IN_SETTINGS["hooks"]["SessionEnd"])
+    )
 
 
 @pytest.mark.parametrize("indent", [2, 4, None])
@@ -143,11 +150,51 @@ def test_remove_restores_byte_for_byte_after_a_repeated_install(tmp_path: Path) 
     assert path.read_bytes() == before
 
 
+def test_upgrading_removes_a_group_left_by_a_version_that_still_installed_it() -> None:
+    """The retirement cleans up after itself, which the naive one-line change would not have.
+
+    `_without_our_groups` opens by skipping any event it does not own, so an event simply
+    deleted from `INSTALLED_EVENTS` stops being inspected — and our group under it survives
+    both the install path and the uninstall path, which share the predicate. The hook would
+    fire on every host for ever with none of this project's tooling able to remove it, and it
+    could not be worked around by uninstalling first, since that means running the *old*
+    uninstall before taking the upgrade.
+
+    `RETIRED_EVENTS` is what closes that, and this is the case it exists for: a settings file
+    written by a version that still installed `SessionEnd`, read by one that does not.
+    """
+    ours = "/venv/bin/python -m remote_agents agent-event"
+    lived_in = {
+        "hooks": {
+            "SessionEnd": [
+                {"hooks": [{"type": "command", "command": ours}]},
+                {"hooks": [{"type": "command", "command": 'bash "/home/tester/session-end.sh"'}]},
+            ]
+        }
+    }
+
+    kept = _without_our_groups(lived_in)
+
+    assert kept["hooks"]["SessionEnd"] == [
+        {"hooks": [{"type": "command", "command": 'bash "/home/tester/session-end.sh"'}]}
+    ], "the retired group was stranded, or the operator's own hook was taken with it"
+
+
+def test_every_retired_event_has_left_the_installed_set() -> None:
+    """The two tuples are disjoint, so an event cannot be both owned and retired.
+
+    An event in both would be installed and then swept in the same run, which reads as an
+    installer that cannot make up its mind and would leave the file churning between two
+    states on alternate runs.
+    """
+    assert not set(INSTALLED_EVENTS) & set(RETIRED_EVENTS)
+
+
 def test_remove_leaves_an_unrelated_hook_under_a_shared_event(tmp_path: Path) -> None:
     path = _settings_file(tmp_path)
 
     install_agent_hooks(path)
-    assert len(json.loads(path.read_text(encoding="utf-8"))["hooks"]["SessionEnd"]) == 2
+    assert len(json.loads(path.read_text(encoding="utf-8"))["hooks"]["SessionEnd"]) == 1
 
     remove_agent_hooks(path)
 

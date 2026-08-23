@@ -62,11 +62,16 @@ _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: asserted `error_type` and the classifier's fixture wrote `reason="rate_limit"` directly, so
 #: the two halves agreed with each other and neither was ever compared with the agent.
 #: `tests/live/test_agent_activity_hooks.py` is where that comparison now lives.
+#: `reason` is `SessionEnd`'s, and `SessionEnd` is retired (DEC-051). It stays because a host
+#: that has not re-run `install-agent-hooks` yet is still firing that hook at this spool, and a
+#: reader that stopped recognising the field would mis-parse those records rather than ignore
+#: them. The mapping drops the event either way; what this keeps is the ability to read it
+#: correctly on the way to being dropped.
 _DISCRIMINATING_FIELDS = ("error", "notification_type", "reason")
 _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
-#: A collision needs two events in the same *microsecond* for one session, so the four hooks
+#: A collision needs two events in the same *microsecond* for one session, so the hooks
 #: firing together at the end of a turn do not approach this; reaching eight means something
 #: is wrong that a ninth attempt would not fix. Exhausting it is a silent drop, which is the
 #: right answer in a hook -- it is stated here because the loop's `return` is inside the

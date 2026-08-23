@@ -1,11 +1,11 @@
 """Merge this project's agent-event hooks into a Claude Code settings file, reversibly.
 
 The file this writes is not ours. It is the operator's live agent configuration, it holds
-their own hooks — including, on the machine this was written for, a ``SessionEnd`` hook that
-is one of the four events installed here — and a bad write to it breaks every agent session
-on the machine at once. So the whole module is arranged around leaving that file exactly as
-it was found apart from the four groups it adds, and around refusing outright when it cannot
-promise that.
+their own hooks — including, on the machine this was written for, a ``SessionEnd`` hook of
+their own, under an event this installer used to write to and no longer does (DEC-051) — and a
+bad write to it breaks every agent session on the machine at once. So the whole module is
+arranged around leaving that file exactly as it was found apart from the groups it adds, and
+around refusing outright when it cannot promise that.
 
 Three decisions carry most of that weight.
 
@@ -64,7 +64,29 @@ from typing import Any
 
 from remote_agents.ports.private_directory import ancestors_writable_by_others
 
-INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification", "SessionEnd")
+INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification")
+
+RETIRED_EVENTS = ("SessionEnd",)
+"""Events this installer used to own and must still clean up after.
+
+**Without this, dropping an event strands it for ever.** `_without_our_groups` opens by
+skipping any event it does not own, so an event removed from `INSTALLED_EVENTS` stops being
+inspected at all -- and our group under it is copied across untouched by *both* the install
+path and the uninstall path, which share the predicate. The hook would go on firing on every
+host with none of this project's tooling able to remove it, and it could not be worked around
+by uninstalling first, because that would mean running the *old* uninstall before taking the
+upgrade.
+
+So the sweep is over what we own **now or ever did**, and an event leaves `INSTALLED_EVENTS`
+by moving here rather than by disappearing. An entry stays until every host has run the
+installer at least once since the event was dropped; there is no way for this process to know
+when that is, and the cost of keeping one is a dictionary lookup per install.
+
+`SessionEnd` was dropped 2026-08-23 (DEC-051): its record was spooled, read, deleted and then
+discarded at the mapping, because there is no `ActivityKind` for it -- `ended` was retired for
+reporting an exit the owner had just caused. It wrote a file per session end, in every Claude
+session on the machine, that nothing ever consumed.
+"""
 
 # What identifies a group as ours: the argument tail, matched as parsed words rather than as
 # text. The interpreter in front of it may change -- a moved virtualenv should replace our
@@ -200,7 +222,7 @@ def _read_settings(path: Path) -> _Settings:
                 f"{path.parent} does not exist, so this machine has no agent configuration to "
                 "install into; refusing to create one"
             ) from None
-        # A settings file is the agent's, and creating one holding only our four hooks is both
+        # A settings file is the agent's, and creating one holding only our own hooks is both
         # valid and what a fresh machine needs. Removal later empties it back to `{}` rather
         # than deleting it, because by then the file may hold settings we never saw.
         return _Settings(path, None, {}, _DEFAULT_STYLE, 0o600)
@@ -296,8 +318,12 @@ def _without_our_groups(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hooks, dict):
         return document
     remaining: dict[str, Any] = {}
+    # Now *or ever* — see `RETIRED_EVENTS`. Sweeping only what is currently installed is what
+    # would stand an event we dropped, in a file neither install nor uninstall would touch
+    # again.
+    ours = (*INSTALLED_EVENTS, *RETIRED_EVENTS)
     for event, groups in hooks.items():
-        if event not in INSTALLED_EVENTS or not isinstance(groups, list):
+        if event not in ours or not isinstance(groups, list):
             remaining[event] = groups
             continue
         kept = [group for group in groups if not _is_our_group(group)]
@@ -473,9 +499,9 @@ def _refuse_when_removal_would_not_restore(
             "could not put it back exactly as it is now. An empty block is almost always the "
             'cause: "hooks": {} and no "hooks" key at all mean the same thing but are '
             "different text, so an uninstall cannot tell which one to leave behind. Delete "
-            "the empty block (or the empty list, or a null, under Stop, StopFailure, "
-            "Notification or SessionEnd) and run this again — that changes nothing else "
-            "about your settings."
+            "the empty block (or the empty list, or a null, under any of "
+            f"{', '.join((*INSTALLED_EVENTS, *RETIRED_EVENTS))}) and run this again — that "
+            "changes nothing else about your settings."
         )
 
 
