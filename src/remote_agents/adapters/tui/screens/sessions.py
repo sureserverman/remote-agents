@@ -103,7 +103,147 @@ class OpeningAction(Message):
         self.action = action
 
 
-class SessionsScreen(ChoiceScreen):
+#: One key per action the session detail offers, and the action each one names.
+#:
+#: **Bare letters, which is affordable here and nowhere else on this surface.** Both sessions
+#: positions call `hide_entry()`, so there is no filter to type into and a letter cannot be
+#: mistaken for a search. The projects pane cannot do this: its filter holds the keyboard by
+#: construction, which is why Stage 5's order toggle has to be a `ctrl+` key.
+#:
+#: Nothing here decides whether an action is *legal*. The key names it, the detail performs it
+#: through `choose`, and the policy re-checked at issue time is what refuses -- DEC-007's
+#: fourth mitigation. A key is only ever a faster way to reach a row that already exists.
+#:
+#: That chain asks before `force` and before either Remote Control direction, and does **not**
+#: ask before Stop and close or Clean up. Stated precisely rather than as "the same
+#: confirmations a row gets", which was the first version of this comment and was the sentence
+#: a later reader would have used to conclude this path was already safe for all six. It is the
+#: reason `UNCONFIRMED_MUTATING_ACTIONS` below exists.
+#:
+#: No trust key, deliberately (DEC-047): this surface answers the trust question in the pane
+#: the console exchanges in, so it has no trust row and must not grow a trust key either.
+SESSION_ACTION_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("a", "attach", "Copy attach"),
+    ("i", "inspect", "Inspect output"),
+    ("r", "rename", "Rename"),
+    ("f", FORCE, ACTION_LABELS[FORCE]),
+)
+
+#: The actions a key must never carry: exactly the branch of `SessionDetailScreen.choose` that
+#: reaches `tui.stop` **without asking** -- `key in ACTION_LABELS and key != FORCE`, which today
+#: is Stop and close, and Clean up. Derived from that condition rather than listing the two, so
+#: a third unconfirmed action added to the policy is excluded here the day it appears.
+#:
+#: **The plan proposed `s` and `c` for these, and they are deliberately not bound.** Two
+#: decisions close off every way to do it safely:
+#:
+#: - DEC-018 -- "neither surface gains a confirmation for graceful stop or for cleanup",
+#:   applied "to both surfaces or neither". So the key cannot ask.
+#: - DEC-007 -- every screen rests its cursor on a non-mutating entry. So the key cannot open
+#:   the detail with the stop row under the cursor either.
+#:
+#: What made DEC-018's accepted cost -- "an owner who stops the wrong session loses that output
+#: with no second chance" -- tolerable was that reaching those rows took two deliberate,
+#: human-paced keypresses: Enter to open the detail, then Enter on a row the owner could see.
+#: A key collapses that to one, and this list auto-refreshes every ten seconds restoring the
+#: cursor *by key* -- so a session that ends between ticks drops its row and the cursor falls
+#: to row 0, a different session, silently. Pressed at that moment, an auto-dispatched `s`
+#: would gracefully stop a live agent the owner never selected, with nothing asked and nothing
+#: recoverable. Found by this task's Tier-1 review.
+#:
+#: `d` still reaches them in two keypresses, which is what it did before this task.
+UNCONFIRMED_MUTATING_ACTIONS = frozenset(ACTION_LABELS) - {FORCE}
+
+#: The Remote Control key, kept out of the table above because it is the one key whose action
+#: is not known until the record is read -- see `action_row_remote_control`.
+_REMOTE_CONTROL_KEY = "m"
+
+
+#: The bindings themselves, built once from the table above.
+#:
+#: **Declared here and attached to the screen classes, not to the mixin below**, and that is a
+#: fact about Textual rather than a preference: `BINDINGS` are merged across the MRO for
+#: `DOMNode` subclasses only, so a plain mixin's list is silently skipped. The first version of
+#: this task put them on the mixin, and the screen reported exactly `['d']` -- no error, no
+#: warning, every new key simply inert. Measured, then moved.
+SESSION_ACTION_BINDINGS = [
+    # Hidden from the footer for the same reason `d` is: the bar is shared with every
+    # inherited binding, and seven more entries would clip the ones the owner did not ask
+    # for. Task 4.3 is what keeps the hidden ones honest.
+    *(
+        Binding(key, f"row_action('{action}')", label, show=False)
+        for key, action, label in SESSION_ACTION_KEYS
+    ),
+    Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
+]
+
+
+class _SessionActionKeys:
+    """The per-action key *behaviour* both sessions positions share.
+
+    Methods only. The bindings that reach them are attached to the screen classes for the MRO
+    reason recorded above; what lives here is the one definition of what a key does, so
+    `SessionsPaneScreen` inherits it rather than holding a second copy.
+    """
+
+    def highlighted_session(self) -> str | None:
+        """The session id under the cursor, or None if the cursor is on nothing usable.
+
+        Returns rather than raises, because a binding that raises exits the app -- the same
+        reason `DashboardScreen.action_session_detail` checks its index before reading it.
+        """
+        choices = self.query_one("#choices", OptionList)
+        key = held_option_id(choices)
+        # One check, not two: every sentinel row id in this package -- `_BACK`, `_CANCEL`,
+        # `_EMPTY`, `NEVER_EMPTY` -- is `\x00`-prefixed, so the prefix covers all of them.
+        if key is None or key.startswith("\x00"):
+            return None
+        return key
+
+    async def action_row_action(self, action: str) -> None:
+        """Open the highlighted session's detail, asking it to perform `action`.
+
+        The whole of what a key does. It carries no confirmation, no policy check and no
+        command of its own: those live on the detail, once, and this is an entry to them.
+        """
+        session_value = self.highlighted_session()
+        if session_value is None:
+            return
+        await self.tui.show_detail(session_value, action)
+
+    async def action_row_remote_control(self) -> None:
+        """Remote Control, which is the one key that cannot name its action in advance.
+
+        The direction is policy -- `remote_control_directions` answers Enable, Disable, or
+        *both* when nobody has toggled this session and the observation is unknown. Where it
+        offers one, the key performs it. Where it offers two, the key opens the detail and
+        lets the owner choose: a surface that guessed would be picking a side of a question
+        the policy deliberately declines to answer, on a live pane.
+        """
+        session_value = self.highlighted_session()
+        if session_value is None:
+            return
+        try:
+            record = await self.tui.current_record(session_value)
+        except Exception as error:
+            self.tui.report_store_failure(error, self)
+            return
+        if not self.showing:
+            # The owner left while the store was answering. Every other post-await continuation
+            # on this screen family re-checks this before acting -- `dispatch_opening`,
+            # `confirm_force`, `confirm_remote_control`, `show_attach` -- because `action_back`
+            # only consults the app-level busy flag, and this method sets none. Without it a
+            # read landing late pushes a detail onto whatever the owner navigated to instead.
+            return
+        if record is None:
+            await self.tui.show_detail(session_value)
+            return
+        directions = remote_control_directions(record, record.remote_control_state)
+        opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
+        await self.tui.show_detail(session_value, opening)
+
+
+class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     """Every managed session, including ones this process never launched.
 
     The one position in this surface whose answer goes stale with nobody touching it: the
@@ -112,6 +252,8 @@ class SessionsScreen(ChoiceScreen):
     demand since sub-plan 3; this screen now also re-reads itself on an interval, and stops
     doing so the moment it is not the screen on top.
     """
+
+    BINDINGS = list(SESSION_ACTION_BINDINGS)
 
     empty_state = "No managed sessions on this host."
 
@@ -396,6 +538,11 @@ class SessionsPaneScreen(SessionsScreen):
         # with every inherited binding, and the key only means something while a row is
         # highlighted. The status line says so where it is true.
         Binding("d", "session_detail", "Session detail", show=False),
+        # Repeated rather than inherited, because Textual merges `BINDINGS` across the MRO and
+        # a subclass that declares its own does *not* lose its parent's -- but this file has
+        # been bitten once already by assuming how that merge works, so the set this position
+        # offers is written where a reader can see it whole.
+        *SESSION_ACTION_BINDINGS,
     ]
 
     async def choose(self, key: str) -> None:

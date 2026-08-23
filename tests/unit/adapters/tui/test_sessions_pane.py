@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from backends import tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
@@ -429,3 +430,211 @@ async def test_a_session_whose_project_left_the_catalogue_still_renders() -> Non
         choices = app.screen.query_one("#choices", OptionList)
         assert choices.option_count == 1
         assert "vanished" in str(choices.get_option_at_index(0).prompt)
+
+
+# A key per action, each routed into the detail's own chain ------------------------------------
+
+_ACTION_KEYS = (
+    ("a", "attach"),
+    ("i", "inspect"),
+    ("r", "rename"),
+    ("f", "force"),
+)
+
+
+@pytest.mark.parametrize(("key", "action"), _ACTION_KEYS)
+async def test_each_key_pushes_the_detail_carrying_its_action(key: str, action: str) -> None:
+    """DEC-007's control plane, one key deep instead of two.
+
+    Each key names an action and hands it to `SessionDetailScreen`, which performs it through
+    the chain it already has -- the same confirmations, refusals and guards a pressed row
+    gets. The key itself decides nothing about whether the action is legal; that is the
+    policy's answer, re-checked at issue time.
+    """
+    opened: list[tuple[str, str | None]] = []
+    app = SessionsPane(_context((_record(),)))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press(key)
+        await pilot.pause()
+
+    assert opened == [(str(_SESSION), action)], opened
+
+
+async def test_a_key_with_no_row_highlighted_is_a_no_op() -> None:
+    """An empty list still has a footer. A key pressed against no row must do nothing rather
+    than raise out of a binding, which on this surface exits the app."""
+    opened: list = []
+    app = SessionsPane(_context(()))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(*a, **k):
+            opened.append(a)
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        for key in ("a", "i", "r", "s", "c", "f", "m"):
+            await pilot.press(key)
+            await pilot.pause()
+        assert app.is_running, "a key with no highlighted row took the surface down"
+
+    assert opened == []
+
+
+async def test_no_action_key_collides_with_an_app_level_binding() -> None:
+    """The pane hides its filter, so bare letters are free here in a way they are not on the
+    projects pane. What is *not* free is anything the app already binds -- a screen binding
+    shadowing Quit or Back would take the key away everywhere it is inherited."""
+    from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen as _Pane
+
+    app_keys = {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}
+    pane_keys = {binding.key for binding in _Pane.BINDINGS}
+    assert not (pane_keys & app_keys), sorted(pane_keys & app_keys)
+
+
+async def test_no_trust_key_is_offered_dec_047() -> None:
+    """DEC-047: the local surface answers the trust question in the pane the console exchanges
+    in, so it deliberately has no trust row -- and must not grow a trust *key* either."""
+    from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen as _Pane
+
+    actions = " ".join(str(binding.action) for binding in _Pane.BINDINGS)
+    assert "trust" not in actions.lower(), actions
+
+
+async def test_m_performs_the_single_offered_direction() -> None:
+    """Where the policy offers one direction, the key performs it."""
+    from dataclasses import replace as _replace
+
+    from remote_agents.domain.remote_control import RemoteControlState
+
+    opened: list[tuple[str, str | None]] = []
+    record = _replace(_record(), remote_control_state=RemoteControlState.INACTIVE)
+    app = SessionsPane(_context((record,)))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press("m")
+        await pilot.pause()
+
+    assert len(opened) == 1, opened
+    assert opened[0][1] == "remote-control-active", opened
+
+
+async def test_m_opens_the_detail_unmodified_when_the_direction_is_unknown() -> None:
+    """`remote_control_directions` offers *both* when nobody has toggled this session or the
+    observation came back UNKNOWN -- deliberately, because unknown must not be guessed at.
+
+    A key that picked one would be answering, on a live pane, a question the policy declines
+    to answer. So it opens the detail and lets the owner choose, which is the same two
+    keypresses this key exists to save everywhere else and the right number here.
+    """
+    opened: list[tuple[str, str | None]] = []
+    app = SessionsPane(_context((_record(),)))  # no remote_control_state observed
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press("m")
+        await pilot.pause()
+
+    assert opened == [(str(_SESSION), None)], opened
+
+
+async def test_no_key_auto_performs_an_action_the_detail_would_not_ask_about() -> None:
+    """The rule this task's Tier-1 review produced, pinned as a rule rather than as a list.
+
+    `SessionDetailScreen.choose` asks before `force` and before either Remote Control
+    direction, and does not ask before Stop and close or Clean up -- the branch
+    `key in ACTION_LABELS and key != FORCE`. A key that auto-performed one of those would
+    remove the only thing standing in front of it, which was two deliberate keypresses rather
+    than a confirmation (DEC-018 declined confirmations for both, on both surfaces).
+
+    That matters here specifically because this list restores its cursor *by key* every ten
+    seconds and falls back to row 0 when a key has gone -- so a session ending between ticks
+    moves the cursor to a different session with nothing said.
+
+    Derived from the policy rather than hardcoded: an unconfirmed action added to
+    `ACTION_LABELS` tomorrow is excluded the day it appears, instead of quietly becoming
+    bindable.
+    """
+    from remote_agents.adapters.tui.screens.sessions import (
+        SESSION_ACTION_KEYS,
+        UNCONFIRMED_MUTATING_ACTIONS,
+    )
+    from remote_agents.application.session_actions import ACTION_LABELS, FORCE
+
+    assert UNCONFIRMED_MUTATING_ACTIONS == frozenset(ACTION_LABELS) - {FORCE}
+    assert UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
+
+    bound = {action for _key, action, _label in SESSION_ACTION_KEYS}
+    offenders = bound & UNCONFIRMED_MUTATING_ACTIONS
+    assert not offenders, (
+        f"these keys auto-perform an action the detail never asks about: {sorted(offenders)}"
+    )
+
+
+async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
+    """`SessionsScreen` and `SessionsPaneScreen` each declare `BINDINGS` from the same list,
+    and both carry the same 10-second auto-refresh -- so both are the surface this task's
+    Critical was about, and an edit touching one alone must not go unnoticed.
+
+    Asserted as an equality between the two key sets rather than as two separate lists, so the
+    sharing itself is the pinned invariant.
+    """
+    from remote_agents.adapters.tui.screens.sessions import SessionsScreen
+
+    action_keys = {key for key, _a, _l in _module_action_keys()} | {"m"}
+    full = {str(b.key) for b in SessionsScreen.BINDINGS}
+    pane = {str(b.key) for b in SessionsPaneScreen.BINDINGS}
+    assert action_keys <= full, sorted(action_keys - full)
+    assert action_keys <= pane, sorted(action_keys - pane)
+    # The pane adds `d` and nothing else; every other key is shared.
+    assert pane - full == {"d"}, sorted(pane - full)
+
+
+def _module_action_keys():
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+
+    return SESSION_ACTION_KEYS
+
+
+async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
+    """Asserted against the *effective* bindings, not a class's declared list.
+
+    `SessionsPaneScreen.BINDINGS` repeats `*SESSION_ACTION_BINDINGS` rather than relying on
+    Textual's MRO merge, and a future reader may reasonably delete the repetition as redundant
+    -- it is. Reading the declared list would then silently stop checking the inherited keys
+    and still pass, so this reads what the mounted screen actually offers.
+    """
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        offered = set(app.screen.active_bindings)
+
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+
+    for key, _action, _label in SESSION_ACTION_KEYS:
+        assert key in offered, f"{key!r} is not in the screen's effective keymap: {sorted(offered)}"
+    assert "m" in offered
+    assert "d" in offered, "the detail key was lost"
+    assert {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}.isdisjoint(
+        {key for key, _a, _l in SESSION_ACTION_KEYS} | {"m"}
+    )
