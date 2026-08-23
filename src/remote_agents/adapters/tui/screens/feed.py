@@ -120,6 +120,29 @@ class FeedRegion:
     #: Per instance, created on first use so neither user has to remember an `__init__` call.
     _feed_news: FeedNews | None = None
 
+    async def choose(self, key: str) -> None:
+        """Route a notification row here; hand every other key to the screen underneath.
+
+        **On the mixin, not on either screen, and that is the whole point.** Both users list
+        `FeedRegion` first in their bases -- `FeedScreen(FeedRegion, ChoiceScreen)` and
+        `DashboardScreen(FeedRegion, ProjectsPaneScreen)` -- so this sits in front of both
+        screens' own `choose` in the MRO and `super()` continues to whichever one that is. One
+        implementation, two surfaces, and nothing in `dashboard.py` that a later change could
+        edit on one side only. Stage 3's expansion lands here for the same reason.
+
+        Without the branch a notification key fell through to the dashboard's project half,
+        which looks it up in the catalogue, does not find it, and announces "That project is no
+        longer available. Refresh and try again." -- a warning about a project, for a row that
+        is not one. Reproduced before the fix.
+
+        Selecting a notification does nothing yet; the row is the record and Enter gains its
+        meaning in Stage 3. It is a deliberate no-op rather than an omission: the routing and
+        what the routing *does* are separable, and the seam is worth landing on its own.
+        """
+        if key.startswith(NOTIFICATION_PREFIX):
+            return
+        await super().choose(key)
+
     @staticmethod
     def _draw_feed(pane: OptionList, rows: list[tuple[str, str]]) -> None:
         """Refill the pane, leaving the cursor on the observation it was on.
@@ -206,7 +229,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     DEFAULT_CSS = """
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }
-    FeedScreen #feed-pane { height: 1fr; padding: 0 1; }
+    FeedScreen #feed-pane { height: 1fr; }
     """
 
     def __init__(self) -> None:
