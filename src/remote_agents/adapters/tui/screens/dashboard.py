@@ -203,7 +203,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
                         id="feed-pane",
                         markup=False,
                     )
-                    feed.border_title = "Notifications"
+                    feed.border_title = "Notifications — enter expands"
                     yield feed
             with VerticalScroll(id="output-pane"):
                 yield TextArea(

@@ -28,6 +28,7 @@ from remote_agents.adapters.tui.screens.base import (
     held_option_id,
     restore_highlight_by_id,
 )
+from remote_agents.domain.models import SessionRecord
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
     ActivityKind,
@@ -46,12 +47,24 @@ _FEED_LIMIT = FEED_LIMIT
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
 #: standing messages) a glanceable feed line has no use for.
 KIND_WORDS = {
-    ActivityKind.COMPLETED: "the agent has finished its work",
-    ActivityKind.LIMIT_REACHED: "the agent hit a usage limit",
-    ActivityKind.OUTPUT_LIMIT: "the response hit its output ceiling",
-    ActivityKind.NEEDS_ANSWER: "the agent is waiting for an answer",
-    ActivityKind.QUIET: "the pane has gone quiet",
+    ActivityKind.COMPLETED: "finished its work",
+    ActivityKind.LIMIT_REACHED: "hit a usage limit",
+    ActivityKind.OUTPUT_LIMIT: "hit its output ceiling",
+    ActivityKind.NEEDS_ANSWER: "waiting for an answer",
+    ActivityKind.QUIET: "gone quiet",
 }
+"""Each phrase leads with what *differs*, and drops the subject the row already names.
+
+These read "the agent has finished its work", "the agent is waiting for an answer" and so on
+until the Stage 3 gate measured them at the width the dashboard actually gives this pane. Three
+of the five began with the same eight characters, and the row prefixes them with a session
+identity -- so at ~36 columns three observations of three different kinds truncated to the
+*same 36 characters*, and a pane of identical rows cannot be glanced at.
+
+Dropping "the agent" is not a shortening for its own sake: the row now opens with the session,
+so the subject was being said twice. `existing · claude · #1 · waiting for an answer` names who
+is waiting more precisely than the sentence it replaces did.
+"""
 
 
 #: The row id for the pane's declared empty state. Disabled, so the cursor never rests on a
@@ -63,6 +76,29 @@ _EMPTY_FEED_ROW = "notification:none"
 #: is the whole of the dispatch -- the same seam the dashboard already tests `session:` on. No
 #: new handler, and specifically no app-level one (`screens/base.py:952` says why).
 NOTIFICATION_PREFIX = "notification:"
+
+
+def _glance_identity(record: SessionRecord) -> str:
+    """How the feed names a session: project, agent, sequence -- and not the mode.
+
+    **Not `display.rendered`, and the difference is one token that costs ten columns.** That
+    property renders `<project> · <agent> · <mode> · #<n>`, which is right for a *sessions
+    list*, where `regular` versus `resumed` versus `recovered` distinguishes rows that are
+    otherwise the same session. A notification row is not identifying a session among its
+    siblings; it is saying which session an event belongs to, and it is doing that in a pane
+    a third of a column wide, where those ten columns are the difference between showing what
+    happened and not.
+
+    So this is a second *rendering*, not a second copy of a rule: it composes the same fields
+    the identity already exposes, and any question about what a session is *called* still has
+    one answer (DEC-043 -- the decision is shared, the sentence stays the surface's). The mode
+    remains one keypress away on the sessions pane and the detail screen.
+
+    A custom label is kept: it is the one part of the name the owner chose.
+    """
+    display = record.display
+    named = f"{display.project_slug} · {display.agent_label} · #{display.sequence}"
+    return f"{named} · {display.custom_label}" if display.custom_label else named
 
 
 def feed_key(activity: AgentActivity) -> str:
@@ -295,7 +331,7 @@ class FeedRegion:
             # that renders its session-id fallback, which is a worse row and a working pane.
             _LOG.exception("the feed could not read sessions to name its rows")
             return {}
-        return {str(record.session_id): record.display.rendered for record in records}
+        return {str(record.session_id): _glance_identity(record) for record in records}
 
     async def choose(self, key: str) -> None:
         """Route a notification row here; hand every other key to the screen underneath.
@@ -474,7 +510,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
                 id="feed-pane",
                 markup=False,
             )
-            feed.border_title = "Notifications"
+            feed.border_title = "Notifications — enter expands"
             yield feed
             with VerticalScroll(id="output-pane"):
                 yield TextArea(

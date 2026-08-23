@@ -1128,3 +1128,81 @@ async def test_expanding_the_second_of_two_colliding_rows_keys_it_apart(surface)
             if ":detail:" in str(pane.get_option_at_index(i).id)
         )
         assert "detail number 1" in expanded, expanded
+
+
+async def test_rows_of_different_kinds_are_distinguishable_at_the_narrow_width() -> None:
+    """The dashboard's feed region is ~36 columns, and a glance has to tell rows apart.
+
+    Measured before this was fixed: with the mode in the identity and kind words that all
+    began "the agent", three observations of three different kinds truncated to the *same 36
+    characters* --
+
+        'existing · claude · regular · #1 · t'   (waiting for an answer)
+        'existing · claude · regular · #1 · t'   (finished its work)
+        'existing · claude · regular · #1 · t'   (gone quiet)
+
+    An expansion is a *targeted* read: at most one row opens at a time, so a pane of
+    indistinguishable rows means opening each in turn to find the one that needs an answer.
+    The collapsed row has to discriminate for the keypress to be worth anything.
+    """
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    stamp = datetime.now(UTC)
+    kinds = (
+        ActivityKind.NEEDS_ANSWER,
+        ActivityKind.COMPLETED,
+        ActivityKind.LIMIT_REACHED,
+        ActivityKind.OUTPUT_LIMIT,
+        ActivityKind.QUIET,
+    )
+    observations = tuple(
+        AgentActivity(
+            session, kind, None, stamp - timedelta(minutes=n), ActivityConfidence.REPORTED
+        )
+        for n, kind in enumerate(kinds)
+    )
+
+    async def feed():
+        return observations
+
+    context, _sessions = _index_context(feed, (_session_record(session),))
+    app = RemoteAgentsTui(context)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        width = pane.content_size.width
+        glances = [
+            str(pane.get_option_at_index(i).prompt)[:width] for i in range(pane.option_count)
+        ]
+        assert len(set(glances)) == len(kinds), (
+            f"{len(kinds)} kinds collapsed to {len(set(glances))} distinct rows at "
+            f"{width} columns:\n" + "\n".join(repr(g) for g in glances)
+        )
+
+
+@_SURFACES
+async def test_a_real_enter_keypress_expands_the_highlighted_row(surface) -> None:
+    """Every other expansion case calls `choose` directly, which skips the keypress ->
+    `OptionSelected` -> `choose` path entirely. This drives the key an owner actually presses."""
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        # Focus the pane the way the owner would: the console pane already holds the keyboard,
+        # the dashboard's is reached by Tab.
+        while not pane.has_focus:
+            await pilot.press("tab")
+            await pilot.pause()
+        assert pane.highlighted is not None
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _feed_pane(app).option_count > 1, "Enter did not expand the highlighted row"
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert _feed_pane(app).option_count == 1, "Enter did not collapse it again"
