@@ -202,12 +202,20 @@ def _record(
     state: SessionState = SessionState.RUNNING,
     orphan_provenance: OrphanProvenance | None = None,
 ) -> SessionRecord:
-    """A session stamped now, so `age()` renders a stable `0m ago` in the baseline."""
+    """A session stamped now, so `age()` renders a stable `0m ago` in the baseline.
+
+    **The slug is the project's `opaque_id`, because that is what the store actually holds.**
+    It read `"existing"` -- the catalogue's *name* -- until Stage 1, which made the naming
+    join a no-op here and left all 34 baselines blind to the one change that stage makes.
+    They passed unmoved, which is the most expensive way for a net to be wrong: it reports
+    the render it never drew. A fixture that disagrees with production is not a simpler
+    fixture, it is a different subject.
+    """
     return SessionRecord(
         _SESSION_ID,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1),
         state,
         datetime.now(UTC),
         orphan_provenance=orphan_provenance,
