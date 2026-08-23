@@ -56,12 +56,12 @@ class _Launcher:
         return self.records
 
 
-def _record() -> SessionRecord:
+def _record(slug: str = "existing") -> SessionRecord:
     return SessionRecord(
         _SESSION,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionDisplayIdentity(slug, "claude", "regular", 1),
         SessionState.RUNNING,
         datetime.now(UTC),
     )
@@ -172,3 +172,23 @@ async def test_open_session_detail_is_one_key_away() -> None:
         await pilot.press("d")
         await pilot.pause()
         assert isinstance(app.screen, SessionDetailScreen)
+
+
+# The project a session row names on this surface ----------------------------------------------
+
+
+async def test_the_sessions_region_names_the_project_and_keeps_its_option_id() -> None:
+    """The dashboard's pane is the second render of the same record, and it must agree.
+
+    Both halves are asserted together on purpose: the name is what the owner reads, and the
+    option id is what `choose` and `action_session_detail` route on. A change that fixed the
+    first and moved the second would look right on screen and strand every action behind it.
+    """
+    app = RemoteAgentsTui(_context((_record(slug="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        row = pane.get_option_at_index(0)
+        assert "existing" in str(row.prompt)
+        assert "opaque-existing" not in str(row.prompt)
+        assert row.id == f"session:{_SESSION}"
