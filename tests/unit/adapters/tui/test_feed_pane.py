@@ -519,3 +519,90 @@ async def test_an_observation_whose_session_is_unknown_falls_back_to_its_id(surf
         row = _feed_rows(app)[0]
         assert "deadbeef" in row, row
         assert "·  ·" not in row, "an unknown session must not render an empty identity"
+
+
+@_SURFACES
+async def test_a_notification_for_an_ended_session_still_names_its_project(surface) -> None:
+    """The read is `list_sessions`, raw -- not `listed_sessions`, which filters ENDED.
+
+    A notification outlives its session by design, so the record the feed needs to name a row
+    is routinely one the *sessions list* has correctly stopped showing. Filtering here would
+    make the feed's naming fail on precisely the observations most worth reading: the ones
+    about work that has finished.
+    """
+    from remote_agents.domain.models import SessionState
+
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    # `dataclasses.replace`, not `type(x)(**x.__dict__)`: SessionRecord is frozen *and*
+    # slotted, so it has no `__dict__` at all and the latter raises AttributeError.
+    from dataclasses import replace as _dc_replace
+
+    ended = _dc_replace(_session_record(session), state=SessionState.ENDED)
+
+    async def feed():
+        return (_named_activity(ActivityKind.COMPLETED, minutes_ago=3, session=session),)
+
+    context, _sessions = _index_context(feed, (ended,))
+    app = surface(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "existing" in _feed_rows(app)[0], _feed_rows(app)[0]
+
+
+@_SURFACES
+async def test_a_store_read_that_raises_leaves_the_drawn_rows_alone(surface) -> None:
+    """Same contract the activity read already has: rows already on screen are stale, not
+    wrong, and a background read having a bad moment must never break the position."""
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+    failing = [False]
+
+    class _Sessions:
+        refreshed = 0
+
+        async def refresh_readiness(self):
+            return ()
+
+        async def list_sessions(self):
+            if failing[0]:
+                raise RuntimeError("store contended")
+            return (_session_record(session),)
+
+    async def feed():
+        return (_named_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, session=session),)
+
+    from dataclasses import replace as _replace
+
+    base = _context(feed)
+    app = surface(_replace(base, backend=_replace(base.backend, sessions=_Sessions())))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before = _feed_rows(app)
+        assert "existing" in before[0]
+
+        failing[0] = True
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert app.is_running, "a failed name read must not take the surface down"
+        assert _feed_rows(app), "the pane must not be emptied by a failed name read"
+
+
+@_SURFACES
+async def test_the_feed_read_never_refreshes_readiness(surface) -> None:
+    """A feed re-render must not start a tmux conversation. This pane repaints every ten
+    seconds on two surfaces, and `refresh_readiness` rescans every record and runs a capture
+    per FAILED session -- so naming the rows through the readiness pass would put a periodic
+    tmux workload behind a pane whose whole job is to be glanced at."""
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+
+    async def feed():
+        return (_named_activity(ActivityKind.QUIET, minutes_ago=1, session=session),)
+
+    context, sessions = _index_context(feed, (_session_record(session),))
+    app = surface(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        baseline = type(sessions).refreshed
+        await app.screen._reload_feed()
+        await pilot.pause()
+        assert type(sessions).refreshed == baseline, "the feed's own read refreshed readiness"

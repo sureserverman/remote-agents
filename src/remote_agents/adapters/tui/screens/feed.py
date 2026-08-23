@@ -23,6 +23,7 @@ from textual.widgets.option_list import Option
 from remote_agents.adapters.tui.context import FEED_LIMIT
 from remote_agents.adapters.tui.model import age
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
+from remote_agents.application.session_views import with_project_names
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 _LOG = logging.getLogger(__name__)
@@ -160,6 +161,41 @@ class FeedRegion:
     #: Per instance, created on first use so neither user has to remember an `__init__` call.
     _feed_news: FeedNews | None = None
 
+    async def _session_names(self) -> dict[str, str]:
+        """`{session_id: rendered identity}` for every session the store still holds.
+
+        Three deliberate choices, each of which the obvious alternative gets wrong.
+
+        **`list_sessions()` raw, not `listed_sessions()`.** The latter pairs the read with a
+        readiness refresh *and* filters to what a list should show, which is exactly ENDED
+        removed (DEC-017). A notification outlives its session by design -- that is what a
+        durable feed is for -- so the record needed to name a row is routinely one the
+        sessions list has correctly stopped showing. Filtering here would break naming on the
+        observations most worth reading: the ones about work that finished.
+
+        **No `refresh_readiness`.** It rescans every record and runs a tmux capture per FAILED
+        session. This pane repaints every ten seconds on two surfaces, so naming rows through
+        the readiness pass would put a periodic tmux workload behind a pane whose whole job is
+        to be glanced at. The feed reads; it does not probe.
+
+        **A failure returns an empty index rather than propagating.** The rows then render
+        their session-id fallback, which is the same contract the activity read above already
+        has: what is drawn is stale, not wrong, and a background read having a bad moment must
+        never break the position or empty the pane.
+        """
+        sessions = self.services.backend.sessions
+        if sessions is None:
+            return {}
+        try:
+            records = await sessions.list_sessions()
+        except Exception:
+            _LOG.exception("the feed could not read sessions to name its rows")
+            return {}
+        return {
+            str(record.session_id): record.display.rendered
+            for record in with_project_names(records, self.tui.catalogue)
+        }
+
     async def choose(self, key: str) -> None:
         """Route a notification row here; hand every other key to the screen underneath.
 
@@ -232,7 +268,7 @@ class FeedRegion:
             pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))
             self._feed_news.arrived(activities)
             return
-        self._draw_feed(pane, feed_rows(activities))
+        self._draw_feed(pane, feed_rows(activities, await self._session_names()))
 
         newest = self._feed_news.arrived(activities)
         flash = self.services.console_flash
