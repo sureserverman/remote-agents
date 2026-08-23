@@ -668,3 +668,80 @@ async def test_the_dashboard_leaves_the_keyboard_in_its_filter() -> None:
         assert isinstance(app.focused, Input), (
             f"the dashboard filter lost the keyboard to {app.focused!r}"
         )
+
+
+# The pane's "never an exception" contract, at the draw as well as the read -------------------
+
+
+@_SURFACES
+async def test_two_observations_sharing_a_timestamp_do_not_take_the_app_down(surface) -> None:
+    """`feed_key` composes session, kind and `observed_at`, and nothing makes that unique.
+
+    `agent_activity`'s only unique column is `activity_id`, which `activity_store` discards
+    before an `AgentActivity` is built -- so two rows with the same session, kind and
+    microsecond are representable, and this project already treats that collision as a real
+    event rather than a theoretical one (`activity_spool._MAXIMUM_NAME_ATTEMPTS` exists for
+    exactly it). `OptionList.add_options` raises `DuplicateID` on a repeated id, and the draw
+    runs inside a `Timer` callback, where `App._handle_exception` "Always results in the app
+    exiting" -- and the offending pair stays in the newest FEED_LIMIT rows, so it would take
+    the surface down again on every tick until new activity pushed it out.
+
+    The same failure class `SessionsScreen._draw_listing`'s docstring records having already
+    been fixed once, in a new code path.
+    """
+    stamp = datetime.now(UTC)
+    twin = AgentActivity(
+        "01234567-89ab-cdef-0123-456789abcdef",
+        ActivityKind.COMPLETED,
+        "first",
+        stamp,
+        ActivityConfidence.REPORTED,
+    )
+    other = AgentActivity(
+        "01234567-89ab-cdef-0123-456789abcdef",
+        ActivityKind.COMPLETED,
+        "second",
+        stamp,
+        ActivityConfidence.REPORTED,
+    )
+
+    async def feed():
+        return (twin, other)
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.is_running, "a duplicate row id took the surface down"
+        pane = _feed_pane(app)
+        assert pane.option_count == 2, "both observations must still be drawn"
+        ids = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert len(set(ids)) == 2, ids
+
+
+@_SURFACES
+async def test_a_failure_building_the_rows_leaves_the_pane_as_it_was(surface) -> None:
+    """The docstring promises "never an exception" for the whole method, not for the read.
+
+    The activity read was guarded and everything after it was not, so any failure in the
+    naming join or the option rebuild propagated out of a Timer callback and exited the app.
+    """
+    from remote_agents.adapters.tui.screens import feed as feed_module
+
+    async def feed():
+        return (_activity(ActivityKind.COMPLETED, minutes_ago=1, detail="drawn"),)
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before = _feed_rows(app)
+        assert before
+
+        original = feed_module.feed_rows
+        feed_module.feed_rows = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            await app.screen._reload_feed()
+            await pilot.pause()
+            assert app.is_running, "a failed row build took the surface down"
+            assert _feed_rows(app) == before, "the drawn rows must be left alone"
+        finally:
+            feed_module.feed_rows = original

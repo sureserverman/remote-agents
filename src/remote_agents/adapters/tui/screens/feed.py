@@ -107,7 +107,20 @@ def feed_rows(
     being: a sentence about nobody.
     """
     names = names or {}
-    rows = []
+    rows: list[tuple[str, str]] = []
+    #: How many rows already carry each composite key. `feed_key` is
+    #: session + kind + observed_at, and nothing in the store makes that unique: the only
+    #: unique column on `agent_activity` is `activity_id`, which `activity_store` discards
+    #: before an `AgentActivity` is built. Two hooks firing in the same microsecond for one
+    #: session is a collision this project already treats as real -- `activity_spool` carries
+    #: `_MAXIMUM_NAME_ATTEMPTS` for exactly it -- and `OptionList.add_options` answers a
+    #: repeated id with `DuplicateID`, from inside a `Timer` callback, which exits the app.
+    #:
+    #: The ordinal is appended in iteration order, so it is stable across reloads for as long
+    #: as the feed's own order is (observed_at desc, activity_id desc) -- which is what keeps
+    #: the cursor on its row. A uniquifier that reshuffled would have traded a crash for the
+    #: defect Task 2.1's composite key exists to prevent.
+    seen: dict[str, int] = {}
     for activity in activities[:limit]:
         words = KIND_WORDS.get(activity.kind, activity.kind.value)
         identity = names.get(str(activity.session_id)) or str(activity.session_id)
@@ -116,9 +129,12 @@ def feed_rows(
         # makes the row readable at all. Cutting the line to the *pane* is not done here --
         # `_draw_feed` hands the widget a `Text` that truncates itself at whatever width it is
         # given, which is the only version that survives a resize.
-        rows.append(
-            (feed_key(activity), f"{age(activity.observed_at)} · {identity} · {words}{detail}")
-        )
+        key = feed_key(activity)
+        occurrence = seen.get(key, 0)
+        seen[key] = occurrence + 1
+        if occurrence:
+            key = f"{key}:{occurrence}"
+        rows.append((key, f"{age(activity.observed_at)} · {identity} · {words}{detail}"))
     return rows
 
 
@@ -198,10 +214,16 @@ class FeedRegion:
         except Exception:
             _LOG.exception("the feed could not read sessions to name its rows")
             return {}
-        return {
-            str(record.session_id): record.display.rendered
-            for record in with_project_names(records, self.tui.catalogue)
-        }
+        try:
+            return {
+                str(record.session_id): record.display.rendered
+                for record in with_project_names(records, self.tui.catalogue)
+            }
+        except Exception:
+            # Inside the guard rather than after it: an index this could not build is a row
+            # that renders its session-id fallback, which is a worse row and a working pane.
+            _LOG.exception("the feed could not name its rows")
+            return {}
 
     async def choose(self, key: str) -> None:
         """Route a notification row here; hand every other key to the screen underneath.
@@ -275,7 +297,16 @@ class FeedRegion:
             pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))
             self._feed_news.arrived(activities)
             return
-        self._draw_feed(pane, feed_rows(activities, await self._session_names()))
+        try:
+            self._draw_feed(pane, feed_rows(activities, await self._session_names()))
+        except Exception:
+            # The docstring above promises "never an exception" for the *method*, and only
+            # the read was guarded -- so the naming join and the option rebuild could both
+            # propagate out of a `Timer` callback, where `App._handle_exception` exits the
+            # app. Same failure class `SessionsScreen._draw_listing` records having been
+            # fixed once already, in a path written after it.
+            _LOG.exception("the notifications feed could not be drawn")
+            return
 
         newest = self._feed_news.arrived(activities)
         flash = self.services.console_flash
