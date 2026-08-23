@@ -68,6 +68,11 @@ def with_project_names(
 
     The index is built once per call rather than per record: both callers pass a whole
     listing, and a per-record rebuild would walk a 97-project catalogue once per row.
+    *Per call*, and not once per process -- a caller that invokes this on every navigation
+    rebuilds it every time. That is deliberate rather than overlooked: the catalogue is
+    mutable state on the surface holding it, and a cached index would need invalidating
+    wherever a refresh lands. At a 97-project catalogue the rebuild is not measurable; the
+    distinction is written down so nobody reads the sentence above as the stronger promise.
     """
     names = {project.opaque_id: project.name for project in catalogue}
     return tuple(with_project_name(record, names.get(str(record.project_id))) for record in records)

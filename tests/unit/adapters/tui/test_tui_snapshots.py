@@ -716,7 +716,14 @@ def _neutral_colour_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("step", _POSITIONS)
 async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
-    """Each of the 16 positions renders exactly what its committed baseline shows."""
+    """Every position in `_POSITIONS` renders exactly what its committed baseline shows.
+
+    The count is deliberately not written out here. It said "the 16 positions" while
+    `_POSITIONS` held 19, having gone stale three entries ago with nothing to notice --
+    a prose count beside the tuple it describes is a claim no test can check, and this file
+    is the one place in the suite where an unchecked claim is most expensive. The
+    parametrization is the authority; a reader who wants the number counts the tuple.
+    """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=_SIZE) as pilot:
         # Before driving, not at capture time: the theme drives a style recompute, so it has
