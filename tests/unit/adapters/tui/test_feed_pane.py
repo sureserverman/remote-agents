@@ -781,3 +781,76 @@ async def test_the_narrow_dashboard_region_still_names_project_agent_and_sequenc
             f"the sequence does not fit {pane.content_size.width} columns: {visible!r}"
         )
         assert pane.virtual_size.height == pane.option_count
+
+
+# Expansion state: at most one row open, and per instance --------------------------------------
+
+
+@_SURFACES
+async def test_opening_a_second_row_closes_the_first(surface) -> None:
+    """The pane is a third of a column on the dashboard. Two rows open at once leaves nothing
+    left to scan, which is the opposite of what a glanceable feed is for."""
+
+    async def feed():
+        return (
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="first detail"),
+            _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="second detail"),
+        )
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        first, second = (pane.get_option_at_index(i).id for i in range(2))
+
+        await app.screen.choose(first)
+        await pilot.pause()
+        assert app.screen.opened_notification == first
+
+        await app.screen.choose(second)
+        await pilot.pause()
+        assert app.screen.opened_notification == second, "opening a second row must close the first"
+
+
+@_SURFACES
+async def test_enter_on_an_open_row_closes_it(surface) -> None:
+    async def feed():
+        return (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="the detail"),)
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert app.screen.opened_notification == key
+
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert app.screen.opened_notification is None, "Enter on an open row must close it"
+
+
+async def test_the_expansion_state_is_per_instance_not_shared() -> None:
+    """`FeedRegion` is a mixin over two screens that can both exist at once -- the dashboard in
+    one process, the console's feed pane in another. A class-level default that got *assigned*
+    would be per instance; one that got mutated in place would not, which is the trap
+    `_feed_news` already documents having stepped around."""
+
+    async def feed():
+        return (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="d"),)
+
+    dashboard = RemoteAgentsTui(_context(feed))
+    pane_app = FeedPane(_context(feed))
+    async with dashboard.run_test() as dash_pilot:
+        await dash_pilot.pause()
+        key = _feed_pane(dashboard).get_option_at_index(0).id
+        await dashboard.screen.choose(key)
+        await dash_pilot.pause()
+        assert dashboard.screen.opened_notification == key
+
+        async with pane_app.run_test() as pane_pilot:
+            await pane_pilot.pause()
+            assert pane_app.screen.opened_notification is None, (
+                "one surface's open row leaked into the other"
+            )

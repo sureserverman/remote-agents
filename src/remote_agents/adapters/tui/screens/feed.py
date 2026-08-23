@@ -194,6 +194,17 @@ class FeedRegion:
     #: Per instance, created on first use so neither user has to remember an `__init__` call.
     _feed_news: FeedNews | None = None
 
+    #: Which notification is open, or None. **At most one**, and the pane's size is the whole
+    #: argument: the dashboard's feed region is a third of one column, so two rows open at once
+    #: leaves nothing left to scan -- the opposite of what a glanceable feed is for.
+    #:
+    #: A class attribute *assigned* on the instance, exactly like `_feed_news` above and for
+    #: the same reason: neither user has to remember an `__init__` call, and the assignment is
+    #: what keeps it per instance. Mutating a shared default in place would make the console's
+    #: feed pane and the dashboard's region share an open row across two processes' worth of
+    #: state, which is the trap that comment already exists to have avoided once.
+    opened_notification: str | None = None
+
     async def _session_names(self) -> dict[str, str]:
         """`{session_id: rendered identity}` for every session the store still holds.
 
@@ -245,6 +256,11 @@ class FeedRegion:
         what the routing *does* are separable, and the seam is worth landing on its own.
         """
         if key.startswith(NOTIFICATION_PREFIX):
+            # A toggle, and at most one open at a time. Assigning here (rather than mutating a
+            # shared container) is what keeps the state per instance -- see the attribute's
+            # own comment.
+            self.opened_notification = None if self.opened_notification == key else key
+            await self._reload_feed()
             return
         await super().choose(key)
 
