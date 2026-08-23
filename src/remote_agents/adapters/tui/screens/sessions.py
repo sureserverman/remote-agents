@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 
 from textual.binding import Binding
+from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, TextArea
 
@@ -76,6 +77,30 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
 #: that a host is not answering a tmux readiness probe continuously, short enough that a
 #: session another process started is visible before the owner thinks to press Ctrl+R.
 _SESSIONS_AUTO_REFRESH = 10.0
+
+
+class OpeningAction(Message):
+    """One action for a freshly-opened session detail to perform on arrival.
+
+    **A message rather than `call_after_refresh`, and DEC-025 is the whole reason.** The
+    dispatch cannot be awaited inside `populate` -- `ChoiceScreen.on_mount` awaits that, so a
+    confirmation raised there waits for a pump that has not started, and the app deadlocks
+    (observed: a test that hung rather than failed). The obvious repair is to defer it onto a
+    scheduled callback, and that is precisely what DEC-025 forbids: a callback handed to
+    `call_after_refresh` is on the decision's list of callers whose suspension does not hold
+    the pump, so a modal raised from one could be popped out from under its own `await` and
+    hang forever holding whatever the caller held. `tests/architecture/
+    test_confirmations_are_asked_from_screen_handlers.py` fails on exactly that, and it did.
+
+    A posted message is neither. It is delivered to `SessionDetailScreen.on_opening_action`,
+    an ordinary screen handler running on the screen's own message pump -- which is the shape
+    DEC-025 says makes every other confirmation in this tree safe, and the shape the failing
+    test's own remedy names: "move the call onto a screen handler".
+    """
+
+    def __init__(self, action: str) -> None:
+        super().__init__()
+        self.action = action
 
 
 class SessionsScreen(ChoiceScreen):
@@ -403,9 +428,19 @@ class SessionDetailScreen(ChoiceScreen):
     #: always at least Back, plus whatever the policy allows.
     empty_state = NEVER_EMPTY
 
-    def __init__(self, session_value: str) -> None:
+    def __init__(self, session_value: str, opening_action: str | None = None) -> None:
         super().__init__()
         self.session_value = session_value
+        #: One action to perform on arrival, or None. Set by the sessions pane's per-action
+        #: keys so that a key there does not have to re-implement anything: it names an
+        #: action and this screen performs it through the same `choose` a pressed row uses.
+        #:
+        #: Consumed exactly once, in `populate`, and cleared *before* it is dispatched --
+        #: `populate` runs per mount while `on_reveal` runs on every return, so an action
+        #: read by the wrong one would re-ask a destructive question each time the owner came
+        #: back from Inspect or from an abort. Clearing first also means a branch that raises
+        #: cannot leave it armed.
+        self._opening_action = opening_action
         # The session's own name, as the store last reported it. Held rather than re-read on
         # every breadcrumb build because the breadcrumb is drawn from a synchronous property
         # and reading the store is not — `render_detail` refreshes it and says so.
@@ -432,6 +467,67 @@ class SessionDetailScreen(ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         await self.render_detail()
+        # Read and cleared in one step, before anything can act on it.
+        action, self._opening_action = self._opening_action, None
+        if action is None:
+            return
+        # Scheduled onto the pump, **not awaited here**, and this is a correctness fix rather
+        # than a style choice. `ChoiceScreen.on_mount` awaits `populate`, so this method runs
+        # *inside* the mount; `confirm_force` and `confirm_remote_control` reach
+        # `ask_to_confirm`, which awaits a worker that cannot resolve until the mount has
+        # returned and the pump is running. Awaiting the dispatch here therefore deadlocks the
+        # app outright -- observed as a test that hung rather than failed, killed at 60s.
+        #
+        # `call_after_refresh` puts the dispatch on the message pump, which is where every
+        # other confirmation on this screen is already raised from: a pressed row reaches
+        # `choose` through `on_option_list_option_selected`, a handler. So this makes the
+        # opening action arrive by the same route as the keypress it stands in for, which is
+        # also what DEC-025 asks -- a confirmation is only ever asked from a screen handler.
+        self.post_message(OpeningAction(action))
+
+    async def on_opening_action(self, message: OpeningAction) -> None:
+        """The screen handler `OpeningAction` is delivered to. DEC-025's required shape."""
+        await self.dispatch_opening(message.action)
+
+    async def dispatch_opening(self, action: str) -> None:
+        """Perform an action that arrived from a key rather than from a row.
+
+        **The one entry point for the whole mechanism**, and both callers reach it the same
+        way -- `populate` for a freshly pushed detail, `RemoteAgentsTui.show_detail` for one
+        already on screen -- because a third caller that forgot either guard below is exactly
+        how this goes wrong.
+
+        **Through `choose`, not around it.** Every guard a pressed row gets lives in that
+        chain: `confirm_force` holds `holding_the_guard()` across the re-read *and* the whole
+        modal and re-checks the policy before asking, `confirm_remote_control` does the same
+        for a live pane, and `tui.stop` re-reads and re-checks at issue time -- DEC-007's
+        mitigations, and DEC-025's rule that a confirmation is only ever asked from a screen
+        handler. Dispatching here rather than calling any of them directly is what keeps this
+        an *entry path* rather than a second implementation, which the plan's own research
+        names as the highest-risk thing it could have done.
+
+        An action the policy no longer allows is therefore refused by the policy itself, in
+        its own words, rather than by a check held here that could drift from it.
+        """
+        if not self.showing:
+            # The owner left between the keypress and the refresh. Logged rather than silent:
+            # a discarded intent that leaves no trace turns "I pressed force and nothing
+            # happened" into an unanswerable report.
+            _LOG.info("the opening action %r was dropped: the detail is no longer showing", action)
+            return
+        if self.tui.busy:
+            # The guard a pressed row already had, on the path that does not go through a row.
+            # `ChoiceScreen.on_option_list_option_selected` drops a selection while the surface
+            # is busy, and that refusal is load-bearing further down: `app.set_remote_control`
+            # has no busy check of its own *because* of it, and its docstring says so --
+            # "a second caller reaching this directly would not be refused here, which is the
+            # thing to check before adding one". This is that second caller, and this is that
+            # check. Without it a key pressed during an in-flight stop could start a second
+            # mutating command against the same session, and whichever finished first would
+            # clear `busy` while the other was still running.
+            _LOG.debug("the opening action %r was refused: a command is already in flight", action)
+            return
+        await self.choose(action)
 
     async def on_reveal(self) -> None:
         """Re-read on the way back from Inspect or a confirmation.

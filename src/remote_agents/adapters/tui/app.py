@@ -31,6 +31,7 @@ from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
     DashboardScreen,
+    OpeningAction,
     ResumeProjectsScreen,
     SessionDetailScreen,
     SessionsScreen,
@@ -716,18 +717,33 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         await self.switch_flow(SessionsScreen())
 
-    async def show_detail(self, session_value: str) -> None:
-        """Open — or redraw — the detail for one session.
+    async def show_detail(self, session_value: str, opening_action: str | None = None) -> None:
+        """Open — or redraw — the detail for one session, optionally performing one action.
 
         Redrawing rather than pushing when the same detail is already on screen is what keeps
         a stop, a confirmation abort, or a remote-control change from growing the stack by one
         screen every time the owner uses it.
+
+        `opening_action` is what the sessions pane's per-action keys carry. On the redraw path
+        it is dispatched explicitly, because that path does not re-mount the screen and so
+        never reaches `populate` — a key pressed on a detail already showing must still do
+        what it says. It is passed through `choose` there for the same reason `populate` does:
+        one chain, with all of its guards.
         """
         screen = self.screen
         if isinstance(screen, SessionDetailScreen) and screen.session_value == session_value:
             await screen.render_detail()
+            if opening_action is not None:
+                # Posted, not awaited, so this path is byte-for-byte the mount path's:
+                # both reach `dispatch_opening` from `on_opening_action`, a screen handler on
+                # the screen's own pump -- which is where a pressed row reaches `choose` from
+                # too, and is what DEC-025 requires. Awaiting it here instead ran the
+                # confirmation from whatever coroutine happened to call `show_detail`, which
+                # is a second way to raise a modal and hung outright when that caller was not
+                # the pump.
+                screen.post_message(OpeningAction(opening_action))
             return
-        await self.push_screen(SessionDetailScreen(session_value))
+        await self.push_screen(SessionDetailScreen(session_value, opening_action))
 
     # Resume ---------------------------------------------------------------------
 
@@ -820,13 +836,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         """Change one session's control mode, after re-reading and re-checking the policy.
 
         Unlike `stop`, this does not open with `if self._busy: return`. The asymmetry is real
-        and worth knowing about: what refuses a second concurrent change is
-        `ChoiceScreen.on_option_list_option_selected`, which drops a row selection while the
-        surface is busy, so the refusal happens before this is ever called. That holds for the
-        one caller there is — `SessionDetailScreen.confirm_remote_control`, reached only
-        through that handler. A second caller reaching this directly would not be refused
-        here, which is the thing to check before adding one.
+        This *used* to open without one, and the docstring here explained why: what refused a
+        second concurrent change was `ChoiceScreen.on_option_list_option_selected`, which drops
+        a row selection while the surface is busy, so the refusal happened before this was
+        ever called. It then said, of the single caller that arrangement depended on, that "a
+        second caller reaching this directly would not be refused here, which is the thing to
+        check before adding one."
+
+        Stage 4 added exactly that second caller. `SessionDetailScreen.dispatch_opening`
+        repeats the busy check, which closes it — but a rule that every *entry* must remember
+        is a rule a third entry can forget, and the note above was already the record of
+        someone foreseeing that and it happening anyway. So the guard moved to where the
+        command is issued, which is the one place no caller can route around, and this is now
+        symmetric with `stop`.
+
+        Safe to add precisely because `confirm_remote_control` calls this *outside* its own
+        `holding_the_guard()` block — the same shape `confirm_force` uses for `stop`, and the
+        reason `stop` could always afford this guard.
         """
+        if self.busy:
+            return
         self._busy = True
         try:
             record = await self.current_record(session_value)

@@ -45,6 +45,7 @@ from remote_agents.adapters.tui.screens.resume import (
 )
 from remote_agents.adapters.tui.screens.sessions import (
     InspectScreen,
+    OpeningAction,
     RenameScreen,
     SessionDetailScreen,
     SessionsPaneScreen,
@@ -94,6 +95,7 @@ __all__ = [
     "ResumeProfilesScreen",
     "ResumeProjectsScreen",
     "ReviewScreen",
+    "OpeningAction",
     "SessionDetailScreen",
     "SessionsPaneScreen",
     "SessionsScreen",
