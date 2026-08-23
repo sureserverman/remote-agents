@@ -10,7 +10,7 @@ here on the other.
 The pane is a reader of `agent_activity` (via the composition's `activity_feed`
 capability) and nothing else — it never drains the spool, because consuming spool files
 would starve the phone's notifications (task 5.2's correction). Text an agent produced
-travels through a `markup=False` Static, the same inertness rule every row sink in this
+travels through a `markup=False` OptionList, the same inertness rule every row sink in this
 surface follows (DEC-014's spirit: text this app did not author is displayed, never
 interpreted).
 """
@@ -745,3 +745,39 @@ async def test_a_failure_building_the_rows_leaves_the_pane_as_it_was(surface) ->
             assert _feed_rows(app) == before, "the drawn rows must be left alone"
         finally:
             feed_module.feed_rows = original
+
+
+async def test_the_narrow_dashboard_region_still_names_project_agent_and_sequence() -> None:
+    """The goal names three things a row must carry, and the dashboard is where they are
+    hardest to fit: its feed region is `2fr` of a `3fr/2fr` split, so at the project's own
+    100-column baseline it has roughly 36 usable columns for an identity that is 32.
+
+    Leading with the age spent 11 of those on a timestamp and cut the row mid-identity --
+    `0m ago · existing · claude · regula…` -- losing the sequence and the kind words both.
+    The list is already ordered newest-first, so position carries recency and the identity
+    is what the row is *for*. Age moves after it and falls off the narrow pane instead.
+    """
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+
+    async def feed():
+        return (_named_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, session=session),)
+
+    context, _sessions = _index_context(feed, (_session_record(session),))
+    app = RemoteAgentsTui(context)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        # Measured, not scraped. The dashboard's *sessions* row carries a byte-identical
+        # identity prefix, so no filter over the rendered screen can reliably tell the two
+        # apart -- an earlier version of this test matched the sessions row and passed
+        # against a feed row that was in fact cut mid-identity. Truncating the real prompt to
+        # the real measured pane width asks the question directly: does the content the goal
+        # requires survive at the width this surface actually gives the feed?
+        prompt = str(pane.get_option_at_index(0).prompt)
+        visible = prompt[: pane.content_size.width]
+        assert "existing" in visible, visible
+        assert "codex" in visible, visible
+        assert "#4" in visible, (
+            f"the sequence does not fit {pane.content_size.width} columns: {visible!r}"
+        )
+        assert pane.virtual_size.height == pane.option_count

@@ -7,8 +7,8 @@ holds the render and the news detector, and both screens mix it in.
 
 A reader of `agent_activity` through the composition's `activity_feed` capability and
 nothing else. It never drains the spool, because consuming spool files would starve the
-phone's notifications. Text an agent produced reaches a `markup=False` `Static`, so it is
-displayed and never interpreted (DEC-014's spirit, DEC-037's carriage of the agent's words).
+phone's notifications. Text an agent produced reaches a `markup=False` `OptionList`, so it
+is displayed and never interpreted (DEC-014's spirit, DEC-037's carriage of the agent's words).
 """
 
 from __future__ import annotations
@@ -100,8 +100,18 @@ def feed_rows(
 ) -> list[tuple[str, str]]:
     """One `(key, line)` per observation, newest first, bounded.
 
-    `<age> · <identity> · <kind words> — <detail>`, where the identity is the session's own
+    `<identity> · <kind words> · <age> — <detail>`, where the identity is the session's own
     rendered name when `names` knows it and the bare session id when it does not.
+
+    **The identity leads, and that is a correction rather than a preference.** It led with the
+    age until the Stage 2 gate evaluator measured the dashboard: that region is `2fr` of a
+    `3fr/2fr` split, so at this project's own 100-column baseline it has about 36 usable
+    columns for an identity that is 32 -- and eleven of them went to a timestamp, cutting the
+    row at `0m ago · existing · claude · regula…`. Both the sequence and the kind words were
+    gone, on the surface where the goal ("every row names the session it is about -- project,
+    agent and sequence") is hardest to meet and therefore matters most. The list is already
+    ordered newest-first, so position carries recency; the identity is what the row is *for*,
+    and the age is what falls off a narrow pane instead.
 
     **The fallback is a feature, not a guard.** A notification outlives the session it is
     about -- that is what a durable feed is for -- so a row whose session has since been
@@ -129,15 +139,22 @@ def feed_rows(
         identity = names.get(str(activity.session_id)) or str(activity.session_id)
         detail = f" — {_elide(activity.detail)}" if activity.detail else ""
         # `_elide` caps the *detail* so one verbose agent cannot crowd out the identity that
-        # makes the row readable at all. Cutting the line to the *pane* is not done here --
-        # `_draw_feed` hands the widget a `Text` that truncates itself at whatever width it is
-        # given, which is the only version that survives a resize.
+        # makes the row readable at all. Cutting the line to the *pane* is not done here and
+        # not in Python at all: `text-wrap: nowrap; text-overflow: ellipsis` in both surfaces'
+        # DEFAULT_CSS is the only thing enforcing one-observation-one-row, and it truncates
+        # at whatever width each pane actually renders at, which is what survives a resize.
+        #
+        # This comment previously described `_draw_feed` handing the widget a self-truncating
+        # `rich.text.Text`. That was true of a draft and false of the code: Textual 8.2's
+        # `Content.from_rich_text` drops `no_wrap`, so the approach was abandoned for the CSS
+        # and the comment was not. A maintainer trusting it would have concluded the CSS was
+        # redundant and deleted the only thing holding the property up.
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
         if occurrence:
             key = f"{key}:{occurrence}"
-        rows.append((key, f"{age(activity.observed_at)} · {identity} · {words}{detail}"))
+        rows.append((key, f"{identity} · {words} · {age(activity.observed_at)}{detail}"))
     return rows
 
 
@@ -244,8 +261,15 @@ class FeedRegion:
         surface uses (DEC-007). The cursor always rests somewhere.
         """
         held_id = held_option_id(pane)
+        # Built before the pane is cleared, so a failure here leaves the drawn rows standing.
+        # `clear_options()` first would have emptied the pane and *then* raised, which is a
+        # blank pane rather than a stale one -- and `_reload_feed`'s docstring promises the
+        # latter. The gate evaluator caught the gap: the test pinning that promise
+        # monkeypatches `feed_rows`, which raises before this method is entered, so it never
+        # exercised the window between the clear and the refill.
+        options = [Option(line, id=key) for key, line in rows]
         pane.clear_options()
-        pane.add_options(Option(line, id=key) for key, line in rows)
+        pane.add_options(options)
         restore_highlight_by_id(pane, held_id, [key for key, _line in rows])
 
     async def _reload_feed(self) -> None:
@@ -318,6 +342,11 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     DEFAULT_CSS = """
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }
+    /* No `border` here: `OptionList` draws its own, which is where this pane's
+       `▔ Notifications ▔` chrome comes from -- inherited rather than chosen, and stated
+       because the `Static` this replaced drew none and the dashboard's twin sets one
+       explicitly. `text-wrap`/`text-overflow` are load-bearing: they are the whole of
+       one-observation-one-row. */
     FeedScreen #feed-pane { height: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
     """
 
