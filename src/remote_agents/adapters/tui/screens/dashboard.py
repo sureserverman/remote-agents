@@ -35,7 +35,12 @@ from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import (
+    NEVER_EMPTY,
+    ChoiceScreen,
+    held_option_id,
+    restore_highlight_by_id,
+)
 from remote_agents.adapters.tui.screens.feed import (
     _EMPTY_FEED_ROW,
     NO_NOTIFICATIONS,
@@ -300,12 +305,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # trade the sessions pane's staleness note records.
         await self._reload_feed()
         pane = self.query_one("#sessions-pane", OptionList)
-        held = pane.highlighted
-        held_id = (
-            pane.get_option_at_index(held).id
-            if held is not None and pane.option_count > held
-            else None
-        )
+        held_id = held_option_id(pane)
         pane.clear_options()
         if not records:
             pane.add_option(Option(_NO_SESSIONS, id="empty", disabled=True))
@@ -321,12 +321,9 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # it for every #choices list): on the row it held if that row survived the
         # rebuild, else on the first row — a pane advertising "enter opens" with no
         # highlighted row makes both keys silent no-ops until an arrow press.
-        pane.highlighted = 0
-        if held_id is not None:
-            for index in range(pane.option_count):
-                if pane.get_option_at_index(index).id == held_id:
-                    pane.highlighted = index
-                    break
+        restore_highlight_by_id(
+            pane, held_id, [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records]
+        )
 
 
 class ProjectChooserScreen(ChoiceScreen):

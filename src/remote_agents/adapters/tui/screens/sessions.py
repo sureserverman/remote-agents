@@ -23,7 +23,7 @@ from textual.timer import Timer
 from textual.widgets import Input, OptionList, TextArea
 
 from remote_agents.adapters.tui.model import _BACK, label_or_error, session_row
-from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
+from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen, held_option_id
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
     RemoteControlConfirmModal,
@@ -314,12 +314,7 @@ class SessionsScreen(ChoiceScreen):
         # deeper. A key that has gone falls back to row 0, which is the same non-mutating
         # resting position every other fill uses (DEC-007).
         choices = self.query_one("#choices", OptionList)
-        resting = choices.highlighted
-        current = (
-            choices.get_option_at_index(resting).id
-            if resting is not None and resting < choices.option_count
-            else None
-        )
+        current = held_option_id(choices)
         keys = [key for key, _text in rows]
         highlight = keys.index(current) if current in keys else 0
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)

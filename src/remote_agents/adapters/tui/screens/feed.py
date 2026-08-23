@@ -22,8 +22,11 @@ from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.context import FEED_LIMIT
 from remote_agents.adapters.tui.model import age
-from remote_agents.adapters.tui.screens.base import ChoiceScreen
-from remote_agents.application.session_views import with_project_names
+from remote_agents.adapters.tui.screens.base import (
+    ChoiceScreen,
+    held_option_id,
+    restore_highlight_by_id,
+)
 from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
 
 _LOG = logging.getLogger(__name__)
@@ -138,16 +141,6 @@ def feed_rows(
     return rows
 
 
-def feed_lines(
-    activities: tuple[AgentActivity, ...],
-    names: dict[str, str] | None = None,
-    *,
-    limit: int = _FEED_LIMIT,
-) -> list[str]:
-    """One line per observation, newest first, bounded. The text half of `feed_rows`."""
-    return [line for _key, line in feed_rows(activities, names, limit=limit)]
-
-
 class FeedNews:
     """Whether the head of a read is news the owner has not been told, or history.
 
@@ -206,24 +199,14 @@ class FeedRegion:
         has: what is drawn is stale, not wrong, and a background read having a bad moment must
         never break the position or empty the pane.
         """
-        sessions = self.services.backend.sessions
-        if sessions is None:
-            return {}
         try:
-            records = await sessions.list_sessions()
+            records = await self.tui.raw_sessions()
         except Exception:
+            # Guarded whole, not merely at the read: an index this could not build is a row
+            # that renders its session-id fallback, which is a worse row and a working pane.
             _LOG.exception("the feed could not read sessions to name its rows")
             return {}
-        try:
-            return {
-                str(record.session_id): record.display.rendered
-                for record in with_project_names(records, self.tui.catalogue)
-            }
-        except Exception:
-            # Inside the guard rather than after it: an index this could not build is a row
-            # that renders its session-id fallback, which is a worse row and a working pane.
-            _LOG.exception("the feed could not name its rows")
-            return {}
+        return {str(record.session_id): record.display.rendered for record in records}
 
     async def choose(self, key: str) -> None:
         """Route a notification row here; hand every other key to the screen underneath.
@@ -260,18 +243,10 @@ class FeedRegion:
         A key that has gone falls back to row 0, the resting position every other list on this
         surface uses (DEC-007). The cursor always rests somewhere.
         """
-        held = pane.highlighted
-        held_id = (
-            pane.get_option_at_index(held).id
-            if held is not None and held < pane.option_count
-            else None
-        )
+        held_id = held_option_id(pane)
         pane.clear_options()
         pane.add_options(Option(line, id=key) for key, line in rows)
-        if not rows:
-            return
-        keys = [key for key, _line in rows]
-        pane.highlighted = keys.index(held_id) if held_id in keys else 0
+        restore_highlight_by_id(pane, held_id, [key for key, _line in rows])
 
     async def _reload_feed(self) -> None:
         """Render the newest observations, or the placeholder — never an exception.

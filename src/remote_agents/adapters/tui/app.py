@@ -1105,6 +1105,20 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # exact tuple it saw before this task removes the question entirely.
         return self._with_names(records)
 
+    async def raw_sessions(self) -> tuple[SessionRecord, ...]:
+        """Every session the store holds, named, and filtered by nothing.
+
+        The feed needs this and the lists must not have it. A notification outlives its
+        session by design, so naming a feed row routinely needs a record `only_listed` has
+        correctly removed (DEC-017's "exactly ENDED") -- while a *list* showing that same
+        record would be offering the owner a session with nothing left to reach.
+
+        Here rather than in `screens/feed.py`, which had built its own `list_sessions()` plus
+        `with_project_names(records, catalogue)` -- a second copy of the join `_with_names`
+        already is, in the stage whose whole subject was that the join has one home.
+        """
+        return self._with_names(await self._services.backend.sessions.list_sessions())
+
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
         # The comment this replaces claimed the filter matched the bot's "exactly", which was
@@ -1112,7 +1126,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
         # asserted over the whole `SessionState` set rather than over the states a reader
         # thought to name.
-        return self._with_names(only_listed(await self._services.backend.sessions.list_sessions()))
+        return only_listed(await self.raw_sessions())
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
