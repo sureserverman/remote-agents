@@ -200,7 +200,13 @@ async def test_only_resume_capable_profiles_are_offered() -> None:
     assert "codex" not in keys, "codex is not resume-capable here and must not be offered"
 
 
-async def test_the_catalogue_is_paginated() -> None:
+async def test_the_catalogue_scrolls_instead_of_paging() -> None:
+    """DEC-050: the port still pages, the local surface reads ahead and appends.
+
+    There are no Previous/Next rows here any more. The owner arrows down one list, and the
+    next page is read when the cursor comes within `load_ahead` of what is loaded -- so a
+    conversation on page two is reached by scrolling, not by finding a row that says so.
+    """
     conversations = _Conversations(
         {1: tuple(_summary(index) for index in range(1, 4)), 2: (_summary(9),)},
         page_count=2,
@@ -215,14 +221,28 @@ async def test_the_catalogue_is_paginated() -> None:
         await pilot.pause()
         await app.screen.choose("claude")
         await pilot.pause()
+
         first = _rows(app)
         assert any("conversation 1" in row for row in first)
+        assert not any("page" in row.casefold() for row in first), (
+            f"a paging row survived the move to scrolling: {first}"
+        )
+        assert not any("conversation 9" in row for row in first), (
+            "the second page was read before the cursor went anywhere near it"
+        )
 
-        await app.screen.choose("\x00next")
+        # One step off the resting row is enough here: three loaded rows and a load-ahead of
+        # three means the first conversation is already inside the window.
+        await pilot.press("down")
         await pilot.pause()
-        second = _rows(app)
+        scrolled = _rows(app)
 
-    assert any("conversation 9" in row for row in second)
+    assert any("conversation 9" in row for row in scrolled), (
+        f"scrolling toward the end did not read the next page: {scrolled}"
+    )
+    assert any("conversation 1" in row for row in scrolled), (
+        "the appended page replaced what was loaded rather than extending it"
+    )
 
 
 async def test_no_provider_id_or_path_is_ever_rendered() -> None:

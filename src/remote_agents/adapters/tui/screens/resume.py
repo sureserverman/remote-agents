@@ -28,8 +28,6 @@ import logging
 
 from remote_agents.adapters.tui.model import (
     _BACK,
-    _NEXT,
-    _PREVIOUS,
     conversation_row,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
@@ -39,6 +37,7 @@ from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capab
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
+    ConversationSummary,
     ProfileResumeCapability,
 )
 from remote_agents.domain.models import ProfileId, ProjectId
@@ -256,15 +255,30 @@ class ResumeConversationsScreen(ChoiceScreen):
         """Ctrl+R does here what coming back to this position does: read it again."""
         await self.on_reveal()
 
+    #: How close to the end of what is loaded the cursor comes before the next page is read.
+    #:
+    #: Three rows of warning at a ten-row page, so an owner arrowing steadily never reaches a
+    #: boundary that is still being fetched. It is not a page size and must not become one:
+    #: the port pages, this screen does not.
+    load_ahead = 3
+
     def __init__(
         self, project: CatalogProject, profile: str, page: ConversationCataloguePage
     ) -> None:
         super().__init__()
         self.project = project
         self.profile = profile
-        # The paging state the app used to carry as `_resume_page` / `_resume_page_count`.
-        # Local to the one screen that pages, so nothing else can move it under this screen.
+        #: The newest page read, for its `page` / `page_count` / `unavailable_reason` only.
+        #: This screen does not *show* a page any more (DEC-050) -- it accumulates.
         self.page = page
+        #: Every conversation read so far, in catalogue order, across however many reads it
+        #: took. The list the owner scrolls is this, and it only ever grows while the screen
+        #: is open.
+        self.loaded: list[ConversationSummary] = list(page.conversations)
+        self._loading = False
+        #: The conversation rows currently drawn, so the highlight handler can tell a
+        #: conversation from the `Back` beneath them without re-deriving the filter.
+        self.offered_rows: tuple[tuple[str, str], ...] = ()
 
     @property
     def crumb(self) -> str:
@@ -272,18 +286,31 @@ class ResumeConversationsScreen(ChoiceScreen):
         return self.profile
 
     async def on_reveal(self) -> None:
-        """Re-read this page on the way back from the confirmation, for the same reason."""
-        page = await fetch_page(self, self.project, self.profile, self.page.page)
+        """Read the catalogue again from the top on every arrival at this position.
+
+        From the first page rather than from wherever the owner had scrolled to: a returning
+        owner is looking at a catalogue that may have gained a conversation since, and the one
+        they want is the newest. Re-reading only what was already loaded would be a longer
+        read that answers a staler question.
+        """
+        page = await fetch_page(self, self.project, self.profile, 1)
         if page is None:
             return
         self.page = page
+        self.loaded = list(page.conversations)
         self.render_page()
 
     async def populate(self) -> None:
         self.hide_entry()
         self.render_page()
 
-    def render_page(self) -> None:
+    def render_page(self, *, highlight: int | None = None) -> None:
+        """Draw everything loaded so far, resting on `Back` unless a cursor is carried in.
+
+        `highlight` is what keeps an append from yanking the owner back to the resting row:
+        `show_choices` sets the cursor on every fill, so a mid-scroll read has to say where
+        the cursor already was.
+        """
         page = self.page
         if page.unavailable_reason is not None:
             self.set_status(
@@ -307,9 +334,12 @@ class ResumeConversationsScreen(ChoiceScreen):
         # conversation. Page 1 of 1." above no conversations at all. The bot filters first and
         # then asks `if not buttons:`, so this was also the one place the two surfaces would
         # have disagreed — in the task whose subject is making them agree.
+        # Built from everything loaded, not from the newest page (DEC-050). `self.loaded`
+        # accumulates across reads; `page` is kept only for `page_count` and the
+        # unavailability reason above.
         offered = [
             (str(item.reference), conversation_row(item))
-            for item in page.conversations
+            for item in self.loaded
             if resume_available(item)
         ]
         if not offered:
@@ -319,14 +349,16 @@ class ResumeConversationsScreen(ChoiceScreen):
             self.show_choices((), trailing=((_BACK, "Back"),))
             return
         entries = list(offered)
-        if page.page > 1:
-            entries.append((_PREVIOUS, "Previous page"))
-        if page.page < page.page_count:
-            entries.append((_NEXT, "Next page"))
         entries.append((_BACK, "Back"))
+        # **No paging rows (DEC-050).** The port still pages -- `RESUME_PAGE_SIZE` is shared
+        # with the bot and unchanged -- but this surface reads the next page as the cursor
+        # approaches the end and appends, so the owner arrows through one list. The bot keeps
+        # its Previous/Next buttons, because a Telegram keyboard has a hard size limit and no
+        # cursor to read intent from; that asymmetry is the decision, not an oversight.
+        more = page.page < page.page_count
         self.set_status(
-            f"Choose a conversation — starting one hands this terminal to its pane, or prints "
-            f"how to reach it. Page {page.page} of {page.page_count}."
+            "Choose a conversation — starting one hands this terminal to its pane, or prints "
+            "how to reach it." + (" Scroll for more." if more else "")
         )
         # **The cursor rests on Back, and this position had no need of that until now.** The
         # rows here used to lead to a confirmation, so row 0 was a navigation and a repeated
@@ -352,7 +384,16 @@ class ResumeConversationsScreen(ChoiceScreen):
         # first conversation would be a full page-length away and nothing would fail. Pinned by
         # `test_resting_cursor.py::test_one_key_from_the_resting_row_reaches_the_first_conversation`
         # so the assumption is checked rather than inherited.
-        self.show_choices(tuple(entries), highlight=len(entries) - 1)
+        self.offered_rows = tuple(offered)
+        resting = len(entries) - 1
+        self.show_choices(tuple(entries), highlight=resting if highlight is None else highlight)
+
+    def cursor_row(self) -> int | None:
+        """Where the cursor is now, or `None` when the list has not been filled yet."""
+        choices = self.query("#choices")
+        if not choices:
+            return None
+        return getattr(choices.first(), "highlighted", None)
 
     async def choose(self, key: str) -> None:
         conversations = self.services.backend.conversations
@@ -360,9 +401,6 @@ class ResumeConversationsScreen(ChoiceScreen):
             return
         if key == _BACK:
             await self.tui.go_back()
-            return
-        if key in {_NEXT, _PREVIOUS}:
-            await self.turn_page(1 if key == _NEXT else -1)
             return
         # Guarded across the resolve *and* the push, matching `:113` and `:232` — the two
         # siblings of this fetch — for the reason given there. This one was the exception
@@ -407,14 +445,41 @@ class ResumeConversationsScreen(ChoiceScreen):
         # `issue_resume` sets `_busy` synchronously before its first one.
         await self.tui.issue_resume(self, self.project, self.profile, resolved)
 
-    async def turn_page(self, step: int) -> None:
-        wanted = max(1, min(self.page.page + step, self.page.page_count))
-        async with self.holding_the_guard():
-            page = await fetch_page(self, self.project, self.profile, wanted)
-        if page is None:
+    async def on_option_list_option_highlighted(self, event: object) -> None:
+        """Read the next page when the cursor comes within `load_ahead` of what is loaded.
+
+        Keyed on the cursor's position among *conversations* rather than among rows, which is
+        what stops the fetch firing the moment the screen draws: the resting row is `Back`, so
+        an owner who opens this position and leaves reads exactly one page.
+        """
+        index = getattr(event, "option_index", None)
+        if index is None or index >= len(self.offered_rows):
             return
-        self.page = page
-        self.render_page()
+        if index < len(self.offered_rows) - self.load_ahead:
+            return
+        await self.load_more()
+
+    async def load_more(self) -> None:
+        """Append the next page, keeping the cursor where the owner left it.
+
+        Re-entrancy is refused rather than queued: `OptionHighlighted` fires per keypress and
+        an owner holding `Down` would otherwise start one read per row. The next highlight
+        asks again, so a refused read costs nothing but the keypress that would have repeated
+        it anyway.
+        """
+        if self._loading or self.page.page >= self.page.page_count:
+            return
+        self._loading = True
+        try:
+            async with self.holding_the_guard():
+                page = await fetch_page(self, self.project, self.profile, self.page.page + 1)
+            if page is None:
+                return
+            self.page = page
+            self.loaded.extend(page.conversations)
+            self.render_page(highlight=self.cursor_row())
+        finally:
+            self._loading = False
 
 
 async def fetch_page(

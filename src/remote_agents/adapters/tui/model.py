@@ -25,8 +25,9 @@ __all__ = ["selectable_area", "session_row"]
 
 # Row keys for choices that are navigation rather than data. The NUL prefix is what keeps
 # them from colliding with a project id, a profile id, or a conversation reference.
-_NEXT = "\x00next"
-_PREVIOUS = "\x00previous"
+# `_NEXT` and `_PREVIOUS` lived here until DEC-050 gave the local surface a scrolling
+# conversation list. No position on this surface pages any more; the bot still does, and its
+# buttons are its own (DEC-043).
 _BACK = "\x00back"
 _CANCEL = "\x00cancel"
 #: The one row a position shows in place of no rows at all. Disabled when rendered, so it
