@@ -196,6 +196,9 @@ SESSION_ACTION_BINDINGS = [
         for key, action, label in SESSION_ACTION_KEYS
     ),
     Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
+    # Not a row key: it acts on the *console*, not on the highlighted session. Grouped here
+    # because it is offered in the same places and hidden for the same reason.
+    Binding("p", "show_projects_pane", "Projects", show=False),
 ]
 
 
@@ -255,6 +258,12 @@ class _SessionActionKeys:
         """
         if action in {"row_action", "row_remote_control"}:
             return self.highlighted_session() is not None
+        if action == "show_projects_pane":
+            # Absent, not inert, on a host that wired no console. The owner cannot tell a key
+            # that quietly does nothing from a surface that forgot to draw it, and this one is
+            # about *where things are on screen* -- the failure would look like the console
+            # being broken rather than the key being unavailable.
+            return self.services.console_show_projects is not None
         return super().check_action(action, parameters)
 
     async def action_row_action(self, action: str) -> None:
@@ -267,6 +276,27 @@ class _SessionActionKeys:
         if session_value is None:
             return
         await self.tui.show_detail(session_value, action)
+
+    async def action_show_projects_pane(self) -> None:
+        """Put the projects surface back in the console's left slot.
+
+        DEC-040's exchange, run backwards. It writes no record and touches no lifecycle, so it
+        needs none of the re-read-and-re-check machinery every other key here routes through --
+        and DEC-041's root-key budget is untouched, because this is a screen binding inside our
+        own process rather than a tmux root key. `CONSOLE_BINDINGS` is not edited.
+
+        A failure is reported as what it is. The console degrading is not the session going
+        wrong, and saying so in lifecycle terms would send the owner looking at an agent that
+        is perfectly fine.
+        """
+        show_projects = self.services.console_show_projects
+        if show_projects is None:
+            return
+        try:
+            await show_projects()
+        except Exception as error:
+            _LOG.exception("the console could not show the projects surface")
+            self.announce(f"The console could not show the projects surface: {error}")
 
     async def action_row_remote_control(self) -> None:
         """Remote Control, which is the one key that cannot name its action in advance.

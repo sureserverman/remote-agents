@@ -707,3 +707,61 @@ async def test_the_status_line_names_the_keys_and_is_not_truncated(width: int) -
         assert f"{key} {action}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
     assert "m remote" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
     assert "…" not in drawn, f"the status line was elided at {width} columns: {drawn!r}"
+
+
+# One key returns the projects surface to the console's left slot -------------------------------
+
+
+async def test_p_calls_the_wired_capability_exactly_once() -> None:
+    """DEC-040: the console exchanges its left pane with the agent, and this puts it back.
+
+    An exchange writes no record and touches no lifecycle, which is why this key needs none of
+    the machinery every other key on this pane routes through.
+    """
+    calls: list[int] = []
+
+    async def show_projects() -> None:
+        calls.append(1)
+
+    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+
+    assert calls == [1], calls
+
+
+async def test_p_is_absent_on_a_host_that_wired_no_console() -> None:
+    """A bare terminal has no console to put a surface back into, so the key is not offered
+    and its action declines. A dead-end entry is worse than an absent one -- the owner cannot
+    tell a key that does nothing from a surface that forgot to draw it."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.check_action("show_projects_pane", ()) is False
+        await pilot.press("p")
+        await pilot.pause()
+        assert app.is_running
+
+
+async def test_a_failing_capability_is_reported_and_is_not_a_lifecycle_failure() -> None:
+    """The console degrading is not the session going wrong. A raise here must reach the owner
+    as what it is -- the surface could not be rearranged -- and must not take the app down or
+    read as anything having happened to the agent."""
+    from tui_feedback import announcements
+
+    async def show_projects() -> None:
+        raise RuntimeError("the console has no left slot")
+
+    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        said = " ".join(announcements(app))
+        assert app.is_running, "a failing console capability took the surface down"
+
+    assert "console" in said.lower(), said
+    assert "session" not in said.lower(), f"a console failure was reported as a session one: {said}"

@@ -1085,6 +1085,7 @@ def local_context(config, connection, paths: ProductionPaths):
     open_in_console = None
     console_sync = None
     console_flash = None
+    console_show_projects = None
     hide_in_console = None
     console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
@@ -1122,6 +1123,7 @@ def local_context(config, connection, paths: ProductionPaths):
         open_in_console = _console_opener(composer)
         console_sync = composer.sync
         console_flash = composer.flash
+        console_show_projects = composer.show_projects
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -1168,6 +1170,7 @@ def local_context(config, connection, paths: ProductionPaths):
         open_in_console=open_in_console,
         console_sync=console_sync,
         console_flash=console_flash,
+        console_show_projects=console_show_projects,
         console_recovery=console_recovery,
     )
 

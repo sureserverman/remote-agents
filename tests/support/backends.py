@@ -121,17 +121,23 @@ class SessionUseCaseDouble:
 #: The `TuiContext` fields that are the surface's own rather than the backend's — the attach
 #: route (DEC-039), the profile narrowing this surface applies, the capture parameter, and
 #: the four console capabilities (DEC-040).
-_SURFACE_FIELDS = frozenset(
-    {
-        "profiles",
-        "attach_argv",
-        "capture_redactions",
-        "open_in_console",
-        "console_sync",
-        "console_flash",
-        "console_recovery",
-    }
-)
+def _surface_fields() -> frozenset[str]:
+    """Every `TuiContext` field that is not the backend, read off the dataclass.
+
+    Hand-listed until Stage 4's Task 4.4 added `console_show_projects` and this set did not
+    know about it -- so the new field went to `backend_for`, which refused it with a
+    `TypeError` naming a helper the test had never mentioned. A list that has to be updated
+    whenever a field is added is a list that will be out of date, and the failure it produces
+    points away from the change that caused it.
+
+    Derived instead. `TuiContext` is a frozen dataclass, so its own fields are the authority,
+    and a field added tomorrow is sorted correctly the day it appears.
+    """
+    from dataclasses import fields
+
+    from remote_agents.adapters.tui.context import TuiContext
+
+    return frozenset(field.name for field in fields(TuiContext)) - {"backend"}
 
 
 def tui_context_for(**arguments: object):
@@ -142,7 +148,7 @@ def tui_context_for(**arguments: object):
     way a literal call can, and rewriting each by hand would put the same split in six
     places — where the seventh would get it subtly wrong.
 
-    It names the split rather than hiding it: anything in `_SURFACE_FIELDS` is the surface's,
+    It names the split rather than hiding it: anything `TuiContext` declares is the surface's,
     everything else is a `Backend` field and goes through `backend_for`, so an unknown key
     fails loudly at `Backend(**...)` rather than being silently dropped. Deliberately no
     `launcher`/`creator` aliases — the point of Stage 3 is that those names are gone, and a
@@ -150,6 +156,7 @@ def tui_context_for(**arguments: object):
     """
     from remote_agents.adapters.tui.context import TuiContext
 
-    surface = {name: value for name, value in arguments.items() if name in _SURFACE_FIELDS}
-    backend = {name: value for name, value in arguments.items() if name not in _SURFACE_FIELDS}
+    surface_fields = _surface_fields()
+    surface = {name: value for name, value in arguments.items() if name in surface_fields}
+    backend = {name: value for name, value in arguments.items() if name not in surface_fields}
     return TuiContext(backend=backend_for(**backend), **surface)  # type: ignore[arg-type]
