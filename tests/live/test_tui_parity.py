@@ -53,6 +53,7 @@ from remote_agents.adapters.tui.model import _BACK, _EMPTY
 from remote_agents.application.commands import ForceStopCommand, LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_views import with_project_names
 from remote_agents.bootstrap import ProjectCatalogueProvider, _local_runtime, local_context
 from remote_agents.config import load_config
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
@@ -328,7 +329,13 @@ async def test_the_terminal_force_stops_a_session_through_the_confirmation_modal
             await _choose(app, pilot, "force")
             await _until(pilot, lambda: position(app) == "FORCE_MODAL", "opened the confirmation")
             assert app.screen.is_modal, "an app binding could walk away from an unanswered kill"
-            assert record.display.rendered in _status(app), "the confirmation must name the session"
+            # The named record. This harness launches with `ProjectId(project.opaque_id)`, so
+            # the stored slug really is the hash -- which makes this the one member of the
+            # class that would have failed *only* on a live host, where it is the only place
+            # it ever runs. Skipped in CI, so it is fixed by identification rather than by a
+            # red run; the shape is identical to the three members that were reproduced.
+            (named,) = with_project_names((record,), (harness.project,))
+            assert named.display.rendered in _status(app), "the confirmation must name the session"
             resting = app.screen.query_one("#choices", OptionList).highlighted
             assert resting is not None, "the owner cannot see which row an enter would activate"
             assert _rows(app)[resting] != "force-confirm", "a stray enter would have killed it"

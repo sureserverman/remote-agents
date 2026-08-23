@@ -29,6 +29,7 @@ from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.application.commands import ForceStopCommand
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_views import with_project_names
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -48,7 +49,11 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
         SessionId.new(),
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        # The opaque_id, which is what the store holds. It read the catalogue *name*
+        # until Stage 1, which made the naming join a no-op here -- so the assertion
+        # below ("the confirm step must name the session") was true of a record that
+        # had never needed naming.
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1),
         state,
         datetime.now(UTC),
     )
@@ -141,7 +146,13 @@ async def test_choosing_force_opens_a_confirm_modal_and_issues_nothing_yet() -> 
     assert step == "FORCE_MODAL"
     assert modal, "the confirmation must be modal, or an app binding can leave it unanswered"
     assert launcher.issued == [], "force must not be issued on the first selection"
-    assert record.display.rendered in status, "the confirm step must name the session"
+    # The *named* record: the surface resolves the project's opaque_id to its catalogue name
+    # before anything renders, so the confirmation names the session the way the row the
+    # owner pressed named it. Comparing against the stored record would assert the hash form
+    # the owner never sees -- and would pass a modal that named the wrong thing.
+    (named,) = with_project_names((record,), (_PROJECT,))
+    assert named.display.rendered in status, "the confirm step must name the session"
+    assert record.display.project_slug not in status
 
 
 async def test_the_confirm_modal_opens_with_abort_highlighted() -> None:

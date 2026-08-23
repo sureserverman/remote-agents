@@ -40,6 +40,7 @@ from remote_agents.application.commands import (
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
+from remote_agents.application.session_views import with_project_names
 from remote_agents.domain.conversations import (
     ConversationCataloguePage,
     ConversationReference,
@@ -68,7 +69,11 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
         SessionId.new(),
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        # The opaque_id, as the store holds it: this file compares what the two
+        # surfaces draw, and both now resolve that to the project name. A fixture
+        # whose slug was already the name compared two renders neither of which had
+        # to resolve anything.
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1),
         state,
         datetime.now(UTC),
     )
@@ -239,7 +244,12 @@ async def _probe_detail(app, launcher, pilot) -> None:
     # Parity is unchanged; which region says what is not. The session's name is the header's
     # breadcrumb and its state is the one-line status, so both halves of "the local surface
     # names the session and its state" are still asserted, from the two places they moved to.
-    assert launcher.record.display.rendered in _breadcrumb(app)
+    # Both surfaces resolve the project's opaque_id to its catalogue name, so parity is
+    # asserted against the named record. Against the stored one this compared two renders
+    # neither of which had to resolve anything, which is not the parity this file claims.
+    (named,) = with_project_names((launcher.record,), (_PROJECT,))
+    assert named.display.rendered in _breadcrumb(app)
+    assert launcher.record.display.project_slug not in _breadcrumb(app)
     assert launcher.record.state.value in _status(app)
 
 
