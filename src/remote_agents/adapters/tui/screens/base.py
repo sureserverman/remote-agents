@@ -73,7 +73,27 @@ def restore_highlight_by_id(pane: OptionList, held_id: str | None, keys: Sequenc
     """
     if not keys:
         return
-    pane.highlighted = keys.index(held_id) if held_id in keys else 0
+    target = keys.index(held_id) if held_id in keys else 0
+    # Never onto a disabled row. Textual's own guards do not cover this path: `validate_
+    # highlighted` only clamps to bounds, and `watch_highlighted` merely skips the scroll and
+    # the `OptionHighlighted` post for a disabled index -- neither refuses to *set* it. So a
+    # direct assignment can park the cursor on a row that cannot be selected, cannot be
+    # scrolled to, and fires no highlight event: stranded, and invisible to a snapshot.
+    #
+    # Not currently reachable -- an expanded feed's continuation ids cannot collide with a row
+    # key -- but that safety is an emergent property of three modules' constraints agreeing
+    # (session ids forbid colons, the kind vocabulary is a closed enum, timestamps contain no
+    # "detail"), asserted nowhere. This function's own contract is that the cursor rests
+    # somewhere non-mutating, so it is enforced here rather than left to those three.
+    if _is_disabled(pane, target):
+        target = next(
+            (index for index in range(len(keys)) if not _is_disabled(pane, index)), target
+        )
+    pane.highlighted = target
+
+
+def _is_disabled(pane: OptionList, index: int) -> bool:
+    return index < pane.option_count and pane.get_option_at_index(index).disabled
 
 
 class ChoiceScreen(Screen[None]):

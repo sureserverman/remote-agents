@@ -28,7 +28,11 @@ from remote_agents.adapters.tui.screens.base import (
     held_option_id,
     restore_highlight_by_id,
 )
-from remote_agents.ports.agent_activity import ActivityKind, AgentActivity
+from remote_agents.ports.agent_activity import (
+    MAXIMUM_DETAIL_CHARACTERS,
+    ActivityKind,
+    AgentActivity,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -82,6 +86,24 @@ DETAIL_WIDTH = 72
 #: How far an expanded row's continuation lines are inset, so they read as belonging to the
 #: row above rather than as further observations.
 _CONTINUATION_INDENT = 2
+
+#: The narrowest an expanded line is ever wrapped to, whatever the pane reports.
+_MINIMUM_CONTINUATION_ROOM = 20
+
+#: How many rows one expanded detail may ever draw.
+#:
+#: **Derived from the port's own cap rather than guessed, and imported rather than assumed.**
+#: `bounded_detail_line` truncates a detail to `MAXIMUM_DETAIL_CHARACTERS`, so at the narrowest
+#: wrap this module will use, one detail cannot exceed this many lines. The `+ 1` is slack for
+#: a wrap that breaks early on a word boundary.
+#:
+#: The bound is enforced *here* and not merely inherited, because `adapters/sqlite/
+#: activity_store` reconstructs an `AgentActivity` straight from the database -- a row written
+#: by an older or foreign writer never passes through `bounded_detail_line` at all. Without a
+#: cap of its own, one such row would emit hundreds of disabled options into the pane on every
+#: redraw, from inside a `Timer` callback. Naming the import is what makes the coupling
+#: visible: change the port's cap and this follows, rather than silently disagreeing with it.
+MAXIMUM_CONTINUATION_ROWS = -(-MAXIMUM_DETAIL_CHARACTERS // _MINIMUM_CONTINUATION_ROOM) + 1
 
 
 def _elide(text: str, width: int | None = DETAIL_WIDTH) -> str:
@@ -184,8 +206,13 @@ def _continuation_rows(key: str, detail: str, width: int | None) -> list[tuple[s
     been laid out falls back to `DETAIL_WIDTH`, which is the collapsed row's bound and so is
     never narrower than what the owner was already reading.
     """
-    room = max(20, (width or DETAIL_WIDTH) - _CONTINUATION_INDENT)
+    room = max(_MINIMUM_CONTINUATION_ROOM, (width or DETAIL_WIDTH) - _CONTINUATION_INDENT)
     lines = textwrap.wrap(" ".join(detail.split()), room) or [""]
+    if len(lines) > MAXIMUM_CONTINUATION_ROWS:
+        # Cut, and *said* to be cut. A detail this long is already outside what the port
+        # promises, so the honest render is the part that fits plus a mark that there was
+        # more -- not a silent truncation, and not a pane full of one observation.
+        lines = [*lines[: MAXIMUM_CONTINUATION_ROWS - 1], "…"]
     return [
         (f"{key}:detail:{index}", f"{' ' * _CONTINUATION_INDENT}{line}", True)
         for index, line in enumerate(lines)
@@ -293,6 +320,15 @@ class FeedRegion:
             # A toggle, and at most one open at a time. Assigning here (rather than mutating a
             # shared container) is what keeps the state per instance -- see the attribute's
             # own comment.
+            #
+            # The state flips before the redraw, and `_reload_feed` is guarded to leave the
+            # drawn rows alone on failure -- so a read that fails on this exact keypress
+            # leaves the flag flipped and the pane showing the old state. They resynchronise
+            # on the next successful reload, which may be the 10s timer rather than a key, so
+            # from the owner's side the row can appear to open or close a few seconds later
+            # with no input in between. Stated rather than fixed: it is this module's
+            # "stale is not wrong" contract, and the alternative -- flipping only after a
+            # successful draw -- would make a keypress silently do nothing instead.
             self.opened_notification = None if self.opened_notification == key else key
             await self._reload_feed()
             return
@@ -341,6 +377,11 @@ class FeedRegion:
             return
         if not activities:
             pane.clear_options()
+            # Nothing left to have open. Cleared for symmetry with the aged-out case, which
+            # drops an expansion whose row has gone: leaving it set is a state that describes
+            # a row the pane is no longer drawing, and it would reopen on its own if that key
+            # ever came back.
+            self.opened_notification = None
             # DEC-009's answer, as a row rather than a paragraph -- and disabled, so the
             # cursor cannot come to rest on a sentence and answer Enter with nothing.
             pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))

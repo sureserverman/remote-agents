@@ -1048,3 +1048,83 @@ async def test_an_open_row_that_ages_out_collapses_cleanly(surface) -> None:
         assert key not in ids, "the aged-out row is still drawn"
         assert not any(":detail:" in i for i in ids), "orphaned continuation rows survived"
         assert pane.option_count == FEED_LIMIT
+
+
+@_SURFACES
+async def test_an_over_long_detail_cannot_flood_the_pane(surface) -> None:
+    """`_continuation_rows` must bound itself rather than trust a cap set in another module.
+
+    `ports/agent_activity.MAXIMUM_DETAIL_CHARACTERS` is 240 and `bounded_detail_line` applies
+    it -- but `adapters/sqlite/activity_store` reconstructs `AgentActivity` straight from the
+    database, so a row written by an older or a foreign writer never passes through that
+    function at all. Without a bound here, one such row would emit hundreds of disabled
+    options into the pane on every redraw, inside a `Timer` callback.
+    """
+    from remote_agents.adapters.tui.screens.feed import MAXIMUM_CONTINUATION_ROWS
+
+    observations = (_activity(ActivityKind.COMPLETED, minutes_ago=1, detail="word " * 4000),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        continuations = pane.option_count - 1
+        assert continuations <= MAXIMUM_CONTINUATION_ROWS, (
+            f"one detail emitted {continuations} rows"
+        )
+        assert continuations > 0, "the expansion showed nothing at all"
+
+
+@_SURFACES
+async def test_expanding_the_second_of_two_colliding_rows_keys_it_apart(surface) -> None:
+    """The duplicate-timestamp path and the expansion path, together.
+
+    Each is covered alone; this is the interaction. The second of a colliding pair carries an
+    ordinal suffix, so its continuation ids must hang off *that* key rather than off the first
+    row's -- otherwise opening one would expand the other, or `add_options` would raise on a
+    repeated id and exit the app from a timer.
+    """
+    stamp = datetime.now(UTC)
+    pair = tuple(
+        AgentActivity(
+            "01234567-89ab-cdef-0123-456789abcdef",
+            ActivityKind.COMPLETED,
+            f"detail number {n}",
+            stamp,
+            ActivityConfidence.REPORTED,
+        )
+        for n in range(2)
+    )
+
+    async def feed():
+        return pair
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        second = pane.get_option_at_index(1).id
+        assert second.endswith(":1"), second
+
+        await app.screen.choose(second)
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        ids = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert len(set(ids)) == len(ids), f"duplicate option ids: {ids}"
+        continuations = [i for i in ids if ":detail:" in i]
+        assert continuations, "the second row did not expand"
+        assert all(i.startswith(f"{second}:detail:") for i in continuations), continuations
+        expanded = " ".join(
+            " ".join(str(pane.get_option_at_index(i).prompt).split())
+            for i in range(pane.option_count)
+            if ":detail:" in str(pane.get_option_at_index(i).id)
+        )
+        assert "detail number 1" in expanded, expanded
