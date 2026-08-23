@@ -75,7 +75,7 @@ def feed_key(activity: AgentActivity) -> str:
 DETAIL_WIDTH = 72
 
 
-def _elide(text: str, width: int = DETAIL_WIDTH) -> str:
+def _elide(text: str, width: int | None = DETAIL_WIDTH) -> str:
     """One line, cut at `width`, with an ellipsis when it was cut.
 
     Cut rather than wrapped, and that is the change. A wrapped detail is what the `Static`
@@ -83,7 +83,9 @@ def _elide(text: str, width: int = DETAIL_WIDTH) -> str:
     a pane that holds twenty. One observation is one row.
     """
     collapsed = " ".join(text.split())
-    return collapsed if len(collapsed) <= width else f"{collapsed[: width - 1]}…"
+    if width is None or len(collapsed) <= width:
+        return collapsed
+    return f"{collapsed[: max(1, width - 1)]}…"
 
 
 def feed_rows(
@@ -109,6 +111,10 @@ def feed_rows(
         words = KIND_WORDS.get(activity.kind, activity.kind.value)
         identity = names.get(str(activity.session_id)) or str(activity.session_id)
         detail = f" — {_elide(activity.detail)}" if activity.detail else ""
+        # `_elide` caps the *detail* so one verbose agent cannot crowd out the identity that
+        # makes the row readable at all. Cutting the line to the *pane* is not done here --
+        # `_draw_feed` hands the widget a `Text` that truncates itself at whatever width it is
+        # given, which is the only version that survives a resize.
         rows.append(
             (feed_key(activity), f"{age(activity.observed_at)} · {identity} · {words}{detail}")
         )
@@ -305,7 +311,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     DEFAULT_CSS = """
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }
-    FeedScreen #feed-pane { height: 1fr; }
+    FeedScreen #feed-pane { height: 1fr; text-wrap: nowrap; text-overflow: ellipsis; }
     """
 
     def __init__(self) -> None:

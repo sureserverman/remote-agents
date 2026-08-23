@@ -492,11 +492,25 @@ async def test_a_long_detail_is_ellipsised_rather_than_wrapped(surface) -> None:
     app = surface(context)
     async with app.run_test() as pilot:
         await pilot.pause()
+        pane = _feed_pane(app)
         rows = _feed_rows(app)
-        assert len(rows) == 1, "one observation must occupy exactly one row"
-        assert "\n" not in rows[0], "the row must not wrap"
+        assert len(rows) == 1, "one observation must occupy exactly one option"
         assert rows[0].endswith("…"), rows[0][-40:]
         assert len(rows[0]) < 400
+
+        # Asserted on the widget's own geometry, which is the direct form of "one
+        # observation is one row" and is the same statement on both surfaces.
+        #
+        # Three earlier versions of this assertion were wrong, each in a way worth recording
+        # because each looked right: `"\n" not in rows[0]` checks a prompt string that never
+        # holds a newline whatever the widget does with it (this is the one that let the wrap
+        # ship); filtering rendered lines by an age token also matches the dashboard's
+        # *session* row; and filtering by the detail's own text fails because the detail is
+        # cut off entirely in a pane a third of a column wide. The virtual height is none of
+        # those -- it is the number of lines the list actually occupies.
+        assert pane.virtual_size.height == pane.option_count, (
+            f"{pane.option_count} option(s) occupied {pane.virtual_size.height} lines"
+        )
 
 
 @_SURFACES

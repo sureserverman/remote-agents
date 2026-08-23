@@ -112,6 +112,11 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+)
 
 _SNAPSHOTS = Path(__file__).parent / "snapshots"
 _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
@@ -302,6 +307,46 @@ class _Conversations:
         )
 
 
+#: What the feed panes draw. Stamped `now` for the same reason `_record` is: `age()` renders
+#: "0m ago" and the SVG stays byte-stable across runs.
+#:
+#: Wired at all because it was not, and that made the FEED and DASHBOARD baselines blind to
+#: the whole of the feed's render -- they could only ever capture the empty state, so a row
+#: format, an identity and an elision were all outside the net that exists to catch them. The
+#: same defect Task 1.5 found in this file's session fixture, in a second place.
+#:
+#: The long detail is deliberate: it is what proves the row is *cut* rather than wrapped, and
+#: a wrapped row is the defect the live capture at Preflight showed.
+def _activities() -> tuple[AgentActivity, ...]:
+    return (
+        AgentActivity(
+            str(_SESSION_ID),
+            ActivityKind.NEEDS_ANSWER,
+            "May I push the branch and open a pull request against main?",
+            datetime.now(UTC),
+            ActivityConfidence.REPORTED,
+        ),
+        AgentActivity(
+            str(_SESSION_ID),
+            ActivityKind.COMPLETED,
+            "Baseline landed and the plan is amended with the real number. " * 6,
+            datetime.now(UTC),
+            ActivityConfidence.REPORTED,
+        ),
+        AgentActivity(
+            "deadbeef-0000-0000-0000-000000000000",
+            ActivityKind.QUIET,
+            None,
+            datetime.now(UTC),
+            ActivityConfidence.INFERRED,
+        ),
+    )
+
+
+async def _activities_reader() -> tuple[AgentActivity, ...]:
+    return _activities()
+
+
 def _context(
     *,
     state: SessionState = SessionState.RUNNING,
@@ -309,6 +354,7 @@ def _context(
     creator: object | None = None,
     conversations: object | None = None,
     capture=None,
+    activity_feed=None,
 ) -> TuiContext:
     """The collaborators every capture is driven against.
 
@@ -326,6 +372,7 @@ def _context(
             catalogue=(_PROJECT, _OTHER),
             capture=(lambda _session_id: _captured()) if capture is None else capture,
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
+            activity_feed=_activities_reader if activity_feed is None else activity_feed,
         ),
         profiles=(
             ProfileAvailability("claude", True),

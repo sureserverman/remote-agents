@@ -158,7 +158,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     DashboardScreen #dashboard-left { width: 3fr; }
     DashboardScreen #dashboard-right { width: 2fr; }
     DashboardScreen #sessions-pane { height: 2fr; border: round $secondary; }
-    DashboardScreen #feed-pane { height: 1fr; border: round $secondary; }
+    DashboardScreen #feed-pane { height: 1fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis; }
     """
 
     def __init__(self) -> None:
