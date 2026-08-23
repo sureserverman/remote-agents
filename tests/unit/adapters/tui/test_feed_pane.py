@@ -791,11 +791,13 @@ async def test_opening_a_second_row_closes_the_first(surface) -> None:
     """The pane is a third of a column on the dashboard. Two rows open at once leaves nothing
     left to scan, which is the opposite of what a glanceable feed is for."""
 
+    observations = (
+        _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="first detail"),
+        _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="second detail"),
+    )
+
     async def feed():
-        return (
-            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="first detail"),
-            _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="second detail"),
-        )
+        return observations
 
     app = surface(_context(feed))
     async with app.run_test() as pilot:
@@ -814,8 +816,10 @@ async def test_opening_a_second_row_closes_the_first(surface) -> None:
 
 @_SURFACES
 async def test_enter_on_an_open_row_closes_it(surface) -> None:
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="the detail"),)
+
     async def feed():
-        return (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="the detail"),)
+        return observations
 
     app = surface(_context(feed))
     async with app.run_test() as pilot:
@@ -837,8 +841,10 @@ async def test_the_expansion_state_is_per_instance_not_shared() -> None:
     would be per instance; one that got mutated in place would not, which is the trap
     `_feed_news` already documents having stepped around."""
 
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="d"),)
+
     async def feed():
-        return (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="d"),)
+        return observations
 
     dashboard = RemoteAgentsTui(_context(feed))
     pane_app = FeedPane(_context(feed))
@@ -854,3 +860,110 @@ async def test_the_expansion_state_is_per_instance_not_shared() -> None:
             assert pane_app.screen.opened_notification is None, (
                 "one surface's open row leaked into the other"
             )
+
+
+# The expansion itself -------------------------------------------------------------------------
+
+_LONG_DETAIL = (
+    "May I push the branch and open a pull request against main? "
+    "The rebase is clean and the suite is green, but the changelog entry is still missing."
+)
+
+
+@_SURFACES
+async def test_enter_emits_the_full_detail_as_continuation_rows(surface) -> None:
+    """DEC-037's whole argument: the feed exists to save the owner a trip to the session, so
+    the words must stay reachable. Stage 2 bounded what is *drawn* -- this is where the rest
+    comes back, one keypress away rather than gone."""
+
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        assert _feed_pane(app).option_count == 1
+
+        await app.screen.choose(key)
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        assert pane.option_count > 1, "Enter emitted no continuation rows"
+        # Whitespace collapsed: the continuation rows are indented by two and wrapped at the
+        # pane width, so joining them reproduces the sentence with the wrap points still in it.
+        # The assertion is about the words surviving, not about where the lines broke.
+        expanded = " ".join(
+            " ".join(str(pane.get_option_at_index(i).prompt).split())
+            for i in range(1, pane.option_count)
+        )
+        # The *full* detail, not the truncated form the collapsed row carries.
+        assert "changelog entry is still missing" in expanded, expanded
+        assert "…" not in expanded, "the expansion must not itself be elided"
+
+
+@_SURFACES
+async def test_every_continuation_row_is_disabled(surface) -> None:
+    """The cursor must not be able to come to rest on a fragment of text and answer Enter
+    with nothing. Disabled options render and scroll but cannot be selected."""
+
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        for index in range(1, pane.option_count):
+            option = pane.get_option_at_index(index)
+            assert option.disabled is True, f"row {index} is selectable: {option.prompt!r}"
+
+
+@_SURFACES
+async def test_closing_removes_the_continuation_rows(surface) -> None:
+    observations = (_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert _feed_pane(app).option_count > 1
+
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert _feed_pane(app).option_count == 1, "closing left orphaned continuation rows"
+
+
+@_SURFACES
+async def test_a_row_with_no_detail_toggles_without_emitting_an_empty_row(surface) -> None:
+    """QUIET carries no detail. Its row still answers Enter -- refusing would make the key
+    mean different things on different rows -- but it has nothing to show, and an empty
+    continuation row would be a blank line the cursor skips over for no reason."""
+
+    observations = (_activity(ActivityKind.QUIET, minutes_ago=1, detail=None),)
+
+    async def feed():
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert app.screen.opened_notification == key, "the row must still toggle"
+        assert _feed_pane(app).option_count == 1, "an empty detail emitted a continuation row"

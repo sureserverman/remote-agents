@@ -14,6 +14,7 @@ is displayed and never interpreted (DEC-014's spirit, DEC-037's carriage of the 
 from __future__ import annotations
 
 import logging
+import textwrap
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -78,6 +79,10 @@ def feed_key(activity: AgentActivity) -> str:
 #: this bounds only what is *drawn*, never what is stored.
 DETAIL_WIDTH = 72
 
+#: How far an expanded row's continuation lines are inset, so they read as belonging to the
+#: row above rather than as further observations.
+_CONTINUATION_INDENT = 2
+
 
 def _elide(text: str, width: int | None = DETAIL_WIDTH) -> str:
     """One line, cut at `width`, with an ellipsis when it was cut.
@@ -97,7 +102,9 @@ def feed_rows(
     names: dict[str, str] | None = None,
     *,
     limit: int = _FEED_LIMIT,
-) -> list[tuple[str, str]]:
+    opened: str | None = None,
+    width: int | None = None,
+) -> list[tuple[str, str, bool]]:
     """One `(key, line)` per observation, newest first, bounded.
 
     `<identity> · <kind words> · <age> — <detail>`, where the identity is the session's own
@@ -154,8 +161,35 @@ def feed_rows(
         seen[key] = occurrence + 1
         if occurrence:
             key = f"{key}:{occurrence}"
-        rows.append((key, f"{identity} · {words} · {age(activity.observed_at)}{detail}"))
+        rows.append((key, f"{identity} · {words} · {age(activity.observed_at)}{detail}", False))
+        if opened == key and activity.detail:
+            rows.extend(_continuation_rows(key, activity.detail, width))
     return rows
+
+
+def _continuation_rows(key: str, detail: str, width: int | None) -> list[tuple[str, str, bool]]:
+    """The open row's full detail, wrapped, as rows the cursor cannot land on.
+
+    **Wrapped here in Python rather than by the widget**, because the pane declares
+    `text-wrap: nowrap` -- which is what makes one observation one row, and is not something
+    to switch off for a subset of rows in a list that has one style. So the wrapping the
+    collapsed row must never do is done explicitly for the rows that exist to show everything.
+
+    Every row is `disabled`: they render and scroll, and `OptionList.action_select` refuses to
+    post `OptionSelected` for a disabled option, so the cursor cannot come to rest on a
+    fragment of a sentence and answer Enter with nothing (DEC-007's resting-cursor rule).
+
+    Indented by two, so a continuation reads as belonging to the row above it rather than as
+    another observation. `width` is the pane's own, measured at draw time; a pane that has not
+    been laid out falls back to `DETAIL_WIDTH`, which is the collapsed row's bound and so is
+    never narrower than what the owner was already reading.
+    """
+    room = max(20, (width or DETAIL_WIDTH) - _CONTINUATION_INDENT)
+    lines = textwrap.wrap(" ".join(detail.split()), room) or [""]
+    return [
+        (f"{key}:detail:{index}", f"{' ' * _CONTINUATION_INDENT}{line}", True)
+        for index, line in enumerate(lines)
+    ]
 
 
 class FeedNews:
@@ -265,7 +299,7 @@ class FeedRegion:
         await super().choose(key)
 
     @staticmethod
-    def _draw_feed(pane: OptionList, rows: list[tuple[str, str]]) -> None:
+    def _draw_feed(pane: OptionList, rows: list[tuple[str, str, bool]]) -> None:
         """Refill the pane, leaving the cursor on the observation it was on.
 
         By *key*, never by index. This pane repaints on a 10-second interval and the feed
@@ -283,10 +317,10 @@ class FeedRegion:
         # latter. The gate evaluator caught the gap: the test pinning that promise
         # monkeypatches `feed_rows`, which raises before this method is entered, so it never
         # exercised the window between the clear and the refill.
-        options = [Option(line, id=key) for key, line in rows]
+        options = [Option(line, id=key, disabled=disabled) for key, line, disabled in rows]
         pane.clear_options()
         pane.add_options(options)
-        restore_highlight_by_id(pane, held_id, [key for key, _line in rows])
+        restore_highlight_by_id(pane, held_id, [key for key, _line, _disabled in rows])
 
     async def _reload_feed(self) -> None:
         """Render the newest observations, or the placeholder — never an exception.
@@ -313,7 +347,19 @@ class FeedRegion:
             self._feed_news.arrived(activities)
             return
         try:
-            self._draw_feed(pane, feed_rows(activities, await self._session_names()))
+            # The pane's own width, for wrapping an expanded detail. Reported as 0 before the
+            # first layout, which `_continuation_rows` falls back on -- and an expansion only
+            # ever happens on a keypress, by which time the pane has certainly been laid out.
+            measured = pane.content_size.width
+            self._draw_feed(
+                pane,
+                feed_rows(
+                    activities,
+                    await self._session_names(),
+                    opened=self.opened_notification,
+                    width=measured if measured > 0 else None,
+                ),
+            )
         except Exception:
             # The docstring above promises "never an exception" for the *method*, and only
             # the read was guarded -- so the naming join and the option rebuild could both
