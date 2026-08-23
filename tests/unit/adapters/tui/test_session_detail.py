@@ -28,12 +28,17 @@ from remote_agents.domain.models import (
 _EXISTING = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
 
-def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
+def _record(
+    state: SessionState = SessionState.RUNNING,
+    *,
+    slug: str = "existing",
+    custom_label: str | None = None,
+) -> SessionRecord:
     return SessionRecord(
         SessionId.new(),
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionDisplayIdentity(slug, "claude", "regular", 1, custom_label),
         state,
         datetime.now(UTC),
     )
@@ -173,3 +178,40 @@ async def test_selecting_a_row_opens_its_detail() -> None:
 
     assert step == "SESSION_DETAIL"
     assert record.display.rendered in trail
+
+
+# The project the breadcrumb names -------------------------------------------------------------
+
+
+async def test_the_breadcrumb_names_the_project_rather_than_the_catalogue_id() -> None:
+    """The detail is reached from a row that now reads the project's name, so a detail still
+    showing the hex prefix would rename the session on the way in -- the owner would arrive
+    somewhere that looks like a different session from the one they chose."""
+    record = _record(slug="opaque-existing")
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        trail = breadcrumb(app)
+
+    assert "existing" in trail
+    assert "opaque-existing" not in trail
+
+
+async def test_a_renamed_session_keeps_its_label_after_the_named_project() -> None:
+    """`SessionDisplayIdentity.rendered` puts the custom label last, after the generated
+    part. Naming the project rewrites one field *inside* the generated part, so the label
+    must survive it -- a rename the owner performed is the one part of this string they
+    chose, and losing it to a cosmetic fix would be the worse trade."""
+    record = _record(slug="opaque-existing", custom_label="nightly sweep")
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test() as pilot:
+        await app.show_detail(str(record.session_id))
+        await pilot.pause()
+        trail = breadcrumb(app)
+
+    assert "existing" in trail
+    assert "opaque-existing" not in trail
+    assert trail.index("nightly sweep") > trail.index("existing")
