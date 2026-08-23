@@ -620,3 +620,51 @@ async def test_the_feed_read_never_refreshes_readiness(surface) -> None:
         await app.screen._reload_feed()
         await pilot.pause()
         assert type(sessions).refreshed == baseline, "the feed's own read refreshed readiness"
+
+
+async def test_the_console_feed_pane_holds_the_keyboard_on_arrival() -> None:
+    """The console's feed pane is nothing but this list, so the list is what the keys are for.
+
+    Found by the stage's live check, not by a unit test: every case above drives `_reload_feed`
+    directly or sets `highlighted` itself, so all of them passed against a pane the arrow keys
+    could not reach. On arrival focus sat on `#filter` -- a `display: none` Input this screen
+    composes only because `ChoiceScreen`'s machinery queries it by id -- and Down did nothing
+    until the owner pressed Tab first. A pane whose whole content is a scrollable list, whose
+    scrolling is one undiscoverable keystroke away, is the defect this stage set out to remove
+    wearing a different hat.
+
+    The dashboard deliberately does *not* do this: there the filter legitimately owns the
+    keyboard for typing a project filter, and the feed is three Tabs away by design.
+    """
+
+    async def feed():
+        return tuple(
+            _activity(ActivityKind.COMPLETED, minutes_ago=minute, detail=f"row {minute}")
+            for minute in range(30)
+        )
+
+    app = FeedPane(_context(feed))
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        assert pane.has_focus, f"the feed pane did not take the keyboard; {app.focused!r} did"
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert pane.highlighted == 1, "Down must move the cursor without a Tab first"
+
+
+async def test_the_dashboard_leaves_the_keyboard_in_its_filter() -> None:
+    """The other half of the rule above, so a later change cannot quietly take the filter's
+    keyboard away in the name of making the feed focusable."""
+    from textual.widgets import Input
+
+    async def feed():
+        return (_activity(ActivityKind.COMPLETED, minutes_ago=1),)
+
+    app = RemoteAgentsTui(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.focused, Input), (
+            f"the dashboard filter lost the keyboard to {app.focused!r}"
+        )

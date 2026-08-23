@@ -346,6 +346,17 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     async def populate(self) -> None:
         self.hide_entry()
         await self._reload_feed()
+        # The keys are for the list, so the list takes them. `hide_entry` hides `#filter` and
+        # `#choices` -- both composed only because `ChoiceScreen`'s machinery queries them by
+        # id -- but hiding a widget does not move the focus off it, so the keyboard sat on a
+        # `display: none` Input and Down did nothing until the owner pressed Tab. On a pane
+        # whose entire content is one scrollable list, that is the scrolling this stage added
+        # being one undiscoverable keystroke away.
+        #
+        # Here and not in `FeedRegion`: the dashboard shares the render and must *not* share
+        # this, because there the filter legitimately owns the keyboard for typing a project
+        # filter and the feed is three Tabs away by design. Both halves are pinned by tests.
+        self.query_one("#feed-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._FEED_AUTO_REFRESH, self._auto_reload)
 
