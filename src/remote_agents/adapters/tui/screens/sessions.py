@@ -196,10 +196,28 @@ SESSION_ACTION_BINDINGS = [
         for key, action, label in SESSION_ACTION_KEYS
     ),
     Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
-    # Not a row key: it acts on the *console*, not on the highlighted session. Grouped here
-    # because it is offered in the same places and hidden for the same reason.
-    Binding("p", "show_projects_pane", "Projects", show=False),
 ]
+
+# The invariant, enforced where it cannot be skipped. It was previously asserted only by a
+# test, and this codebase already has the better pattern for exactly this shape --
+# `ChoiceScreen.__init_subclass__` raises at class-definition time rather than trusting a test
+# to be run. The failure this guards is not hypothetical and not small: re-adding `s` here to
+# "finish the job the plan proposed" would put an unconfirmed graceful stop one keypress from
+# a list whose cursor moves under a 10-second refresh, and it would ship the moment someone
+# did not notice one red test.
+_bindable = {action for _key, action, _label in SESSION_ACTION_KEYS}
+if _bindable & UNCONFIRMED_MUTATING_ACTIONS:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        "these keys would auto-perform an action the detail never asks about: "
+        f"{sorted(_bindable & UNCONFIRMED_MUTATING_ACTIONS)}. "
+        "DEC-018 forbids confirming them and DEC-007 forbids resting the cursor on them, so a "
+        "key cannot carry one safely; `d` reaches them in two keypresses."
+    )
+del _bindable
+
+#: The console key, kept off `SESSION_ACTION_BINDINGS` deliberately -- see
+#: `SessionsPaneScreen.BINDINGS`, which is the only position that offers it.
+_SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=False)
 
 
 class _SessionActionKeys:
@@ -273,7 +291,11 @@ class _SessionActionKeys:
         command of its own: those live on the detail, once, and this is an entry to them.
         """
         session_value = self.highlighted_session()
-        if session_value is None:
+        if session_value is None or self.tui.busy:
+            # `busy` mirrors `ChoiceScreen.on_option_list_option_selected`, which refuses a
+            # pressed row while a command is in flight. `dispatch_opening` checks it again once
+            # the detail exists; this is the same refusal one step earlier, so the two entry
+            # paths agree rather than relying on the pump staying serialized forever.
             return
         await self.tui.show_detail(session_value, action)
 
@@ -308,7 +330,7 @@ class _SessionActionKeys:
         the policy deliberately declines to answer, on a live pane.
         """
         session_value = self.highlighted_session()
-        if session_value is None:
+        if session_value is None or self.tui.busy:
             return
         try:
             record = await self.tui.current_record(session_value)
@@ -325,6 +347,13 @@ class _SessionActionKeys:
         if record is None:
             await self.tui.show_detail(session_value)
             return
+        # The direction is picked from this read and re-checked by `confirm_remote_control`'s
+        # own read -- which asks whether Remote Control is *available*, not whether the
+        # direction is still the right one. So a foreign writer toggling between the two reads
+        # can leave the owner asked to enable something already enabled. That window is the
+        # row path's too (a rendered row fixes its direction and is never re-diffed either);
+        # this key narrows it from human-paced to machine-paced rather than opening it. Noted
+        # so the omission is not read as an oversight.
         directions = remote_control_directions(record, record.remote_control_state)
         opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
         await self.tui.show_detail(session_value, opening)
@@ -632,6 +661,19 @@ class SessionsPaneScreen(SessionsScreen):
         # been bitten once already by assuming how that merge works, so the set this position
         # offers is written where a reader can see it whole.
         *SESSION_ACTION_BINDINGS,
+        # `p` is offered **here and not on `SessionsScreen`**, and the difference is not
+        # cosmetic. Hosting is decided by the tmux socket name -- `bootstrap.local_context`
+        # says so in terms: "hosting is decided by the socket name, which is true of every
+        # pane on this server". So a plain `remote-agents tui` started from any shell on the
+        # console's server is classified CONSOLE and gets `console_show_projects` wired, and a
+        # `p` on the full sessions position would then rearrange the owner's real console from
+        # a process that is not one of its three managed panes at all.
+        #
+        # This pane *is* one of them. Found by the Stage 4 Tier-2 pass, which noted that the
+        # other four console capabilities are either never invoked from `SessionsScreen` or
+        # (`open_in_console`) invoked only from this subclass -- so `p` would have been the
+        # first to break that pattern.
+        _SHOW_PROJECTS_BINDING,
     ]
 
     async def choose(self, key: str) -> None:

@@ -14,6 +14,7 @@ already opened the detail; this is that pair, on a screen of its own.
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime
 
 import pytest
@@ -21,6 +22,7 @@ from backends import tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
 
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import SessionsPane
 from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen, SessionsPaneScreen
@@ -606,8 +608,15 @@ async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
     pane = {str(b.key) for b in SessionsPaneScreen.BINDINGS}
     assert action_keys <= full, sorted(action_keys - full)
     assert action_keys <= pane, sorted(action_keys - pane)
-    # The pane adds `d` and nothing else; every other key is shared.
-    assert pane - full == {"d"}, sorted(pane - full)
+    # The pane adds `d` and `p`; every row key is shared.
+    #
+    # `p` is the pane's alone on purpose. Hosting is decided by the tmux socket name, so a
+    # plain `remote-agents tui` started from any shell on the console's server is classified
+    # CONSOLE and has `console_show_projects` wired -- and a `p` on the full sessions position
+    # would then rearrange the owner's real console from a process that is not one of its
+    # managed panes. This asserts the separation rather than leaving it to the comment.
+    assert pane - full == {"d", "p"}, sorted(pane - full)
+    assert "p" not in full, "the full sessions position must not offer the console key"
 
 
 def _module_action_keys():
@@ -765,3 +774,52 @@ async def test_a_failing_capability_is_reported_and_is_not_a_lifecycle_failure()
 
     assert "console" in said.lower(), said
     assert "session" not in said.lower(), f"a console failure was reported as a session one: {said}"
+
+
+async def test_the_full_sessions_position_does_not_offer_the_console_key() -> None:
+    """Driven, not just read off the class: a `SessionsScreen` with `console_show_projects`
+    wired -- the exact combination a `remote-agents tui` on the console's own tmux server
+    produces -- must still not carry `p`."""
+    calls: list[int] = []
+
+    async def show_projects() -> None:  # pragma: no cover - must never be reached
+        calls.append(1)
+
+    app = RemoteAgentsTui(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.show_sessions()
+        await pilot.pause()
+        assert position(app) == "SESSIONS"
+        offered = set(app.screen.active_bindings)
+        assert "p" not in offered, sorted(offered)
+        await pilot.press("p")
+        await pilot.pause()
+
+    assert calls == [], "the full sessions position rearranged the console"
+
+
+def test_a_key_for_an_unconfirmed_action_fails_at_import_not_only_in_ci() -> None:
+    """The invariant is enforced where it cannot be skipped.
+
+    It was asserted only by a test, and this codebase already has the better pattern for the
+    shape -- `ChoiceScreen.__init_subclass__` raises at class-definition time. Re-adding `s`
+    to "finish the job the plan proposed" would otherwise ship the moment someone did not
+    notice one red test, putting an unconfirmed graceful stop one keypress from a list whose
+    cursor moves under a 10-second refresh.
+    """
+    import importlib
+
+    import remote_agents.adapters.tui.screens.sessions as module
+
+    original = module.SESSION_ACTION_KEYS
+    source = pathlib.Path(module.__file__).read_text("utf-8")
+    assert "raise RuntimeError(" in source, "the import-time guard is gone"
+    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS" in source, "the guard no longer checks it"
+    # The guard reads the module-level table, so the check is exactly the one that runs at
+    # import; reproduced here rather than re-importing a mutated module, which pytest's own
+    # module cache makes unreliable.
+    bindable = {action for _key, action, _label in original}
+    assert not bindable & module.UNCONFIRMED_MUTATING_ACTIONS
+    assert module.UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
+    importlib.reload  # noqa: B018 - referenced so the import is not flagged unused
