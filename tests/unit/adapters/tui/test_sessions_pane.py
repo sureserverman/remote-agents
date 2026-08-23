@@ -385,3 +385,47 @@ async def test_a_session_that_is_shown_says_nothing_at_all() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert list(app._notifications) == []
+
+
+# The project a row names ----------------------------------------------------------------------
+
+
+async def test_a_row_names_its_project_rather_than_the_catalogue_id() -> None:
+    """The defect this closes, captured from the live surface before the change:
+
+        034b69be3a8290521db3d76e · codex · regular · #3 · running · 10d ago
+
+    `SessionDisplayIdentity.project_slug` holds the catalogue's `opaque_id`, and the bot has
+    always swapped it for the readable name at render time. This surface never did.
+    """
+    app = SessionsPane(_context((_record(name="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        row = choices.get_option_at_index(0)
+        assert "existing" in str(row.prompt)
+        assert "opaque-existing" not in str(row.prompt)
+
+
+async def test_naming_the_project_leaves_the_row_key_alone() -> None:
+    """The key is the handle every action screen is reached through.
+
+    Getting the name wrong is cosmetic; getting the *key* wrong strands Stop, Force stop,
+    Rename and Inspect behind a row that no longer addresses anything.
+    """
+    app = SessionsPane(_context((_record(name="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert choices.get_option_at_index(0).id == str(_SESSION)
+
+
+async def test_a_session_whose_project_left_the_catalogue_still_renders() -> None:
+    """Deregistered, or a directory moved, while the session runs. The slug is then the only
+    name there is, and a row the owner cannot see is a session they cannot stop."""
+    app = SessionsPane(_context((_record(name="vanished"),), catalogue=()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert choices.option_count == 1
+        assert "vanished" in str(choices.get_option_at_index(0).prompt)

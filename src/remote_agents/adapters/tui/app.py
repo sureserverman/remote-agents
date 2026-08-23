@@ -54,7 +54,11 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.application.session_views import listed_sessions, only_listed
+from remote_agents.application.session_views import (
+    listed_sessions,
+    only_listed,
+    with_project_names,
+)
 from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import (
@@ -1051,6 +1055,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 return record
         return None
 
+    def _with_names(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
+        """Join this surface's catalogue onto the records, by the shared rule.
+
+        **Here rather than in the three renders that show a row, and that is the whole of
+        this task's deviation from the plan's `Scope:` line.** The plan named
+        `SessionsScreen._draw_listing`, `DashboardScreen._reload_sessions_pane` and
+        `SessionDetailScreen.render_detail` -- three sites, and it noted that the first of
+        them has two branches which "must name identically". They do not have to, because
+        they no longer decide: both reads this surface performs pass through here, so a
+        render cannot draw an unnamed record without first getting one from somewhere that
+        does not exist. Three call sites that must agree, replaced by one they all read from,
+        is the same argument Task 1.1 made one layer up -- applying it here and not there
+        would have been holding the argument and declining to use it.
+
+        The rule itself is `application/session_views.with_project_names`; what is this
+        surface's own is which catalogue, and that is `self._catalogue` -- the local
+        catalogue, refreshed by `reload_catalogue`.
+        """
+        return with_project_names(records, self._catalogue)
+
     async def load_sessions(self) -> tuple[SessionRecord, ...]:
         """Refresh readiness, then return the sessions worth showing.
 
@@ -1076,7 +1100,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         records = await listed_sessions(self._services.backend.sessions)
         if self._services.console_sync is not None:
             await self._services.console_sync(records)
-        return records
+        # Named *after* the sync, deliberately. The sync matches records against tmux panes,
+        # and while naming touches only `display.project_slug` and no id, handing it the
+        # exact tuple it saw before this task removes the question entirely.
+        return self._with_names(records)
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
@@ -1085,7 +1112,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
         # asserted over the whole `SessionState` set rather than over the states a reader
         # thought to name.
-        return only_listed(await self._services.backend.sessions.list_sessions())
+        return self._with_names(only_listed(await self._services.backend.sessions.list_sessions()))
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
