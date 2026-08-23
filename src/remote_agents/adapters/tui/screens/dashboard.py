@@ -36,7 +36,11 @@ from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen
-from remote_agents.adapters.tui.screens.feed import NO_NOTIFICATIONS, FeedRegion
+from remote_agents.adapters.tui.screens.feed import (
+    _EMPTY_FEED_ROW,
+    NO_NOTIFICATIONS,
+    FeedRegion,
+)
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.application.project_catalog import CatalogProject
@@ -181,7 +185,16 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
                     sessions = OptionList(id="sessions-pane", markup=False)
                     sessions.border_title = "Sessions — enter opens, d for detail"
                     yield sessions
-                    feed = Static(NO_NOTIFICATIONS, id="feed-pane", markup=False)
+                    # Seeded with its empty state at compose time, not left blank. `_reload_feed`
+                    # returns early when the capability is absent or the read raises, and a
+                    # `Static` used to carry this sentence as its initial content -- so an
+                    # unseeded list would answer both of those with an empty box instead of the
+                    # sentence DEC-009 requires this pane to declare.
+                    feed = OptionList(
+                        Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True),
+                        id="feed-pane",
+                        markup=False,
+                    )
                     feed.border_title = "Notifications"
                     yield feed
             with VerticalScroll(id="output-pane"):

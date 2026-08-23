@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from backends import backend_for
-from textual.widgets import OptionList, Static
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -92,7 +92,7 @@ async def test_three_panes_render_and_the_session_appears_in_its_pane() -> None:
         assert isinstance(screen, DashboardScreen)
         projects = screen.query_one("#choices", OptionList)
         sessions = screen.query_one("#sessions-pane", OptionList)
-        feed = screen.query_one("#feed-pane", Static)
+        feed = screen.query_one("#feed-pane", OptionList)
         assert projects.option_count == 1
         assert projects.get_option_at_index(0).id == "opaque-existing"
         assert sessions.option_count == 1

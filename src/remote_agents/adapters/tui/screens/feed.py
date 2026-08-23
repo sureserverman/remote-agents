@@ -18,6 +18,7 @@ import logging
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
+from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.context import FEED_LIMIT
 from remote_agents.adapters.tui.model import age
@@ -44,14 +45,43 @@ KIND_WORDS = {
 }
 
 
-def feed_lines(activities: tuple[AgentActivity, ...], *, limit: int = _FEED_LIMIT) -> list[str]:
-    """One line per observation, newest first, bounded."""
-    lines = []
+#: The row id for the pane's declared empty state. Disabled, so the cursor never rests on a
+#: sentence it can press Enter on.
+_EMPTY_FEED_ROW = "notification:none"
+
+#: What every observation row's id starts with. `ChoiceScreen.on_option_list_option_selected`
+#: routes an `OptionList` selection to its screen's `choose` by the option's id, so the prefix
+#: is the whole of the dispatch -- the same seam the dashboard already tests `session:` on. No
+#: new handler, and specifically no app-level one (`screens/base.py:952` says why).
+NOTIFICATION_PREFIX = "notification:"
+
+
+def feed_key(activity: AgentActivity) -> str:
+    """A row id naming the observation, not its position.
+
+    Composite of session, kind and `observed_at` rather than the index, because the feed is
+    newest-first and grows at the *head*: an index-keyed row means the row under the owner's
+    cursor silently becomes a different notification every time any agent reports. The same
+    argument `_draw_listing` makes for restoring the sessions list by key.
+    """
+    return f"{NOTIFICATION_PREFIX}{activity.session_id}:{activity.kind.value}:{activity.observed_at.isoformat()}"
+
+
+def feed_rows(
+    activities: tuple[AgentActivity, ...], *, limit: int = _FEED_LIMIT
+) -> list[tuple[str, str]]:
+    """One `(key, line)` per observation, newest first, bounded."""
+    rows = []
     for activity in activities[:limit]:
         words = KIND_WORDS.get(activity.kind, activity.kind.value)
         detail = f" — {activity.detail}" if activity.detail else ""
-        lines.append(f"{age(activity.observed_at)} · {words}{detail}")
-    return lines
+        rows.append((feed_key(activity), f"{age(activity.observed_at)} · {words}{detail}"))
+    return rows
+
+
+def feed_lines(activities: tuple[AgentActivity, ...], *, limit: int = _FEED_LIMIT) -> list[str]:
+    """One line per observation, newest first, bounded. The text half of `feed_rows`."""
+    return [line for _key, line in feed_rows(activities, limit=limit)]
 
 
 class FeedNews:
@@ -90,6 +120,31 @@ class FeedRegion:
     #: Per instance, created on first use so neither user has to remember an `__init__` call.
     _feed_news: FeedNews | None = None
 
+    @staticmethod
+    def _draw_feed(pane: OptionList, rows: list[tuple[str, str]]) -> None:
+        """Refill the pane, leaving the cursor on the observation it was on.
+
+        By *key*, never by index. This pane repaints on a 10-second interval and the feed
+        grows at the head, so every row the owner was reading shifts down whenever any agent
+        reports -- restoring by index would hand them a different notification each tick,
+        which is the same defect `SessionsScreen._draw_listing` restores by key to avoid.
+
+        A key that has gone falls back to row 0, the resting position every other list on this
+        surface uses (DEC-007). The cursor always rests somewhere.
+        """
+        held = pane.highlighted
+        held_id = (
+            pane.get_option_at_index(held).id
+            if held is not None and held < pane.option_count
+            else None
+        )
+        pane.clear_options()
+        pane.add_options(Option(line, id=key) for key, line in rows)
+        if not rows:
+            return
+        keys = [key for key, _line in rows]
+        pane.highlighted = keys.index(held_id) if held_id in keys else 0
+
     async def _reload_feed(self) -> None:
         """Render the newest observations, or the placeholder — never an exception.
 
@@ -99,7 +154,7 @@ class FeedRegion:
         if self._feed_news is None:
             self._feed_news = FeedNews()
         reader = self.services.backend.activity_feed
-        pane = self.query_one("#feed-pane", Static)
+        pane = self.query_one("#feed-pane", OptionList)
         if reader is None:
             return
         try:
@@ -108,10 +163,13 @@ class FeedRegion:
             _LOG.exception("the notifications feed could not be read")
             return
         if not activities:
-            pane.update(NO_NOTIFICATIONS)
+            pane.clear_options()
+            # DEC-009's answer, as a row rather than a paragraph -- and disabled, so the
+            # cursor cannot come to rest on a sentence and answer Enter with nothing.
+            pane.add_option(Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True))
             self._feed_news.arrived(activities)
             return
-        pane.update("\n".join(feed_lines(activities)))
+        self._draw_feed(pane, feed_rows(activities))
 
         newest = self._feed_news.arrived(activities)
         flash = self.services.console_flash
@@ -162,7 +220,16 @@ class FeedScreen(FeedRegion, ChoiceScreen):
             yield Static(self.status, id="status", markup=False)
             yield Input(placeholder="", id="filter")
             yield OptionList(id="choices", markup=False)
-            feed = Static(NO_NOTIFICATIONS, id="feed-pane", markup=False)
+            # Seeded with its empty state at compose time, not left blank. `_reload_feed`
+            # returns early when the capability is absent or the read raises, and a
+            # `Static` used to carry this sentence as its initial content -- so an
+            # unseeded list would answer both of those with an empty box instead of the
+            # sentence DEC-009 requires this pane to declare.
+            feed = OptionList(
+                Option(NO_NOTIFICATIONS, id=_EMPTY_FEED_ROW, disabled=True),
+                id="feed-pane",
+                markup=False,
+            )
             feed.border_title = "Notifications"
             yield feed
             with VerticalScroll(id="output-pane"):

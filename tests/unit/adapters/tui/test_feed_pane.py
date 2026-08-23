@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from backends import backend_for
-from textual.widgets import Static
+from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -77,9 +77,26 @@ def _context(feed=None) -> TuiContext:
     )
 
 
+def _feed_pane(app) -> OptionList:
+    return app.screen.query_one("#feed-pane", OptionList)
+
+
+def _feed_rows(app) -> list[str]:
+    """The prompts actually drawn, in order. The pane is a list now, not a paragraph."""
+    pane = _feed_pane(app)
+    return [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+
+
+def _feed_text(app) -> str:
+    """Every drawn row joined, so assertions written against the old Static still read
+    naturally. Newline-joined rather than space-joined on purpose: the bound test counts
+    `splitlines()`, and one option is one line."""
+    return "\n".join(_feed_rows(app))
+
+
 #: The two surfaces the feed renders on. `RemoteAgentsTui` rests on the dashboard, whose
 #: feed is one region of three; `FeedPane` rests on the feed and nothing else. Both draw
-#: into a `#feed-pane` Static, which is what lets one set of assertions cover both.
+#: into a `#feed-pane` OptionList, which is what lets one set of assertions cover both.
 _SURFACES = pytest.mark.parametrize(
     "surface", (RemoteAgentsTui, FeedPane), ids=("dashboard-region", "standalone-pane")
 )
@@ -96,8 +113,7 @@ async def test_the_feed_renders_newest_first_from_the_capability(surface) -> Non
     app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
-        pane = app.screen.query_one("#feed-pane", Static)
-        text = str(pane.content)
+        text = _feed_text(app)
         assert "May I push?" in text
         assert text.index("May I push?") < text.index("finished"), "newest renders first"
 
@@ -107,8 +123,7 @@ async def test_an_absent_capability_keeps_the_placeholder(surface) -> None:
     app = surface(_context(None))
     async with app.run_test() as pilot:
         await pilot.pause()
-        pane = app.screen.query_one("#feed-pane", Static)
-        assert "No notifications yet." in str(pane.content)
+        assert "No notifications yet." in _feed_text(app)
 
 
 @_SURFACES
@@ -119,7 +134,7 @@ async def test_an_empty_feed_says_so_rather_than_going_blank(surface) -> None:
     app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "No notifications yet." in str(app.screen.query_one("#feed-pane", Static).content)
+        assert "No notifications yet." in _feed_text(app)
 
 
 @_SURFACES
@@ -132,7 +147,7 @@ async def test_hostile_text_is_rendered_inert(surface) -> None:
     app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
-        text = str(app.screen.query_one("#feed-pane", Static).content)
+        text = _feed_text(app)
         assert "[link=" in text, "markup must be displayed, never interpreted"
 
 
@@ -145,7 +160,7 @@ async def test_a_raising_feed_keeps_the_pane_and_its_surface_standing(surface) -
     async with app.run_test() as pilot:
         await pilot.pause()
         assert app.is_running
-        assert "No notifications yet." in str(app.screen.query_one("#feed-pane", Static).content)
+        assert "No notifications yet." in _feed_text(app)
 
 
 @_SURFACES
@@ -204,7 +219,7 @@ async def test_the_feed_is_bounded_rather_than_an_archive(surface) -> None:
     app = surface(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
-        text = str(app.screen.query_one("#feed-pane", Static).content)
+        text = _feed_text(app)
         assert len(text.splitlines()) == FEED_LIMIT
 
 
@@ -221,3 +236,149 @@ async def test_the_feed_pane_offers_no_flows_at_all() -> None:
         await app.action_add_project()
         await pilot.pause()
         assert app.screen.position == "FEED", "a declined flow must not move the pane"
+
+
+# The pane is a list, not a paragraph -----------------------------------------------------------
+
+
+@_SURFACES
+async def test_the_feed_pane_is_a_scrollable_option_list(surface) -> None:
+    """The pane held a `Static`, which cannot scroll and cannot highlight, so the twenty-first
+    observation was simply unreachable. An `OptionList` scrolls and highlights, and it inherits
+    `ChoiceScreen.on_option_list_option_selected`'s routing for free."""
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return (_activity(ActivityKind.COMPLETED, minutes_ago=1),)
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        assert isinstance(pane, OptionList)
+        # Inertness is asserted behaviourally by `test_hostile_text_is_rendered_inert`, not by
+        # reading a flag: `OptionList` takes `markup=` and exposes no public attribute for it,
+        # so a check here would have to reach for `_markup` and would pass just as happily on
+        # a widget that had stopped honouring it.
+        assert pane.option_count == 1
+
+
+@_SURFACES
+async def test_a_read_of_n_observations_draws_n_rows(surface) -> None:
+    async def feed() -> tuple[AgentActivity, ...]:
+        return tuple(_activity(ActivityKind.COMPLETED, minutes_ago=minute) for minute in range(6))
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert _feed_pane(app).option_count == 6
+
+
+@_SURFACES
+async def test_a_row_id_is_stable_across_reloads_and_unique_per_observation(surface) -> None:
+    """The id is what Enter comes back as, so it must name the observation and nothing else.
+
+    Composite of session, kind and observed_at rather than the index: the feed is newest-first
+    and grows at the head, so an index-keyed row means the row under the cursor becomes a
+    different notification every time an agent reports.
+    """
+    # Built once, outside the reader: `_activity` stamps `datetime.now(UTC)` on every call, so
+    # a reader that rebuilt them would mint a new observed_at per reload and this test would
+    # be asserting the clock rather than the key.
+    observations = (
+        _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1),
+        _activity(ActivityKind.COMPLETED, minutes_ago=5),
+    )
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return observations
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        first = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert len(set(first)) == len(first), "two observations must not share a row id"
+        assert all(key.startswith("notification:") for key in first)
+        await app.screen._reload_feed()
+        await pilot.pause()
+        pane = _feed_pane(app)
+        again = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert again == first, "the same observation must keep the same id across a reload"
+
+
+@_SURFACES
+async def test_a_reload_keeps_the_cursor_on_the_row_it_was_on(surface) -> None:
+    """The pane repaints every 10 seconds. A cursor that jumped home on each tick would make
+    the list unusable for the one thing it is now for -- reading down it."""
+    rows = [
+        (
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="one"),
+            _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="two"),
+            _activity(ActivityKind.QUIET, minutes_ago=9, detail="three"),
+        )
+    ]
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return rows[0]
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        pane.highlighted = 2
+        held = pane.get_option_at_index(2).id
+
+        # A newer observation arrives at the head, pushing every held row down one.
+        rows[0] = (_activity(ActivityKind.LIMIT_REACHED, minutes_ago=0, detail="new"), *rows[0])
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        assert pane.get_option_at_index(pane.highlighted).id == held, (
+            "the cursor must follow its observation, not its index"
+        )
+        assert pane.highlighted == 3
+
+
+@_SURFACES
+async def test_a_cursor_whose_row_aged_out_rests_on_the_first_row(surface) -> None:
+    """Same resting rule every other list on this surface keeps (DEC-007): somewhere
+    deliberate and non-mutating, never nowhere."""
+    rows = [
+        (
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="one"),
+            _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="two"),
+        )
+    ]
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return rows[0]
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        _feed_pane(app).highlighted = 1
+
+        rows[0] = (_activity(ActivityKind.QUIET, minutes_ago=0, detail="only"),)
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        assert _feed_pane(app).highlighted == 0
+
+
+@_SURFACES
+async def test_the_empty_state_is_a_row_the_cursor_cannot_act_on(surface) -> None:
+    """DEC-009: the pane declares it can be empty and says so in its own words. As a row now
+    rather than a paragraph -- and disabled, so the cursor cannot rest on a sentence and
+    answer Enter with nothing."""
+
+    async def feed() -> tuple[AgentActivity, ...]:
+        return ()
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = _feed_pane(app)
+        assert pane.option_count == 1
+        assert "No notifications yet." in str(pane.get_option_at_index(0).prompt)
+        assert pane.get_option_at_index(0).disabled is True
