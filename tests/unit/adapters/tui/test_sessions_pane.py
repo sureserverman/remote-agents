@@ -72,6 +72,9 @@ def _context(records: tuple[SessionRecord, ...] = (), **overrides) -> TuiContext
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
+        # Wired because `i` is offered only where there is something to inspect, exactly as
+        # `p` is offered only where a console is wired. The real composition always wires it.
+        "capture": lambda _session_id: "captured output",
     }
     base.update(overrides)
     return tui_context_for(**base)
@@ -823,3 +826,16 @@ def test_a_key_for_an_unconfirmed_action_fails_at_import_not_only_in_ci() -> Non
     assert not bindable & module.UNCONFIRMED_MUTATING_ACTIONS
     assert module.UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
     importlib.reload  # noqa: B018 - referenced so the import is not flagged unused
+
+
+async def test_i_is_absent_on_a_host_that_cannot_inspect() -> None:
+    """The same rule `p` follows: offered where the capability exists, absent where it does
+    not. `detail_entries` gates the Inspect row on `backend.capture` and `show_inspect`
+    returns silently without it, so a key that stayed offered would push a detail with no
+    Inspect row and then do nothing -- the dead end `p`'s own gating exists to avoid."""
+    app = SessionsPane(_context((_record(),), capture=None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.check_action("row_action", ("inspect",)) is False
+        assert screen.check_action("row_action", ("attach",)) is not False

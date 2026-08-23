@@ -835,8 +835,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     ) -> None:
         """Change one session's control mode, after re-reading and re-checking the policy.
 
-        Unlike `stop`, this does not open with `if self._busy: return`. The asymmetry is real
-        This *used* to open without one, and the docstring here explained why: what refused a
+        This *used* to open without `if self.busy: return`, and the docstring here explained
+        why: what refused a
         second concurrent change was `ChoiceScreen.on_option_list_option_selected`, which drops
         a row selection while the surface is busy, so the refusal happened before this was
         ever called. It then said, of the single caller that arrangement depended on, that "a

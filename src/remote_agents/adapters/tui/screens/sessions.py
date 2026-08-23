@@ -134,8 +134,10 @@ SESSION_ACTION_KEYS: tuple[tuple[str, str, str], ...] = (
 #: is Stop and close, and Clean up. Derived from that condition rather than listing the two, so
 #: a third unconfirmed action added to the policy is excluded here the day it appears.
 #:
-#: **The plan proposed `s` and `c` for these, and they are deliberately not bound.** Two
-#: decisions close off every way to do it safely:
+#: **The plan proposed `s` and `c` for these, and they are deliberately not bound.** Recorded
+#: as DEC-052, because this is now the standing rule for every future key on this surface and
+#: the inference it rests on is not written in DEC-018 itself. Two decisions close off every
+#: way to do it safely:
 #:
 #: - DEC-018 -- "neither surface gains a confirmation for graceful stop or for cleanup",
 #:   applied "to both surfaces or neither". So the key cannot ask.
@@ -242,7 +244,8 @@ class _SessionActionKeys:
         # (`SessionsScreen().check_action(...)` -> NoMatches). "Unreachable today" is what the
         # base class's own analog was too, and an exception out of a footer redraw is the
         # class that has already cost this app once.
-        choices = self.query("#choices").first(OptionList) if self.query("#choices") else None
+        found = self.query("#choices")
+        choices = found.first(OptionList) if found else None
         if choices is None:
             return None
         key = held_option_id(choices)
@@ -274,7 +277,19 @@ class _SessionActionKeys:
         nothing then -- but it is a discovery path, so it is named rather than left to be
         rediscovered.
         """
-        if action in {"row_action", "row_remote_control"}:
+        if action == "row_action":
+            if self.highlighted_session() is None:
+                return False
+            # `i` is offered only where there is something to inspect, mirroring
+            # `detail_entries`, which gates the Inspect row on the same capability, and
+            # `show_inspect`, which returns silently without it. `p` was gated on exactly this
+            # reasoning and `i` was not -- an inconsistency the stage evaluator caught.
+            # Unreachable in this project's own composition (`compose_backend` always wires
+            # `capture`), which is why it is a consistency fix rather than a defect repair.
+            if parameters and parameters[0] == "inspect":
+                return self.services.backend.capture is not None
+            return True
+        if action == "row_remote_control":
             return self.highlighted_session() is not None
         if action == "show_projects_pane":
             # Absent, not inert, on a host that wired no console. The owner cannot tell a key
