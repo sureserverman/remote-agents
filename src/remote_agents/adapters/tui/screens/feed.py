@@ -67,21 +67,61 @@ def feed_key(activity: AgentActivity) -> str:
     return f"{NOTIFICATION_PREFIX}{activity.session_id}:{activity.kind.value}:{activity.observed_at.isoformat()}"
 
 
+#: How much of an agent's line a row carries before it is cut. The pane is a third of one
+#: column, so a row is a glance: enough to recognise the question, never the whole answer.
+#: The rest is one keypress away (Stage 3) rather than gone -- DEC-037 keeps the words, and
+#: this bounds only what is *drawn*, never what is stored.
+DETAIL_WIDTH = 72
+
+
+def _elide(text: str, width: int = DETAIL_WIDTH) -> str:
+    """One line, cut at `width`, with an ellipsis when it was cut.
+
+    Cut rather than wrapped, and that is the change. A wrapped detail is what the `Static`
+    did: one 400-character answer became six lines and pushed every other observation out of
+    a pane that holds twenty. One observation is one row.
+    """
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= width else f"{collapsed[: width - 1]}…"
+
+
 def feed_rows(
-    activities: tuple[AgentActivity, ...], *, limit: int = _FEED_LIMIT
+    activities: tuple[AgentActivity, ...],
+    names: dict[str, str] | None = None,
+    *,
+    limit: int = _FEED_LIMIT,
 ) -> list[tuple[str, str]]:
-    """One `(key, line)` per observation, newest first, bounded."""
+    """One `(key, line)` per observation, newest first, bounded.
+
+    `<age> · <identity> · <kind words> — <detail>`, where the identity is the session's own
+    rendered name when `names` knows it and the bare session id when it does not.
+
+    **The fallback is a feature, not a guard.** A notification outlives the session it is
+    about -- that is what a durable feed is for -- so a row whose session has since been
+    reconciled away must still say which one it was. Rendering an empty identity there would
+    turn "the agent is waiting for an answer" back into the thing this row exists to stop
+    being: a sentence about nobody.
+    """
+    names = names or {}
     rows = []
     for activity in activities[:limit]:
         words = KIND_WORDS.get(activity.kind, activity.kind.value)
-        detail = f" — {activity.detail}" if activity.detail else ""
-        rows.append((feed_key(activity), f"{age(activity.observed_at)} · {words}{detail}"))
+        identity = names.get(str(activity.session_id)) or str(activity.session_id)
+        detail = f" — {_elide(activity.detail)}" if activity.detail else ""
+        rows.append(
+            (feed_key(activity), f"{age(activity.observed_at)} · {identity} · {words}{detail}")
+        )
     return rows
 
 
-def feed_lines(activities: tuple[AgentActivity, ...], *, limit: int = _FEED_LIMIT) -> list[str]:
+def feed_lines(
+    activities: tuple[AgentActivity, ...],
+    names: dict[str, str] | None = None,
+    *,
+    limit: int = _FEED_LIMIT,
+) -> list[str]:
     """One line per observation, newest first, bounded. The text half of `feed_rows`."""
-    return [line for _key, line in feed_rows(activities, limit=limit)]
+    return [line for _key, line in feed_rows(activities, names, limit=limit)]
 
 
 class FeedNews:

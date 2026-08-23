@@ -382,3 +382,140 @@ async def test_the_empty_state_is_a_row_the_cursor_cannot_act_on(surface) -> Non
         assert pane.option_count == 1
         assert "No notifications yet." in str(pane.get_option_at_index(0).prompt)
         assert pane.get_option_at_index(0).disabled is True
+
+
+# A row says whose notification it is ----------------------------------------------------------
+
+
+def _named_activity(
+    kind, *, minutes_ago: int, detail=None, session="01234567-89ab-cdef-0123-456789abcdef"
+):
+    from datetime import timedelta
+
+    return AgentActivity(
+        session,
+        kind,
+        detail,
+        datetime.now(UTC) - timedelta(minutes=minutes_ago),
+        ActivityConfidence.REPORTED,
+    )
+
+
+def _index_context(feed, records):
+    """A context whose store reports `records`, and the fake store itself.
+
+    Returned as a pair so a caller can assert what the feed's read did *not* do.
+    """
+    from dataclasses import replace as _replace
+
+    class _Sessions:
+        #: Counted, not refused. The *dashboard* legitimately refreshes readiness for its own
+        #: sessions pane, so a fake that raised would fail that surface for doing its job --
+        #: it did, on the first run of these cases. What must not happen is the *feed's* read
+        #: probing tmux, and that is asserted by calling `_reload_feed` on its own and
+        #: checking this counter has not moved.
+        refreshed = 0
+
+        async def refresh_readiness(self):
+            type(self).refreshed += 1
+            return records
+
+        async def list_sessions(self):
+            return records
+
+    _Sessions.refreshed = 0
+
+    context = _context(feed)
+    sessions = _Sessions()
+    return _replace(context, backend=_replace(context.backend, sessions=sessions)), sessions
+
+
+def _session_record(session_id: str, slug: str = "opaque-existing"):
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionId,
+        SessionRecord,
+        SessionState,
+    )
+
+    return SessionRecord(
+        SessionId.parse(session_id),
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity(slug, "codex", "regular", 4),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+@_SURFACES
+async def test_a_row_names_the_project_agent_and_sequence_it_belongs_to(surface) -> None:
+    """A notification said only *when* and *what*, never *whose*.
+
+    On a host running several agents at once -- which is the host this feature exists for --
+    "the agent is waiting for an answer" identifies nothing. The row now leads with the
+    session's identity, resolved through the same catalogue join Stage 1 promoted.
+    """
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+
+    async def feed():
+        return (_named_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="May I push?"),)
+
+    context, _sessions = _index_context(feed, (_session_record(session),))
+    app = surface(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row = _feed_rows(app)[0]
+        assert "existing" in row, row
+        assert "codex" in row, row
+        assert "#4" in row, row
+        assert "waiting for an answer" in row, row
+        assert "opaque-existing" not in row, "the row must name the project, not its hash"
+
+
+@_SURFACES
+async def test_a_long_detail_is_ellipsised_rather_than_wrapped(surface) -> None:
+    """Wrapping is what the Static did, and it is why six lines of one notification could push
+    every other observation off the pane. One observation is one row."""
+    session = "01234567-89ab-cdef-0123-456789abcdef"
+
+    async def feed():
+        return (
+            _named_activity(
+                ActivityKind.COMPLETED, minutes_ago=1, detail="x" * 400, session=session
+            ),
+        )
+
+    context, _sessions = _index_context(feed, (_session_record(session),))
+    app = surface(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        rows = _feed_rows(app)
+        assert len(rows) == 1, "one observation must occupy exactly one row"
+        assert "\n" not in rows[0], "the row must not wrap"
+        assert rows[0].endswith("…"), rows[0][-40:]
+        assert len(rows[0]) < 400
+
+
+@_SURFACES
+async def test_an_observation_whose_session_is_unknown_falls_back_to_its_id(surface) -> None:
+    """A notification outlives its session -- that is the point of a durable feed. A row whose
+    session has been reconciled away must still say which one it was, so the bare id is the
+    fallback rather than an empty identity."""
+
+    async def feed():
+        return (
+            _named_activity(
+                ActivityKind.QUIET, minutes_ago=2, session="deadbeef-0000-0000-0000-000000000000"
+            ),
+        )
+
+    context, _sessions = _index_context(feed, ())
+    app = surface(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row = _feed_rows(app)[0]
+        assert "deadbeef" in row, row
+        assert "·  ·" not in row, "an unknown session must not render an empty identity"
