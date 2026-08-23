@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -1180,4 +1181,38 @@ async def test_a_fresher_completion_is_still_amended_in_silently() -> None:
     assert len(view.sent) == sends_after_the_first, (
         "a fresher completion reached the phone; it is the same news in newer words, and "
         "alerting for it is the shape DEC-034 removed"
+    )
+
+
+async def test_the_queue_full_warning_names_the_session_that_paid(caplog) -> None:
+    """BL-032, closed. The id has to be in the record, not merely in the format string.
+
+    `test_every_operator_facing_sentence_is_the_one_it_has_always_been` pins the sentence, and
+    that is the guard that made this a deliberate edit rather than a drive-by reword. But it
+    reads the *literal* out of the source and nothing more, so it would pass just as happily
+    with the arguments the wrong way round -- "for session 5 (loud-session held)" is a
+    different defect wearing the same string. This drives a real eviction and reads the record
+    the logger actually emitted.
+    """
+    clock = _Clock()
+    notifier, _view = _notifier(clock)
+
+    loud = [
+        _for(SESSION_A, ActivityKind.COMPLETED, f"run {index}", clock.moment)
+        for index in range(notifications._MAXIMUM_PENDING + 1)
+    ]
+    with caplog.at_level(logging.WARNING, logger="remote_agents.adapters.telegram.notifications"):
+        # Queued while there is no bot attached, so the pass holds rather than delivers and the
+        # cap is genuinely reached.
+        notifier._bot = None
+        await notifier.deliver(loud)
+
+    warnings = [r for r in caplog.records if "queue is full" in r.getMessage()]
+    assert warnings, "the cap was never reached; this test proves nothing"
+    message = warnings[-1].getMessage()
+    assert f"for session {SESSION_A}" in message, (
+        f"the session that paid is not named, or is named in the wrong slot: {message!r}"
+    )
+    assert "held)" in message and str(notifications._MAXIMUM_PENDING) in message, (
+        f"the tally the id sits beside is gone or wrong: {message!r}"
     )

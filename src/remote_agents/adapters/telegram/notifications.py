@@ -535,24 +535,28 @@ class ActivityNotifier:
         Never raises. This runs on the periodic task beside the one that serves the owner, and
         a notification failing is not a reason for the service to stop noticing things.
         """
-        for _session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
-            # The rule is the policy's; the sentence is this surface's (DEC-043). Word for word
-            # what it was before the rule moved, including *not* naming the session -- the
-            # policy now hands back who paid and it would be one interpolation to say so, which
-            # is exactly why this is spelled out. Relocating a rule is not licence to reword the
-            # line an operator greps for, and a nicer sentence is the easiest kind of behaviour
-            # change to ship inside a refactor: no test sees it and the diff reads as cleanup.
-            # BL-032 holds the improvement, to be taken on its own or not at all.
+        for session_id, held in enqueue(self._pending, activities, maximum=_MAXIMUM_PENDING):
+            # The rule is the policy's; the sentence is this surface's (DEC-043). It now names
+            # the session that paid -- BL-032, taken deliberately and on its own, which is the
+            # only way it was ever going to be taken. The relocation that made it possible
+            # (the policy hands back who paid) deliberately did *not* take it: an operator
+            # greps this line, so its text is behaviour, and a nicer sentence is the easiest
+            # kind of behaviour change to ship unnoticed inside a refactor -- no test would
+            # have objected and the diff reads as cleanup. So it was reverted then and the
+            # wording pinned, and taking it now meant editing that pin on purpose.
             #
-            # One thing here *did* move: the line used to be written inside `_evict`, as each
-            # deletion happened, and is now written once per batch after `enqueue` returns.
-            # Text, count, order and the pre-deletion tally are identical and nothing else logs
-            # in between, so no operator can tell -- but it is the only ordering change in the
-            # whole relocation, and a comment this careful about what did not change should say
-            # what did.
+            # The count stays beside the id rather than being replaced by it. A session id
+            # answers "whose news was lost" and the tally answers "how much of the queue that
+            # session was holding when it paid", which is what says whether this is one chatty
+            # session or a queue under pressure everywhere.
+            #
+            # One thing here also moved at the relocation: the line used to be written inside
+            # `_evict`, as each deletion happened, and is now written once per batch after
+            # `enqueue` returns. Count, order and the pre-deletion tally are identical and
+            # nothing else logs in between, so no operator can tell.
             _LOG.warning(
-                "the notification queue is full; dropping the oldest held for one "
-                "session (%d held)",
+                "the notification queue is full; dropping the oldest held for session %s (%d held)",
+                session_id,
                 held,
             )
         if self._bot is None:

@@ -46,7 +46,7 @@ _AT_THE_BASE = frozenset(
         "could not remove the notification of a session that has finished",
         "dropping an activity this service will not speak about",
         "holding %d undelivered notification(s) in memory; a restart now loses them",
-        "the notification queue is full; dropping the oldest held for one session (%d held)",
+        "the notification queue is full; dropping the oldest held for session %s (%d held)",
     }
 )
 
@@ -162,10 +162,13 @@ def test_every_operator_facing_sentence_is_the_one_it_has_always_been() -> None:
     lesson is evidently cheaper to state than to learn: a guard whose docstring names a set has
     to compare the set.
 
-    The eviction line is the reason this exists. The policy now returns which session paid, so
-    naming it in the warning is one interpolation away and was briefly written that way; the
-    stage's own evaluator caught it as the single behaviour delta in an otherwise exact
-    relocation. BL-032 holds that improvement so it can be taken deliberately.
+    The eviction line is the reason this exists, and it is also the one line that has since
+    changed. The policy returns which session paid, so naming it was one interpolation away and
+    was briefly written that way during the relocation; the stage's own evaluator caught it as
+    the single behaviour delta in an otherwise exact move, and it was reverted so it could be
+    taken on its own. It was, closing BL-032 -- and taking it meant editing the set below by
+    hand, which is exactly the deliberate act this pin exists to force. The guard worked: the
+    improvement happened, and it happened in a commit about itself.
 
     Pinned as an exact set, so adding a line fails here too and has to be an intentional edit.
     """
