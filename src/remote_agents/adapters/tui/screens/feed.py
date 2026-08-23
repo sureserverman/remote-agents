@@ -65,7 +65,8 @@ def feed_key(activity: AgentActivity) -> str:
     cursor silently becomes a different notification every time any agent reports. The same
     argument `_draw_listing` makes for restoring the sessions list by key.
     """
-    return f"{NOTIFICATION_PREFIX}{activity.session_id}:{activity.kind.value}:{activity.observed_at.isoformat()}"
+    stamp = activity.observed_at.isoformat()
+    return f"{NOTIFICATION_PREFIX}{activity.session_id}:{activity.kind.value}:{stamp}"
 
 
 #: How much of an agent's line a row carries before it is cut. The pane is a third of one
