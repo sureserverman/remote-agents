@@ -90,6 +90,8 @@ from remote_agents.application.session_views import (
     only_listed,
     selectable_area,
     session_row,
+    with_project_name,
+    with_project_names,
 )
 from remote_agents.application.stops import execute_stop
 from remote_agents.config import TelegramSecrets
@@ -1891,11 +1893,14 @@ class PrivateBotBoundary:
         return self._named(await listed_sessions(self.backend.sessions))
 
     def _named(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
-        project_names = {project.opaque_id: project.name for project in self.catalogue}
-        return tuple(
-            _with_project_name(record, project_names.get(str(record.project_id)))
-            for record in records
-        )
+        """This surface's catalogue, joined by the shared rule.
+
+        The join itself is `application/session_views.with_project_names` and no longer this
+        adapter's: the local surface needed the same rule, and a second copy here is the
+        shape BL-031 records. What stays this surface's is *which* catalogue -- the bot holds
+        a ranked snapshot of its own.
+        """
+        return with_project_names(records, self.catalogue)
 
     async def _record(self, session_value: str) -> SessionRecord | None:
         return next(
@@ -1973,7 +1978,7 @@ class PrivateBotBoundary:
                         state_word(record.state, record.orphan_provenance),
                     )
                     return None
-                named = _with_project_name(record, project_names.get(str(record.project_id)))
+                named = with_project_name(record, project_names.get(str(record.project_id)))
                 return named.display.rendered
         return None
 
@@ -2545,16 +2550,6 @@ def _profile_name(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }.get(profile_id, "Unavailable")
-
-
-def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
-    if name is None or name == record.display.project_slug:
-        return record
-    try:
-        display = replace(record.display, project_slug=name)
-    except ValueError:
-        return record
-    return replace(record, display=display)
 
 
 _ACTIVE_TAB = "• "

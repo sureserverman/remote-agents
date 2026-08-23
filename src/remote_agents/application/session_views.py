@@ -21,8 +21,10 @@ and the Textual side still hands its rows to a widget.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Protocol
 
+from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import SessionRecord, SessionState
@@ -42,6 +44,55 @@ def session_row(record: SessionRecord) -> str:
     """
     word = state_word(record.state, record.orphan_provenance)
     return f"{record.display.rendered} · {word} · {age(record.created_at)}"
+
+
+def with_project_names(
+    records: Iterable[SessionRecord], catalogue: Iterable[CatalogProject]
+) -> tuple[SessionRecord, ...]:
+    """Re-render each record's project under the name the catalogue gives it.
+
+    **The same argument DEC-029 made about a state's name, made about a project's.** What a
+    project is *called* is one rule, and it was living in `adapters/telegram/service.py:
+    _with_project_name` -- where the local surface could not reach it, and so rendered
+    `SessionDisplayIdentity.project_slug` raw. That slug is the catalogue's `opaque_id`, a
+    24-character sha256 prefix: a correct key and an unreadable name.
+
+    Promoted rather than copied, and the distinction is the whole reason this function is
+    here. A second copy in `adapters/tui/` would have been byte-identical to the bot's on the
+    day it was written and answerable to nothing afterwards -- which is precisely BL-031, and
+    precisely what this module's own docstring exists to record having ended. The twin is
+    caught one step *before* it exists rather than one step after, by
+    `tests/unit/application/test_session_views.py:
+    test_no_adapter_redefines_the_row_or_the_area_predicate`, whose forbidden tuple names
+    both spellings.
+
+    The index is built once per call rather than per record: both callers pass a whole
+    listing, and a per-record rebuild would walk a 97-project catalogue once per row.
+    """
+    names = {project.opaque_id: project.name for project in catalogue}
+    return tuple(with_project_name(record, names.get(str(record.project_id))) for record in records)
+
+
+def with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
+    """One record under a readable project name, or exactly the record that came in.
+
+    **Three ways to decline, and all three return the record rather than raising.** No name
+    in the catalogue (a project deregistered or moved while its session runs); a name the
+    slug already carries (nothing to do); and a name `SessionDisplayIdentity` refuses.
+
+    That third one is the one worth stating. The identity demands a non-empty, single,
+    printable token, and a catalogue name is a *directory* name -- under no such obligation.
+    So `ValueError` here is not a fault, it is the domain declining to render a badly-named
+    directory, and the honest answer is the unreadable-but-correct slug. Letting it out would
+    take down every session list on both surfaces over one directory with a space in it.
+    """
+    if name is None or name == record.display.project_slug:
+        return record
+    try:
+        display = replace(record.display, project_slug=name)
+    except ValueError:
+        return record
+    return replace(record, display=display)
 
 
 def selectable_area(value: str) -> bool:

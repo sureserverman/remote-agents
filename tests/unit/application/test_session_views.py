@@ -25,12 +25,14 @@ import pytest
 
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
+from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import (
     listed_in_sessions,
     listed_sessions,
     only_listed,
     selectable_area,
     session_row,
+    with_project_names,
 )
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -206,6 +208,12 @@ def test_no_adapter_redefines_the_row_or_the_area_predicate() -> None:
         "def _session_row_label",
         "def selectable_area",
         "def _selectable_area",
+        # The naming rule joined the sweep the day it was promoted, not the day a second
+        # surface wanted it. `_with_project_name` lived in the bot alone and was *about* to
+        # be copied into the local surface -- the manufactured-twin shape BL-031 records,
+        # caught one step before it existed rather than one step after.
+        "def _with_project_name",
+        "def with_project_names",
     )
     offenders = {
         path.relative_to(adapters).as_posix(): sorted(found)
@@ -308,3 +316,86 @@ async def test_a_list_open_keeps_the_order_the_store_gave() -> None:
     sessions = _RecordingSessions((second, first))
 
     assert await listed_sessions(sessions) == (second, first)
+
+
+# Which name a row shows for its project -------------------------------------------------------
+
+
+def _catalogued(opaque_id: str, name: str = "remote-agents") -> CatalogProject:
+    return CatalogProject(opaque_id, name, "infra", "Registered")
+
+
+def _record_for(project_id: str, slug: str) -> SessionRecord:
+    """A record whose `project_slug` is whatever the store persisted for it.
+
+    The store persists the *slug*, and for a catalogue project that slug is the opaque id --
+    a 24-character sha256 prefix. That is the whole defect: it is a correct, stable key and
+    an unreadable name, and only the catalogue can turn one into the other.
+    """
+    return SessionRecord(
+        session_id=SessionId(UUID(int=2)),
+        project_id=ProjectId(project_id),
+        profile_id=ProfileId("claude"),
+        display=SessionDisplayIdentity(slug, "claude", "regular", 3),
+        state=SessionState.RUNNING,
+        created_at=_NOW - timedelta(minutes=5),
+    )
+
+
+def test_a_slug_that_is_a_catalogue_id_renders_the_catalogue_name() -> None:
+    opaque = "034b69be3a8290521db3d76e"
+    record = _record_for(opaque, opaque)
+    (named,) = with_project_names((record,), (_catalogued(opaque),))
+    assert named.display.project_slug == "remote-agents"
+    assert opaque not in named.display.rendered
+
+
+def test_the_row_key_is_untouched_by_the_naming() -> None:
+    """The id is the handle every action screen is reached through; only the *name* moves."""
+    opaque = "034b69be3a8290521db3d76e"
+    record = _record_for(opaque, opaque)
+    (named,) = with_project_names((record,), (_catalogued(opaque),))
+    assert named.session_id == record.session_id
+    assert named.project_id == record.project_id
+    assert named.state is record.state
+
+
+def test_a_project_absent_from_the_catalogue_is_left_alone() -> None:
+    """Unchanged, never blanked. A project can leave the catalogue while its session runs --
+    deregistered, or a directory moved -- and the slug is then the only name there is."""
+    record = _record_for("gone", "gone")
+    (named,) = with_project_names((record,), (_catalogued("other"),))
+    assert named is record
+
+
+def test_a_slug_already_equal_to_the_name_is_left_alone() -> None:
+    record = _record_for("plain", "plain")
+    (named,) = with_project_names((record,), (_catalogued("plain", "plain"),))
+    assert named is record
+
+
+@pytest.mark.parametrize(
+    "rejected",
+    ("", "  ", "my project", "tab\there", "bell\x07"),
+    ids=("empty", "whitespace-only", "inner-space", "tab", "unprintable"),
+)
+def test_a_name_the_identity_would_reject_leaves_the_record_unchanged(rejected: str) -> None:
+    """`SessionDisplayIdentity` demands a single printable token, and a catalogue name is a
+    directory name -- which is under no such obligation. Raising here would take down every
+    list on both surfaces over one badly-named directory, so the unreadable-but-correct slug
+    is kept and the row still renders."""
+    record = _record_for("id", "id")
+    (named,) = with_project_names((record,), (_catalogued("id", rejected),))
+    assert named is record
+
+
+def test_every_record_is_returned_even_when_none_can_be_named() -> None:
+    """The count is the contract: a surface fills its list from this and a dropped record is
+    a session the owner cannot reach."""
+    records = tuple(_record_for(f"p{index}", f"p{index}") for index in range(4))
+    assert len(with_project_names(records, ())) == len(records)
+
+
+def test_an_empty_catalogue_returns_the_records_unchanged() -> None:
+    records = (_record_for("a", "a"), _record_for("b", "b"))
+    assert with_project_names(records, ()) == records
