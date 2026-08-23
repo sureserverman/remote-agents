@@ -42,14 +42,22 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.application.notification_policy import (
+    REFUSALS_BEFORE_ABANDONING,
     SessionGroup,
     enqueue,
     for_update,
+    forget_absent,
     grouped_for_delivery,
     merged,
     shown_in_message,
     unheard,
     unsaid,
+)
+from remote_agents.application.notification_policy import (
+    delivered as delivered_before,
+)
+from remote_agents.application.notification_policy import (
+    refused as refused_too_often,
 )
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
@@ -413,6 +421,9 @@ class ActivityNotifier:
         self._now = now
         self._bot: object | None = None
         self._pending: deque[AgentActivity] = deque()
+        #: Consecutive refusals per session, for DEC-049's three-strike rule. The rule is
+        #: `application/notification_policy`'s; the count stays here (DEC-044).
+        self._refusals: dict[str, int] = {}
         #: Whether the pass that just ran delivered anything, so `_report_backlog` can tell an
         #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
         self._sent_this_pass = False
@@ -574,32 +585,77 @@ class ActivityNotifier:
         held: list[AgentActivity] = []
         sent = 0
         arrived_at_the_bottom = False
-        refused = False
+        refused_sessions: list[str] = []
         for group in grouped_for_delivery(self._pending):
-            if refused or sent >= _MAXIMUM_SENDS_PER_PASS:
+            if sent >= _MAXIMUM_SENDS_PER_PASS:
                 held.extend(group.activities)
                 continue
             try:
                 delivered, alerted, unsaid = await self._send(group)
             except Exception:
-                # Held whole, and the pass stops. The record is already off disk -- the drain
-                # deletes before it returns (DEC-013 cost 3) and DEC-026 keeps this queue in
-                # memory with nothing behind it -- so an activity neither sent nor held here is
-                # gone outright. Stopping rather than skipping to the next session keeps the
-                # order and avoids hammering a Telegram that just refused us.
+                # Held whole. The record is already off disk -- the drain deletes before it
+                # returns (DEC-013 cost 3) and DEC-026 keeps this queue in memory with nothing
+                # behind it -- so an activity neither sent nor held here is gone outright.
+                #
+                # **The pass no longer stops here (DEC-049), and giving that up is the price
+                # of telling poison from an outage.** It used to stop, to keep the order and
+                # to avoid hammering a Telegram that had just refused us. But a refusal on its
+                # own says nothing about *why*: a 400 on a malformed message and a network
+                # that is down look identical from here. The one signal that separates them is
+                # whether anything else got through in the same pass, and reading that signal
+                # means attempting the other sessions instead of stopping at the first
+                # refusal. So the strike is applied after the loop, not inside it.
                 _LOG.warning("could not deliver an activity notification; holding it for retry")
                 held.extend(group.activities)
-                refused = True
+                refused_sessions.append(group.session_id)
                 continue
+            # A backstop, and disclosed as one: on every reachable path today `forget_absent`
+            # below already clears this, because a session that delivered has left the queue.
+            # The arm that needs it is a session that delivers *and stays queued* -- one whose
+            # message could not hold every line -- and that is out of ordinary reach for the
+            # same reason `unsaid`'s own test records: there are fewer kinds than the five
+            # lines a message carries. Mutating this line away fails no test in the suite, so
+            # it is kept on the argument rather than on evidence: without it such a session
+            # would carry its old strikes into its next refusal and be abandoned for failures
+            # it had already recovered from.
+            delivered_before(self._refusals, group.session_id)
             sent += int(delivered)
             arrived_at_the_bottom = arrived_at_the_bottom or alerted
             # What the message could not spell out is owed, not spent.
             held.extend(unsaid)
+        if sent and refused_sessions:
+            # **A strike counts only when the service was otherwise working.** Something
+            # reached the owner this pass, so Telegram is up and the credentials are good;
+            # a session refused *in that pass* is being refused about itself. When nothing
+            # got through, every refusal is evidence about the outage rather than about any
+            # one session, and no strike is recorded -- which is what stops a half-hour of
+            # Telegram being unreachable from quietly eating a session's news every three
+            # passes.
+            abandoned = {
+                session_id
+                for session_id in refused_sessions
+                if refused_too_often(self._refusals, session_id, limit=REFUSALS_BEFORE_ABANDONING)
+            }
+            for session_id in abandoned:
+                # Dropped silently, by the owner's decision: this is the notification path, so
+                # telling them here means sending a message about a message that could not be
+                # sent, to the chat that just refused one. The journal is where it goes, which
+                # is where every other drop in this module goes.
+                _LOG.warning(
+                    "giving up on an activity notification after %d refusals; "
+                    "dropping %d observation(s) for session %s",
+                    REFUSALS_BEFORE_ABANDONING,
+                    sum(1 for activity in held if activity.session_id == session_id),
+                    session_id,
+                )
+            if abandoned:
+                held = [activity for activity in held if activity.session_id not in abandoned]
         self._sent_this_pass = sent > 0
         # What is held is the *collapsed* set, not what arrived: two identical observations are
         # one thing said twice, and re-holding both would resurrect a duplicate the next pass
         # has already been told to fold.
         self._pending = deque(held)
+        forget_absent(self._refusals, (activity.session_id for activity in self._pending))
         if arrived_at_the_bottom:
             # Once per pass, not once per message: the menu only has to end up below the last
             # notification, and moving it five times to get there would delete and re-send the
