@@ -638,3 +638,72 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
     assert {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}.isdisjoint(
         {key for key, _a, _l in SESSION_ACTION_KEYS} | {"m"}
     )
+
+
+# The keys answer for themselves, and say they exist ---------------------------------------
+
+
+async def test_the_action_keys_decline_when_no_row_is_highlighted() -> None:
+    """`check_action` mirrors the early return the action already has, per this surface's rule
+    that a key is refused only where the action it names already declines.
+
+    `highlighted_session()` returns None on an empty list, so every action key is a no-op
+    there -- and `check_action` says so rather than leaving Textual to dispatch into a method
+    that will silently do nothing.
+    """
+    app = SessionsPane(_context(()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.highlighted_session() is None
+        assert screen.check_action("row_action", ("force",)) is False
+        assert screen.check_action("row_remote_control", ()) is False
+
+
+async def test_the_action_keys_are_offered_when_a_row_is_highlighted() -> None:
+    """The other half: a rule that only ever refuses would hide a working key."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.highlighted_session() is not None
+        assert screen.check_action("row_action", ("force",)) is not False
+        assert screen.check_action("row_remote_control", ()) is not False
+
+
+@pytest.mark.parametrize("width", (100, 80, 60))
+async def test_the_status_line_names_the_keys_and_is_not_truncated(width: int) -> None:
+    """The keys are `show=False`, so the status line is where they are discoverable.
+
+    Not a preference: the footer at the project's own 100-column baseline already runs to
+    about seventy columns, and six more entries would clip bindings the owner did not add --
+    the defect `InspectScreen`'s own comment records having caused once.
+
+    **Asserted on the rendered line, not on `Static.content`.** The first version of this test
+    read the content, which holds the untruncated source string and would have passed at any
+    width whatsoever -- while `#status` is `height: 2` and clips. A Tier-1 review reproduced
+    the real thing at 60 columns: "m remote control" vanished with no ellipsis at all, which is
+    worse than eliding. This is the same pitfall `test_status_region.py`'s own
+    `test_the_attach_command_renders_whole_at_eighty_columns` documents, and it is the third
+    time in this plan that asserting the input instead of the render hid a real defect.
+
+    60 is included because `app.py`'s own margin comments treat it as a live budget.
+    """
+    from textual.widgets import Static
+
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(width, 24)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        # Rows joined with a space, not concatenated. `#status` is `height: 2` and wraps, and
+        # the wrap point falls mid-sentence -- at 60 columns it lands between "a" and
+        # "attach", so a bare concatenation reads "aattach" and the assertion fails on a
+        # string that is entirely present. Joining with a space can only ever produce a false
+        # *failure* (if a wrap split a word), never a false pass, which is the right direction
+        # for a test whose whole job is to notice loss.
+        drawn = " ".join(status.render_line(row).text.strip() for row in range(status.size.height))
+
+    for key, action, _label in _module_action_keys():
+        assert f"{key} {action}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
+    assert "m remote" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
+    assert "…" not in drawn, f"the status line was elided at {width} columns: {drawn!r}"

@@ -158,6 +158,27 @@ UNCONFIRMED_MUTATING_ACTIONS = frozenset(ACTION_LABELS) - {FORCE}
 #: is not known until the record is read -- see `action_row_remote_control`.
 _REMOTE_CONTROL_KEY = "m"
 
+#: What the status line says about the row keys, built from the table rather than written
+#: beside it. Both sessions positions need the sentence and the second is a subclass of the
+#: first, so a literal in each would be two strings to keep agreeing -- the shape
+#: `remote_control_entries` above already exists to avoid.
+#:
+#: Short words on purpose. The full labels ran the pane's status past what `#status` can show
+#: at 60 columns, where it clips with no ellipsis at all rather than eliding -- worse than the
+#: truncation this region was hardened against once already.
+#:
+#: **A sixth key would have to earn its columns, and a test says so rather than this comment.**
+#: `test_the_status_line_names_the_keys_and_is_not_truncated` renders the real status at 100,
+#: 80 and 60 and asserts every key survives -- 60 being the floor `app.py`'s own budget comment
+#: commits to. Measured today: 100 characters on the full position and 112 on the pane, against
+#: a two-row 60-column budget of 120. Grow this table and that test fails at 60 first.
+_ROW_KEY_SUMMARY = " · ".join(
+    [
+        *(f"{key} {action}" for key, action, _label in SESSION_ACTION_KEYS),
+        f"{_REMOTE_CONTROL_KEY} remote",
+    ]
+)
+
 
 #: The bindings themselves, built once from the table above.
 #:
@@ -192,13 +213,49 @@ class _SessionActionKeys:
         Returns rather than raises, because a binding that raises exits the app -- the same
         reason `DashboardScreen.action_session_detail` checks its index before reading it.
         """
-        choices = self.query_one("#choices", OptionList)
+        # Guarded exactly as `ChoiceScreen._live_entry` is, and for its reason verbatim:
+        # `query_one` raises `NoMatches` before the screen has composed, and this runs from
+        # `check_action` -- which `Screen.active_bindings` calls for *every* binding in the
+        # chain, `show=False` ones included, on any `bindings_updated_signal` publish. No
+        # driven sequence reaches it today; a Tier-1 review reached it directly
+        # (`SessionsScreen().check_action(...)` -> NoMatches). "Unreachable today" is what the
+        # base class's own analog was too, and an exception out of a footer redraw is the
+        # class that has already cost this app once.
+        choices = self.query("#choices").first(OptionList) if self.query("#choices") else None
+        if choices is None:
+            return None
         key = held_option_id(choices)
         # One check, not two: every sentinel row id in this package -- `_BACK`, `_CANCEL`,
         # `_EMPTY`, `NEVER_EMPTY` -- is `\x00`-prefixed, so the prefix covers all of them.
         if key is None or key.startswith("\x00"):
             return None
         return key
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Refuse the row keys where the row keys already refuse themselves.
+
+        `ChoiceScreen.check_action`'s rule, applied to this task's additions: every entry here
+        mirrors an early return that already exists in the action it governs, so the two
+        cannot drift into disagreeing. `action_row_action` and `action_row_remote_control`
+        both open with `highlighted_session() is None`, and that is the whole of the condition
+        below.
+
+        These bindings are `show=False`, so what this changes is not the footer -- it is
+        whether Textual dispatches into a method that would do nothing. A key that is
+        advertised nowhere and silently does nothing is the same complaint as a key that is
+        advertised and does nothing, one step quieter.
+
+        `False` rather than `None`, which is this file's convention throughout (`base.py`
+        states it, `InspectScreen.check_action` follows it) and is identical for dispatch --
+        both are falsy. The one visible difference: `False` drops the binding from
+        `Screen.active_bindings`, so Textual's own keys panel, which does not filter on
+        `show`, lists none of these while nothing is highlighted. That is correct -- they do
+        nothing then -- but it is a discovery path, so it is named rather than left to be
+        rediscovered.
+        """
+        if action in {"row_action", "row_remote_control"}:
+            return self.highlighted_session() is not None
+        return super().check_action(action, parameters)
 
     async def action_row_action(self, action: str) -> None:
         """Open the highlighted session's detail, asking it to perform `action`.
@@ -265,7 +322,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     #: Class attributes rather than literals at the call site because the console's sessions
     #: *pane* means something different by Enter and has nowhere to escape to — and a status
     #: describing the other surface's keys is a false sentence, not a cosmetic one.
-    listing_status = "{count} managed session(s). Select one for detail."
+    listing_status = "{count} managed session(s). Select one for detail, or " + _ROW_KEY_SUMMARY
     empty_status = "No managed sessions. Press escape to go back."
     # "…to return to the project list" until the console's panes existed. This screen is
     # pushed, so escape is always real here — but the position it returns to is the
@@ -529,7 +586,9 @@ class SessionsPaneScreen(SessionsScreen):
     #: position — so there is no project list to escape to and escape at rest is inert.
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
-    listing_status = "{count} managed session(s). Enter opens one, d for its detail."
+    listing_status = (
+        "{count} managed session(s). Enter opens one, d for its detail, or " + _ROW_KEY_SUMMARY
+    )
     empty_status = "No managed sessions on this host. Launching one starts it here."
     read_failure_route = "Ctrl+R re-reads this screen."
 
