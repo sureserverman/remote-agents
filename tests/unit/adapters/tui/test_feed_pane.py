@@ -967,3 +967,84 @@ async def test_a_row_with_no_detail_toggles_without_emitting_an_empty_row(surfac
         await pilot.pause()
         assert app.screen.opened_notification == key, "the row must still toggle"
         assert _feed_pane(app).option_count == 1, "an empty detail emitted a continuation row"
+
+
+# An open row survives the ten-second repaint ---------------------------------------------------
+
+
+@_SURFACES
+async def test_a_reload_that_adds_a_newer_observation_keeps_the_open_row_open(surface) -> None:
+    """The pane repaints on a 10s interval and on every reveal. An expansion discarded under
+    the owner's cursor reads as the surface refusing the key they just pressed -- and the
+    window is widest exactly when the feed is busy, which is when they are reading it."""
+    rows = [
+        (
+            _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL),
+            _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="older"),
+        )
+    ]
+
+    async def feed():
+        return rows[0]
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        expanded_before = _feed_pane(app).option_count
+        assert expanded_before > 2
+
+        # A newer observation arrives at the head, pushing the open row down one.
+        rows[0] = (_activity(ActivityKind.LIMIT_REACHED, minutes_ago=0, detail="new"), *rows[0])
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        assert app.screen.opened_notification == key, "the reload closed the open row"
+        ids = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert key in ids, "the open row itself vanished"
+        assert any(i.startswith(f"{key}:detail:") for i in ids), (
+            "the open row is still open but drew no continuation rows"
+        )
+        # It moved down by exactly the one observation that arrived above it.
+        assert ids.index(key) == 1
+
+
+@_SURFACES
+async def test_an_open_row_that_ages_out_collapses_cleanly(surface) -> None:
+    """`FEED_LIMIT` bounds the pane, so an open row can be pushed out of the window entirely.
+    Its continuation rows must go with it rather than being left behind attached to nothing."""
+    from remote_agents.adapters.tui.context import FEED_LIMIT
+
+    opened = _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail=_LONG_DETAIL)
+    rows = [(opened,)]
+
+    async def feed():
+        return rows[0]
+
+    app = surface(_context(feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        key = _feed_pane(app).get_option_at_index(0).id
+        await app.screen.choose(key)
+        await pilot.pause()
+        assert _feed_pane(app).option_count > 1
+
+        # Enough newer observations to push the open one past FEED_LIMIT.
+        rows[0] = (
+            *(
+                _activity(ActivityKind.COMPLETED, minutes_ago=0, detail=f"newer {n}")
+                for n in range(FEED_LIMIT + 2)
+            ),
+            opened,
+        )
+        await app.screen._reload_feed()
+        await pilot.pause()
+
+        pane = _feed_pane(app)
+        ids = [pane.get_option_at_index(i).id for i in range(pane.option_count)]
+        assert key not in ids, "the aged-out row is still drawn"
+        assert not any(":detail:" in i for i in ids), "orphaned continuation rows survived"
+        assert pane.option_count == FEED_LIMIT
