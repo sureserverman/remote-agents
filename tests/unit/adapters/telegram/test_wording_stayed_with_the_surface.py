@@ -45,6 +45,8 @@ _AT_THE_BASE = frozenset(
         "could not remove the notification a replacement supersedes",
         "could not remove the notification of a session that has finished",
         "dropping an activity this service will not speak about",
+        "giving up on an activity notification after %d refusals; dropping %d "
+        "observation(s) for session %s",
         "holding %d undelivered notification(s) in memory; a restart now loses them",
         "the notification queue is full; dropping the oldest held for session %s (%d held)",
     }

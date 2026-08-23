@@ -425,6 +425,55 @@ def forget_expired(
 # anywhere (DEC-026). What moves is the rule for what a full queue costs and whom.
 
 
+REFUSALS_BEFORE_ABANDONING = 3
+"""How many consecutive refusals a session's news survives before it is given up on.
+
+Three, by the owner's decision of 2026-08-23 (DEC-049). Two would abandon on the second
+attempt of a transient outage, which is the case the retry exists for; a larger number just
+lengthens the outage a permanently-refused group inflicts on every other session behind it.
+"""
+
+
+def refused(refusals: MutableMapping[str, int], session_id: str, *, limit: int) -> bool:
+    """Count a refusal against a session and answer whether its news is now abandoned.
+
+    **The bug this closes is not that a refused group is retried -- it is that it blocks.**
+    `deliver` stops the whole pass on a refusal and holds the group at the head of the queue,
+    which is right for a 429 or an outage: nothing is lost and the order is kept. For a
+    refusal that will never succeed -- a 400 on a malformed message -- the same group is
+    retried and refused every pass, and because the refusal stops the pass, *no session in the
+    chat is ever notified again*. One poisoned group is a chat-wide outage with no error
+    anybody sees.
+
+    Mutates the mapping it is handed rather than owning one (DEC-044): the rule is here, the
+    count stays with the surface, and a caller that never asks again keeps no state at all.
+    The entry is deleted on abandonment so the next refusal for that session starts from one,
+    and `delivered` clears it so the count means *consecutive* refusals rather than lifetime
+    ones -- a session that fails once a week is not a session anyone should give up on.
+    """
+    refusals[session_id] = refusals.get(session_id, 0) + 1
+    if refusals[session_id] < limit:
+        return False
+    del refusals[session_id]
+    return True
+
+
+def delivered(refusals: MutableMapping[str, int], session_id: str) -> None:
+    """Forget a session's refusals, because the streak this counts is a consecutive one."""
+    refusals.pop(session_id, None)
+
+
+def forget_absent(refusals: MutableMapping[str, int], present: Iterable[str]) -> None:
+    """Drop counts for sessions no longer queued, so the map cannot grow for the process's life.
+
+    A session can leave the queue without ever succeeding or being abandoned -- the 200-cap
+    evicts it, or `retire_finished` retires it -- and a count nobody will ever clear is the
+    unbounded map this module already deleted once.
+    """
+    for session_id in set(refusals) - set(present):
+        del refusals[session_id]
+
+
 def enqueue(
     pending: MutableSequence[AgentActivity],
     activities: Iterable[AgentActivity],

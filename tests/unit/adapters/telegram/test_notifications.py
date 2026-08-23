@@ -14,7 +14,10 @@ from remote_agents.adapters.telegram.notifications import (
     render_activity,
 )
 from remote_agents.adapters.telegram.presenters import MAX_TELEGRAM_TEXT_UNITS
-from remote_agents.application.notification_policy import SessionGroup
+from remote_agents.application.notification_policy import (
+    REFUSALS_BEFORE_ABANDONING,
+    SessionGroup,
+)
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
@@ -1020,46 +1023,208 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
     assert _messages(view) == 1
 
 
-async def test_bl_003_a_refused_group_holds_the_head_of_the_queue_for_ever() -> None:
-    """PIN, not an endorsement: BL-003, a deferred improvement.
+async def test_a_permanently_refused_group_is_dropped_and_stops_blocking_the_chat() -> None:
+    """BL-003, closed. Three strikes and the poison goes (DEC-049).
 
-    `deliver` stops the pass on a refused send and holds the group at the head of the queue.
-    That is right for a 429 or an outage and wrong for a permanent refusal: the same group is
-    retried and refused every pass, and no other session in the chat is notified again.
+    `deliver` stops the pass on a refusal and holds the group at the head of the queue, which
+    is right for a 429 or an outage. For a refusal that will never succeed it meant the same
+    group was retried and refused every pass -- and because the refusal stops the pass, **no
+    session in the chat was ever notified again**. One poisoned group was a chat-wide outage
+    that nothing reported.
 
-    Deferred because the fix needs a policy nobody has chosen -- how many refusals before a
-    group is abandoned, and what the owner is told when one is -- and the failure has not been
-    seen in the wild.
+    The second assertion is the one that matters. Dropping the poison is only half the fix:
+    the pass carries on past a refusal now, so the session waiting behind it is served in the
+    same pass rather than after the poison is finally abandoned.
+
+    **Both sessions report on every pass, and that is load-bearing rather than incidental.** A
+    strike is only recorded when something else got through in the same pass (DEC-049), which
+    is what stops an outage being read as poison -- so a poisoned session that is *alone* in
+    the queue accumulates no strikes and is held indefinitely. That is the accepted cost, and
+    it is coherent: a group blocking nobody is not the failure BL-003 named.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    honest_send = view.send_apart
+
+    async def refuse_the_poisoned_one(bot: object, arguments: dict[str, object]) -> int:
+        if "poisoned" in str(arguments["text"]):
+            raise TelegramError("400: this message can never be sent")
+        return await honest_send(bot, arguments)
+
+    view.send_apart = refuse_the_poisoned_one  # type: ignore[method-assign]
+
+    for attempt in range(REFUSALS_BEFORE_ABANDONING):
+        clock.advance(60)
+        await notifier.deliver(
+            [
+                _for(SESSION_A, ActivityKind.COMPLETED, "poisoned", clock.moment),
+                _for(
+                    SESSION_B, ActivityKind.NEEDS_ANSWER, f"am I ever told? {attempt}", clock.moment
+                ),
+            ]
+        )
+
+    assert "am I ever told?" in _showing(view), (
+        "the second session is still waiting behind the poisoned group; dropping the poison "
+        "without letting the pass continue only shortens the outage, it does not end it"
+    )
+    assert not any(activity.session_id == SESSION_A for activity in notifier._pending), (
+        "the poisoned group is still queued after its third refusal"
+    )
+
+
+async def test_an_outage_is_not_read_as_poison_and_costs_the_owner_nothing() -> None:
+    """The reason a strike is conditional (DEC-049), and the case a bare count gets wrong.
+
+    A refusal on its own says nothing about why: a 400 on a malformed message and a network
+    that is down are the same exception here. A plain three-strike rule cannot tell them
+    apart, so a sustained outage would quietly abandon a session's news every few passes --
+    ten sessions over half an hour at a sixty-second poll, with only journal lines to show for
+    it. That is a worse failure than the one BL-003 named, because it destroys news that would
+    have gone out fine on the next attempt.
+
+    So a strike is only recorded when *something else got through in the same pass*. Here
+    nothing does, for twice the limit, and every observation is still owed at the end.
     """
     clock = _Clock()
     notifier, view = _notifier(clock)
 
-    async def always_refuse(_bot: object, _arguments: dict[str, object]) -> int:
-        raise TelegramError("permanent refusal, not a rate limit")
+    async def telegram_is_down(_bot: object, _arguments: dict[str, object]) -> int:
+        raise TelegramError("network is unreachable")
 
-    view.send_apart = always_refuse  # type: ignore[method-assign]
+    view.send_apart = telegram_is_down  # type: ignore[method-assign]
 
-    for _ in range(5):
-        clock.advance(120)
-        assert (
-            await notifier.deliver(
-                [
-                    _for(SESSION_A, ActivityKind.COMPLETED, "poisoned", clock.moment),
-                    _for(SESSION_B, ActivityKind.NEEDS_ANSWER, "am I ever told?", clock.moment),
-                ]
-            )
-            == 0
+    for attempt in range(REFUSALS_BEFORE_ABANDONING * 2):
+        clock.advance(60)
+        await notifier.deliver(
+            [
+                _for(SESSION_A, ActivityKind.COMPLETED, f"a {attempt}", clock.moment),
+                _for(SESSION_B, ActivityKind.NEEDS_ANSWER, f"b {attempt}", clock.moment),
+            ]
         )
 
-    assert view.sent == [], "nothing was delivered, which is the premise"
-    assert notifier.pending_count() > 0, (
-        "BL-003 pinned: the refused group is held rather than abandoned"
+    assert notifier._refusals == {}, (
+        "an outage was scored as poison; a bare count cannot tell them apart, which is why "
+        "the strike is conditional"
     )
-    assert SESSION_B in {activity.session_id for activity in notifier._pending}, (
-        "BL-003 pinned: a second session in the same chat is never notified while the head of "
-        "the queue keeps being refused. If this now fails, the decision was taken -- delete "
-        "this test."
+    queued = {activity.session_id for activity in notifier._pending}
+    assert queued == {SESSION_A, SESSION_B}, (
+        f"the outage cost the owner news that would have gone out on recovery: {queued}"
     )
+
+
+async def test_a_session_that_recovers_never_reaches_the_limit() -> None:
+    """A session that fails twice, recovers, then fails twice more keeps its news.
+
+    A transient refusal is the case the retry exists for. Five refusals across this session's
+    life, never three in a row, and its observations are still owed at the end.
+
+    **What this does not prove, stated because the mutation was run.** It does not isolate
+    *which* mechanism clears the streak. Removing `delivered_before` entirely leaves this test
+    green, because `forget_absent` already drops the count for a session that has left the
+    queue -- and a session that delivered has left the queue on every path reachable here. The
+    arm only `delivered_before` covers is a session that delivers and *stays* queued, which
+    needs a message too small to hold its lines, and there are fewer kinds than lines by
+    design. So that arm is carried on argument rather than evidence, and the source says so at
+    the call.
+
+    **Two earlier versions of this test proved less than they claimed**, which is why the
+    caveat above is here rather than absent. The first used one session, and a lone session
+    accrues no strikes at all -- a strike needs another delivery in the same pass (DEC-049) --
+    so it passed with the clearing removed. The second refused only `send_apart`, so once the
+    session recovered its later reports became amendments and stopped being refused at all.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+    honest_send = view.send_apart
+    honest_amend = view.amend_apart
+    refuse_session_a = True
+
+    async def refuse_a_when_told(bot: object, arguments: dict[str, object]) -> int:
+        if refuse_session_a and "flaky" in str(arguments["text"]):
+            raise TelegramError("429: slow down")
+        return await honest_send(bot, arguments)
+
+    async def refuse_amendments_too(
+        bot: object, message_id: int, arguments: dict[str, object]
+    ) -> bool:
+        # Both routes, because once a session has a standing message its next report is an
+        # amendment and never reaches `send_apart` at all. A fake that refuses only sends
+        # stops refusing the moment the session recovers, which is exactly the shape this
+        # test is trying to drive through.
+        if refuse_session_a and "flaky" in str(arguments["text"]):
+            raise TelegramError("429: slow down")
+        return await honest_amend(bot, message_id, arguments)
+
+    view.send_apart = refuse_a_when_told  # type: ignore[method-assign]
+    view.amend_apart = refuse_amendments_too  # type: ignore[method-assign]
+
+    async def a_pass(index: int) -> None:
+        clock.advance(60)
+        await notifier.deliver(
+            [
+                _for(SESSION_A, ActivityKind.COMPLETED, f"flaky {index}", clock.moment),
+                _for(SESSION_B, ActivityKind.COMPLETED, f"steady {index}", clock.moment),
+            ]
+        )
+
+    await a_pass(0)
+    await a_pass(1)
+    assert notifier._refusals.get(SESSION_A) == 2, "the premise: two strikes stand"
+
+    refuse_session_a = False
+    await a_pass(2)
+    assert notifier._refusals.get(SESSION_A) is None, "a delivery did not clear the streak"
+
+    refuse_session_a = True
+    await a_pass(3)
+    await a_pass(4)
+
+    # Five refusals in this session's life, never three in a row.
+    assert notifier._refusals.get(SESSION_A) == 2, (
+        "the streak is being counted for the life of the process rather than consecutively"
+    )
+    assert any(activity.session_id == SESSION_A for activity in notifier._pending), (
+        "a session that recovers in between was abandoned; its news would have gone out"
+    )
+
+
+async def test_the_refusal_counts_do_not_grow_for_the_life_of_the_service() -> None:
+    """The map this rule needs is the shape of the one DEC-048 deleted, so it is bounded here.
+
+    A session can leave the queue without succeeding *or* being abandoned -- the 200-cap evicts
+    it, or `retire_finished` retires it -- and a count nobody will ever clear is exactly the
+    unbounded map the taper left behind.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    honest_send = view.send_apart
+
+    async def refuse_only_session_a(bot: object, arguments: dict[str, object]) -> int:
+        if "held" in str(arguments["text"]):
+            raise TelegramError("400")
+        return await honest_send(bot, arguments)
+
+    view.send_apart = refuse_only_session_a  # type: ignore[method-assign]
+
+    clock.advance(60)
+    # A delivery beside the refusal, because a strike is only recorded when the service is
+    # otherwise working (DEC-049).
+    await notifier.deliver(
+        [
+            _for(SESSION_A, ActivityKind.COMPLETED, "held", clock.moment),
+            _for(SESSION_B, ActivityKind.COMPLETED, "went out", clock.moment),
+        ]
+    )
+    assert notifier._refusals, "the premise: a refusal was counted"
+
+    # The session's news leaves the queue by a route that is neither success nor abandonment.
+    notifier._pending.clear()
+    clock.advance(60)
+    await notifier.deliver([])
+
+    assert notifier._refusals == {}, "a count outlived every observation it was about"
 
 
 # What replaced the suppression window (DEC-048) ----------------------------------------------
