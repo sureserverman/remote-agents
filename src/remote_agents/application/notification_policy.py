@@ -216,7 +216,15 @@ def unheard(
     every repeat an alert again, which is the shape the owner asked to be rid of.
     """
     known = {activity.kind for activity in standing}
-    return tuple(activity.kind for activity in shown if activity.kind not in known)
+    heard_questions = {
+        activity.detail for activity in standing if activity.kind is ActivityKind.NEEDS_ANSWER
+    }
+    return tuple(
+        activity.kind
+        for activity in shown
+        if activity.kind not in known
+        or (activity.kind is ActivityKind.NEEDS_ANSWER and activity.detail not in heard_questions)
+    )
 
 
 def unsaid(

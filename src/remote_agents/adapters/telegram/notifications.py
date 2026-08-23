@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -42,17 +42,12 @@ from remote_agents.adapters.telegram.presenters import (
     render_message,
 )
 from remote_agents.application.notification_policy import (
-    Sent,
     SessionGroup,
-    due,
     enqueue,
     for_update,
-    forget_expired,
     grouped_for_delivery,
     merged,
-    record_sent,
     shown_in_message,
-    told,
     unheard,
     unsaid,
 )
@@ -273,16 +268,6 @@ def _moment(activity: AgentActivity) -> str:
     return activity.observed_at.astimezone(UTC).strftime("%H:%M UTC")
 
 
-_RATE_LIMIT_SECONDS = 120.0
-"""How long one session's one kind of news stays old.
-
-A `Stop` hook fires per turn, not per task, so an agent working through a long instruction
-reports "finished" repeatedly and each report is true. The owner does not need five of them.
-Scoped to (session, kind) rather than to the chat: an agent that finishes and then needs an
-answer has said two different things, and collapsing those would lose the one worth acting on.
-"""
-
-
 class StandingNotificationStore:
     """The process-local sibling of
     :class:`~remote_agents.adapters.sqlite.standing_notification_store.SQLiteStandingNotificationStore`.
@@ -391,10 +376,6 @@ class ActivityNotifier:
       dropping it, and the next pass tries again. *Nowhere else* includes disk: DEC-026 keeps
       this queue in memory with no durable counterpart, so a restart takes whatever it is
       holding with it.
-    - **`_last_sent`** is the rate limit, keyed by session *and* kind. The map lives here;
-      the rules for it -- the taper, the repeat counters, the retention floor -- live in
-      `application/notification_policy` and are handed this map to apply. Residence is not
-      policy, the same split DEC-026 makes for the queue below.
     - **`_standing`** is which message each session's notification is, and it is the one piece
       of this object's state that is *not* process-local. It has to outlive the process for the
       same reason the live view's anchor does: a restart that forgets which message a session
@@ -423,21 +404,18 @@ class ActivityNotifier:
         display: Callable[[str], Awaitable[str | None]],
         standing: StandingNotificationPort | None = None,
         finished: Callable[[tuple[str, ...]], Awaitable[tuple[str, ...]]] | None = None,
-        rate_limit_seconds: float = _RATE_LIMIT_SECONDS,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._view = view
         self._callbacks = callbacks
         self._owner_user_id = owner_user_id
         self._display = display
-        self._rate_limit = timedelta(seconds=rate_limit_seconds)
         self._now = now
         self._bot: object | None = None
         self._pending: deque[AgentActivity] = deque()
         #: Whether the pass that just ran delivered anything, so `_report_backlog` can tell an
         #: outage from an ordinary pass that merely deferred a group past the per-pass ceiling.
         self._sent_this_pass = False
-        self._last_sent: dict[tuple[str, ActivityKind], Sent] = {}
         self._standing = standing if standing is not None else StandingNotificationStore()
         #: Which of the sessions holding a notification have stopped being worth one, or None
         #: in a composition with no lifecycle to ask. See `retire_finished`.
@@ -579,7 +557,6 @@ class ActivityNotifier:
             )
         if self._bot is None:
             return 0
-        forget_expired(self._last_sent, self._now(), rate_limit=self._rate_limit)
         # Before the sends, not after. A session the owner has just stopped may also be
         # holding an observation in the queue; retiring first means its message leaves the
         # chat and `_display_for` then declines the leftover, rather than the pass amending a
@@ -680,27 +657,22 @@ class ActivityNotifier:
         longer be named are both finished business, so the caller drops them rather than
         holding them. Only a raise means "try again".
 
-        **The window decides whether a message is sent, never which lines it carries.** This
-        is the correction to the shape this task first had, and the distinction is the whole
-        of two defects. The limit exists to stop *messages*: one per session per pass is the
-        cost the owner feels, and a second line inside a message they are already receiving
-        costs them nothing. Filtering the group by window instead meant that an observation
-        the queue was holding -- something the agent said that had never been sent, since
-        anything still queued by definition has not been -- was *deleted* while a message to
-        that very session went out with four of its five lines unused. Before grouping that
-        trade was forced, because carrying it meant a second message; grouping removed the
-        reason and the filter outlived it.
+        **There is no suppression window; what a message carries is decided by comparing
+        what was said.** A window used to gate this, and the history is worth keeping because
+        both of its defects were about suppression outliving its reason. It first filtered the
+        *group*, deleting a queued observation while a message to that very session went out
+        with four of its five lines unused. Corrected to gate the whole message, it then read
+        its own suppression as evidence: a kind held back by its window was absent from the
+        message, and `record_sent` scored that absence as "the session reported something
+        different, so the held kind is not repeating", so a standing condition backed off to
+        sixty-four minutes was absent from sixty-three of every sixty-four minutes' messages
+        and never advanced past the first step -- measured at 75 to 255 notifications overnight
+        where the taper intended 12.
 
-        The second defect is worse and is why this is stated as a rule. A kind held back by
-        its own window was absent from the message, and `record_sent` read that absence as
-        "this session reported something different, so the held kind is not repeating" -- the
-        notifier taking its own suppression decision as evidence against itself. A standing
-        condition backed off to sixty-four minutes is absent from sixty-three of every
-        sixty-four minutes' messages, so it was nearly always the kind that got reset, and its
-        backoff never advanced past the first step. Measured on the module's own premises
-        (`Stop` fires per turn), an overnight session with a periodic companion produced 75 to
-        255 notifications where the taper intends 12. Sending the whole group closes both: what
-        was observed rides along, and what was observed is what `record_sent` is told about.
+        Both are gone with the window itself (DEC-048). What remains does the same job without
+        destroying anything: an identical re-render returns early below, and news already
+        alerted is amended in silently. The taper's last argument was a Bot API call per
+        session per pass, and `_MAXIMUM_SENDS_PER_PASS` bounds that already.
 
         **A repeat is written into the message the owner already has; only news they have not
         been alerted to is allowed to arrive (DEC-034).** This is the second correction the
@@ -714,30 +686,33 @@ class ActivityNotifier:
         in newer words and is amended in silently. The first alert is as fast as it ever was;
         what is taken away is the second and later copies of it.
 
-        **It closes them, and the taper is now restored too** -- which is worth stating here
-        because this paragraph used to say the opposite and was left behind by the fix. It read
-        that retention prunes an entry at `window(repeats) * RETENTION_WINDOWS`, four minutes at
-        zero repeats, so a kind observed less often than that never doubles at all, and that a
-        lone `Stop` every four minutes "still produces 120 messages in eight hours". DEC-031's
-        count-independent floor answered that, and the horizon has not been that expression on
-        its own since. Measured against the policy as it stands, a lone `Stop` every four
-        minutes now produces **12** messages in eight hours, which is what the taper intends;
-        `application/notification_policy.forget_expired` is where the floor lives and
-        `test_a_kind_reporting_slower_than_its_first_window_still_reaches_the_taper` is the run.
+        **`needs_answer` is the exception, and it is the reason the window could go (DEC-048).**
+        A second question is not the first one asked again -- it is the agent blocked on
+        something else, and the owner cannot answer what they were never shown. So a
+        `needs_answer` whose text matches none of the standing ones counts as unheard and
+        arrives; every other kind keeps the kind-only rule above.
+
         """
-        moment = self._now()
         standing = self._recall(group.session_id)
-        # The window gates **every** delivery, an amendment included. It reads as too strict
-        # for one that is silent -- withholding an edit only makes a message stale -- and the
-        # cost it is really bounding is not the buzz: it is a Bot API call per session per
-        # pass, on the same chat rate limit `_MAXIMUM_SENDS_PER_PASS` exists for, spent to
-        # rewrite a sentence with a slightly newer one. The message the owner is looking at
-        # already says the session stopped, which is what it is for.
-        if not any(
-            due(activity, self._last_sent, moment, rate_limit=self._rate_limit)
-            for activity in group.activities
-        ):
-            return False, False, ()
+        # **No suppression window. Removed 2026-08-23 by the owner's decision (DEC-048).**
+        #
+        # A window gated every delivery here, an amendment included, and a gated observation
+        # was neither sent nor held -- `deliver` dropped it, and the drain had already deleted
+        # the record, so it was gone outright. That was BL-002: a genuinely new question
+        # arriving behind a repeating `needs_answer` was destroyed rather than delayed, and the
+        # owner was never told, at any later pass, that the question they were reading had been
+        # superseded.
+        #
+        # What the window was for is now done, better, by comparing what was actually said. An
+        # identical repeat returns early below ("the re-render would say exactly what the
+        # message already says") and costs nothing; news the owner has already been alerted to
+        # is amended into the standing message silently, which is the whole of the 3am problem
+        # the taper was built for. The one cost the window's own comment claimed to bound --
+        # "a Bot API call per session per pass" -- is bounded already by
+        # `_MAXIMUM_SENDS_PER_PASS`, which counts amendments too (`sent += int(delivered)`).
+        #
+        # So the taper was suppressing content while two later mechanisms suppressed the
+        # interruption, and only the content suppression was ever irreversible.
         display = await self._display(group.session_id)
         if display is None:
             # Two refusals arrive as one `None`, and this module is deliberately unable to
@@ -790,32 +765,13 @@ class ActivityNotifier:
                     },
                 ):
                     self._remember(group.session_id, standing.message_id, shown, standing.token)
-                    record_sent(
-                        self._last_sent, group.session_id, told(group.activities, shown), moment
-                    )
                     return True, False, unsaid(group.activities, shown)
                 self._standing.forget(self._view.chat_id, group.session_id)
-                return await self._send_afresh(updated, group, display=display, moment=moment)
+                return await self._send_afresh(updated, group, display=display)
             replacement = await self._replace(standing, updated, display=display)
             if replacement is not None:
                 message_id, token = replacement
                 self._remember(group.session_id, message_id, shown, token)
-                # Stamped for what *arrived* and was shown, not for everything on screen. The
-                # two were the same thing when a message was built from one pass's news and
-                # thrown away after; a standing message goes on displaying every kind it has
-                # ever carried, so reading the screen would report each of them as reported
-                # again on every pass -- the counts would climb without the agent saying
-                # anything, and `record_sent`'s cross-kind reset could never fire, because no
-                # kind is ever absent from a message that keeps them all.
-                #
-                # This is a narrowing, and `record_sent`'s docstring warns about one. It is
-                # not that one: the argument there was narrowed by *suppression*, so the
-                # notifier read its own silence as the session having changed the subject.
-                # This narrows to what the session actually said this pass, which is the
-                # question the taper was always asking.
-                record_sent(
-                    self._last_sent, group.session_id, told(group.activities, shown), moment
-                )
                 return True, True, unsaid(group.activities, shown)
             # The replacement could not be given a working button, which is the one outcome
             # worth starting over for: `_replace` has already put the message in the chat, so
@@ -824,7 +780,7 @@ class ActivityNotifier:
             self._standing.forget(self._view.chat_id, group.session_id)
             return True, True, unsaid(group.activities, shown)
 
-        return await self._send_afresh(group, group, display=display, moment=moment)
+        return await self._send_afresh(group, group, display=display)
 
     async def _send_afresh(
         self,
@@ -832,15 +788,14 @@ class ActivityNotifier:
         group: SessionGroup,
         *,
         display: str,
-        moment: datetime,
     ) -> tuple[bool, bool, tuple[AgentActivity, ...]]:
         """Start a session's message over, saying `outgoing` and owing against `group`.
 
         Two groups because the two questions differ once a message can be amended. `outgoing`
         is what the new message says -- the whole story when a standing message has been lost,
         so nothing the owner never read is silently dropped on the way to a fresh one -- while
-        `group` is what this pass actually heard, which is what the rate limit is asked about
-        and what is still owed if a line did not fit.
+        `group` is what this pass actually heard, and so what is still owed if a line did not
+        fit.
         """
         message_id = await self._view.send_apart(
             self._bot,
@@ -857,7 +812,6 @@ class ActivityNotifier:
         # suppress its next report. What it does cover is a kind that was rendered without
         # being due -- that one has now been said, and is a repeat from here on.
         shown = shown_in_message(outgoing, limit=_MAXIMUM_LINES_PER_MESSAGE)
-        record_sent(self._last_sent, group.session_id, (a.kind for a in shown), moment)
         token = await self._mint(outgoing, message_id, display=display)
         if token is not None:
             # Recorded only once the button exists, because a standing message is one this

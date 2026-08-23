@@ -305,7 +305,7 @@ class _Clock:
         self.moment += timedelta(seconds=seconds)
 
 
-def _notifier(clock: _Clock, *, rate_limit_seconds: float = 120.0, callbacks=None):
+def _notifier(clock: _Clock, *, callbacks=None):
     view = _RecordingView()
 
     async def display(_session_id: str) -> str:
@@ -316,7 +316,6 @@ def _notifier(clock: _Clock, *, rate_limit_seconds: float = 120.0, callbacks=Non
         callbacks=callbacks if callbacks is not None else CallbackStateStore(),
         owner_user_id=7,
         display=display,
-        rate_limit_seconds=rate_limit_seconds,
         now=clock,
     )
     notifier.attach(_SilentBot())
@@ -438,42 +437,6 @@ async def test_a_pass_that_only_amends_does_not_re_send_the_owner_s_menu() -> No
     await notifier.deliver([_for(session, ActivityKind.COMPLETED, "two", clock.moment)])
 
     assert len(moved) == 1, "an amendment moved the menu, and moving it is a message"
-
-
-async def test_the_rate_limit_map_does_not_grow_for_the_life_of_the_service() -> None:
-    """One entry per (session, kind) is small; unbounded over a service that launches
-    sessions all day is not. An entry older than the window suppresses nothing.
-
-    The clock advance below used to be 241 seconds, and that number is why the taper was
-    broken for a year: it pinned the retention horizon at `_window(0) * _RETENTION_WINDOWS`,
-    which is exactly the horizon that discarded a repeat count before any kind reporting more
-    slowly than four minutes could accumulate one. The test was green throughout and asserted
-    the defect. What this is *for* is that the map does not grow for the life of the service,
-    and that claim is independent of how long an entry is kept -- so it now steps past the
-    floored horizon instead, and the taper has its own test.
-    """
-    clock = _Clock()
-    notifier, _ = _notifier(clock)
-
-    for index in range(25):
-        await notifier.deliver(
-            [
-                AgentActivity(
-                    session_id=f"session-{index}",
-                    kind=ActivityKind.COMPLETED,
-                    detail=None,
-                    observed_at=clock.moment,
-                )
-            ]
-        )
-    assert len(notifier._last_sent) == 25
-
-    # Past the window, the retention that keeps a lapsed entry's repeat count readable, and
-    # the floor under both that lets a slow-reporting kind accumulate one at all.
-    clock.advance(60 * 60 * 3)
-    await notifier.deliver([])
-
-    assert notifier._last_sent == {}, "expired suppressions were kept for the life of the run"
 
 
 async def test_an_entry_still_inside_its_window_is_not_forgotten() -> None:
@@ -665,60 +628,6 @@ async def test_a_standing_condition_never_becomes_a_second_message() -> None:
 
     assert _messages(view) == 1
     assert "May I force-push?" in _showing(view)
-
-
-async def test_a_different_kind_from_the_same_session_starts_the_count_over() -> None:
-    """A repeat count claims nothing has changed. A different kind is something changing.
-
-    Read on `_last_sent` rather than on messages, because messages no longer answer it: every
-    line below lands in the session's one message, replaced each time. The counts decide when
-    that replacement is allowed to go out at all, so the bookkeeping still governs what the
-    owner's phone does.
-
-    The advances step past each doubled window in turn — 2 minutes, then 4, then 8 — because a
-    send that the taper suppresses does not advance the count it is being read for.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-    session = _activity(ActivityKind.NEEDS_ANSWER).session_id
-
-    for index, seconds in enumerate((0, 121, 241)):
-        clock.advance(seconds)
-        await notifier.deliver(
-            [_for(session, ActivityKind.NEEDS_ANSWER, f"question {index}", clock.moment)]
-        )
-    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 2
-
-    clock.advance(481)
-    await notifier.deliver([_for(session, ActivityKind.COMPLETED, "moved on", clock.moment)])
-
-    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 0, (
-        "the agent said something different, so the waiting count is no longer a claim"
-    )
-    assert _messages(view) == 1, "and none of it was a second message"
-
-
-async def test_a_backed_off_entry_is_not_forgotten_while_it_is_still_suppressing() -> None:
-    """The pruning measures each entry against its own window.
-
-    Under a fixed horizon the backed-off entries — the repeating ones, which are the only ones
-    the backoff is for — were forgotten while still suppressing, quietly restoring the
-    every-two-minutes behaviour for exactly the case it was added to fix.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-    session = _activity(ActivityKind.NEEDS_ANSWER).session_id
-
-    await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "first", clock.moment)])
-    clock.advance(121)
-    await notifier.deliver([_for(session, ActivityKind.NEEDS_ANSWER, "second", clock.moment)])
-
-    clock.advance(121)
-    await notifier.deliver([])  # a pass that prunes but sends nothing
-
-    assert len(notifier._last_sent) == 1, "an entry still suppressing was pruned"
-    assert notifier._last_sent[(session, ActivityKind.NEEDS_ANSWER)].repeats == 1
-    assert _messages(view) == 1
 
 
 async def test_many_sessions_at_once_are_spread_across_passes_not_fired_at_the_chat() -> None:
@@ -1003,135 +912,6 @@ async def test_a_refused_group_comes_back_whole_and_regroups_with_what_arrives_n
     assert "Ran it." in text and "Which file?" in text
 
 
-async def test_a_group_that_the_rate_limit_empties_sends_nothing_at_all() -> None:
-    """An emptied group is finished business, not a failed send.
-
-    Every observation in it has already been reported inside its window, so there is nothing
-    to say -- and holding it for retry would mean re-deciding the same suppression every pass
-    for as long as the window lasts, with `_report_backlog` calling each of those passes an
-    outage.
-
-    The window still governs a *replacement*, not only a first message, because a replacement
-    is a `sendMessage` and reaches the phone the same way. That is the one place this delivery
-    shape is stricter than editing in place would have been, and it is the reason the taper is
-    still doing a job at all.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-    first = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it.", clock.moment)
-
-    assert await notifier.deliver([first]) == 1
-
-    clock.advance(10)
-    again = _for(SESSION_A, ActivityKind.COMPLETED, "Ran it again.", clock.moment)
-    assert await notifier.deliver([again]) == 0
-    assert _messages(view) == 1, "the second is inside the window and is not a second message"
-    assert notifier.pending_count() == 0, "suppressed is settled, not held"
-
-
-async def test_two_kinds_in_one_message_do_not_reset_each_other_s_backoff() -> None:
-    """The cross-kind reset was written when a message carried exactly one kind.
-
-    Its rule is sound: a *different* kind means something changed, so the session's other
-    repeat counts are a claim that nothing has, and they start over. Applied to two kinds
-    riding in one message it turns on itself -- recording the second zeroes the first, which
-    was recorded a line earlier and is not evidence that anything changed. A standing
-    condition would then reset its own backoff on every pass that carried a companion, and the
-    doubling that exists to stop a three-in-the-morning message every two minutes would never
-    advance past its first step.
-
-    What may still reset is a kind that was *not* in this message: that is the original rule,
-    and it is left alone.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-
-    # A standing condition, repeated until its window has doubled twice. Each advance clears
-    # the *current* window without reaching the retention horizon, which is that window times
-    # `_RETENTION_WINDOWS` -- overshoot it and the entry is forgotten, so the next send reads
-    # as a first sighting and the count never climbs.
-    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
-    for seconds in (121, 241):
-        clock.advance(seconds)
-        await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
-    waiting = notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)]
-    assert waiting.repeats == 2, "the standing condition must have backed off to begin with"
-
-    clock.advance(481)
-
-    # Now it repeats *alongside* a second kind, in one message.
-    await notifier.deliver(
-        [
-            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment),
-            _for(SESSION_A, ActivityKind.COMPLETED, "Ran it.", clock.moment),
-        ]
-    )
-
-    assert notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats > waiting.repeats, (
-        "its own companion must not have reset it"
-    )
-
-
-async def test_a_kind_that_was_not_in_the_message_still_starts_over() -> None:
-    """The half of the reset that is still right, pinned so the fix above cannot delete it."""
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-
-    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, "turn 0", clock.moment)])
-    for index, seconds in enumerate((121, 241), start=1):
-        clock.advance(seconds)
-        await notifier.deliver(
-            [_for(SESSION_A, ActivityKind.COMPLETED, f"turn {index}", clock.moment)]
-        )
-    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 2
-
-    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "asked", clock.moment)])
-
-    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats == 0, (
-        "a different kind means something changed, so the untouched kind starts over"
-    )
-
-
-async def test_a_suppressed_kind_does_not_have_its_own_backoff_reset_by_its_suppression() -> None:
-    """The storm the gate's evaluator measured: 75 to 255 messages where the taper intends 12.
-
-    The mechanism was the notifier reading its own suppression as evidence against itself. A
-    standing `needs_answer` backed off to sixty-four minutes is absent from sixty-three of every
-    sixty-four minutes' messages; the send filtered it out for being inside its window, and
-    `_record_sent` was then told only about the kinds that survived that filter, so it saw the
-    held kind as "not in this message" and read that as the session having reported something
-    different. Its backoff went to zero and it fired again on the next thirty-second pass.
-
-    `Stop` fires per turn, so a companion kind arriving periodically is the ordinary case for an
-    agent working through a long instruction -- not a contrived one.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-
-    await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
-    for seconds in (121, 241):
-        clock.advance(seconds)
-        await notifier.deliver([_for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment)])
-    backed_off = notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats
-    assert backed_off == 2
-
-    # A companion kind arrives while the standing one is still inside its window.
-    clock.advance(60)
-    await notifier.deliver(
-        [
-            _for(SESSION_A, ActivityKind.NEEDS_ANSWER, None, clock.moment),
-            _for(SESSION_A, ActivityKind.COMPLETED, "Ran the linter.", clock.moment),
-        ]
-    )
-
-    assert notifier._last_sent[(SESSION_A, ActivityKind.NEEDS_ANSWER)].repeats > backed_off, (
-        "the held kind's own suppression must not read as a change"
-    )
-    assert "waiting for an answer" in str(view.sent[-1]["text"]), (
-        "and since a message was going out anyway, it rides along rather than being deleted"
-    )
-
-
 async def test_a_kind_the_window_is_holding_is_never_deleted_from_a_message_going_out() -> None:
     """Anything still queued has by construction never been sent, so dropping it loses it.
 
@@ -1227,10 +1007,7 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
     text = str(view.sent[-1]["text"])
     assert "and 1 earlier." in text, "the oldest is the one folded away"
     assert "Which file?" not in text
-    assert (SESSION_A, ActivityKind.NEEDS_ANSWER) not in notifier._last_sent, (
-        "a kind nobody was shown must not be recorded as told"
-    )
-    assert notifier.pending_count() == 1, "and it is owed, not spent"
+    assert notifier.pending_count() == 1, "it is owed, not spent"
 
     # The next pass says it, rather than it being lost with the group that could not carry it.
     # It has to claim a slot from a line the message already showed: there is no second
@@ -1240,125 +1017,6 @@ async def test_an_observation_the_message_could_not_hold_is_owed_not_spent(
     assert await notifier.deliver([]) == 1
     assert "Which file?" in _showing(view)
     assert _messages(view) == 1
-
-
-async def test_a_kind_reporting_slower_than_its_first_window_still_backs_off() -> None:
-    """The taper has to survive the gap between reports, and it did not.
-
-    `_forget_expired_limits` pruned an entry at `_window(repeats) * _RETENTION_WINDOWS`, which
-    at zero repeats is four minutes. A kind observed less often than that always found its own
-    note already discarded, was re-created at zero, and so never doubled -- the counter is what
-    makes the next wait longer, and it could not climb. A `Stop` hook fires per turn and a turn
-    routinely takes longer than four minutes, so this was the ordinary case rather than an edge
-    one: measured at 120 messages over eight hours where the taper intends twelve.
-
-    Retention now has a floor that does not depend on the count it is trying to preserve.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-
-    # Eight hours of an agent finishing a turn every five minutes.
-    for _ in range(8 * 12):
-        await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
-        clock.advance(300)
-
-    assert len(view.sent) <= 15, (
-        f"the taper never engaged: {len(view.sent)} messages in eight hours"
-    )
-    assert notifier._last_sent[(SESSION_A, ActivityKind.COMPLETED)].repeats >= 5, (
-        "the repeat count must survive the gap between reports"
-    )
-
-
-async def test_a_kind_nobody_reports_any_more_is_still_forgotten() -> None:
-    """The floor must not turn the map into a leak.
-
-    `_forget_expired_limits` exists because one entry per (session, kind) is unbounded over the
-    life of a service launching sessions all day. A floor that kept everything for ever would
-    trade one defect for that one.
-    """
-    clock = _Clock()
-    notifier, _ = _notifier(clock)
-    await notifier.deliver([_for(SESSION_A, ActivityKind.COMPLETED, None, clock.moment)])
-    assert notifier._last_sent
-
-    clock.advance(60 * 60 * 6)
-    await notifier.deliver([])
-
-    assert notifier._last_sent == {}, "a session that stopped reporting must not be kept for ever"
-
-
-# Pinned open decisions -- these tests exist to be DELETED ------------------------------------
-#
-# The two cases below assert behaviour nobody has defended. They pin BL-002 and BL-003 as they
-# stand so that a refactor cannot resolve either one as a side effect, because resolving an open
-# backlog item by accident takes a decision that is the owner's, and takes it invisibly: the
-# diff would read as a cleanup and every other test would still pass.
-#
-# When the owner takes either decision, the corresponding test is DELETED rather than adjusted.
-# A pin that gets "updated" to match new behaviour has stopped being a pin and become a
-# description, and the whole point of it was to make the change deliberate.
-
-
-async def test_bl_002_a_new_question_behind_a_repeating_kind_is_discarded() -> None:
-    """PIN, not an endorsement: BL-002, an open decision the owner must take.
-
-    **This pins what the code does, which is not what BL-002 says it does.** The entry describes
-    a genuinely new question *waiting* for the repeating kind's window, and -- since DEC-034 --
-    replacing the old question's text silently when it arrives. Measured here, it does neither:
-    the window gate in `_send` returns an empty "still owed" tuple, so the observation is
-    neither sent nor held, and `deliver` drops it. The owner is never told the question changed,
-    and no later pass carries it, because the drain deleted the record long ago.
-
-    That is a larger claim than the backlog entry makes, and it points the other way from the
-    principle this module states about itself at `_send`'s own docstring -- "neither shown nor
-    sent; discarding them loses agent output permanently" -- and from
-    `test_an_observation_the_message_could_not_hold_is_owed_not_spent`, which asserts exactly
-    the opposite disposition for an arrival the *line cap* could not carry.
-
-    **Pre-existing and untouched by this sub-plan.** The branch is byte-identical at `0e334c2`,
-    where this sub-plan started, and on `main`. It is pinned rather than repaired because
-    repairing it changes behaviour, which this sub-plan forbids, and because the repair needs a
-    policy nobody has chosen: an observation held past its window comes back every pass, so
-    "hold it instead" is a decision about how the backlog grows, not a one-line fix.
-
-    Delete this test when the owner settles it. Do not adjust it -- an adjusted pin is a
-    description, and a description is what let the entry and the code disagree unnoticed.
-    """
-    clock = _Clock()
-    notifier, view = _notifier(clock)
-    session = SESSION_A
-
-    first = _for(session, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
-    assert await notifier.deliver([first]) == 1
-    assert "Which file?" in _showing(view)
-    alerts_after_the_first = _messages(view)
-
-    clock.advance(30)
-    new_question = "May I force-push to main?"
-    assert (
-        await notifier.deliver(
-            [_for(session, ActivityKind.NEEDS_ANSWER, new_question, clock.moment)]
-        )
-        == 0
-    )
-
-    assert notifier.pending_count() == 0, (
-        "BL-002 pinned: the new question is not held. If this now reads 1, someone gave the "
-        "suppressed observation a debt -- that is the owner's decision; delete this test."
-    )
-
-    # Every later pass, however far past the window, still has nothing to deliver: the
-    # observation is gone rather than waiting.
-    clock.advance(600)
-    assert await notifier.deliver([]) == 0
-
-    assert new_question not in _showing(view), (
-        "BL-002 pinned: the owner is never shown the question that superseded the one they "
-        "are looking at -- not late, not silently, not at all."
-    )
-    assert "Which file?" in _showing(view)
-    assert _messages(view) == alerts_after_the_first
 
 
 async def test_bl_003_a_refused_group_holds_the_head_of_the_queue_for_ever() -> None:
@@ -1400,4 +1058,126 @@ async def test_bl_003_a_refused_group_holds_the_head_of_the_queue_for_ever() -> 
         "BL-003 pinned: a second session in the same chat is never notified while the head of "
         "the queue keeps being refused. If this now fails, the decision was taken -- delete "
         "this test."
+    )
+
+
+# What replaced the suppression window (DEC-048) ----------------------------------------------
+
+
+async def test_a_second_question_reaches_the_owner_rather_than_being_discarded() -> None:
+    """BL-002, closed. The case the taper destroyed, now the case that earns an alert.
+
+    A window keyed on `(session, kind)` used to gate this, and a gated observation was neither
+    sent nor held: `deliver` dropped it and the drain had already deleted the record, so the
+    owner was never told -- not late, not silently, not at all -- that the question they were
+    reading had been superseded. `needs_answer` is the kind where that mattered most, because
+    the agent is *blocked* on it.
+
+    `unheard` now compares the question rather than the kind, so a different one is news. The
+    message count moving is the assertion that matters: an amendment is silent and would leave
+    the owner's phone quiet.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    assert (
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)]
+        )
+        == 1
+    )
+    assert "Which file?" in _showing(view)
+    sends_after_the_first = len(view.sent)
+
+    clock.advance(30)
+    assert (
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "May I force-push to main?", clock.moment)]
+        )
+        == 1
+    ), "the new question was suppressed; this is exactly BL-002"
+
+    assert "May I force-push to main?" in _showing(view)
+    # `len(view.sent)` is the only assertion that says "reached the phone". `deliver`'s return
+    # counts amendments, `_messages` is `sent - deleted` and a replacement does both, and
+    # `_showing` reads the text either way -- three ways to write a green test that would pass
+    # with the exception removed. The first draft of this test used two of them.
+    assert len(view.sent) > sends_after_the_first, (
+        "the new question was amended in silently; the owner's phone never rang, which is the "
+        "half of BL-002 that removing the window alone does not fix"
+    )
+    assert notifier.pending_count() == 0, "delivered, so nothing is owed"
+
+
+async def test_the_same_question_asked_again_never_reaches_the_phone() -> None:
+    """The taper's real job, done by comparing what was said -- and what that now costs.
+
+    An agent repeating one sentence is the burst case the window was built for, and removing
+    the window did not reopen it: the repeat carries no kind the standing message does not
+    already carry, so `unheard` is empty and it is **amended in place**. `amend_apart` is the
+    silent route, so the owner's phone stays quiet however long the agent repeats itself,
+    which is the whole of what the taper protected.
+
+    **The cost, stated because it is real (DEC-048 accepted cost 1).** The window used to gate
+    amendments too, so a repeating session cost nothing at all; now it costs one `editMessageText`
+    per pass. `merged` stamps the newer `observed_at`, so an ordinary repeat is never byte-equal
+    to what is standing and does not take the early return -- that only fires for a re-render
+    identical down to the timestamp. It is bounded by `_MAXIMUM_SENDS_PER_PASS`, which counts
+    amendments, and it buys the owner never losing a question.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    question = _for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)
+    assert await notifier.deliver([question]) == 1
+    messages_after_the_first = _messages(view)
+    sends_after_the_first = len(view.sent)
+
+    for _ in range(5):
+        clock.advance(1)
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.NEEDS_ANSWER, "Which file?", clock.moment)]
+        )
+
+    assert _messages(view) == messages_after_the_first, "a repeat put a second message in the chat"
+    assert len(view.sent) == sends_after_the_first, (
+        "a repeat sent a message; sending is what arrives on the phone, and an identical "
+        "question is not news"
+    )
+    assert "Which file?" in _showing(view)
+    assert notifier.pending_count() == 0, "and it is not owed either -- it is on screen"
+
+
+async def test_a_fresher_completion_is_still_amended_in_silently() -> None:
+    """The exemption is `needs_answer` alone, and this is what it is scoped against.
+
+    `completed` says the session stopped and says it once, however its last reply is worded --
+    so a fresher one carrying different text is the same news in newer words and must not
+    buzz. Comparing the observations for *every* kind is what would make every repeat an alert
+    again, which is the shape the owner asked to be rid of; this is the other side of that line
+    and the reason `unheard` is text-aware for one kind rather than for all of them.
+    """
+    clock = _Clock()
+    notifier, view = _notifier(clock)
+
+    assert (
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.COMPLETED, "wrote a.py", clock.moment)]
+        )
+        == 1
+    )
+    sends_after_the_first = len(view.sent)
+
+    clock.advance(30)
+    assert (
+        await notifier.deliver(
+            [_for(SESSION_A, ActivityKind.COMPLETED, "wrote b.py", clock.moment)]
+        )
+        == 1
+    )
+
+    assert "wrote b.py" in _showing(view), "the newer words are written into the message"
+    assert len(view.sent) == sends_after_the_first, (
+        "a fresher completion reached the phone; it is the same news in newer words, and "
+        "alerting for it is the shape DEC-034 removed"
     )
