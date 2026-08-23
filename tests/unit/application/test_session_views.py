@@ -23,9 +23,9 @@ from uuid import UUID
 
 import pytest
 
+from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
-from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import (
     listed_in_sessions,
     listed_sessions,
