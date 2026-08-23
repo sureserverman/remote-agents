@@ -1315,8 +1315,9 @@ async def test_the_menu_stays_at_the_bottom_as_one_session_keeps_reporting() -> 
                 )
             ]
         )
-        # Past the suppression window, so each pass genuinely sends.
-        boundary.notifier._last_sent.clear()
+        # No window to step past any more (DEC-048): each `run N` is a fresher `completed`
+        # behind a `completed`, so it is amended into the standing message rather than sent.
+        # The assertions below are about the menu staying beneath it, which is unchanged.
 
     assert chat.bot_messages[-1].message_id == boundary.view.anchor(), chat.transcript()
     assert "Sessions" in chat.messages[boundary.view.anchor()].text
