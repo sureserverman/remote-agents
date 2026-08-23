@@ -197,3 +197,38 @@ def test_rank_rejects_a_non_positive_half_life(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         rank_by_recent_use(catalogue, (), datetime(2026, 8, 10, tzinfo=UTC), half_life_days=0)
+
+
+def test_the_two_opaque_id_derivations_cannot_drift_apart() -> None:
+    """`bootstrap._opaque_id` and `project_catalog._entry` derive the same key, separately.
+
+    Neither calls the other: one hashes `str(path.resolve(strict=False))`, the other hashes
+    `str(canonical)` where the caller already resolved. They agree today, and nothing made
+    them agree -- which is the BL-031 shape one level below the thing Stage 1 just fixed.
+
+    What makes drift expensive rather than merely untidy is *how* it would fail. The opaque_id
+    is the join key `with_project_names` looks a record up by. If the two derivations diverged,
+    every lookup would miss, `with_project_name` would decline every record as "not in the
+    catalogue" -- its documented, deliberate, silent fallback -- and both surfaces would go
+    back to rendering the 24-character hash. No exception, no log, no failing test: the defect
+    this stage exists to remove, restored by a change nobody would connect to it.
+
+    Pinned rather than merged. Merging them means exporting a derivation from `application`
+    and having the composition root call it, which is the better end state and is a change to
+    the composition root -- not something to land at a stage gate. This test makes the drift
+    impossible to land silently, which is the part that was actually missing.
+    """
+    from pathlib import Path
+
+    from remote_agents.application.project_catalog import _entry
+    from remote_agents.bootstrap import _opaque_id
+
+    class _P:
+        name = "demo"
+        area = "infra"
+
+    for path in (Path("/home/user/dev/infra/demo"), Path("/tmp/x"), Path("/")):
+        canonical = path.resolve(strict=False)
+        assert _entry(_P(), "Registered", canonical).opaque_id == _opaque_id(path), (
+            f"the catalogue and the composition root disagree on the key for {path}"
+        )

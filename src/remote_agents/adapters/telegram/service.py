@@ -90,7 +90,6 @@ from remote_agents.application.session_views import (
     only_listed,
     selectable_area,
     session_row,
-    with_project_name,
     with_project_names,
 )
 from remote_agents.application.stops import execute_stop
@@ -1963,7 +1962,6 @@ class PrivateBotBoundary:
         """
         if self.backend.sessions is None:
             return None
-        project_names = {project.opaque_id: project.name for project in self.catalogue}
         for record in await self.backend.sessions.list_sessions():
             if str(record.session_id) == session_value:
                 if not notifiable(record.state):
@@ -1978,7 +1976,13 @@ class PrivateBotBoundary:
                         state_word(record.state, record.orphan_provenance),
                     )
                     return None
-                named = with_project_name(record, project_names.get(str(record.project_id)))
+                # The whole join, not just the transform. This built its own
+                # `{opaque_id: name}` index and did its own `.get(str(record.project_id))` --
+                # byte-equivalent to `with_project_names`' body, which is the BL-031 shape
+                # Stage 1 exists to end, surviving inside the stage that ended it. The
+                # forbidden-name sweep could not see it: it greps for `def ` names, and this
+                # was an inlined copy with no definition to find.
+                (named,) = with_project_names((record,), self.catalogue)
                 return named.display.rendered
         return None
 

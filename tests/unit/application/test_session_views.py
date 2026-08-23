@@ -213,6 +213,7 @@ def test_no_adapter_redefines_the_row_or_the_area_predicate() -> None:
         # be copied into the local surface -- the manufactured-twin shape BL-031 records,
         # caught one step before it existed rather than one step after.
         "def _with_project_name",
+        "def with_project_name",
         "def with_project_names",
     )
     offenders = {

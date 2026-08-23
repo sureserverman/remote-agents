@@ -16,6 +16,7 @@ from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import explain_state
+from remote_agents.application.session_views import with_project_names
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -31,7 +32,7 @@ _EXISTING = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 def _record(
     state: SessionState = SessionState.RUNNING,
     *,
-    slug: str = "existing",
+    slug: str = "opaque-existing",
     custom_label: str | None = None,
 ) -> SessionRecord:
     return SessionRecord(
@@ -126,7 +127,9 @@ async def test_detail_names_the_session_and_its_state() -> None:
         status = _status(app)
         trail = breadcrumb(app)
 
-    assert record.display.rendered in trail
+    (named,) = with_project_names((record,), (_EXISTING,))
+    assert named.display.rendered in trail
+    assert record.display.project_slug not in trail
     assert "preserved" in status
 
 
@@ -177,7 +180,9 @@ async def test_selecting_a_row_opens_its_detail() -> None:
         trail = breadcrumb(app)
 
     assert step == "SESSION_DETAIL"
-    assert record.display.rendered in trail
+    (named,) = with_project_names((record,), (_EXISTING,))
+    assert named.display.rendered in trail
+    assert record.display.project_slug not in trail
 
 
 # The project the breadcrumb names -------------------------------------------------------------

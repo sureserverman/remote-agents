@@ -75,10 +75,12 @@ def with_project_names(
     distinction is written down so nobody reads the sentence above as the stronger promise.
     """
     names = {project.opaque_id: project.name for project in catalogue}
-    return tuple(with_project_name(record, names.get(str(record.project_id))) for record in records)
+    return tuple(
+        _with_project_name(record, names.get(str(record.project_id))) for record in records
+    )
 
 
-def with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
+def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
     """One record under a readable project name, or exactly the record that came in.
 
     **Three ways to decline, and all three return the record rather than raising.** No name
