@@ -343,8 +343,22 @@ def _activities() -> tuple[AgentActivity, ...]:
     )
 
 
-async def _activities_reader() -> tuple[AgentActivity, ...]:
-    return _activities()
+def _activity_reader() -> Callable[[], Awaitable[tuple[AgentActivity, ...]]]:
+    """A reader that returns the *same* observations every time it is called.
+
+    `_activities()` stamps `datetime.now(UTC)`, and a row's id is composed of its session,
+    kind and `observed_at` -- so a reader that rebuilt them would mint a new id on every
+    repaint. Nothing depended on that until the feed gained an *open* row, which is matched
+    by id: the expansion was set on one key and redrawn against another, so FEED_EXPANDED
+    captured a pane with nothing expanded in it. Third occurrence of this fixture shape in
+    this stage; production is unaffected, because `observed_at` comes from the store.
+    """
+    observations = _activities()
+
+    async def reader() -> tuple[AgentActivity, ...]:
+        return observations
+
+    return reader
 
 
 def _context(
@@ -372,7 +386,7 @@ def _context(
             catalogue=(_PROJECT, _OTHER),
             capture=(lambda _session_id: _captured()) if capture is None else capture,
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
-            activity_feed=_activities_reader if activity_feed is None else activity_feed,
+            activity_feed=_activity_reader() if activity_feed is None else activity_feed,
         ),
         profiles=(
             ProfileAvailability("claude", True),
@@ -601,6 +615,25 @@ class _State:
     drive: Callable[[RemoteAgentsTui, object], Awaitable[None]]
 
 
+async def _to_expanded_feed(app: RemoteAgentsTui, pilot) -> None:
+    """The feed pane with its first notification opened.
+
+    Driven through `choose` with the row's own id, not by pressing Enter on a highlighted
+    row: the id is what `ChoiceScreen.on_option_list_option_selected` hands to `choose`, so
+    this is the same call the keypress makes, without depending on where the cursor happens
+    to rest at capture time.
+    """
+    from textual.widgets import OptionList
+
+    from remote_agents.adapters.tui.screens import FeedScreen
+
+    await app.push_screen(FeedScreen())
+    await pilot.pause()
+    pane = app.screen.query_one("#feed-pane", OptionList)
+    await app.screen.choose(pane.get_option_at_index(0).id)
+    await pilot.pause()
+
+
 async def _to_sessions(app: RemoteAgentsTui, _pilot) -> None:
     await app.show_sessions()
 
@@ -645,6 +678,12 @@ async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
 
 
 _STATES = (
+    _State(
+        "FEED_EXPANDED",
+        "FEED",
+        _context,
+        _to_expanded_feed,
+    ),
     _State(
         "SESSIONS_EMPTY",
         "SESSIONS",
