@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import working
@@ -126,7 +126,7 @@ class _Gate:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """Every service call the five flows make, each able to block on the test's gate."""
 
     gate: _Gate | None = None

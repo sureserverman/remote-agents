@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import OptionList
 from tui_filter import settle_filter
 
@@ -45,7 +45,7 @@ _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:

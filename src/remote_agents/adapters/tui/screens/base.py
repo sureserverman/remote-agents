@@ -43,6 +43,59 @@ _FLOW_JUMPS = frozenset({"add_project", "sessions", "resume"})
 NEVER_EMPTY = "\x00never-empty"
 
 
+def held_option_id(pane: OptionList) -> str | None:
+    """Which row the cursor is on right now, or None if it is on nothing.
+
+    Three call sites had this same five-line expression -- `SessionsScreen._draw_listing`,
+    `DashboardScreen._reload_sessions_pane` and `FeedRegion._draw_feed` -- each with its own
+    bounds check spelled a slightly different way, and each docstring citing the others'
+    reasoning by name rather than sharing their code. That is the shape BL-031 records and
+    that `test_no_adapter_redefines_the_row_or_the_area_predicate` sweeps for: copies that
+    agree on the day they are written with nothing keeping them agreeing.
+
+    The bounds check is the part worth having once. `highlighted` can outlive the row it
+    names -- a background reload shortens the list under a cursor that was near the end --
+    so reading `get_option_at_index` without it raises on exactly the tick the restore exists
+    to survive.
+    """
+    held = pane.highlighted
+    if held is None or held >= pane.option_count:
+        return None
+    return pane.get_option_at_index(held).id
+
+
+def restore_highlight_by_id(pane: OptionList, held_id: str | None, keys: Sequence[str]) -> None:
+    """Put the cursor back on the row it was on, or on the first row.
+
+    By key and never by index: these lists are newest-first and grow at the head, so the
+    index the owner was on names a different thing after any reload. Row 0 is the fallback
+    because the cursor must always rest somewhere non-mutating (DEC-007), never nowhere.
+    """
+    if not keys:
+        return
+    target = keys.index(held_id) if held_id in keys else 0
+    # Never onto a disabled row. Textual's own guards do not cover this path: `validate_
+    # highlighted` only clamps to bounds, and `watch_highlighted` merely skips the scroll and
+    # the `OptionHighlighted` post for a disabled index -- neither refuses to *set* it. So a
+    # direct assignment can park the cursor on a row that cannot be selected, cannot be
+    # scrolled to, and fires no highlight event: stranded, and invisible to a snapshot.
+    #
+    # Not currently reachable -- an expanded feed's continuation ids cannot collide with a row
+    # key -- but that safety is an emergent property of three modules' constraints agreeing
+    # (session ids forbid colons, the kind vocabulary is a closed enum, timestamps contain no
+    # "detail"), asserted nowhere. This function's own contract is that the cursor rests
+    # somewhere non-mutating, so it is enforced here rather than left to those three.
+    if _is_disabled(pane, target):
+        target = next(
+            (index for index in range(len(keys)) if not _is_disabled(pane, index)), target
+        )
+    pane.highlighted = target
+
+
+def _is_disabled(pane: OptionList, index: int) -> bool:
+    return index < pane.option_count and pane.get_option_at_index(index).disabled
+
+
 class ChoiceScreen(Screen[None]):
     """A status line, an optional filter, a list of choices, and an output pane.
 

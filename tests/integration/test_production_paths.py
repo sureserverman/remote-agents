@@ -108,3 +108,33 @@ def test_production_paths_refuse_a_symlinked_parent(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="symlinks"):
         ProductionPaths.for_home(tmp_path).ensure_directories()
+
+
+def test_preferences_path_is_under_the_state_directory_and_not_beside_the_config(
+    tmp_path: Path,
+) -> None:
+    """A UI preference is state, not configuration.
+
+    `config.toml` is the operator's hand-written file with an exact-key schema; a value the
+    surface writes for itself has no business in it, and an unknown key there is a
+    configuration error rather than a forgotten preference.
+    """
+    paths = ProductionPaths.for_home(tmp_path)
+
+    assert paths.preferences_path == paths.state_directory / "preferences.json"
+    assert paths.preferences_path.parent != paths.config_directory
+    assert paths.preferences_path != paths.config_path
+
+
+def test_preferences_path_is_not_created_by_ensure_directories(tmp_path: Path) -> None:
+    """Like `console_lock_path`: the directory is declared, the file is the writer's.
+
+    Nothing should have to have run for the surface to start, and a preferences file that
+    exists but is empty is one of the cases the reader already forgives.
+    """
+    paths = ProductionPaths.for_home(tmp_path)
+
+    paths.ensure_directories()
+
+    assert paths.state_directory.is_dir()
+    assert not paths.preferences_path.exists()

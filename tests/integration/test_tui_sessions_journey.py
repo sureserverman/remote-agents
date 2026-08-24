@@ -38,6 +38,7 @@ from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
+from remote_agents.application.session_views import with_project_names
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
@@ -99,7 +100,16 @@ async def test_the_terminal_lists_inspects_and_reaches_a_session_it_never_launch
             await pilot.pause()
             assert position(app) == "SESSION_DETAIL"
             detail = _status(app)
-            assert str(launched.display.rendered) in _breadcrumb(app)
+            # Asserted against the *named* record, not the stored one. This test is the only
+            # member of its class that ever failed, and the reason is that it is the only one
+            # that launches through the real `SessionService` into a real store -- so
+            # `launched.display.project_slug` is genuinely the catalogue's opaque_id, which is
+            # what production holds and what every hand-built fixture had been guessing wrong.
+            # The surface now resolves that to the project's name, so comparing the breadcrumb
+            # against the raw record would be asserting the defect Stage 1 removed.
+            (named,) = with_project_names((launched,), (_PROJECT,))
+            assert named.display.rendered in _breadcrumb(app)
+            assert launched.display.project_slug not in _breadcrumb(app)
             assert "running" in detail
 
             # Pressing enter rather than calling _resolve_detail: the detail step's own

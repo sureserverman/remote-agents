@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -107,7 +107,7 @@ class _Conversations:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     resumed: list[ResumeCommand] = field(default_factory=list)
     record: SessionRecord = field(default_factory=_record)
 

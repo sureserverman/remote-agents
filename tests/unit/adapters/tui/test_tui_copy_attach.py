@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -39,7 +39,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     attach: str | None = None
     asked: list[SessionId] = field(default_factory=list)

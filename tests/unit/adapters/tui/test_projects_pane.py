@@ -16,16 +16,23 @@ list this surface shows.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import Input, OptionList, Static
+from tui_filter import settle_filter
 from tui_positions import position
 
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import ProjectsPane
+from remote_agents.adapters.tui.preferences import (
+    ALPHABETICAL,
+    RECENCY,
+    read_project_order,
+    write_project_order,
+)
 from remote_agents.adapters.tui.screens.dashboard import (
     ProjectChooserScreen,
     ProjectsPaneScreen,
@@ -42,6 +49,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.ports.session_store import ProjectUsage
 
 _INFRA = CatalogProject("opaque-infra", "remote-agents", "infra", "Registered")
 _TOOLS = CatalogProject("opaque-tools", "opaque-shift", "dev-area", "Registered")
@@ -57,9 +65,28 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
-    def __init__(self, records: tuple[SessionRecord, ...] = ()) -> None:
+class _Launcher(SessionUseCaseDouble):
+    """A host with launch history, or with none -- `project_usage` is a render-time read.
+
+    Inherits the three reads a screen makes while drawing rather than restating them: the
+    projects pane now asks `project_usage` on every catalogue refresh, so a double that
+    answered only `list_sessions` would fail at the first draw for a reason no test here is
+    about.
+    """
+
+    def __init__(
+        self,
+        records: tuple[SessionRecord, ...] = (),
+        usage: tuple[ProjectUsage, ...] = (),
+    ) -> None:
         self.records = records
+        self.usage = usage
+        #: How many times the catalogue's order was actually recomputed.
+        self.usage_reads = 0
+
+    async def project_usage(self) -> tuple[ProjectUsage, ...]:
+        self.usage_reads += 1
+        return self.usage
 
     async def refresh_readiness(self) -> None:
         return None
@@ -327,3 +354,238 @@ async def test_the_projects_pane_keeps_the_two_flows_that_begin_with_a_project()
         offered = set(app.screen.active_bindings)
         assert "ctrl+n" in offered, offered
         assert "ctrl+s" not in offered, offered
+
+
+def _usage(opaque_id: str, count: int, days_ago: float) -> ProjectUsage:
+    return ProjectUsage(opaque_id, count, datetime.now(UTC) - timedelta(days=days_ago))
+
+
+async def test_the_projects_pane_opens_in_recency_order() -> None:
+    """The DEC-012 gap this stage closes: the bot ranked, this surface drew the registry.
+
+    The catalogue is built infra-then-dev-area and the owner has been in `opaque-shift` all
+    week, so the first draw -- not the second, not the one after a refresh -- must lead with
+    it.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+async def test_a_host_that_reports_no_usage_draws_the_unranked_catalogue() -> None:
+    """Not an empty one. An unranked list is every project the owner can still launch."""
+    launcher = _Launcher()
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+
+
+async def test_the_order_is_computed_per_refresh_and_never_per_render() -> None:
+    """DEC-012's mechanism, which this stage supersedes one *other* clause of.
+
+    A ranking recomputed per render would reshuffle the list under the owner's fingers as
+    they type in the filter -- and would read the store on every keystroke to do it.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        reads_after_first_draw = launcher.usage_reads
+
+        app.screen.render_projects("a")
+        await pilot.pause()
+        app.screen.render_projects("")
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert launcher.usage_reads == reads_after_first_draw
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+async def test_a_refresh_recomputes_the_order() -> None:
+    """The other half: a refresh is exactly where a new order is expected."""
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        before = launcher.usage_reads
+
+        await app.screen.refresh_contents()
+        await pilot.pause()
+
+        assert launcher.usage_reads == before + 1
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+class _UnreadableUsage(_Launcher):
+    async def project_usage(self) -> tuple[ProjectUsage, ...]:
+        raise RuntimeError("the store is unreachable")
+
+
+async def test_a_store_that_cannot_report_usage_still_draws_the_list() -> None:
+    """The degradation is asserted rather than incidental.
+
+    `_ordered` swallows the failure and returns the catalogue as it came, so a host whose
+    store went away renders an *unranked* list rather than an empty one or a traceback. The
+    same answer a host with no launch history gets, which is the point: the owner can still
+    launch every project on the list.
+    """
+    app = ProjectsPane(_context(sessions=_UnreadableUsage()))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+
+
+_ORDER_KEY = "ctrl+t"
+
+
+def _drawn(status: Static) -> str:
+    """What the one-line region actually renders, which is the only thing the owner reads."""
+    return "".join(status.render_line(row).text for row in range(status.size.height))
+
+
+async def test_one_key_switches_the_order_and_the_rows_follow(tmp_path: Path) -> None:
+    """The usage is chosen so the two orders *disagree*, which is the whole test.
+
+    An earlier version gave the recent launch to `dev-area/opaque-shift` -- which is also
+    alphabetically first -- so both orders produced the same two rows and the only thing
+    distinguishing the states was the mode flag. A regression that flipped `_project_order`
+    and the sentence but stopped reassigning `_catalogue` would have passed it. Found by this
+    stage's goal evaluator.
+
+    So: `infra/remote-agents` is the recently used one and `dev-area/opaque-shift` the stale one,
+    which puts recency at [infra, tools] and alphabetical -- area first, then name -- at
+    [tools, infra]. The press has to move the rows or the assertion fails.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-infra", 5, 1), _usage("opaque-tools", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher, preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+        assert app.project_order == ALPHABETICAL
+
+        # And back, so the key is a switch rather than a one-way door.
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+        assert app.project_order == RECENCY
+
+
+async def test_the_switch_reorders_without_re_reading_the_catalogue(tmp_path: Path) -> None:
+    """The key changes the order, not the contents. A filesystem scan is a refresh's job."""
+    reads = 0
+
+    def _scan():
+        nonlocal reads
+        reads += 1
+        return (_INFRA, _TOOLS)
+
+    app = ProjectsPane(_context(refresh_catalogue=_scan, preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        before = reads
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert reads == before
+
+
+async def test_the_status_line_names_the_active_order_in_words(tmp_path: Path) -> None:
+    """DEC-010: the words carry it, so the region takes no severity and no colour."""
+    app = ProjectsPane(_context(preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        recency_sentence = _drawn(status)
+        assert "recent" in recency_sentence.casefold()
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        alphabetical_sentence = _drawn(status)
+        assert "alphabetical" in alphabetical_sentence.casefold()
+        assert alphabetical_sentence != recency_sentence
+        assert not status.has_class("-error") and not status.has_class("-warning")
+
+
+async def test_the_filter_survives_the_switch(tmp_path: Path) -> None:
+    """Reordering does not leave the position, so it has no business discarding the query.
+
+    The same argument Ctrl+R was corrected by: a key that stays put must keep what is typed.
+    """
+    app = ProjectsPane(_context(preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        await pilot.click("#filter")
+        await pilot.press(*"opaque-shift")
+        await settle_filter(pilot)
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-tools"]
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert entry.value == "opaque-shift"
+        assert [option.id for option in choices.options] == ["opaque-tools"]
+
+
+async def test_the_new_mode_is_written_once_per_press(tmp_path: Path) -> None:
+    path = tmp_path / "prefs.json"
+    app = ProjectsPane(_context(preferences_path=path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert not path.exists(), "opening the list is not a choice worth recording"
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+        assert read_project_order(path) == ALPHABETICAL
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+        assert read_project_order(path) == RECENCY
+
+
+async def test_the_remembered_order_is_the_one_the_surface_opens_in(tmp_path: Path) -> None:
+    """The whole point of writing it: a restart lands where the owner left off."""
+    path = tmp_path / "prefs.json"
+    write_project_order(path, ALPHABETICAL)
+
+    app = ProjectsPane(_context(preferences_path=path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        assert app.project_order == ALPHABETICAL
+        status = app.screen.query_one("#status", Static)
+        assert "alphabetical" in _drawn(status).casefold()
+
+
+async def test_a_host_that_wired_no_preferences_path_still_switches(tmp_path: Path) -> None:
+    """It forgets between runs; it does not refuse the key."""
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert app.project_order == ALPHABETICAL
+        assert list(tmp_path.iterdir()) == []

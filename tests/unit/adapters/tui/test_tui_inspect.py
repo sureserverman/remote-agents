@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import Input, OptionList, TextArea
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -40,7 +40,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
 
     async def refresh_readiness(self):

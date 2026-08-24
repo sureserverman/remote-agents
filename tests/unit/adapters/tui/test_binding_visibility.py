@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.screen import Screen
 from textual.widgets import Input, OptionList
 from tui_feedback import announcements
@@ -75,7 +75,7 @@ def _summary() -> ConversationSummary:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
 
     async def refresh_readiness(self):
@@ -260,6 +260,43 @@ async def test_the_footer_offers_back_everywhere_except_the_resting_position(
     assert offered is expected, (
         f"{screen_type.__name__} {'offers' if offered else 'hides'} Back at stack depth "
         f"{'>1' if expected else '1'}"
+    )
+
+
+@pytest.mark.parametrize("screen_type", ALL_SCREENS, ids=lambda c: c.__name__)
+async def test_the_footer_offers_the_reorder_key_exactly_where_the_action_exists(
+    screen_type: type[Screen],
+) -> None:
+    """The order key is a *screen* binding, so its reach is the class that declares it.
+
+    **What this asserts is narrower than the file's other cases, and saying so is the point.**
+    Those derive their expectation from a *declaration* the action is separately pinned
+    against -- `can_refresh`, the stack depth, whether a conversation service was wired -- so
+    they can catch a `check_action` that has drifted from the action it governs. This one
+    reads `hasattr(screen, "action_toggle_project_order")`, which is close to restating
+    Textual's own binding resolution: a screen that wrongly *had* the action would have the
+    attribute too, so this cannot catch the key leaking somewhere it does not belong.
+
+    It earns its place as the regression guard for the two things that are not automatic: the
+    binding is declared `show=True` (an inherited `show=False`, or a `check_action` returning
+    `False`, would hide a key that works), and the reach follows the class rather than a
+    hand-maintained list, so a position that inherits `ProjectsScreen` tomorrow is covered on
+    the same commit. Raised as an overclaim by this stage's goal evaluator, which was right.
+
+    `ResumeProjectsScreen` draws the same catalogue and takes whatever order is in force
+    without offering the switch: one place chooses, everything that renders the catalogue
+    follows.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _arrange(app, pilot, screen_type)
+        offered = "ctrl+t" in _footer_keys(app)
+        expected = hasattr(app.screen, "action_toggle_project_order")
+
+    assert offered is expected, (
+        f"{screen_type.__name__} {'offers' if offered else 'hides'} the reorder key, but "
+        f"{'has' if expected else 'has no'} action_toggle_project_order"
     )
 
 

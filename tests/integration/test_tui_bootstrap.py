@@ -6,10 +6,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from textual.widgets import OptionList
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.preferences import DEFAULT_PROJECT_ORDER
 from remote_agents.bootstrap import local_context, main
 from remote_agents.config import ConfigError
 from remote_agents.production import ProductionPaths
@@ -330,6 +332,53 @@ def test_the_local_context_wires_the_two_stage_four_capabilities(
         )
         # No configuration key sources redactions today; the bot passes none either.
         assert context.capture_redactions == ()
+    finally:
+        connection.close()
+
+
+def test_the_local_context_wires_the_preference_the_surface_remembers(
+    home: Path, paths: ProductionPaths, tmp_path: Path
+) -> None:
+    """The declared boundary's answer, not one the adapter derives for itself (DEC-046)."""
+    from remote_agents.config import load_config
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+
+        assert context.preferences_path == paths.preferences_path
+        assert context.preferences_path.parent == paths.state_directory
+    finally:
+        connection.close()
+
+
+async def test_a_real_composition_with_no_launch_history_draws_every_project(
+    home: Path, paths: ProductionPaths, tmp_path: Path
+) -> None:
+    """The unranked catalogue is the honest answer on a fresh host, not an empty list.
+
+    Driven over the executed composition rather than a double, because the failure this
+    guards against is a composition one: the surface asks its *own* backend for usage now,
+    and a host whose store has never seen a launch must still draw its projects.
+    """
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.config import load_config
+
+    config = load_config(_config_file(home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        context = local_context(config, connection, paths)
+        expected = [project.opaque_id for project in context.backend.catalogue]
+        assert expected, "the fixture registers one project; the catalogue must carry it"
+
+        app = RemoteAgentsTui(context)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            choices = app.screen.query_one("#choices", OptionList)
+
+            assert [option.id for option in choices.options] == expected
+            assert app.project_order == DEFAULT_PROJECT_ORDER
     finally:
         connection.close()
 

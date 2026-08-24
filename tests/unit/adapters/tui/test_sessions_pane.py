@@ -14,12 +14,15 @@ already opened the detail; this is that pair, on a screen of its own.
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime
 
-from backends import tui_context_for
+import pytest
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
 
+from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import SessionsPane
 from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen, SessionsPaneScreen
@@ -39,7 +42,7 @@ _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _OTHER = SessionId.parse("fedcba98-7654-3210-fedc-ba9876543210")
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: tuple[SessionRecord, ...]) -> None:
         self.records = records
 
@@ -69,6 +72,9 @@ def _context(records: tuple[SessionRecord, ...] = (), **overrides) -> TuiContext
         "refresh_catalogue": lambda: (_PROJECT,),
         "attach_argv": lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
         "catalogue": (_PROJECT,),
+        # Wired because `i` is offered only where there is something to inspect, exactly as
+        # `p` is offered only where a console is wired. The real composition always wires it.
+        "capture": lambda _session_id: "captured output",
     }
     base.update(overrides)
     return tui_context_for(**base)
@@ -385,3 +391,586 @@ async def test_a_session_that_is_shown_says_nothing_at_all() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert list(app._notifications) == []
+
+
+# The project a row names ----------------------------------------------------------------------
+
+
+async def test_a_row_names_its_project_rather_than_the_catalogue_id() -> None:
+    """The defect this closes, captured from the live surface before the change:
+
+        034b69be3a8290521db3d76e · codex · regular · #3 · running · 10d ago
+
+    `SessionDisplayIdentity.project_slug` holds the catalogue's `opaque_id`, and the bot has
+    always swapped it for the readable name at render time. This surface never did.
+    """
+    app = SessionsPane(_context((_record(name="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        row = choices.get_option_at_index(0)
+        assert "existing" in str(row.prompt)
+        assert "opaque-existing" not in str(row.prompt)
+
+
+async def test_naming_the_project_leaves_the_row_key_alone() -> None:
+    """The key is the handle every action screen is reached through.
+
+    Getting the name wrong is cosmetic; getting the *key* wrong strands Stop, Force stop,
+    Rename and Inspect behind a row that no longer addresses anything.
+    """
+    app = SessionsPane(_context((_record(name="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert choices.get_option_at_index(0).id == str(_SESSION)
+
+
+async def test_a_session_whose_project_left_the_catalogue_still_renders() -> None:
+    """Deregistered, or a directory moved, while the session runs. The slug is then the only
+    name there is, and a row the owner cannot see is a session they cannot stop."""
+    app = SessionsPane(_context((_record(name="vanished"),), catalogue=()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert choices.option_count == 1
+        assert "vanished" in str(choices.get_option_at_index(0).prompt)
+
+
+# A key per action, each routed into the detail's own chain ------------------------------------
+
+_ACTION_KEYS = (
+    ("a", "attach"),
+    ("i", "inspect"),
+    ("r", "rename"),
+    ("f", "force"),
+)
+
+
+@pytest.mark.parametrize(("key", "action"), _ACTION_KEYS)
+async def test_each_key_pushes_the_detail_carrying_its_action(key: str, action: str) -> None:
+    """DEC-007's control plane, one key deep instead of two.
+
+    Each key names an action and hands it to `SessionDetailScreen`, which performs it through
+    the chain it already has -- the same confirmations, refusals and guards a pressed row
+    gets. The key itself decides nothing about whether the action is legal; that is the
+    policy's answer, re-checked at issue time.
+    """
+    opened: list[tuple[str, str | None]] = []
+    app = SessionsPane(_context((_record(),)))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press(key)
+        await pilot.pause()
+
+    assert opened == [(str(_SESSION), action)], opened
+
+
+async def test_a_key_with_no_row_highlighted_is_a_no_op() -> None:
+    """An empty list still has a footer. A key pressed against no row must do nothing rather
+    than raise out of a binding, which on this surface exits the app."""
+    opened: list = []
+    app = SessionsPane(_context(()))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(*a, **k):
+            opened.append(a)
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        for key in ("a", "i", "r", "s", "c", "f", "m"):
+            await pilot.press(key)
+            await pilot.pause()
+        assert app.is_running, "a key with no highlighted row took the surface down"
+
+    assert opened == []
+
+
+async def test_no_action_key_collides_with_an_app_level_binding() -> None:
+    """The pane hides its filter, so bare letters are free here in a way they are not on the
+    projects pane. What is *not* free is anything the app already binds -- a screen binding
+    shadowing Quit or Back would take the key away everywhere it is inherited."""
+    from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen as _Pane
+
+    app_keys = {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}
+    pane_keys = {binding.key for binding in _Pane.BINDINGS}
+    assert not (pane_keys & app_keys), sorted(pane_keys & app_keys)
+
+
+async def test_no_trust_key_is_offered_dec_047() -> None:
+    """DEC-047: the local surface answers the trust question in the pane the console exchanges
+    in, so it deliberately has no trust row -- and must not grow a trust *key* either."""
+    from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen as _Pane
+
+    actions = " ".join(str(binding.action) for binding in _Pane.BINDINGS)
+    assert "trust" not in actions.lower(), actions
+
+
+async def test_m_performs_the_single_offered_direction() -> None:
+    """Where the policy offers one direction, the key performs it."""
+    from dataclasses import replace as _replace
+
+    from remote_agents.domain.remote_control import RemoteControlState
+
+    opened: list[tuple[str, str | None]] = []
+    record = _replace(_record(), remote_control_state=RemoteControlState.INACTIVE)
+    app = SessionsPane(_context((record,)))
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press("m")
+        await pilot.pause()
+
+    assert len(opened) == 1, opened
+    assert opened[0][1] == "remote-control-active", opened
+
+
+async def test_m_opens_the_detail_unmodified_when_the_direction_is_unknown() -> None:
+    """`remote_control_directions` offers *both* when nobody has toggled this session or the
+    observation came back UNKNOWN -- deliberately, because unknown must not be guessed at.
+
+    A key that picked one would be answering, on a live pane, a question the policy declines
+    to answer. So it opens the detail and lets the owner choose, which is the same two
+    keypresses this key exists to save everywhere else and the right number here.
+    """
+    opened: list[tuple[str, str | None]] = []
+    app = SessionsPane(_context((_record(),)))  # no remote_control_state observed
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        async def capture(session_value, opening_action=None):
+            opened.append((session_value, opening_action))
+
+        app.show_detail = capture  # type: ignore[method-assign]
+        await pilot.press("m")
+        await pilot.pause()
+
+    assert opened == [(str(_SESSION), None)], opened
+
+
+async def test_no_key_auto_performs_an_action_the_detail_would_not_ask_about() -> None:
+    """The rule this task's Tier-1 review produced, pinned as a rule rather than as a list.
+
+    `SessionDetailScreen.choose` asks before `force` and before either Remote Control
+    direction, and does not ask before Stop and close or Clean up -- the branch
+    `key in ACTION_LABELS and key != FORCE`. A key that auto-performed one of those would
+    remove the only thing standing in front of it, which was two deliberate keypresses rather
+    than a confirmation (DEC-018 declined confirmations for both, on both surfaces).
+
+    That matters here specifically because this list restores its cursor *by key* every ten
+    seconds and falls back to row 0 when a key has gone -- so a session ending between ticks
+    moves the cursor to a different session with nothing said.
+
+    Derived from the policy rather than hardcoded: an unconfirmed action added to
+    `ACTION_LABELS` tomorrow is excluded the day it appears, instead of quietly becoming
+    bindable.
+    """
+    from remote_agents.adapters.tui.screens.sessions import (
+        SESSION_ACTION_KEYS,
+        UNCONFIRMED_MUTATING_ACTIONS,
+    )
+    from remote_agents.application.session_actions import ACTION_LABELS, FORCE
+
+    assert UNCONFIRMED_MUTATING_ACTIONS == frozenset(ACTION_LABELS) - {FORCE}
+    assert UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
+
+    bound = {action for _key, action, _label in SESSION_ACTION_KEYS}
+    offenders = bound & UNCONFIRMED_MUTATING_ACTIONS
+    assert not offenders, (
+        f"these keys auto-perform an action the detail never asks about: {sorted(offenders)}"
+    )
+
+
+async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
+    """`SessionsScreen` and `SessionsPaneScreen` each declare `BINDINGS` from the same list,
+    and both carry the same 10-second auto-refresh -- so both are the surface this task's
+    Critical was about, and an edit touching one alone must not go unnoticed.
+
+    Asserted as an equality between the two key sets rather than as two separate lists, so the
+    sharing itself is the pinned invariant.
+    """
+    from remote_agents.adapters.tui.screens.sessions import SessionsScreen
+
+    action_keys = {key for key, _a, _l in _module_action_keys()} | {"m"}
+    full = {str(b.key) for b in SessionsScreen.BINDINGS}
+    pane = {str(b.key) for b in SessionsPaneScreen.BINDINGS}
+    assert action_keys <= full, sorted(action_keys - full)
+    assert action_keys <= pane, sorted(action_keys - pane)
+    # The pane adds `d` and `p`; every row key is shared.
+    #
+    # `p` is the pane's alone on purpose. Hosting is decided by the tmux socket name, so a
+    # plain `remote-agents tui` started from any shell on the console's server is classified
+    # CONSOLE and has `console_show_projects` wired -- and a `p` on the full sessions position
+    # would then rearrange the owner's real console from a process that is not one of its
+    # managed panes. This asserts the separation rather than leaving it to the comment.
+    assert pane - full == {"d", "p"}, sorted(pane - full)
+    assert "p" not in full, "the full sessions position must not offer the console key"
+
+
+def _module_action_keys():
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+
+    return SESSION_ACTION_KEYS
+
+
+async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
+    """Asserted against the *effective* bindings, not a class's declared list.
+
+    `SessionsPaneScreen.BINDINGS` repeats `*SESSION_ACTION_BINDINGS` rather than relying on
+    Textual's MRO merge, and a future reader may reasonably delete the repetition as redundant
+    -- it is. Reading the declared list would then silently stop checking the inherited keys
+    and still pass, so this reads what the mounted screen actually offers.
+    """
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        offered = set(app.screen.active_bindings)
+
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+
+    for key, _action, _label in SESSION_ACTION_KEYS:
+        assert key in offered, f"{key!r} is not in the screen's effective keymap: {sorted(offered)}"
+    assert "m" in offered
+    assert "d" in offered, "the detail key was lost"
+    assert {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}.isdisjoint(
+        {key for key, _a, _l in SESSION_ACTION_KEYS} | {"m"}
+    )
+
+
+# The keys answer for themselves, and say they exist ---------------------------------------
+
+
+async def test_the_action_keys_decline_when_no_row_is_highlighted() -> None:
+    """`check_action` mirrors the early return the action already has, per this surface's rule
+    that a key is refused only where the action it names already declines.
+
+    `highlighted_session()` returns None on an empty list, so every action key is a no-op
+    there -- and `check_action` says so rather than leaving Textual to dispatch into a method
+    that will silently do nothing.
+    """
+    app = SessionsPane(_context(()))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.highlighted_session() is None
+        assert screen.check_action("row_action", ("force",)) is False
+        assert screen.check_action("row_remote_control", ()) is False
+
+
+async def test_the_action_keys_are_offered_when_a_row_is_highlighted() -> None:
+    """The other half: a rule that only ever refuses would hide a working key."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.highlighted_session() is not None
+        assert screen.check_action("row_action", ("force",)) is not False
+        assert screen.check_action("row_remote_control", ()) is not False
+
+
+@pytest.mark.parametrize("width", (100, 80, 60))
+async def test_the_status_line_names_the_keys_and_is_not_truncated(width: int) -> None:
+    """The keys are `show=False`, so the status line is where they are discoverable.
+
+    Not a preference: the footer at the project's own 100-column baseline already runs to
+    about seventy columns, and six more entries would clip bindings the owner did not add --
+    the defect `InspectScreen`'s own comment records having caused once.
+
+    **Asserted on the rendered line, not on `Static.content`.** The first version of this test
+    read the content, which holds the untruncated source string and would have passed at any
+    width whatsoever -- while `#status` is `height: 2` and clips. A Tier-1 review reproduced
+    the real thing at 60 columns: "m remote control" vanished with no ellipsis at all, which is
+    worse than eliding. This is the same pitfall `test_status_region.py`'s own
+    `test_the_attach_command_renders_whole_at_eighty_columns` documents, and it is the third
+    time in this plan that asserting the input instead of the render hid a real defect.
+
+    60 is included because `app.py`'s own margin comments treat it as a live budget.
+    """
+    from textual.widgets import Static
+
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(width, 24)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        # Rows joined with a space, not concatenated. `#status` is `height: 2` and wraps, and
+        # the wrap point falls mid-sentence -- at 60 columns it lands between "a" and
+        # "attach", so a bare concatenation reads "aattach" and the assertion fails on a
+        # string that is entirely present. Joining with a space can only ever produce a false
+        # *failure* (if a wrap split a word), never a false pass, which is the right direction
+        # for a test whose whole job is to notice loss.
+        drawn = " ".join(status.render_line(row).text.strip() for row in range(status.size.height))
+
+    for key, action, _label in _module_action_keys():
+        assert f"{key} {action}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
+    assert "m remote" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
+    assert "…" not in drawn, f"the status line was elided at {width} columns: {drawn!r}"
+
+
+# One key returns the projects surface to the console's left slot -------------------------------
+
+
+async def test_p_calls_the_wired_capability_exactly_once() -> None:
+    """DEC-040: the console exchanges its left pane with the agent, and this puts it back.
+
+    An exchange writes no record and touches no lifecycle, which is why this key needs none of
+    the machinery every other key on this pane routes through.
+    """
+    calls: list[int] = []
+
+    async def show_projects() -> None:
+        calls.append(1)
+
+    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+
+    assert calls == [1], calls
+
+
+async def test_p_is_absent_on_a_host_that_wired_no_console() -> None:
+    """A bare terminal has no console to put a surface back into, so the key is not offered
+    and its action declines. A dead-end entry is worse than an absent one -- the owner cannot
+    tell a key that does nothing from a surface that forgot to draw it."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.check_action("show_projects_pane", ()) is False
+        await pilot.press("p")
+        await pilot.pause()
+        assert app.is_running
+
+
+async def test_a_failing_capability_is_reported_and_is_not_a_lifecycle_failure() -> None:
+    """The console degrading is not the session going wrong. A raise here must reach the owner
+    as what it is -- the surface could not be rearranged -- and must not take the app down or
+    read as anything having happened to the agent."""
+    from tui_feedback import announcements
+
+    async def show_projects() -> None:
+        raise RuntimeError("the console has no left slot")
+
+    app = SessionsPane(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("p")
+        await pilot.pause()
+        said = " ".join(announcements(app))
+        assert app.is_running, "a failing console capability took the surface down"
+
+    assert "console" in said.lower(), said
+    assert "session" not in said.lower(), f"a console failure was reported as a session one: {said}"
+
+
+async def test_the_full_sessions_position_does_not_offer_the_console_key() -> None:
+    """Driven, not just read off the class: a `SessionsScreen` with `console_show_projects`
+    wired -- the exact combination a `remote-agents tui` on the console's own tmux server
+    produces -- must still not carry `p`."""
+    calls: list[int] = []
+
+    async def show_projects() -> None:  # pragma: no cover - must never be reached
+        calls.append(1)
+
+    app = RemoteAgentsTui(_context((_record(),), console_show_projects=show_projects))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.show_sessions()
+        await pilot.pause()
+        assert position(app) == "SESSIONS"
+        offered = set(app.screen.active_bindings)
+        assert "p" not in offered, sorted(offered)
+        await pilot.press("p")
+        await pilot.pause()
+
+    assert calls == [], "the full sessions position rearranged the console"
+
+
+def test_a_key_for_an_unconfirmed_action_fails_at_import_not_only_in_ci() -> None:
+    """The invariant is enforced where it cannot be skipped.
+
+    It was asserted only by a test, and this codebase already has the better pattern for the
+    shape -- `ChoiceScreen.__init_subclass__` raises at class-definition time. Re-adding `s`
+    to "finish the job the plan proposed" would otherwise ship the moment someone did not
+    notice one red test, putting an unconfirmed graceful stop one keypress from a list whose
+    cursor moves under a 10-second refresh.
+    """
+    import importlib
+
+    import remote_agents.adapters.tui.screens.sessions as module
+
+    original = module.SESSION_ACTION_KEYS
+    source = pathlib.Path(module.__file__).read_text("utf-8")
+    assert "raise RuntimeError(" in source, "the import-time guard is gone"
+    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS" in source, "the guard no longer checks it"
+    # The guard reads the module-level table, so the check is exactly the one that runs at
+    # import; reproduced here rather than re-importing a mutated module, which pytest's own
+    # module cache makes unreliable.
+    bindable = {action for _key, action, _label in original}
+    assert not bindable & module.UNCONFIRMED_MUTATING_ACTIONS
+    assert module.UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
+    importlib.reload  # noqa: B018 - referenced so the import is not flagged unused
+
+
+async def test_i_is_absent_on_a_host_that_cannot_inspect() -> None:
+    """The same rule `p` follows: offered where the capability exists, absent where it does
+    not. `detail_entries` gates the Inspect row on `backend.capture` and `show_inspect`
+    returns silently without it, so a key that stayed offered would push a detail with no
+    Inspect row and then do nothing -- the dead end `p`'s own gating exists to avoid."""
+    app = SessionsPane(_context((_record(),), capture=None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert screen.check_action("row_action", ("inspect",)) is False
+        assert screen.check_action("row_action", ("attach",)) is not False
+
+
+def _codex_record(session_id: SessionId = _SESSION) -> SessionRecord:
+    """A live session Remote Control does not apply to — only Claude implements the action."""
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque-existing"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("existing", "codex", "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+def _starting_record(session_id: SessionId = _SESSION) -> SessionRecord:
+    """A listed session the stop policy offers nothing for.
+
+    STARTING rather than ENDED, which is what the close-out evaluator's example named: ENDED
+    is the one state `listed_in_sessions` excludes, so an ENDED row is never drawn and `f`
+    cannot be pressed on one. STARTING is drawn, and `available_actions` returns `()` for it --
+    the pane may not exist yet and the domain has no stop transition from it. The finding was
+    right about the gap; this is the state that actually reaches it.
+    """
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionState.STARTING,
+        datetime.now(UTC),
+    )
+
+
+async def test_the_remote_control_key_is_inert_on_a_session_it_cannot_apply_to() -> None:
+    """`remote_control_available` says to consult it before offering the toggle, and this is
+    the surface that was not.
+
+    `m` reached `show_detail` on a codex row -- a *navigation* the owner did not ask for,
+    dressed as a refusal. The detail then declines in its own words, which is the right answer
+    to the wrong question: the key should not have acted at all. Found by this plan's close-out
+    evaluator, driving a real codex session on the owner's host.
+    """
+    app = SessionsPane(_context((_codex_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_remote_control", ()) is False
+
+        # Driven, not just asked: a `check_action` answer nothing consults is a rule the
+        # framework is free to ignore, so the key itself is pressed and the position re-read.
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert position(app) == "SESSIONS_PANE", "the key navigated instead of declining"
+
+
+async def test_the_force_key_is_inert_where_the_policy_offers_no_force() -> None:
+    """The same rule for the other key whose action the policy gates by state.
+
+    `available_actions(STARTING, None)` is empty, so `f` on a STARTING row named an action
+    nobody was offering. `check_action` mirrors what the policy answers for the row under
+    the cursor, which is the rule that method's own docstring states for every key it gates.
+    """
+    app = SessionsPane(_context((_starting_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_action", ("force",)) is False
+        # The keys that do not depend on the record stay offered: a row is still attachable,
+        # inspectable and renameable when the stop policy has nothing to say about it.
+        assert app.screen.check_action("row_action", ("attach",)) is True
+        assert app.screen.check_action("row_action", ("rename",)) is True
+
+
+async def test_both_keys_stay_offered_where_the_policy_does_offer_them() -> None:
+    """The other half, so the gate is not passing by refusing everything."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_remote_control", ()) is True
+        assert app.screen.check_action("row_action", ("force",)) is True
+
+
+async def test_the_remote_control_key_refuses_in_words_rather_than_navigating() -> None:
+    """The issue-time half of the same rule (DEC-007's third mitigation).
+
+    `check_action` answers from the row that was drawn, so a session that stopped between the
+    redraw and the keypress can still reach the handler. What it must not do there is what it
+    used to do everywhere: push a detail the owner did not ask for. A detail is not a refusal.
+    """
+    from tui_feedback import announcements
+
+    app = SessionsPane(_context((_codex_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        await app.screen.action_row_remote_control()
+        await pilot.pause()
+
+        assert position(app) == "SESSIONS_PANE", "the key navigated instead of declining"
+        assert any("Remote Control" in note for note in announcements(app)), (
+            "the key declined silently, which is the complaint one step quieter"
+        )
+
+
+async def test_the_drawn_records_do_not_outlive_the_rows_they_describe() -> None:
+    """The last session ending must clear the cache `check_action` reads, not just the rows.
+
+    A version of `_draw_listing` that rebuilt `_drawn` only on the non-empty path left the
+    defunct records behind on a non-empty → empty redraw. Nothing could reach them, because
+    the empty draw puts a disabled sentinel row down and `highlighted_session()` filters
+    sentinel ids -- but that is an unrelated guard in another method holding up an invariant
+    this one asserts. Found by the Tier-1 review of this change.
+    """
+    launcher = _Launcher((_record(),))
+    app = SessionsPane(_context((_record(),), sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert app.screen._drawn, "the fixture drew no rows, so this proves nothing"
+
+        launcher.records = ()
+        await app.screen.reload()
+        await pilot.pause()
+
+        assert not app.screen._drawn
+        assert app.screen.highlighted_session() is None

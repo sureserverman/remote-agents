@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.command import DiscoveryHit, Hit
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -33,7 +33,7 @@ _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
 
     async def refresh_readiness(self) -> tuple[SessionRecord, ...]:

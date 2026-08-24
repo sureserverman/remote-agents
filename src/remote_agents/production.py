@@ -74,6 +74,23 @@ class ProductionPaths:
         """
         return self.state_directory / "console.lock"
 
+    @property
+    def preferences_path(self) -> Path:
+        """The one thing the local surface remembers about itself between runs.
+
+        Under `state_directory` and deliberately not beside `config.toml`: the config file
+        is the operator's, hand-written, with an exact-key schema that rejects a key it does
+        not know. A value a surface writes for itself would either break that schema or
+        force it open, and neither is worth a list ordering.
+
+        Not in `ensure_directories`, for `console_lock_path`'s reason: the directory is
+        declared, the file is the writer's, and it is created owner-only on first write.
+        A host where it cannot be written keeps drawing the list in the default order --
+        `adapters/tui/preferences.py` reads and writes totally, and forgetting the choice is
+        the whole cost of every failure it can have.
+        """
+        return self.state_directory / "preferences.json"
+
     def ensure_directories(self) -> None:
         """Create only declared directories and repair their private modes."""
         for path in (

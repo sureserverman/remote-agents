@@ -59,7 +59,7 @@ import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from test_tui_snapshots import settle
 from textual.widgets import Input, OptionList
 from tui_feedback import status
@@ -97,7 +97,7 @@ def _record(session_id: SessionId, ordinal: int) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _GatedLauncher:
+class _GatedLauncher(SessionUseCaseDouble):
     """A store whose next listing can be held open, answering the world as it was.
 
     Two properties, and both are the test rather than the scaffolding.

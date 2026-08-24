@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -55,7 +55,7 @@ def _record(state: SessionState = SessionState.RUNNING, profile: str = "claude")
 
 
 @dataclass(slots=True)
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     issued: list[RemoteControlCommand] = field(default_factory=list)
     result: RemoteControlState = RemoteControlState.ACTIVE

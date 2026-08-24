@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.screen import Screen
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -101,7 +101,7 @@ def _summary() -> ConversationSummary:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
 
     async def refresh_readiness(self):

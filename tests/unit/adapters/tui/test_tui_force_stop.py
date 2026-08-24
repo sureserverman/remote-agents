@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import status as _status
@@ -29,6 +29,7 @@ from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.application.commands import ForceStopCommand
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_views import with_project_names
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -48,14 +49,18 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
         SessionId.new(),
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        # The opaque_id, which is what the store holds. It read the catalogue *name*
+        # until Stage 1, which made the naming join a no-op here -- so the assertion
+        # below ("the confirm step must name the session") was true of a record that
+        # had never needed naming.
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1),
         state,
         datetime.now(UTC),
     )
 
 
 @dataclass(slots=True)
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     issued: list[object] = field(default_factory=list)
     #: What `force_stop` observed. Defaults to the kill that worked; a test wanting BL-026's
@@ -141,7 +146,13 @@ async def test_choosing_force_opens_a_confirm_modal_and_issues_nothing_yet() -> 
     assert step == "FORCE_MODAL"
     assert modal, "the confirmation must be modal, or an app binding can leave it unanswered"
     assert launcher.issued == [], "force must not be issued on the first selection"
-    assert record.display.rendered in status, "the confirm step must name the session"
+    # The *named* record: the surface resolves the project's opaque_id to its catalogue name
+    # before anything renders, so the confirmation names the session the way the row the
+    # owner pressed named it. Comparing against the stored record would assert the hash form
+    # the owner never sees -- and would pass a modal that named the wrong thing.
+    (named,) = with_project_names((record,), (_PROJECT,))
+    assert named.display.rendered in status, "the confirm step must name the session"
+    assert record.display.project_slug not in status
 
 
 async def test_the_confirm_modal_opens_with_abort_highlighted() -> None:
@@ -362,7 +373,7 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
     """
 
     @dataclass(slots=True)
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
         issued: list[object] = field(default_factory=list)
 
@@ -466,7 +477,7 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
     record = _record()
 
     @dataclass(slots=True)
-    class _SlowReads:
+    class _SlowReads(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
         issued: list[object] = field(default_factory=list)
 
@@ -535,7 +546,7 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
     record = _record()
 
     @dataclass(slots=True)
-    class _Vanishing:
+    class _Vanishing(SessionUseCaseDouble):
         seen: int = 0
         issued: list[object] = field(default_factory=list)
 

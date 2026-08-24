@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -37,7 +37,7 @@ def _record() -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     refreshed: int = 0
 

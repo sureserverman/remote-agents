@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
@@ -75,8 +75,19 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.remote_control import RemoteControlState
 
-_PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
+#: The catalogue's name is deliberately **not** the record's project slug below.
+#:
+#: It used to be -- both were `"existing"` -- which made every modal here blind to Stage 1's
+#: naming join: `with_project_names` replaces the slug with the catalogue name, and when the
+#: two are the same string the join is a no-op that a regression removing it would reproduce
+#: exactly. The Stage 1 handoff disclosed this fixture by name and asked the next stage
+#: touching modal wording to fix it; Stage 5's second Tier-2 pass found it still standing,
+#: and it is the same "a test that cannot fail" shape that gate had already closed twice.
+_PROJECT = CatalogProject("opaque-existing", "remote-agents", "infra", "Registered")
 _SESSION_ID = SessionId.new()
+#: What an *unjoined* record carries: the opaque id, which is what both surfaces rendered
+#: before Stage 1 and what they fall back to for a project absent from the catalogue.
+_UNJOINED_SLUG = "opaque-existing"
 #: Interpolated into every status line through `record.display.rendered`, so a modal that
 #: forgets to name the session it is about renders a question with this string missing.
 _LABEL = "the-one-being-killed"
@@ -87,14 +98,14 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
         _SESSION_ID,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1, _LABEL),
+        SessionDisplayIdentity(_UNJOINED_SLUG, "claude", "regular", 1, _LABEL),
         state,
         datetime.now(UTC),
     )
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """Records the command objects, and lets the test move the session under the question.
 
     The commands themselves rather than a name per call: a launcher that recorded
@@ -850,3 +861,42 @@ async def test_the_question_names_the_session_it_is_about(confirm, arrangement) 
     assert _LABEL in question, (
         f"{confirm.__name__} asks a question that does not name the session: {question!r}"
     )
+
+
+async def test_a_confirmation_names_the_project_the_way_the_catalogue_does() -> None:
+    """The question the owner answers must name a project they recognise.
+
+    This is what the fixture above was de-aliased for. A confirmation is DEC-007's whole
+    mitigation, and it is worth exactly as much as the owner's ability to tell *which*
+    session it is about -- so a modal asking about `opaque-existing` is a modal that has
+    stopped doing its job, while looking identical to one that works.
+
+    Asserted against the drawn screen rather than against the record, because the join Stage 1
+    promoted (`with_project_names`) happens between the two: reading the record back would
+    agree with itself whether or not the surface ever applied it.
+    """
+    launcher = _Launcher(records=(_record(),))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.show_detail(str(_SESSION_ID))
+        await pilot.pause()
+        drawn = _drawn_text(app)
+
+        assert _PROJECT.name in drawn, (
+            f"the detail names no project the catalogue knows; it drew: {drawn!r}"
+        )
+        assert _UNJOINED_SLUG not in drawn, (
+            "the detail is rendering the opaque id, which is the defect Stage 1 closed"
+        )
+
+
+def _drawn_text(app: RemoteAgentsTui) -> str:
+    """Every string this screen is showing — status line, breadcrumb, header and rows."""
+    from textual.widgets import Static
+
+    parts = [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
+    for static in app.screen.query(Static):
+        parts.extend(static.render_line(row).text for row in range(max(static.size.height, 0)))
+    parts.append(str(app.sub_title))
+    return " ".join(parts)

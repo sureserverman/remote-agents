@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -62,7 +62,7 @@ def _record(state: SessionState) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     """Records every command issued, so a stop that should not happen is visible."""
 
     records: tuple[SessionRecord, ...] = ()
@@ -284,7 +284,7 @@ async def test_a_navigation_action_cannot_interleave_with_a_stop() -> None:
     record = _record(SessionState.RUNNING)
 
     @dataclass(slots=True)
-    class _SlowLauncher:
+    class _SlowLauncher(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
         issued: list[object] = field(default_factory=list)
 

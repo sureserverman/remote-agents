@@ -151,6 +151,25 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "console_sync",
         "console_flash",
         "console_recovery",
+        # Added by Stage 4's Task 4.4, and listed here because this test is where growing the
+        # set is supposed to become a decision rather than a diff nobody reads. It is the same
+        # family as `console_flash` on every axis that matters: console hosting's alone, absent
+        # in a bare terminal, wired by the composition root rather than probed for (DEC-046),
+        # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
+        # a new kind of capability, it is the return trip of one already here.
+        "console_show_projects",
+        # Added by Stage 5's Task 5.2, and listed here because that is what this test is for.
+        # It is *not* the console family above: it is wired on every host, not only a hosted
+        # one, and it is a **path** rather than a callable -- the declared writable boundary's
+        # answer to where a surface preference lives (DEC-046 again: wired, never derived by
+        # the adapter). What makes it this surface's alone rather than the backend's is that
+        # the bot has one project order by decision (DEC-053) and so has nothing to remember;
+        # putting it on the backend would offer the bot a preference it must not have.
+        #
+        # It is also the only optional field here whose absence is *routine* rather than
+        # host-shaped: `adapters/tui/preferences.py` reads and writes totally, so a host that
+        # wires no path forgets the choice between runs and behaves identically otherwise.
+        "preferences_path",
     }
     shared = {
         "sessions",

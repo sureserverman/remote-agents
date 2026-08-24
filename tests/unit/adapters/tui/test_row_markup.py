@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -90,6 +90,10 @@ _REFERENCE = ConversationReference("c-" + "0" * 14 + "01")
 # Each is a string a real source can produce that console markup would eat or act on.
 _MARKUP_LABEL = "[bold]urgent[/bold]"
 _MARKUP_DESCRIPTION = "check [link=file:///etc/passwd]this[/link]"
+#: A *directory* name carrying markup. Single printable token, so
+#: `SessionDisplayIdentity` accepts it and it reaches the row -- unlike a name with a
+#: space, which the identity refuses and the join declines.
+_MARKUP_PROJECT_NAME = "[bold]staging[/bold]"
 
 
 def _rendered(app: RemoteAgentsTui) -> str:
@@ -113,14 +117,15 @@ def _record(custom_label: str | None = None) -> SessionRecord:
         _SESSION_ID,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1, custom_label),
+        # The opaque_id, as the store holds it, so the naming join actually fires here.
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1, custom_label),
         SessionState.RUNNING,
         datetime.now(UTC),
     )
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
 
     async def refresh_readiness(self):
@@ -369,3 +374,30 @@ def test_no_markup_parsing_widget_is_constructed_without_the_flag() -> None:
         f"markup=False: {unguarded}. Row, status, output and notification text is displayed, never "
         "interpreted -- see this module's docstring."
     )
+
+
+async def test_a_project_name_containing_markup_is_shown_literally_in_a_session_row() -> None:
+    """A session row now carries a *filesystem-derived* name, which it did not before.
+
+    Until the naming join, a session row rendered `project_slug` -- the catalogue's opaque_id,
+    a sha256 prefix, inert by construction because hex cannot spell markup. The row now renders
+    `CatalogProject.name`, which is a directory name off the owner's disk, and a directory can
+    be called `[bold]staging[/bold]`.
+
+    So this is a new path into a row sink rather than a restatement of the label case above:
+    the label is text the owner typed into this app, and this is text the app read off the
+    filesystem. `SessionDisplayIdentity` screens it for whitespace and unprintables and would
+    refuse `my project`, but it has no opinion on square brackets -- inertness is the widget's
+    job (DEC-014), and this asserts the widget is doing it on the path Stage 1 opened.
+    """
+    project = CatalogProject("opaque-existing", _MARKUP_PROJECT_NAME, "infra", "Registered")
+    app = RemoteAgentsTui(_context(project=project))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.show_sessions()
+        await pilot.pause()
+        screen = _rendered(app)
+        assert _MARKUP_PROJECT_NAME in screen, (
+            f"the project name {_MARKUP_PROJECT_NAME!r} was consumed as markup; "
+            f"screen was {screen!r}"
+        )

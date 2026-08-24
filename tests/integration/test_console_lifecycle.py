@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -74,7 +74,7 @@ class RecordingConsole:
         self.calls.append(("swap", source_pane, target_pane))
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: list[SessionRecord]) -> None:
         self.records = records
 

@@ -13,8 +13,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backends import backend_for
-from textual.widgets import OptionList, Static
+from backends import SessionUseCaseDouble, backend_for
+from textual.widgets import OptionList
+from tui_feedback import announcements
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -31,6 +32,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.ports.agent_activity import ActivityKind
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -45,7 +47,7 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: tuple[SessionRecord, ...] = ()) -> None:
         self.records = records
 
@@ -56,24 +58,25 @@ class _Launcher:
         return self.records
 
 
-def _record() -> SessionRecord:
+def _record(slug: str = "existing") -> SessionRecord:
     return SessionRecord(
         _SESSION,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionDisplayIdentity(slug, "claude", "regular", 1),
         SessionState.RUNNING,
         datetime.now(UTC),
     )
 
 
-def _context(records: tuple[SessionRecord, ...] = ()) -> TuiContext:
+def _context(records: tuple[SessionRecord, ...] = (), feed=None) -> TuiContext:
     return TuiContext(
         backend=backend_for(
             sessions=_Launcher(records),  # type: ignore[arg-type]
             projects=_Creator(),  # type: ignore[arg-type]
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
+            activity_feed=feed,
         ),
         profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
@@ -92,7 +95,7 @@ async def test_three_panes_render_and_the_session_appears_in_its_pane() -> None:
         assert isinstance(screen, DashboardScreen)
         projects = screen.query_one("#choices", OptionList)
         sessions = screen.query_one("#sessions-pane", OptionList)
-        feed = screen.query_one("#feed-pane", Static)
+        feed = screen.query_one("#feed-pane", OptionList)
         assert projects.option_count == 1
         assert projects.get_option_at_index(0).id == "opaque-existing"
         assert sessions.option_count == 1
@@ -172,3 +175,87 @@ async def test_open_session_detail_is_one_key_away() -> None:
         await pilot.press("d")
         await pilot.pause()
         assert isinstance(app.screen, SessionDetailScreen)
+
+
+# The project a session row names on this surface ----------------------------------------------
+
+
+async def test_the_sessions_region_names_the_project_and_keeps_its_option_id() -> None:
+    """The dashboard's pane is the second render of the same record, and it must agree.
+
+    Both halves are asserted together on purpose: the name is what the owner reads, and the
+    option id is what `choose` and `action_session_detail` route on. A change that fixed the
+    first and moved the second would look right on screen and strand every action behind it.
+    """
+    app = RemoteAgentsTui(_context((_record(slug="opaque-existing"),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        row = pane.get_option_at_index(0)
+        assert "existing" in str(row.prompt)
+        assert "opaque-existing" not in str(row.prompt)
+        assert row.id == f"session:{_SESSION}"
+
+
+# Enter on a feed row is routed, not mistaken for a project ------------------------------------
+
+
+def _observation():
+    from datetime import timedelta
+
+    from remote_agents.ports.agent_activity import ActivityConfidence, AgentActivity
+
+    return AgentActivity(
+        str(_SESSION),
+        ActivityKind.NEEDS_ANSWER,
+        "May I push?",
+        datetime.now(UTC) - timedelta(minutes=1),
+        ActivityConfidence.REPORTED,
+    )
+
+
+async def test_a_feed_row_routes_by_its_prefix_and_never_reaches_the_project_branch() -> None:
+    """The dashboard's `choose` is one method serving three panes, so a key it does not
+    recognise falls through to the project half -- which answers by *announcing* that the
+    project is unavailable. Before the `notification:` branch existed, Enter on a notification
+    produced exactly that: a warning about a project, for a row that is not one.
+
+    Asserted on the announcement rather than on a spy, because the announcement is the thing
+    the owner would actually have seen.
+    """
+
+    async def feed():
+        return (_observation(),)
+
+    app = RemoteAgentsTui(_context((_record(),), feed=feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#feed-pane", OptionList)
+        key = pane.get_option_at_index(0).id
+        assert key.startswith("notification:")
+
+        await app.screen.choose(key)
+        await pilot.pause()
+
+        assert "no longer available" not in " ".join(announcements(app)), (
+            "a notification key fell through to the project branch"
+        )
+        assert app.screen.position == "DASHBOARD", "a feed row must not move the position"
+
+
+async def test_choosing_a_project_row_is_unaffected_by_the_feed_branch() -> None:
+    """The other half of the same seam: adding a prefix branch must not shadow the fallthrough
+    every project row depends on."""
+
+    async def feed():
+        return (_observation(),)
+
+    app = RemoteAgentsTui(_context((_record(),), feed=feed))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.screen.choose("opaque-existing")
+        await pilot.pause()
+        # PROJECT_CHOOSER, not PROFILES: on this surface a project row asks "launch new or
+        # reopen saved" first (DEC-033). The point of the assertion is that it still gets
+        # somewhere, not which somewhere.
+        assert app.screen.position == "PROJECT_CHOOSER", "a project row must still route"

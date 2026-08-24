@@ -84,7 +84,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import Input
 from tui_positions import position
 
@@ -112,6 +112,11 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.agent_activity import (
+    ActivityConfidence,
+    ActivityKind,
+    AgentActivity,
+)
 
 _SNAPSHOTS = Path(__file__).parent / "snapshots"
 _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
@@ -202,12 +207,20 @@ def _record(
     state: SessionState = SessionState.RUNNING,
     orphan_provenance: OrphanProvenance | None = None,
 ) -> SessionRecord:
-    """A session stamped now, so `age()` renders a stable `0m ago` in the baseline."""
+    """A session stamped now, so `age()` renders a stable `0m ago` in the baseline.
+
+    **The slug is the project's `opaque_id`, because that is what the store actually holds.**
+    It read `"existing"` -- the catalogue's *name* -- until Stage 1, which made the naming
+    join a no-op here and left all 34 baselines blind to the one change that stage makes.
+    They passed unmoved, which is the most expensive way for a net to be wrong: it reports
+    the render it never drew. A fixture that disagrees with production is not a simpler
+    fixture, it is a different subject.
+    """
     return SessionRecord(
         _SESSION_ID,
         ProjectId("opaque-existing"),
         ProfileId("claude"),
-        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionDisplayIdentity("opaque-existing", "claude", "regular", 1),
         state,
         datetime.now(UTC),
         orphan_provenance=orphan_provenance,
@@ -232,7 +245,7 @@ def _summary() -> ConversationSummary:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
     # Three knobs the state axis needs, each defaulting to the happy path so the fifteen
     # position baselines are still driven by the launcher they have always been driven by.
@@ -294,6 +307,60 @@ class _Conversations:
         )
 
 
+#: What the feed panes draw. Stamped `now` for the same reason `_record` is: `age()` renders
+#: "0m ago" and the SVG stays byte-stable across runs.
+#:
+#: Wired at all because it was not, and that made the FEED and DASHBOARD baselines blind to
+#: the whole of the feed's render -- they could only ever capture the empty state, so a row
+#: format, an identity and an elision were all outside the net that exists to catch them. The
+#: same defect Task 1.5 found in this file's session fixture, in a second place.
+#:
+#: The long detail is deliberate: it is what proves the row is *cut* rather than wrapped, and
+#: a wrapped row is the defect the live capture at Preflight showed.
+def _activities() -> tuple[AgentActivity, ...]:
+    return (
+        AgentActivity(
+            str(_SESSION_ID),
+            ActivityKind.NEEDS_ANSWER,
+            "May I push the branch and open a pull request against main?",
+            datetime.now(UTC),
+            ActivityConfidence.REPORTED,
+        ),
+        AgentActivity(
+            str(_SESSION_ID),
+            ActivityKind.COMPLETED,
+            "Baseline landed and the plan is amended with the real number. " * 6,
+            datetime.now(UTC),
+            ActivityConfidence.REPORTED,
+        ),
+        AgentActivity(
+            "deadbeef-0000-0000-0000-000000000000",
+            ActivityKind.QUIET,
+            None,
+            datetime.now(UTC),
+            ActivityConfidence.INFERRED,
+        ),
+    )
+
+
+def _activity_reader() -> Callable[[], Awaitable[tuple[AgentActivity, ...]]]:
+    """A reader that returns the *same* observations every time it is called.
+
+    `_activities()` stamps `datetime.now(UTC)`, and a row's id is composed of its session,
+    kind and `observed_at` -- so a reader that rebuilt them would mint a new id on every
+    repaint. Nothing depended on that until the feed gained an *open* row, which is matched
+    by id: the expansion was set on one key and redrawn against another, so FEED_EXPANDED
+    captured a pane with nothing expanded in it. Third occurrence of this fixture shape in
+    this stage; production is unaffected, because `observed_at` comes from the store.
+    """
+    observations = _activities()
+
+    async def reader() -> tuple[AgentActivity, ...]:
+        return observations
+
+    return reader
+
+
 def _context(
     *,
     state: SessionState = SessionState.RUNNING,
@@ -301,6 +368,7 @@ def _context(
     creator: object | None = None,
     conversations: object | None = None,
     capture=None,
+    activity_feed=None,
 ) -> TuiContext:
     """The collaborators every capture is driven against.
 
@@ -318,6 +386,7 @@ def _context(
             catalogue=(_PROJECT, _OTHER),
             capture=(lambda _session_id: _captured()) if capture is None else capture,
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
+            activity_feed=_activity_reader() if activity_feed is None else activity_feed,
         ),
         profiles=(
             ProfileAvailability("claude", True),
@@ -546,6 +615,25 @@ class _State:
     drive: Callable[[RemoteAgentsTui, object], Awaitable[None]]
 
 
+async def _to_expanded_feed(app: RemoteAgentsTui, pilot) -> None:
+    """The feed pane with its first notification opened.
+
+    Driven through `choose` with the row's own id, not by pressing Enter on a highlighted
+    row: the id is what `ChoiceScreen.on_option_list_option_selected` hands to `choose`, so
+    this is the same call the keypress makes, without depending on where the cursor happens
+    to rest at capture time.
+    """
+    from textual.widgets import OptionList
+
+    from remote_agents.adapters.tui.screens import FeedScreen
+
+    await app.push_screen(FeedScreen())
+    await pilot.pause()
+    pane = app.screen.query_one("#feed-pane", OptionList)
+    await app.screen.choose(pane.get_option_at_index(0).id)
+    await pilot.pause()
+
+
 async def _to_sessions(app: RemoteAgentsTui, _pilot) -> None:
     await app.show_sessions()
 
@@ -590,6 +678,12 @@ async def _to_resume_profiles_revealed(app: RemoteAgentsTui, pilot) -> None:
 
 
 _STATES = (
+    _State(
+        "FEED_EXPANDED",
+        "FEED",
+        _context,
+        _to_expanded_feed,
+    ),
     _State(
         "SESSIONS_EMPTY",
         "SESSIONS",
@@ -708,7 +802,14 @@ def _neutral_colour_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("step", _POSITIONS)
 async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
-    """Each of the 16 positions renders exactly what its committed baseline shows."""
+    """Every position in `_POSITIONS` renders exactly what its committed baseline shows.
+
+    The count is deliberately not written out here. It said "the 16 positions" while
+    `_POSITIONS` held 19, having gone stale three entries ago with nothing to notice --
+    a prose count beside the tuple it describes is a claim no test can check, and this file
+    is the one place in the suite where an unchecked claim is most expensive. The
+    parametrization is the authority; a reader who wants the number counts the tuple.
+    """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=_SIZE) as pilot:
         # Before driving, not at capture time: the theme drives a style recompute, so it has

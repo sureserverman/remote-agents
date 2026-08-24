@@ -66,7 +66,7 @@ from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
     CatalogProject,
     paginate_catalogue,
-    rank_by_recent_use,
+    rank_if_usage_is_reported,
     search_catalogue,
 )
 from remote_agents.application.resume_flow import RESUME_PAGE_SIZE, resume_capable
@@ -90,6 +90,7 @@ from remote_agents.application.session_views import (
     only_listed,
     selectable_area,
     session_row,
+    with_project_names,
 )
 from remote_agents.application.stops import execute_stop
 from remote_agents.config import TelegramSecrets
@@ -388,23 +389,14 @@ class PrivateBotBoundary:
         if self.backend.refresh_catalogue is None:
             return
         catalogue = await asyncio.to_thread(self.backend.refresh_catalogue)
-        self.catalogue = await self._ranked(catalogue)
+        # `now` is read here, at the one place with a reason to know the time; the wrapper
+        # and the ranking behind it both stay pure. The rule itself moved to
+        # `application/project_catalog.py` when the local surface started asking it too
+        # (DEC-043) -- this adapter asks the shared rule and keeps its own sentence.
+        self.catalogue = await rank_if_usage_is_reported(
+            catalogue, self.backend.sessions, datetime.now(UTC)
+        )
         self._project_views.clear()
-
-    async def _ranked(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
-        """Order the catalogue by recent use, or leave it exactly as it came.
-
-        A host with no session use case cannot report usage, and the unranked catalogue is
-        the honest answer rather than an empty one. This used to ask the launcher by name
-        whether it could report usage at all, which gave a composition that forgot to wire
-        one the same answer as a host that has none. `now` is read here, at the one place
-        with a reason to know the time; `rank_by_recent_use` stays pure.
-        """
-        sessions = self.backend.sessions
-        if sessions is None:
-            return catalogue
-        usage = await sessions.project_usage()
-        return rank_by_recent_use(catalogue, usage, datetime.now(UTC))
 
     def permits(self, update: Update) -> bool:
         user = update.effective_user
@@ -1891,11 +1883,14 @@ class PrivateBotBoundary:
         return self._named(await listed_sessions(self.backend.sessions))
 
     def _named(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
-        project_names = {project.opaque_id: project.name for project in self.catalogue}
-        return tuple(
-            _with_project_name(record, project_names.get(str(record.project_id)))
-            for record in records
-        )
+        """This surface's catalogue, joined by the shared rule.
+
+        The join itself is `application/session_views.with_project_names` and no longer this
+        adapter's: the local surface needed the same rule, and a second copy here is the
+        shape BL-031 records. What stays this surface's is *which* catalogue -- the bot holds
+        a ranked snapshot of its own.
+        """
+        return with_project_names(records, self.catalogue)
 
     async def _record(self, session_value: str) -> SessionRecord | None:
         return next(
@@ -1958,7 +1953,6 @@ class PrivateBotBoundary:
         """
         if self.backend.sessions is None:
             return None
-        project_names = {project.opaque_id: project.name for project in self.catalogue}
         for record in await self.backend.sessions.list_sessions():
             if str(record.session_id) == session_value:
                 if not notifiable(record.state):
@@ -1973,7 +1967,13 @@ class PrivateBotBoundary:
                         state_word(record.state, record.orphan_provenance),
                     )
                     return None
-                named = _with_project_name(record, project_names.get(str(record.project_id)))
+                # The whole join, not just the transform. This built its own
+                # `{opaque_id: name}` index and did its own `.get(str(record.project_id))` --
+                # byte-equivalent to `with_project_names`' body, which is the BL-031 shape
+                # Stage 1 exists to end, surviving inside the stage that ended it. The
+                # forbidden-name sweep could not see it: it greps for `def ` names, and this
+                # was an inlined copy with no definition to find.
+                (named,) = with_project_names((record,), self.catalogue)
                 return named.display.rendered
         return None
 
@@ -2545,16 +2545,6 @@ def _profile_name(profile_id: str) -> str:
         "opencode": "OpenCode",
         "cursor-agent": "Cursor Agent",
     }.get(profile_id, "Unavailable")
-
-
-def _with_project_name(record: SessionRecord, name: str | None) -> SessionRecord:
-    if name is None or name == record.display.project_slug:
-        return record
-    try:
-        display = replace(record.display, project_slug=name)
-    except ValueError:
-        return record
-    return replace(record, display=display)
 
 
 _ACTIVE_TAB = "• "

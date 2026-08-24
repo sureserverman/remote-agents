@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TypeVar
 
 from textual import events, work
@@ -27,10 +28,17 @@ from remote_agents.adapters.tui.model import (
     selectable_area,
     session_row,
 )
+from remote_agents.adapters.tui.preferences import (
+    ALPHABETICAL,
+    RECENCY,
+    read_project_order,
+    write_project_order,
+)
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
     DashboardScreen,
+    OpeningAction,
     ResumeProjectsScreen,
     SessionDetailScreen,
     SessionsScreen,
@@ -45,7 +53,11 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.profiles import ProfileAvailability
-from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.project_catalog import (
+    CatalogProject,
+    order_alphabetically,
+    rank_if_usage_is_reported,
+)
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -54,7 +66,11 @@ from remote_agents.application.session_actions import (
     explain_state,
     remote_control_available,
 )
-from remote_agents.application.session_views import listed_sessions, only_listed
+from remote_agents.application.session_views import (
+    listed_sessions,
+    only_listed,
+    with_project_names,
+)
 from remote_agents.application.stops import dispatch_stop, resolve_stop
 from remote_agents.domain.conversations import ResolvedConversation
 from remote_agents.domain.models import (
@@ -198,7 +214,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
+        #: The catalogue exactly as it was read, before either order is applied. Held apart
+        #: from `_catalogue` so a switch re-orders the *snapshot* rather than the list it is
+        #: looking at: `rank_by_recent_use` is a stable sort, so ranking an already
+        #: alphabetical list would silently take alphabetical as the tie-break and lose
+        #: DEC-012's registered-first-then-alphabetical fallback after one round trip.
+        self._raw_catalogue = context.backend.catalogue
         self._catalogue = context.backend.catalogue
+        #: Which of the two orders the projects list is in. Read once, from the file the
+        #: composition root pointed at, and total in every failure -- an unreadable
+        #: preference is a forgotten choice, never a surface that will not start.
+        self._project_order = read_project_order(context.preferences_path)
+        #: Whether `_catalogue` has had that order applied. The snapshot arrives from
+        #: `Backend.catalogue` in whatever order `build_catalogue` produced, and ordering it
+        #: needs the store, which cannot be read from a synchronous constructor.
+        self._catalogue_ordered = False
         self.selection = LaunchSelection()
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
@@ -262,6 +292,77 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     @property
     def catalogue(self) -> tuple[CatalogProject, ...]:
         return self._catalogue
+
+    @property
+    def project_order(self) -> str:
+        """Which order the projects list is drawn in — one of `preferences.PROJECT_ORDERS`."""
+        return self._project_order
+
+    async def ensure_catalogue_ordered(self) -> None:
+        """Apply the chosen order to the snapshot this process started with, exactly once.
+
+        **Why this is not done in `__init__`, and not in the app's `on_mount` either.**
+        Ranking by recent use has to read the store, which is async, so a synchronous
+        constructor cannot do it. `on_mount` can, but the app's Mount is dispatched at the
+        same moment the default screen's own pump is started (`App._process_messages`), so
+        the first `await` here would hand control to a screen that then draws the *unordered*
+        snapshot — the first draw and every later draw disagreeing, which is exactly the
+        defect this task exists to close. Awaited from `ProjectsScreen.populate` instead,
+        which `ChoiceScreen.on_mount` awaits *before* anything is rendered.
+
+        Idempotent, because it is reached from every screen that rests on the projects
+        position and a re-order per mount would be a re-order per render in disguise
+        (DEC-012: once per catalogue refresh).
+        """
+        if self._catalogue_ordered:
+            return
+        # Set **before** the await, deliberately, and unlike `switch_project_order` and
+        # `reload_catalogue`, which set it after. Those two are recording a fact; this one is
+        # a re-entrancy guard, and a guard raised after the suspension point does not guard --
+        # two screens mounting while the store read is in flight would both pass the check and
+        # both rank. The cost is a window where the flag reads True over an unordered
+        # catalogue -- nothing in this app's screen-stack model can observe it today, because
+        # no path mounts two `ProjectsScreen`-family screens concurrently, but that is a fact
+        # about the current navigation model rather than something this guard enforces. A pane
+        # type or a background screen that did populate concurrently would have to re-derive
+        # this trade rather than inherit it.
+        self._catalogue_ordered = True
+        self._catalogue = await self._ordered(self._raw_catalogue)
+
+    async def switch_project_order(self) -> str:
+        """Move to the other order, record the choice, and answer which one is now in force.
+
+        On the app because the catalogue and the chosen order are both app state, while the
+        caller is a screen -- the same split `reload_catalogue` is on, and for the same
+        reason: the sentence that reports it is the screen's.
+
+        The write is total (`adapters/tui/preferences.py`) and the path may be absent, so a
+        host that wired no preferences file switches exactly like one that did and forgets
+        between runs. Re-orders the *unordered* snapshot, never the drawn list.
+        """
+        self._project_order = RECENCY if self._project_order == ALPHABETICAL else ALPHABETICAL
+        write_project_order(self._services.preferences_path, self._project_order)
+        self._catalogue = await self._ordered(self._raw_catalogue)
+        self._catalogue_ordered = True
+        return self._project_order
+
+    async def _ordered(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
+        """The one place either order is applied, so the two draw paths cannot disagree.
+
+        `now` is read here, at the one caller with a reason to know the time, and both
+        orderings behind it stay pure (`application/project_catalog.py`). A read that fails
+        leaves the catalogue in the order it came: the list is then unranked rather than
+        absent, which is the same answer a host with no launch history gets.
+        """
+        try:
+            if self._project_order == ALPHABETICAL:
+                return order_alphabetically(catalogue)
+            return await rank_if_usage_is_reported(
+                catalogue, self._services.backend.sessions, datetime.now(UTC)
+            )
+        except Exception:
+            _LOG.exception("ordering the project catalogue failed")
+            return catalogue
 
     @property
     def busy(self) -> bool:
@@ -571,12 +672,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         it yet", and only the screen that asked knows which of those it is about to say.
         """
         try:
-            self._catalogue = await self.in_thread(
-                self._services.backend.refresh_catalogue, group="catalogue"
-            )
+            read = await self.in_thread(self._services.backend.refresh_catalogue, group="catalogue")
         except Exception:
             _LOG.exception("catalogue refresh failed")
             return False
+        # A refresh is exactly where a new order is expected, and it is one of the three
+        # places an order is computed at all -- the other two being the first draw and the
+        # owner pressing the key (DEC-012: never per render). Marked ordered so a screen
+        # mounting afterwards does not rank the same snapshot a second time.
+        self._raw_catalogue = read
+        self._catalogue = await self._ordered(read)
+        self._catalogue_ordered = True
         return True
 
     async def on_event(self, event: events.Event) -> None:
@@ -712,18 +818,33 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         await self.switch_flow(SessionsScreen())
 
-    async def show_detail(self, session_value: str) -> None:
-        """Open — or redraw — the detail for one session.
+    async def show_detail(self, session_value: str, opening_action: str | None = None) -> None:
+        """Open — or redraw — the detail for one session, optionally performing one action.
 
         Redrawing rather than pushing when the same detail is already on screen is what keeps
         a stop, a confirmation abort, or a remote-control change from growing the stack by one
         screen every time the owner uses it.
+
+        `opening_action` is what the sessions pane's per-action keys carry. On the redraw path
+        it is dispatched explicitly, because that path does not re-mount the screen and so
+        never reaches `populate` — a key pressed on a detail already showing must still do
+        what it says. It is passed through `choose` there for the same reason `populate` does:
+        one chain, with all of its guards.
         """
         screen = self.screen
         if isinstance(screen, SessionDetailScreen) and screen.session_value == session_value:
             await screen.render_detail()
+            if opening_action is not None:
+                # Posted, not awaited, so this path is byte-for-byte the mount path's:
+                # both reach `dispatch_opening` from `on_opening_action`, a screen handler on
+                # the screen's own pump -- which is where a pressed row reaches `choose` from
+                # too, and is what DEC-025 requires. Awaiting it here instead ran the
+                # confirmation from whatever coroutine happened to call `show_detail`, which
+                # is a second way to raise a modal and hung outright when that caller was not
+                # the pump.
+                screen.post_message(OpeningAction(opening_action))
             return
-        await self.push_screen(SessionDetailScreen(session_value))
+        await self.push_screen(SessionDetailScreen(session_value, opening_action))
 
     # Resume ---------------------------------------------------------------------
 
@@ -815,14 +936,27 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     ) -> None:
         """Change one session's control mode, after re-reading and re-checking the policy.
 
-        Unlike `stop`, this does not open with `if self._busy: return`. The asymmetry is real
-        and worth knowing about: what refuses a second concurrent change is
-        `ChoiceScreen.on_option_list_option_selected`, which drops a row selection while the
-        surface is busy, so the refusal happens before this is ever called. That holds for the
-        one caller there is — `SessionDetailScreen.confirm_remote_control`, reached only
-        through that handler. A second caller reaching this directly would not be refused
-        here, which is the thing to check before adding one.
+        This *used* to open without `if self.busy: return`, and the docstring here explained
+        why: what refused a
+        second concurrent change was `ChoiceScreen.on_option_list_option_selected`, which drops
+        a row selection while the surface is busy, so the refusal happened before this was
+        ever called. It then said, of the single caller that arrangement depended on, that "a
+        second caller reaching this directly would not be refused here, which is the thing to
+        check before adding one."
+
+        Stage 4 added exactly that second caller. `SessionDetailScreen.dispatch_opening`
+        repeats the busy check, which closes it — but a rule that every *entry* must remember
+        is a rule a third entry can forget, and the note above was already the record of
+        someone foreseeing that and it happening anyway. So the guard moved to where the
+        command is issued, which is the one place no caller can route around, and this is now
+        symmetric with `stop`.
+
+        Safe to add precisely because `confirm_remote_control` calls this *outside* its own
+        `holding_the_guard()` block — the same shape `confirm_force` uses for `stop`, and the
+        reason `stop` could always afford this guard.
         """
+        if self.busy:
+            return
         self._busy = True
         try:
             record = await self.current_record(session_value)
@@ -1051,6 +1185,26 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 return record
         return None
 
+    def _with_names(self, records: tuple[SessionRecord, ...]) -> tuple[SessionRecord, ...]:
+        """Join this surface's catalogue onto the records, by the shared rule.
+
+        **Here rather than in the three renders that show a row, and that is the whole of
+        this task's deviation from the plan's `Scope:` line.** The plan named
+        `SessionsScreen._draw_listing`, `DashboardScreen._reload_sessions_pane` and
+        `SessionDetailScreen.render_detail` -- three sites, and it noted that the first of
+        them has two branches which "must name identically". They do not have to, because
+        they no longer decide: both reads this surface performs pass through here, so a
+        render cannot draw an unnamed record without first getting one from somewhere that
+        does not exist. Three call sites that must agree, replaced by one they all read from,
+        is the same argument Task 1.1 made one layer up -- applying it here and not there
+        would have been holding the argument and declining to use it.
+
+        The rule itself is `application/session_views.with_project_names`; what is this
+        surface's own is which catalogue, and that is `self._catalogue` -- the local
+        catalogue, refreshed by `reload_catalogue`.
+        """
+        return with_project_names(records, self._catalogue)
+
     async def load_sessions(self) -> tuple[SessionRecord, ...]:
         """Refresh readiness, then return the sessions worth showing.
 
@@ -1076,7 +1230,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         records = await listed_sessions(self._services.backend.sessions)
         if self._services.console_sync is not None:
             await self._services.console_sync(records)
-        return records
+        # Named *after* the sync, deliberately. The sync matches records against tmux panes,
+        # and while naming touches only `display.project_slug` and no id, handing it the
+        # exact tuple it saw before this task removes the question entirely.
+        return self._with_names(records)
+
+    async def raw_sessions(self) -> tuple[SessionRecord, ...]:
+        """Every session the store holds, named, and filtered by nothing.
+
+        The feed needs this and the lists must not have it. A notification outlives its
+        session by design, so naming a feed row routinely needs a record `only_listed` has
+        correctly removed (DEC-017's "exactly ENDED") -- while a *list* showing that same
+        record would be offering the owner a session with nothing left to reach.
+
+        Here rather than in `screens/feed.py`, which had built its own `list_sessions()` plus
+        `with_project_names(records, catalogue)` -- a second copy of the join `_with_names`
+        already is, in the stage whose whole subject was that the join has one home.
+        """
+        return self._with_names(await self._services.backend.sessions.list_sessions())
 
     async def read_sessions(self) -> tuple[SessionRecord, ...]:
         """List the store's sessions, filtering what no surface can act on."""
@@ -1085,7 +1256,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # same enum. `only_listed` is now the one of them, and DEC-017's "exactly ENDED" is
         # asserted over the whole `SessionState` set rather than over the states a reader
         # thought to name.
-        return only_listed(await self._services.backend.sessions.list_sessions())
+        return only_listed(await self.raw_sessions())
 
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
