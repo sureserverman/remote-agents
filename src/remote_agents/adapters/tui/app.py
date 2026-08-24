@@ -321,7 +321,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # a re-entrancy guard, and a guard raised after the suspension point does not guard --
         # two screens mounting while the store read is in flight would both pass the check and
         # both rank. The cost is a window where the flag reads True over an unordered
-        # catalogue, which nothing can observe: the only reader is this early return.
+        # catalogue -- nothing in this app's screen-stack model can observe it today, because
+        # no path mounts two `ProjectsScreen`-family screens concurrently, but that is a fact
+        # about the current navigation model rather than something this guard enforces. A pane
+        # type or a background screen that did populate concurrently would have to re-derive
+        # this trade rather than inherit it.
         self._catalogue_ordered = True
         self._catalogue = await self._ordered(self._raw_catalogue)
 
