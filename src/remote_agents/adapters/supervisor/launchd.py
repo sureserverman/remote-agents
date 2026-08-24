@@ -18,8 +18,13 @@ agent CLIs come from Homebrew. So the plist carries a PATH it computed, and `hom
 is how it computes the Homebrew half.
 
 **The plist is not a place to put the credential.** `EnvironmentVariables` is echoed verbatim
-by `launchctl print`, which any process on the machine may run against this domain, so a token
-in the plist is a token published to the machine. Task 2.0 retired `EnvironmentFile=` on the
+by `launchctl print`, which **any process running as this user** may run against this domain --
+printing another user's GUI domain needs root, so the exposure is same-user rather than
+machine-wide. That is the reachable case and not a weaker one: a co-resident agent session runs
+as the owner, which is the threat `ports/private_directory.py` already refuses a planted symlink
+over. So a token in the plist is a token readable by anything the owner is running.
+
+Task 2.0 retired `EnvironmentFile=` on the
 other side so that exactly one parser reads the credential file; here the same conclusion also
 has a disclosure argument behind it, and `tests/integration/test_secret_sources.py` already
 treats "no injected environment" as *the* launchd case. Only PATH goes in.
