@@ -355,8 +355,25 @@ class LaunchdSupervisor:
         `LivenessMeaning.RUNNING`.
 
         Scoped to this user's own processes (`-U`) and matched against the full command line
-        (`-f`) so that the console script plus its `serve` subcommand identifies the service
-        rather than the interpreter name, which every Python process shares.
+        (`-f`) so that the console script plus its `serve` subcommand *matches* the service
+        rather than the interpreter name, which every Python process shares. Matches, not
+        identifies: `-f` is a substring match, so any of this user's processes whose argv
+        happens to contain that same string would satisfy it too. `-U` is what keeps the
+        practical risk small, and the port's exit-code-only contract is what stops it being
+        narrowed further.
+
+        **The cost this probe carries, which the label-based one did not.** The pattern is
+        built from `self.interpreter`, and the *installed* job's `ProgramArguments[0]` was
+        rendered from whatever `sys.executable` was true when it was installed. Within one
+        supervisor instance those agree by construction; across an upgrade they need not.
+        Reinstall the tool into a new virtualenv or tool directory without reinstalling the
+        service, and this probe searches for a path the still-running, still-healthy process no
+        longer has -- reporting "not running" for a service that is fine. `launchctl print`
+        was immune to that, because it addressed the job by label rather than by a path
+        recomputed from the caller's own environment; the trade is deliberate, since that
+        immunity came with answering a question nobody asked (see above). It self-corrects the
+        moment the service is reinstalled, which is also when the plist would be rewritten.
+        Recorded as an accepted cost in DEC-054.
 
         `/usr/bin/pgrep` is inside `_PATH_STDPATH`, so unlike tmux or uv it resolves even from
         the bare environment launchd would hand a job.

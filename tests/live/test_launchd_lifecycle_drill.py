@@ -13,6 +13,9 @@ stopping the service would silently take every in-flight agent session and the w
 the same loss the Linux drill exists to rule out, on the platform where it has never been
 checked.
 
+**Do not run two of these concurrently.** The label and the tmux socket are fixed constants,
+so a second simultaneous run would share both and each would observe the other's state.
+
 **Disposable proof (ARCH-11).** Everything here is transient: a label that exists only for this
 test, a plist written and deleted, a tmux server of its own. The drill host is a real machine
 with real LaunchAgents in `~/Library/LaunchAgents`; none of them is touched, and the teardown
@@ -128,12 +131,37 @@ def transient_agent() -> Iterator[Path]:
         "ExitTimeOut": 15,
         "Umask": 0o077,
     }
+    # Start from a guaranteed-empty probe socket. Teardown kills this server, but teardown
+    # does not run when a previous invocation was killed hard -- Ctrl-C, a CI timeout, a laptop
+    # sleep -- between its `bootout` and its `kill-server`. That leaves an orphaned
+    # `ra-service-probe` session with no job behind it, and the orphan is enough to make this
+    # whole drill pass for the wrong reason: `_wait_for` evaluates its predicate *before* the
+    # first sleep, so the pre-existing session satisfies the "the job started it" check
+    # immediately, and the closing survival assertion then passes on the orphan whatever
+    # `AbandonProcessGroup` does. Cleaning up front is what makes the observed session
+    # necessarily this run's.
+    _tmux("kill-server")
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_bytes(plistlib.dumps(definition, fmt=plistlib.FMT_XML))
     try:
         yield plist_path
     finally:
-        _launchctl("bootout", f"gui/{os.getuid()}/{TEST_LABEL}")
+        removed = _launchctl("bootout", f"gui/{os.getuid()}/{TEST_LABEL}")
+        # `Boot-out failed: 3: No such process` is the ordinary case: the test already booted
+        # the job out, or never got as far as bootstrapping it. Measured, after an earlier
+        # version of this guard matched on "not find" and cried wolf on every run that failed
+        # before bootstrap. Any *other* failure means a job is still registered on a real
+        # machine with its plist about to be deleted from under it, and saying nothing would
+        # leave the docstring's "unconditionally remove" describing an attempt, not an outcome.
+        already_gone = removed.returncode == 3 or "No such process" in (
+            removed.stderr + removed.stdout
+        )
+        if removed.returncode != 0 and not already_gone:
+            print(
+                f"\n!!! TEARDOWN DID NOT DEREGISTER {TEST_LABEL}: "
+                f"rc={removed.returncode} {removed.stdout.strip()} {removed.stderr.strip()}",
+                file=sys.stderr,
+            )
         _tmux("kill-server")
         plist_path.unlink(missing_ok=True)
         for log in sorted(log_directory.glob("probe.*")):
@@ -154,6 +182,11 @@ def test_a_managed_tmux_session_survives_the_supervisor_stopping_the_service(
     """
     uid = os.getuid()
     target = f"gui/{uid}/{TEST_LABEL}"
+
+    assert not _probe_session_exists(), (
+        "a probe session existed before the job was started, so its presence afterwards would "
+        "prove nothing about the job having created it"
+    )
 
     bootstrapped = _launchctl("bootstrap", f"gui/{uid}", str(transient_agent))
     assert bootstrapped.returncode == 0, f"{bootstrapped.stdout}\n{bootstrapped.stderr}"
@@ -195,7 +228,11 @@ def test_the_drill_leaves_nothing_registered(transient_agent: Path) -> None:
     behind" is a checked claim rather than an intention stated in a docstring.
     """
     uid = os.getuid()
-    _launchctl("bootstrap", f"gui/{uid}", str(transient_agent))
+    bootstrapped = _launchctl("bootstrap", f"gui/{uid}", str(transient_agent))
+    # Asserted, because without it this test also passes when bootstrap silently failed and
+    # nothing was ever registered -- which would make "the teardown works" a claim about a
+    # teardown that had nothing to do.
+    assert bootstrapped.returncode == 0, f"{bootstrapped.stdout}\n{bootstrapped.stderr}"
     _launchctl("bootout", f"gui/{uid}/{TEST_LABEL}")
 
     assert _launchctl("print", f"gui/{uid}/{TEST_LABEL}").returncode != 0
