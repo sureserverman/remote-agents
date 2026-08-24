@@ -245,3 +245,85 @@ def render_remediation(
 def _runnable(argv: tuple[str, ...]) -> Remediation:
     """Build the two renderings of one command from the command itself."""
     return Remediation(instruction=shlex.join(argv), command=argv)
+
+
+#: What one attempt at closing a gap actually did. Closed, and every member that is not
+#: `INSTALLED` leaves the gap open -- there is no member meaning "probably fine".
+INSTALLED = "installed"
+DECLINED = "declined"
+UNCONFIRMED = "unconfirmed"
+INSTALL_FAILED = "install_failed"
+MANUAL = "manual"
+
+_OUTCOMES = (INSTALLED, DECLINED, UNCONFIRMED, INSTALL_FAILED, MANUAL)
+
+
+@dataclass(frozen=True, slots=True)
+class InstallAttempt:
+    """What happened when onboarding offered to close one gap, and whether it closed.
+
+    `resolved` is a single derived property rather than a field, so the four ways of *not*
+    installing cannot drift apart from each other. A caller decides its exit status from this;
+    it is deliberately not an exit code, because this layer does not own process semantics.
+    """
+
+    outcome: str
+    instruction: str
+
+    def __post_init__(self) -> None:
+        if self.outcome not in _OUTCOMES:
+            raise ValueError(f"install outcome must be one of {_OUTCOMES}: {self.outcome}")
+
+    @property
+    def resolved(self) -> bool:
+        """Whether the missing dependency is now present because of this attempt."""
+        return self.outcome == INSTALLED
+
+
+def confirm_and_install(
+    remediation: Remediation,
+    *,
+    announce: Callable[[str], None],
+    confirm: Callable[[str], bool] | None,
+    run: Callable[[tuple[str, ...]], int],
+    assume_yes: bool = False,
+) -> InstallAttempt:
+    """Show the command, get a real yes, and only then run it.
+
+    **The confirmation is blocking on every path, and the shape of this function is the
+    argument for that.** There is exactly one `run(...)` call site reachable, it sits after a
+    single boolean that is either an explicit `--yes` or the answer to a prompt, and there is no
+    default that resolves to true. The failure this guards against is not a caller forgetting
+    to ask -- callers do not get the option -- it is a future flag whose default makes asking
+    unnecessary, which is why `assume_yes` is a parameter with no host-derived default and why
+    the non-interactive case below is a refusal rather than a fallback.
+
+    `confirm=None` means *there is no terminal to ask*, which is the case an unattended
+    installer arrives in, and it is answered `UNCONFIRMED`: nothing runs, the instruction is
+    carried out to the caller to print, and the gap is reported open so the caller can exit
+    non-zero. Treating "nobody was there to say no" as consent is the exact escalation this
+    stage exists to prevent.
+
+    **`announce` fires first on every path**, before the prompt and therefore before anything
+    could run. An operator asked to approve an install has to be looking at the command they
+    are approving; announcing after the fact describes what already happened.
+
+    A remediation with nothing runnable -- a Mac with no Homebrew -- is `MANUAL`: it is shown,
+    nothing is asked, and nothing is run. Asking a yes/no question this tool cannot act on
+    either way would train the operator that the prompt is decorative.
+    """
+    announce(remediation.instruction)
+    argv = remediation.command
+    if argv is None:
+        return InstallAttempt(outcome=MANUAL, instruction=remediation.instruction)
+    if assume_yes:
+        approved = True
+    elif confirm is None:
+        return InstallAttempt(outcome=UNCONFIRMED, instruction=remediation.instruction)
+    else:
+        approved = confirm(f"Run this now? [{remediation.instruction}]")
+    if not approved:
+        return InstallAttempt(outcome=DECLINED, instruction=remediation.instruction)
+    code = run(argv)
+    outcome = INSTALLED if code == 0 else INSTALL_FAILED
+    return InstallAttempt(outcome=outcome, instruction=remediation.instruction)

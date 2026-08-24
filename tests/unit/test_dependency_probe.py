@@ -19,13 +19,19 @@ import pytest
 
 from remote_agents.application.dependencies import (
     AVAILABLE,
+    DECLINED,
     HOMEBREW_INSTALL_INSTRUCTION,
+    INSTALL_FAILED,
+    INSTALLED,
+    MANUAL,
     MISSING,
     REQUIRED_DEPENDENCIES,
+    UNCONFIRMED,
     VERSION_PROBE_FAILED,
     DependencyStatus,
     PackageManager,
     Remediation,
+    confirm_and_install,
     probe_dependencies,
     render_remediation,
 )
@@ -209,3 +215,153 @@ def test_remediation_instruction_and_command_cannot_disagree() -> None:
     """The two fields are one fact rendered twice; a report and a run must not diverge."""
     with pytest.raises(ValueError):
         Remediation(instruction="brew install tmux", command=("brew", "install", "git"))
+
+
+class _Runner:
+    """A subprocess stand-in that records every argv it was handed and answers a fixed code.
+
+    The recording is the assertion. "No install happened" is a claim about what was *not*
+    called, and the only way to make that claim checkable is to hand the code under test
+    something that would have remembered.
+    """
+
+    def __init__(self, code: int = 0) -> None:
+        self.calls: list[tuple[str, ...]] = []
+        self.code = code
+
+    def __call__(self, argv: tuple[str, ...]) -> int:
+        self.calls.append(tuple(argv))
+        return self.code
+
+
+class _Announcer:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def __call__(self, line: str) -> None:
+        self.lines.append(line)
+
+
+_APT_FIX = Remediation(
+    instruction="sudo apt-get install -y tmux", command=("sudo", "apt-get", "install", "-y", "tmux")
+)
+
+
+def _attempt(*, confirm, assume_yes=False, code=0):
+    runner = _Runner(code)
+    announcer = _Announcer()
+    attempt = confirm_and_install(
+        _APT_FIX,
+        announce=announcer,
+        confirm=confirm,
+        run=runner,
+        assume_yes=assume_yes,
+    )
+    return attempt, runner, announcer
+
+
+def test_confirm_declined_runs_no_subprocess_at_all() -> None:
+    """The whole point of the stage: a "no" is a no, not a warning before the same install."""
+    attempt, runner, _ = _attempt(confirm=lambda _prompt: False)
+
+    assert runner.calls == []
+    assert attempt.outcome == DECLINED
+    assert not attempt.resolved
+
+
+def test_confirm_accepted_is_the_only_path_that_invokes_the_installer() -> None:
+    attempt, runner, _ = _attempt(confirm=lambda _prompt: True)
+
+    assert runner.calls == [("sudo", "apt-get", "install", "-y", "tmux")]
+    assert attempt.outcome == INSTALLED
+    assert attempt.resolved
+
+
+def test_confirm_is_unavailable_non_interactively_so_nothing_is_installed() -> None:
+    """No prompt to answer is not a yes.
+
+    A non-interactive run reaches here with `confirm=None` -- there is no terminal to ask --
+    and the tempting reading is that an unattended installer should just proceed. That is
+    precisely the unattended privilege escalation this stage exists to prevent, so the answer
+    is: run nothing, carry the instruction so the caller can print it, and refuse to report
+    the gap as resolved.
+    """
+    attempt, runner, announcer = _attempt(confirm=None)
+
+    assert runner.calls == []
+    assert attempt.outcome == UNCONFIRMED
+    assert not attempt.resolved
+    assert attempt.instruction == "sudo apt-get install -y tmux"
+    assert "sudo apt-get install -y tmux" in announcer.lines
+
+
+def test_confirm_is_satisfied_up_front_by_an_explicit_yes_flag() -> None:
+    """`--yes` is a confirmation the operator already gave, not the absence of one."""
+    attempt, runner, announcer = _attempt(confirm=None, assume_yes=True)
+
+    assert runner.calls == [("sudo", "apt-get", "install", "-y", "tmux")]
+    assert attempt.resolved
+    assert "sudo apt-get install -y tmux" in announcer.lines
+
+
+def test_confirm_shows_the_command_before_it_could_ever_run() -> None:
+    """Announced on every path, including the one that installs, and announced first.
+
+    The gate's wording is that the command is shown *before any install*. Asserting it on the
+    declined path only would leave the accepted path -- the one where it matters -- free to
+    install first and describe it afterwards.
+    """
+    announced: list[str] = []
+
+    def _confirm(prompt: str) -> bool:
+        announced.append(f"asked:{prompt}")
+        return True
+
+    runner = _Runner()
+    announcer = _Announcer()
+
+    def _recording_announce(line: str) -> None:
+        announced.append(f"shown:{line}")
+        announcer(line)
+
+    def _recording_run(argv: tuple[str, ...]) -> int:
+        announced.append("ran")
+        return runner(argv)
+
+    confirm_and_install(
+        _APT_FIX, announce=_recording_announce, confirm=_confirm, run=_recording_run
+    )
+
+    assert announced[0] == "shown:sudo apt-get install -y tmux"
+    assert announced[1].startswith("asked:")
+    assert announced[-1] == "ran"
+
+
+def test_confirm_never_offers_to_run_an_instruction_that_is_not_a_command() -> None:
+    """A Mac with no Homebrew: there is nothing to confirm, so nothing is asked or run."""
+    runner = _Runner()
+    announcer = _Announcer()
+    asked: list[str] = []
+
+    attempt = confirm_and_install(
+        Remediation(instruction=HOMEBREW_INSTALL_INSTRUCTION),
+        announce=announcer,
+        confirm=lambda prompt: asked.append(prompt) or True,
+        run=runner,
+        assume_yes=True,
+    )
+
+    assert runner.calls == []
+    assert asked == []
+    assert attempt.outcome == MANUAL
+    assert not attempt.resolved
+    assert announcer.lines == [HOMEBREW_INSTALL_INSTRUCTION]
+
+
+def test_confirm_reports_an_installer_that_ran_and_failed_as_unresolved() -> None:
+    """A non-zero installer is not an install, and onboarding must not carry on as if it were."""
+    attempt, runner, _ = _attempt(confirm=lambda _prompt: True, code=100)
+
+    assert runner.calls == [("sudo", "apt-get", "install", "-y", "tmux")]
+    assert attempt.outcome == INSTALL_FAILED
+    assert not attempt.resolved
