@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import status as _status
@@ -60,7 +60,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     issued: list[object] = field(default_factory=list)
     #: What `force_stop` observed. Defaults to the kill that worked; a test wanting BL-026's
@@ -373,7 +373,7 @@ async def test_a_failed_force_does_not_leave_the_cursor_on_the_confirm_button() 
     """
 
     @dataclass(slots=True)
-    class _FailingLauncher:
+    class _FailingLauncher(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
         issued: list[object] = field(default_factory=list)
 
@@ -477,7 +477,7 @@ async def test_escape_during_a_detail_read_neither_crashes_nor_detaches(
     record = _record()
 
     @dataclass(slots=True)
-    class _SlowReads:
+    class _SlowReads(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
         issued: list[object] = field(default_factory=list)
 
@@ -546,7 +546,7 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
     record = _record()
 
     @dataclass(slots=True)
-    class _Vanishing:
+    class _Vanishing(SessionUseCaseDouble):
         seen: int = 0
         issued: list[object] = field(default_factory=list)
 

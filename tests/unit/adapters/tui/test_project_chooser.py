@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -38,7 +38,7 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     async def refresh_readiness(self) -> None:
         return None
 

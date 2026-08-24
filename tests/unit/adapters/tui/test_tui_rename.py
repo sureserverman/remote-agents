@@ -18,7 +18,7 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import Input, OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_positions import position
@@ -52,7 +52,7 @@ def _record(label: str | None = None, state: SessionState = SessionState.RUNNING
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     #: Every `(session_id, label)` this surface asked for, in order. The label is what the
     #: assertions are actually about: the screen must hand over the *normalized* value, not

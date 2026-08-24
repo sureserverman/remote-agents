@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 
@@ -47,7 +47,7 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: tuple[SessionRecord, ...] = ()) -> None:
         self.records = records
 

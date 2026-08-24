@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList
 from textual.worker import Worker, WorkerFailed
@@ -94,7 +94,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     """Records the command objects, and lets the test move the session under the question.
 
     The commands themselves rather than a name per call: a launcher that recorded

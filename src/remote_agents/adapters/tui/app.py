@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TypeVar
 
 from textual import events, work
@@ -27,6 +28,10 @@ from remote_agents.adapters.tui.model import (
     selectable_area,
     session_row,
 )
+from remote_agents.adapters.tui.preferences import (
+    ALPHABETICAL,
+    read_project_order,
+)
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
     AreasScreen,
@@ -46,7 +51,11 @@ from remote_agents.application.commands import (
     ResumeCommand,
 )
 from remote_agents.application.profiles import ProfileAvailability
-from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.project_catalog import (
+    CatalogProject,
+    order_alphabetically,
+    rank_if_usage_is_reported,
+)
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
 )
@@ -204,6 +213,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         super().__init__()
         self._services = context
         self._catalogue = context.backend.catalogue
+        #: Which of the two orders the projects list is in. Read once, from the file the
+        #: composition root pointed at, and total in every failure -- an unreadable
+        #: preference is a forgotten choice, never a surface that will not start.
+        self._project_order = read_project_order(context.preferences_path)
+        #: Whether `_catalogue` has had that order applied. The snapshot arrives from
+        #: `Backend.catalogue` in whatever order `build_catalogue` produced, and ordering it
+        #: needs the store, which cannot be read from a synchronous constructor.
+        self._catalogue_ordered = False
         self.selection = LaunchSelection()
         self._busy = False
         # Set once, never cleared: see `_leave`. Separate from `_busy` because the two answer
@@ -267,6 +284,50 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     @property
     def catalogue(self) -> tuple[CatalogProject, ...]:
         return self._catalogue
+
+    @property
+    def project_order(self) -> str:
+        """Which order the projects list is drawn in — one of `preferences.PROJECT_ORDERS`."""
+        return self._project_order
+
+    async def ensure_catalogue_ordered(self) -> None:
+        """Apply the chosen order to the snapshot this process started with, exactly once.
+
+        **Why this is not done in `__init__`, and not in the app's `on_mount` either.**
+        Ranking by recent use has to read the store, which is async, so a synchronous
+        constructor cannot do it. `on_mount` can, but the app's Mount is dispatched at the
+        same moment the default screen's own pump is started (`App._process_messages`), so
+        the first `await` here would hand control to a screen that then draws the *unordered*
+        snapshot — the first draw and every later draw disagreeing, which is exactly the
+        defect this task exists to close. Awaited from `ProjectsScreen.populate` instead,
+        which `ChoiceScreen.on_mount` awaits *before* anything is rendered.
+
+        Idempotent, because it is reached from every screen that rests on the projects
+        position and a re-order per mount would be a re-order per render in disguise
+        (DEC-012: once per catalogue refresh).
+        """
+        if self._catalogue_ordered:
+            return
+        self._catalogue_ordered = True
+        self._catalogue = await self._ordered(self._catalogue)
+
+    async def _ordered(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
+        """The one place either order is applied, so the two draw paths cannot disagree.
+
+        `now` is read here, at the one caller with a reason to know the time, and both
+        orderings behind it stay pure (`application/project_catalog.py`). A read that fails
+        leaves the catalogue in the order it came: the list is then unranked rather than
+        absent, which is the same answer a host with no launch history gets.
+        """
+        try:
+            if self._project_order == ALPHABETICAL:
+                return order_alphabetically(catalogue)
+            return await rank_if_usage_is_reported(
+                catalogue, self._services.backend.sessions, datetime.now(UTC)
+            )
+        except Exception:
+            _LOG.exception("ordering the project catalogue failed")
+            return catalogue
 
     @property
     def busy(self) -> bool:
@@ -576,12 +637,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         it yet", and only the screen that asked knows which of those it is about to say.
         """
         try:
-            self._catalogue = await self.in_thread(
-                self._services.backend.refresh_catalogue, group="catalogue"
-            )
+            read = await self.in_thread(self._services.backend.refresh_catalogue, group="catalogue")
         except Exception:
             _LOG.exception("catalogue refresh failed")
             return False
+        # A refresh is exactly where a new order is expected, and it is the *only* other
+        # place one is computed (DEC-012). Marked ordered so a screen mounting afterwards
+        # does not rank the same snapshot a second time.
+        self._catalogue = await self._ordered(read)
+        self._catalogue_ordered = True
         return True
 
     async def on_event(self, event: events.Event) -> None:

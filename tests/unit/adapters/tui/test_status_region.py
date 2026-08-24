@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import OptionList, Static
 
 # Neither is re-exported from `textual.widgets`. Both are system widgets this app never
@@ -673,7 +673,7 @@ async def test_a_failed_read_still_says_what_failed_after_its_toast_has_gone() -
     """
     from textual.widgets import Static
 
-    class _Unreadable:
+    class _Unreadable(SessionUseCaseDouble):
         async def refresh_readiness(self):
             raise RuntimeError("database is locked")
 

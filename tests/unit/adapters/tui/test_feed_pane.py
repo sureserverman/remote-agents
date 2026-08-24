@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -45,7 +45,7 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     async def refresh_readiness(self) -> None:
         return None
 
@@ -408,7 +408,7 @@ def _index_context(feed, records):
     """
     from dataclasses import replace as _replace
 
-    class _Sessions:
+    class _Sessions(SessionUseCaseDouble):
         #: Counted, not refused. The *dashboard* legitimately refreshes readiness for its own
         #: sessions pane, so a fake that raised would fail that surface for doing its job --
         #: it did, on the first run of these cases. What must not happen is the *feed's* read
@@ -570,7 +570,7 @@ async def test_a_store_read_that_raises_leaves_the_drawn_rows_alone(surface) -> 
     session = "01234567-89ab-cdef-0123-456789abcdef"
     failing = [False]
 
-    class _Sessions:
+    class _Sessions(SessionUseCaseDouble):
         refreshed = 0
 
         async def refresh_readiness(self):

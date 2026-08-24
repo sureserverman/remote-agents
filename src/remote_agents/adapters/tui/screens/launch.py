@@ -55,6 +55,12 @@ class ProjectsScreen(ChoiceScreen):
     crumb = "Projects"
 
     async def populate(self) -> None:
+        # Before the first draw, not after it. `ChoiceScreen.on_mount` awaits this method and
+        # renders nothing itself, so the ordering the app applies here is in place for the
+        # very first list the owner sees -- see `RemoteAgentsTui.ensure_catalogue_ordered`
+        # for why the app's own `on_mount` is the wrong hook. Idempotent, so the screens that
+        # subclass this one do not each re-order the same snapshot.
+        await self.tui.ensure_catalogue_ordered()
         self.render_projects()
 
     async def on_reveal(self) -> None:

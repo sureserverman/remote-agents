@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements, breadcrumb
 from tui_feedback import status as _status
@@ -48,7 +48,7 @@ def _record(
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     records: tuple[SessionRecord, ...] = ()
     #: How many times the store has been read. A command that is refused before it starts
     #: never reaches `current_record`, so this is how a test tells "refused" from "issued

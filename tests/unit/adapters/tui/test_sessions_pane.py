@@ -18,7 +18,7 @@ import pathlib
 from datetime import UTC, datetime
 
 import pytest
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import OptionList
 from tui_positions import position
 
@@ -42,7 +42,7 @@ _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _OTHER = SessionId.parse("fedcba98-7654-3210-fedc-ba9876543210")
 
 
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     def __init__(self, records: tuple[SessionRecord, ...]) -> None:
         self.records = records
 

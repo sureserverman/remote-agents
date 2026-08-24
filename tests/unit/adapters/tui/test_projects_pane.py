@@ -16,11 +16,11 @@ list this surface shows.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from backends import tui_context_for
+from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import Input, OptionList, Static
 from tui_positions import position
 
@@ -42,6 +42,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.ports.session_store import ProjectUsage
 
 _INFRA = CatalogProject("opaque-infra", "remote-agents", "infra", "Registered")
 _TOOLS = CatalogProject("opaque-tools", "opaque-shift", "dev-area", "Registered")
@@ -57,9 +58,28 @@ class _Creator:
         return CreatedProject(identity, Path("/dev") / command.area / command.name)
 
 
-class _Launcher:
-    def __init__(self, records: tuple[SessionRecord, ...] = ()) -> None:
+class _Launcher(SessionUseCaseDouble):
+    """A host with launch history, or with none -- `project_usage` is a render-time read.
+
+    Inherits the three reads a screen makes while drawing rather than restating them: the
+    projects pane now asks `project_usage` on every catalogue refresh, so a double that
+    answered only `list_sessions` would fail at the first draw for a reason no test here is
+    about.
+    """
+
+    def __init__(
+        self,
+        records: tuple[SessionRecord, ...] = (),
+        usage: tuple[ProjectUsage, ...] = (),
+    ) -> None:
         self.records = records
+        self.usage = usage
+        #: How many times the catalogue's order was actually recomputed.
+        self.usage_reads = 0
+
+    async def project_usage(self) -> tuple[ProjectUsage, ...]:
+        self.usage_reads += 1
+        return self.usage
 
     async def refresh_readiness(self) -> None:
         return None
@@ -327,3 +347,93 @@ async def test_the_projects_pane_keeps_the_two_flows_that_begin_with_a_project()
         offered = set(app.screen.active_bindings)
         assert "ctrl+n" in offered, offered
         assert "ctrl+s" not in offered, offered
+
+
+def _usage(opaque_id: str, count: int, days_ago: float) -> ProjectUsage:
+    return ProjectUsage(opaque_id, count, datetime.now(UTC) - timedelta(days=days_ago))
+
+
+async def test_the_projects_pane_opens_in_recency_order() -> None:
+    """The DEC-012 gap this stage closes: the bot ranked, this surface drew the registry.
+
+    The catalogue is built infra-then-dev-area and the owner has been in `opaque-shift` all
+    week, so the first draw -- not the second, not the one after a refresh -- must lead with
+    it.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+async def test_a_host_that_reports_no_usage_draws_the_unranked_catalogue() -> None:
+    """Not an empty one. An unranked list is every project the owner can still launch."""
+    launcher = _Launcher()
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+
+
+async def test_the_order_is_computed_per_refresh_and_never_per_render() -> None:
+    """DEC-012's mechanism, which this stage supersedes one *other* clause of.
+
+    A ranking recomputed per render would reshuffle the list under the owner's fingers as
+    they type in the filter -- and would read the store on every keystroke to do it.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        reads_after_first_draw = launcher.usage_reads
+
+        app.screen.render_projects("a")
+        await pilot.pause()
+        app.screen.render_projects("")
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert launcher.usage_reads == reads_after_first_draw
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+async def test_a_refresh_recomputes_the_order() -> None:
+    """The other half: a refresh is exactly where a new order is expected."""
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        before = launcher.usage_reads
+
+        await app.screen.refresh_contents()
+        await pilot.pause()
+
+        assert launcher.usage_reads == before + 1
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+
+class _UnreadableUsage(_Launcher):
+    async def project_usage(self) -> tuple[ProjectUsage, ...]:
+        raise RuntimeError("the store is unreachable")
+
+
+async def test_a_store_that_cannot_report_usage_still_draws_the_list() -> None:
+    """The degradation is asserted rather than incidental.
+
+    `_ordered` swallows the failure and returns the catalogue as it came, so a host whose
+    store went away renders an *unranked* list rather than an empty one or a traceback. The
+    same answer a host with no launch history gets, which is the point: the owner can still
+    launch every project on the list.
+    """
+    app = ProjectsPane(_context(sessions=_UnreadableUsage()))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]

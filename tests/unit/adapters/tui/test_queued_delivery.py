@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -147,7 +147,7 @@ def _conversation_page() -> ConversationCataloguePage:
 
 
 @dataclass(slots=True)
-class _RecordingLauncher:
+class _RecordingLauncher(SessionUseCaseDouble):
     """Records every command and answers at once.
 
     Deliberately not slow. See the module docstring: under queued delivery the second handler

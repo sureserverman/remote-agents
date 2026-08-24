@@ -61,7 +61,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -125,7 +125,7 @@ def _record(custom_label: str | None = None) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
 
     async def refresh_readiness(self):

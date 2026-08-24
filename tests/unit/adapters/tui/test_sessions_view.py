@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
@@ -41,7 +41,7 @@ def _record(state: SessionState = SessionState.RUNNING, *, minutes: int = 0) -> 
 
 
 @dataclass(slots=True)
-class _Listing:
+class _Listing(SessionUseCaseDouble):
     """A launcher that reports whatever set of sessions the test asked for."""
 
     records: tuple[SessionRecord, ...] = ()
@@ -208,7 +208,7 @@ async def test_the_sessions_step_does_not_disturb_a_launch_in_progress() -> None
 
 
 @dataclass(slots=True)
-class _FlakyListing:
+class _FlakyListing(SessionUseCaseDouble):
     """Succeeds for the first read, then fails — a store contended by the other writer."""
 
     records: tuple[SessionRecord, ...] = ()
@@ -330,7 +330,7 @@ async def test_a_screen_left_mid_read_does_not_draw_onto_its_own_corpse() -> Non
     import asyncio
 
     @dataclass(slots=True)
-    class _SlowListing:
+    class _SlowListing(SessionUseCaseDouble):
         records: tuple[SessionRecord, ...] = ()
 
         async def refresh_readiness(self) -> tuple[SessionRecord, ...]:

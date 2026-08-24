@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
 from tui_positions import position
@@ -77,7 +77,7 @@ def _record() -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
 
     async def refresh_readiness(self):

@@ -43,7 +43,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from test_tui_snapshots import settle
 from textual.widgets import OptionList
@@ -93,7 +93,7 @@ def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
 
 
 @dataclass(slots=True)
-class _SlowLauncher:
+class _SlowLauncher(SessionUseCaseDouble):
     """Records every command, and holds the first one open until the test releases it.
 
     The window has to be genuinely open or these tests prove nothing — if the first call
@@ -537,7 +537,7 @@ async def test_the_position_is_unchanged_by_a_dropped_keypress() -> None:
 
 
 @dataclass(slots=True)
-class _AdvancingLauncher:
+class _AdvancingLauncher(SessionUseCaseDouble):
     """A store whose record advances state, the way the real one does after a stop.
 
     `_SlowLauncher` returns a frozen RUNNING record, which makes `_busy` look like the thing

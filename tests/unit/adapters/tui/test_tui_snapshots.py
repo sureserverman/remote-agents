@@ -84,7 +84,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from backends import backend_for
+from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import Input
 from tui_positions import position
 
@@ -245,7 +245,7 @@ def _summary() -> ConversationSummary:
 
 
 @dataclass(slots=True)
-class _Launcher:
+class _Launcher(SessionUseCaseDouble):
     record: SessionRecord = field(default_factory=_record)
     # Three knobs the state axis needs, each defaulting to the happy path so the fifteen
     # position baselines are still driven by the launcher they have always been driven by.
