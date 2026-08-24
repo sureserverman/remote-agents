@@ -839,3 +839,138 @@ async def test_i_is_absent_on_a_host_that_cannot_inspect() -> None:
         screen = app.screen
         assert screen.check_action("row_action", ("inspect",)) is False
         assert screen.check_action("row_action", ("attach",)) is not False
+
+
+def _codex_record(session_id: SessionId = _SESSION) -> SessionRecord:
+    """A live session Remote Control does not apply to — only Claude implements the action."""
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque-existing"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("existing", "codex", "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+def _starting_record(session_id: SessionId = _SESSION) -> SessionRecord:
+    """A listed session the stop policy offers nothing for.
+
+    STARTING rather than ENDED, which is what the close-out evaluator's example named: ENDED
+    is the one state `listed_in_sessions` excludes, so an ENDED row is never drawn and `f`
+    cannot be pressed on one. STARTING is drawn, and `available_actions` returns `()` for it --
+    the pane may not exist yet and the domain has no stop transition from it. The finding was
+    right about the gap; this is the state that actually reaches it.
+    """
+    return SessionRecord(
+        session_id,
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity("existing", "claude", "regular", 1),
+        SessionState.STARTING,
+        datetime.now(UTC),
+    )
+
+
+async def test_the_remote_control_key_is_inert_on_a_session_it_cannot_apply_to() -> None:
+    """`remote_control_available` says to consult it before offering the toggle, and this is
+    the surface that was not.
+
+    `m` reached `show_detail` on a codex row -- a *navigation* the owner did not ask for,
+    dressed as a refusal. The detail then declines in its own words, which is the right answer
+    to the wrong question: the key should not have acted at all. Found by this plan's close-out
+    evaluator, driving a real codex session on the owner's host.
+    """
+    app = SessionsPane(_context((_codex_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_remote_control", ()) is False
+
+        # Driven, not just asked: a `check_action` answer nothing consults is a rule the
+        # framework is free to ignore, so the key itself is pressed and the position re-read.
+        await pilot.press("m")
+        await pilot.pause()
+
+        assert position(app) == "SESSIONS_PANE", "the key navigated instead of declining"
+
+
+async def test_the_force_key_is_inert_where_the_policy_offers_no_force() -> None:
+    """The same rule for the other key whose action the policy gates by state.
+
+    `available_actions(STARTING, None)` is empty, so `f` on a STARTING row named an action
+    nobody was offering. `check_action` mirrors what the policy answers for the row under
+    the cursor, which is the rule that method's own docstring states for every key it gates.
+    """
+    app = SessionsPane(_context((_starting_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_action", ("force",)) is False
+        # The keys that do not depend on the record stay offered: a row is still attachable,
+        # inspectable and renameable when the stop policy has nothing to say about it.
+        assert app.screen.check_action("row_action", ("attach",)) is True
+        assert app.screen.check_action("row_action", ("rename",)) is True
+
+
+async def test_both_keys_stay_offered_where_the_policy_does_offer_them() -> None:
+    """The other half, so the gate is not passing by refusing everything."""
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        assert app.screen.check_action("row_remote_control", ()) is True
+        assert app.screen.check_action("row_action", ("force",)) is True
+
+
+async def test_the_remote_control_key_refuses_in_words_rather_than_navigating() -> None:
+    """The issue-time half of the same rule (DEC-007's third mitigation).
+
+    `check_action` answers from the row that was drawn, so a session that stopped between the
+    redraw and the keypress can still reach the handler. What it must not do there is what it
+    used to do everywhere: push a detail the owner did not ask for. A detail is not a refusal.
+    """
+    from tui_feedback import announcements
+
+    app = SessionsPane(_context((_codex_record(),)))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+
+        await app.screen.action_row_remote_control()
+        await pilot.pause()
+
+        assert position(app) == "SESSIONS_PANE", "the key navigated instead of declining"
+        assert any("Remote Control" in note for note in announcements(app)), (
+            "the key declined silently, which is the complaint one step quieter"
+        )
+
+
+async def test_the_drawn_records_do_not_outlive_the_rows_they_describe() -> None:
+    """The last session ending must clear the cache `check_action` reads, not just the rows.
+
+    A version of `_draw_listing` that rebuilt `_drawn` only on the non-empty path left the
+    defunct records behind on a non-empty → empty redraw. Nothing could reach them, because
+    the empty draw puts a disabled sentinel row down and `highlighted_session()` filters
+    sentinel ids -- but that is an unrelated guard in another method holding up an invariant
+    this one asserts. Found by the Tier-1 review of this change.
+    """
+    launcher = _Launcher((_record(),))
+    app = SessionsPane(_context((_record(),), sessions=launcher))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert app.screen._drawn, "the fixture drew no rows, so this proves nothing"
+
+        launcher.records = ()
+        await app.screen.reload()
+        await pilot.pause()
+
+        assert not app.screen._drawn
+        assert app.screen.highlighted_session() is None

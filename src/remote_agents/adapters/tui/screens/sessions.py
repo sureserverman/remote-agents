@@ -17,6 +17,8 @@ be asked about one direction.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from textual.binding import Binding
 from textual.message import Message
@@ -230,6 +232,42 @@ class _SessionActionKeys:
     `SessionsPaneScreen` inherits it rather than holding a second copy.
     """
 
+    #: The records behind the rows currently drawn, keyed by session id. A class-level default
+    #: rather than an `__init__` assignment: this mixin is combined with `ChoiceScreen` across
+    #: several screens whose `__init__`s differ, and `check_action` can run before any of them
+    #: has drawn anything. Read-only, so the shared default cannot be mutated into per-instance
+    #: state by accident -- `_draw_listing` rebinds the attribute rather than updating it.
+    _drawn: Mapping[str, SessionRecord] = MappingProxyType({})
+
+    def _drawn_record(self, session_value: str) -> SessionRecord | None:
+        """The record this screen last *drew* for that row, if it still has one.
+
+        A drawn record, deliberately, not a fresh read: `check_action` is synchronous and runs
+        on every footer redraw, so it cannot ask the store. That is the right authority here
+        anyway -- these rules describe what the row on screen offers, and DEC-007 puts the
+        safety check at issue time instead, where the record is re-read and the policy
+        re-checked before anything happens. A key hidden from a row that has since changed is
+        a stale *advertisement*, which the next ten-second tick corrects; a key that acted on a
+        stale record would be the thing DEC-007 exists to prevent, and it still cannot.
+        """
+        return self._drawn.get(session_value)
+
+    def _policy_offers(self, session_value: str, action: str) -> bool:
+        """Whether the drawn row's own state offers `action`. Permissive when unknown."""
+        record = self._drawn_record(session_value)
+        if record is None:
+            # A highlighted row this screen has no record for should not silently lose its
+            # keys: an absent answer is not a refusal, and the action's own chain refuses in
+            # its own words if the row really is gone.
+            return True
+        return action in available_actions(record.state, record.orphan_provenance)
+
+    def _remote_control_offered(self, session_value: str) -> bool:
+        record = self._drawn_record(session_value)
+        if record is None:
+            return True
+        return remote_control_available(record)
+
     def highlighted_session(self) -> str | None:
         """The session id under the cursor, or None if the cursor is on nothing usable.
 
@@ -278,7 +316,8 @@ class _SessionActionKeys:
         rediscovered.
         """
         if action == "row_action":
-            if self.highlighted_session() is None:
+            highlighted = self.highlighted_session()
+            if highlighted is None:
                 return False
             # `i` is offered only where there is something to inspect, mirroring
             # `detail_entries`, which gates the Inspect row on the same capability, and
@@ -288,9 +327,25 @@ class _SessionActionKeys:
             # `capture`), which is why it is a consistency fix rather than a defect repair.
             if parameters and parameters[0] == "inspect":
                 return self.services.backend.capture is not None
+            if parameters and parameters[0] == FORCE:
+                # Mirrors the policy for the row under the cursor, which is what every other
+                # rule here does. `available_actions` returns nothing for STARTING and for an
+                # ORPHANED session whose provenance is not adopted, and both are *drawn* --
+                # only ENDED is filtered out of the list -- so `f` named an action nobody was
+                # offering, on a row the owner is looking at. Found by this plan's close-out
+                # evaluator. Attach and rename are deliberately not gated: they are not stop
+                # actions and the policy says nothing about them.
+                return self._policy_offers(highlighted, FORCE)
             return True
         if action == "row_remote_control":
-            return self.highlighted_session() is not None
+            highlighted = self.highlighted_session()
+            if highlighted is None:
+                return False
+            # `remote_control_available`'s own docstring says to consult it before offering
+            # the toggle and not to treat the service as a backstop for the state half. This
+            # surface was the caller that did not: `m` on a codex row reached `show_detail`,
+            # which is a navigation the owner did not ask for wearing a refusal's clothes.
+            return self._remote_control_offered(highlighted)
         if action == "show_projects_pane":
             # Absent, not inert, on a host that wired no console. The owner cannot tell a key
             # that quietly does nothing from a surface that forgot to draw it, and this one is
@@ -361,6 +416,17 @@ class _SessionActionKeys:
             return
         if record is None:
             await self.tui.show_detail(session_value)
+            return
+        if not remote_control_available(record):
+            # The re-read at issue time, which is DEC-007's third mitigation, applied to the
+            # one key whose availability `check_action` can only answer from the drawn row.
+            # A session that stopped -- or a row the cursor moved onto between the redraw and
+            # the keypress -- is refused here in words rather than by being navigated
+            # somewhere. `show_detail` was what this did, and a detail the owner did not ask
+            # for is not a refusal, it is a refusal-shaped move.
+            self.announce(
+                "Remote Control is only for a running Claude session.", severity="warning"
+            )
             return
         # The direction is picked from this read and re-checked by `confirm_remote_control`'s
         # own read -- which asks whether Remote Control is *available*, not whether the
@@ -597,6 +663,16 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         if not self.showing:
             return
+        # Rebuilt on **every** draw, this branch included, so `_drawn` cannot outlive the rows
+        # it describes -- see `_drawn_record`. Assigned before the empty-list return rather
+        # than after it: a last session ending leaves that branch drawing an empty list, and a
+        # version of this that rebuilt only on the non-empty path left the defunct records
+        # behind. Nothing could reach them today, because `show_choices(())` draws a disabled
+        # sentinel row and `highlighted_session()` filters every sentinel id -- but that is an
+        # unrelated guard in another method holding up an invariant this one asserts, which is
+        # the shape that stops being true the first time someone adds a second reader. Found by
+        # this change's Tier-1 review.
+        self._drawn = {str(record.session_id): record for record in records}
         if not records:
             self.show_choices(())
             self.set_status(self.empty_status)
