@@ -480,7 +480,8 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
         received.append(secrets)
 
     monkeypatch.setattr(
-        "remote_agents.bootstrap.load_secrets", lambda: TelegramSecrets("token", 7, 11)
+        "remote_agents.bootstrap._resolve_serve_secrets",
+        lambda _paths: TelegramSecrets("token", 7, 11),
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap.ProductionPaths.for_home",
@@ -553,7 +554,8 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
         served.append(tuple(project.name for project in handed.catalogue))
 
     monkeypatch.setattr(
-        "remote_agents.bootstrap.load_secrets", lambda: TelegramSecrets("token", 7, 11)
+        "remote_agents.bootstrap._resolve_serve_secrets",
+        lambda _paths: TelegramSecrets("token", 7, 11),
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap.ProductionPaths.for_home",
