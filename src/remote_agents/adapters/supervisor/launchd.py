@@ -85,6 +85,23 @@ _BREW_BINARIES = (Path("/opt/homebrew/bin/brew"), Path("/usr/local/bin/brew"))
 _STANDARD_DIRECTORIES = (Path("/usr/bin"), Path("/bin"), Path("/usr/sbin"), Path("/sbin"))
 
 
+#: Every character that means something to an extended regular expression.
+#:
+#: `pgrep -f` takes an ERE, not a literal, and a path is not a regex: measured on the drill
+#: host, `pgrep -U <uid> -f 'a+b(c'` exits **2** for a malformed pattern. `_command_succeeds`
+#: reads any non-zero exit as "not running", so an unescaped `+` or `(` anywhere in the install
+#: path would have turned a bad-pattern error into a confident, permanent "the service is down".
+_ERE_METACHARACTERS = ".[]\\()*+?{}|^$"
+
+
+def _literal_pattern(value: Path) -> str:
+    """Render a path so `pgrep -f` matches it literally rather than as a pattern."""
+    return "".join(
+        f"\\{character}" if character in _ERE_METACHARACTERS else character
+        for character in str(value)
+    )
+
+
 def homebrew_prefix(candidates: tuple[Path, ...] = _BREW_BINARIES) -> Path | None:
     """Ask the installed brew where its prefix is, or answer `None` if there is no brew.
 
@@ -140,9 +157,9 @@ class LaunchdSupervisor:
 
     kind: ClassVar[SupervisorKind] = SupervisorKind.LAUNCHD
 
-    #: `print` exits zero for any bootstrapped job, including one that exited and will not be
-    #: restarted -- so zero means registered, and the report has to say so.
-    liveness_meaning: ClassVar[LivenessMeaning] = LivenessMeaning.REGISTERED
+    #: Answered by `pgrep` against the running process, not by `launchctl` -- so this really
+    #: is "running", matching the systemd side rather than merely resembling it.
+    liveness_meaning: ClassVar[LivenessMeaning] = LivenessMeaning.RUNNING
 
     def __post_init__(self) -> None:
         """Enforce the absolute-path invariant every docstring here asserts.
@@ -185,7 +202,27 @@ class LaunchdSupervisor:
 
     @property
     def service_target(self) -> str:
-        """`gui/<uid>/<label>`, the target the three per-service verbs address."""
+        """`gui/<uid>/<label>`, the target the three per-service verbs address.
+
+        **The GUI domain requires a console login, and that is a deliberate, documented
+        constraint of this deployment rather than an oversight.** `launchctl(1)` distinguishes
+        the two per-user domains explicitly: a `user/<uid>` domain "may exist independently of
+        a logged-in user", while a `gui/<uid>` "user-login domain is created when the user logs
+        in at the GUI". So with `gui/`, the service loads when the owner logs in at the Mac's
+        screen and not before -- after a reboot with nobody at the console there is no domain to
+        bootstrap into, and the plist is never read.
+
+        Chosen by the owner (2026-08-24) with `user/<uid>` and a root `LaunchDaemon` as the
+        alternatives. The trade accepted: the macOS service is available only while the owner is
+        logged in, in exchange for keeping the job in the same session as the owner's GUI
+        applications -- which is where the agent CLIs it launches expect to live -- and keeping
+        the whole service unprivileged and reading a 0600 file out of the owner's own home,
+        which the LaunchDaemon option would have changed.
+
+        Anything that documents macOS setup has to say this out loud; a Mac that has rebooted
+        and is sitting at the login window is a Mac where this service is legitimately absent,
+        and that must not read as a fault.
+        """
         return f"gui/{self.uid}/{LABEL}"
 
     def search_path(self) -> tuple[Path, ...]:
@@ -301,21 +338,28 @@ class LaunchdSupervisor:
         return ("launchctl", "kickstart", self.service_target)
 
     def liveness_command(self) -> tuple[str, ...]:
-        """`print` against the service target: **exit status only**, and read the caveat.
+        """Ask whether the service is **running**, by exit status alone.
 
-        `launchctl(1)` says of this command's output "Do NOT rely on the structure", so the
-        port forbids a caller parsing it and the exit status is the whole signal. There is no
-        `launchctl` verb that answers liveness more narrowly without reading that output.
+        Not `launchctl print`. That was the obvious probe and it answers the wrong question:
+        measured against real jobs on a Mac, it exits 0 for a job whose `state = not running`
+        exactly as for a running one, because zero means *bootstrapped*. The cases an operator
+        actually runs `doctor` for -- the binary moved, a config error, a permanent spawn
+        failure -- all leave the job bootstrapped and dead, so a report built on that probe was
+        green precisely when it needed not to be. Narrowing `print` is not available either:
+        `launchctl(1)` says of its output "Do NOT rely on the structure".
 
-        **This asks a slightly different question than the systemd side does.** `systemctl
-        --user is-active --quiet` is false for a unit that is loaded but not running.
-        `launchctl print` exits zero for any *bootstrapped* service, including one that has
-        exited cleanly and, under `KeepAlive = {SuccessfulExit: False}`, is deliberately not
-        being restarted. So a zero here means "registered", and on the systemd side it means
-        "running"; the two agree on the case that matters most -- a service that was never
-        installed, or that was booted out, is non-zero on both -- and diverge on a service that
-        is installed and stopped. The shared vocabulary does not make that difference go away,
-        and narrowing it would mean parsing output the man page forbids parsing, so it is
-        recorded here rather than papered over.
+        `pgrep` sidesteps the whole problem. The man page's prohibition is on parsing `print`'s
+        structure, not on asking something else, and `pgrep` answers by exit status: 0 when a
+        matching process exists, 1 when none does. That is the same shape as
+        `systemctl is-active --quiet`, which is why both adapters can now honestly declare
+        `LivenessMeaning.RUNNING`.
+
+        Scoped to this user's own processes (`-U`) and matched against the full command line
+        (`-f`) so that the console script plus its `serve` subcommand identifies the service
+        rather than the interpreter name, which every Python process shares.
+
+        `/usr/bin/pgrep` is inside `_PATH_STDPATH`, so unlike tmux or uv it resolves even from
+        the bare environment launchd would hand a job.
         """
-        return ("launchctl", "print", self.service_target)
+        script = self.interpreter.parent / "remote-agents"
+        return ("pgrep", "-U", str(self.uid), "-f", f"{_literal_pattern(script)} serve")

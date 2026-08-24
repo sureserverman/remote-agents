@@ -241,7 +241,16 @@ def test_launchd_verbs_are_argv_the_caller_runs() -> None:
     )
     assert ELSEWHERE.remove_command() == ("launchctl", "bootout", f"gui/501/{LABEL}")
     assert ELSEWHERE.start_command() == ("launchctl", "kickstart", f"gui/501/{LABEL}")
-    assert ELSEWHERE.liveness_command() == ("launchctl", "print", f"gui/501/{LABEL}")
+    # Deliberately not `launchctl print`: it exits 0 for a bootstrapped-but-dead job, so it
+    # answers "is it registered". `pgrep` answers "is it running" by exit status alone, which
+    # is what lets this adapter honestly declare the same LivenessMeaning as the systemd one.
+    assert ELSEWHERE.liveness_command() == (
+        "pgrep",
+        "-U",
+        "501",
+        "-f",
+        "/opt/ra/bin/remote-agents serve",
+    )
 
 
 def test_launchd_domain_target_uses_the_uid_it_was_given() -> None:

@@ -188,14 +188,14 @@ def test_doctor_runs_the_ported_liveness_argv_and_nothing_systemd_specific_on_a_
 
     capsys.readouterr()
     assert not any("systemctl" in argv[0] for argv in invoked), invoked
-    assert ("launchctl", "print", "gui/501/remote-agents") in invoked
+    assert ("pgrep", "-U", "501", "-f", "/opt/ra/bin/remote-agents serve") in invoked
 
 
 @pytest.mark.parametrize(
     ("supervisor", "meaning"),
     [
         pytest.param(_SUPERVISORS[0].values[0], LivenessMeaning.RUNNING, id="systemd"),
-        pytest.param(_SUPERVISORS[1].values[0], LivenessMeaning.REGISTERED, id="launchd"),
+        pytest.param(_SUPERVISORS[1].values[0], LivenessMeaning.RUNNING, id="launchd"),
     ],
 )
 def test_doctor_says_what_a_green_service_component_actually_establishes(
@@ -218,10 +218,21 @@ def test_doctor_says_what_a_green_service_component_actually_establishes(
     assert report["service_liveness"] == meaning.value
 
 
-def test_the_two_supervisors_do_not_claim_the_same_liveness_meaning() -> None:
-    """The distinction is real, so the vocabulary must not collapse it back to one value."""
+def test_both_supervisors_now_answer_the_same_liveness_question() -> None:
+    """Parity is the goal, and `LivenessMeaning` is what makes it a claim rather than a hope.
+
+    The two used to differ: `launchctl print` could only report "registered", so a green
+    service on a Mac meant less than the same word on Linux. Switching the launchd probe to
+    `pgrep` -- which answers by exit status and so keeps the no-parsing rule -- made both
+    genuinely answer "running".
+
+    `REGISTERED` stays in the vocabulary rather than being deleted now that nothing returns it.
+    It is what a future adapter whose supervisor can only confirm registration would have to
+    declare, and declaring it is exactly what stops such an adapter passing itself off as
+    equivalent -- which is the failure this member was added to surface.
+    """
     systemd, launchd = (parameters.values[0] for parameters in _SUPERVISORS)
 
     assert systemd.liveness_meaning is LivenessMeaning.RUNNING
-    assert launchd.liveness_meaning is LivenessMeaning.REGISTERED
-    assert systemd.liveness_meaning is not launchd.liveness_meaning
+    assert launchd.liveness_meaning is LivenessMeaning.RUNNING
+    assert LivenessMeaning.REGISTERED in set(LivenessMeaning)
