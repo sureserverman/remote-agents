@@ -197,3 +197,49 @@ def test_writing_an_unknown_order_is_refused_rather_than_stored(tmp_path: Path) 
     write_project_order(path, "by-vibes")
 
     assert read_project_order(path) == ALPHABETICAL
+
+
+def test_a_write_leaves_no_scratch_file_behind(tmp_path: Path) -> None:
+    """The write is a rename over the target, so the directory holds one file when it ends."""
+    path = tmp_path / "preferences.json"
+
+    write_project_order(path, ALPHABETICAL)
+    write_project_order(path, RECENCY)
+
+    assert [entry.name for entry in tmp_path.iterdir()] == ["preferences.json"]
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root writes through a read-only directory")
+def test_a_failed_write_leaves_the_previous_choice_readable(tmp_path: Path) -> None:
+    """An interrupted write must not be able to destroy the answer already recorded.
+
+    In-place truncation could leave a zero-length file -- forgiven by the reader, but the
+    owner's choice is gone. A rename cannot: the target is either the old file or the new one.
+    """
+    directory = tmp_path / "state"
+    directory.mkdir()
+    path = directory / "preferences.json"
+    write_project_order(path, ALPHABETICAL)
+    os.chmod(directory, 0o500)
+
+    try:
+        write_project_order(path, RECENCY)
+
+        assert read_project_order(path) == ALPHABETICAL
+    finally:
+        os.chmod(directory, 0o700)
+
+
+@pytest.mark.skipif(os.getuid() == 0, reason="root writes through a read-only directory")
+def test_a_failed_write_does_not_poison_the_next_one(tmp_path: Path) -> None:
+    """A scratch file left behind would make a transient failure a permanent one."""
+    directory = tmp_path / "state"
+    directory.mkdir()
+    path = directory / "preferences.json"
+    os.chmod(directory, 0o500)
+    write_project_order(path, ALPHABETICAL)
+    os.chmod(directory, 0o700)
+
+    write_project_order(path, ALPHABETICAL)
+
+    assert read_project_order(path) == ALPHABETICAL

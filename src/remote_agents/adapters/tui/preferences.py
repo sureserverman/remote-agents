@@ -15,6 +15,7 @@ remembers which of the two the owner picked).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -78,14 +79,27 @@ def write_project_order(path: Path | None, order: str) -> None:
         _LOG.warning("refusing to store an unknown project order: %r", order)
         return
     payload = json.dumps({_KEY: order})
+    # Written beside the target and renamed over it, rather than truncated in place. The
+    # reader forgives a zero-length file, so an interrupted in-place write cost only a
+    # forgotten preference -- but `os.replace` is atomic on the same filesystem and removes
+    # the window entirely for two lines. A reader on another surface can then never see a
+    # half-written file, only the old one or the new one.
+    scratch = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        # O_CREAT's mode applies only to a file this call creates, so the fchmod is what
-        # repairs one an earlier version -- or an operator -- left readable. fchmod rather
-        # than chmod: it names the file just opened, not whatever the path resolves to a
-        # syscall later.
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # O_EXCL because this name is ours: a collision means another process is mid-write
+        # with our pid, which cannot happen, or a stale file is in the way, which we want to
+        # hear about rather than clobber. fchmod rather than chmod names the file just
+        # opened, not whatever the path resolves to a syscall later.
+        descriptor = os.open(scratch, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             os.fchmod(handle.fileno(), 0o600)
             handle.write(payload)
+        # Replaces whatever mode the old file had along with its contents, so this is also
+        # what repairs one an earlier version -- or an operator -- left readable.
+        os.replace(scratch, path)
     except OSError:
         _LOG.warning("could not save the project order to %s", path, exc_info=True)
+        # A scratch file left behind is a file the next write cannot create, so the failure
+        # would be permanent rather than transient.
+        with contextlib.suppress(OSError):
+            scratch.unlink()

@@ -269,11 +269,23 @@ async def test_the_footer_offers_the_reorder_key_exactly_where_the_action_exists
 ) -> None:
     """The order key is a *screen* binding, so its reach is the class that declares it.
 
-    The expectation is read off the screen -- does this position have the action at all --
-    rather than named per screen, so a position that inherits `ProjectsScreen` tomorrow is
-    covered on the same commit. `ResumeProjectsScreen` draws the same catalogue and takes
-    whatever order is in force without offering the switch: one place chooses, everything
-    that renders the catalogue follows.
+    **What this asserts is narrower than the file's other cases, and saying so is the point.**
+    Those derive their expectation from a *declaration* the action is separately pinned
+    against -- `can_refresh`, the stack depth, whether a conversation service was wired -- so
+    they can catch a `check_action` that has drifted from the action it governs. This one
+    reads `hasattr(screen, "action_toggle_project_order")`, which is close to restating
+    Textual's own binding resolution: a screen that wrongly *had* the action would have the
+    attribute too, so this cannot catch the key leaking somewhere it does not belong.
+
+    It earns its place as the regression guard for the two things that are not automatic: the
+    binding is declared `show=True` (an inherited `show=False`, or a `check_action` returning
+    `False`, would hide a key that works), and the reach follows the class rather than a
+    hand-maintained list, so a position that inherits `ProjectsScreen` tomorrow is covered on
+    the same commit. Raised as an overclaim by this stage's goal evaluator, which was right.
+
+    `ResumeProjectsScreen` draws the same catalogue and takes whatever order is in force
+    without offering the switch: one place chooses, everything that renders the catalogue
+    follows.
     """
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:

@@ -455,19 +455,37 @@ def _drawn(status: Static) -> str:
 
 
 async def test_one_key_switches_the_order_and_the_rows_follow(tmp_path: Path) -> None:
-    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    """The usage is chosen so the two orders *disagree*, which is the whole test.
+
+    An earlier version gave the recent launch to `dev-area/opaque-shift` -- which is also
+    alphabetically first -- so both orders produced the same two rows and the only thing
+    distinguishing the states was the mode flag. A regression that flipped `_project_order`
+    and the sentence but stopped reassigning `_catalogue` would have passed it. Found by this
+    stage's goal evaluator.
+
+    So: `infra/remote-agents` is the recently used one and `dev-area/opaque-shift` the stale one,
+    which puts recency at [infra, tools] and alphabetical -- area first, then name -- at
+    [tools, infra]. The press has to move the rows or the assertion fails.
+    """
+    launcher = _Launcher(usage=(_usage("opaque-infra", 5, 1), _usage("opaque-tools", 40, 400)))
     app = ProjectsPane(_context(sessions=launcher, preferences_path=tmp_path / "prefs.json"))
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
-        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
 
         await pilot.press(_ORDER_KEY)
         await pilot.pause()
 
-        # dev-area/opaque-shift before infra/remote-agents: area first, then name.
         assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
         assert app.project_order == ALPHABETICAL
+
+        # And back, so the key is a switch rather than a one-way door.
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+        assert app.project_order == RECENCY
 
 
 async def test_the_switch_reorders_without_re_reading_the_catalogue(tmp_path: Path) -> None:
