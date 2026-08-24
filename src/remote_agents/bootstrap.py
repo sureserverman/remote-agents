@@ -96,6 +96,7 @@ from remote_agents.config import (
     describe_schema_drift,
     load_config,
     load_secrets,
+    render_config,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
@@ -1268,6 +1269,35 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
+
+
+def detected_config(home: Path) -> str:
+    """Render this host's configuration from the one thing onboarding actually knows: its home.
+
+    The composition root is where this belongs, and not by default. `render_config` holds the
+    schema and refuses an incomplete set of keys; `ProductionPaths` holds the private tree and
+    where the database goes. This function is the only place that knows *both*, plus the two
+    paths that are neither -- the operator's dev tree and the projects registry, which live in
+    their home but outside the boundary `ProductionPaths` declares itself the owner of. DEC-015
+    puts exactly that kind of joining here.
+
+    `~/dev` and `~/.claude/projects-registry.yaml` are the shipped example's two paths with the
+    hardcoded home taken out, so an operator whose layout already matches the example gets the
+    file they would have written. An operator whose does not gets a config that loads and a
+    `doctor` that tells them the registry is unavailable, which is the honest answer for a host
+    that has no registry yet -- and is a different sentence from the crash a copied example
+    produces at the first `serve`.
+
+    Public, unusually for this module, because the onboarding test has to read what would be
+    written without writing it. The alternative was asserting on a file, which would have made
+    every case in that test a filesystem case.
+    """
+    paths = ProductionPaths.for_home(home)
+    return render_config(
+        dev_root=home / "dev",
+        registry_path=home / ".claude" / "projects-registry.yaml",
+        database_path=paths.database_path,
+    )
 
 
 def _supervisor_for_host() -> ServiceSupervisor:

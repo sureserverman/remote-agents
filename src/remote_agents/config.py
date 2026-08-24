@@ -254,3 +254,71 @@ def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}")
     return value
+
+
+#: What a freshly generated configuration starts at, and the values the shipped example has
+#: carried since it was written. They are here rather than in the generator's caller because
+#: the bounds that accept them are here: `_bounded_int` is what says 40 is a legal label length,
+#: and a default living somewhere else could drift outside a bound nothing would re-check until
+#: an operator's first `serve`.
+DEFAULT_LIMITS: dict[str, int] = {
+    "max_label_length": 40,
+    "project_page_size": 10,
+    "activity_poll_seconds": 30,
+    "activity_quiet_polls": 3,
+}
+
+
+def render_config(
+    *,
+    dev_root: Path,
+    registry_path: Path,
+    database_path: Path,
+    limits: dict[str, int] | None = None,
+) -> str:
+    """Render a complete configuration for one host, checked against this build's own schema.
+
+    **Rendered, never copied.** `config/remote-agents.example.toml` spells out `/home/user/dev`
+    and a `/home/user/.claude/…` registry path, and the README has told operators to
+    `install -m 600` it into place. That cannot work anywhere but this developer's own machine:
+    `load_config` refuses a `paths.dev_root` that is not an existing directory, so a copied
+    example fails on a macOS host at the first `serve` rather than at install time — on the
+    platform the cross-platform installer exists to support.
+
+    Lives beside the loader for `describe_schema_drift`'s reason: the closed key sets are here,
+    `application/` may not import this module (DEC-015), and a renderer that restated the schema
+    would be a second copy free to fall behind the first. Here it can be *checked* against it —
+    the key sets below are the loader's own, so a key added to `_PATH_KEYS` and forgotten here
+    raises when this function is called rather than producing a file that fails
+    `_require_exact_keys` on an operator's host and nowhere else.
+
+    The values are TOML basic strings, escaped. A home directory may legally hold a `"` or a
+    `\\`, and both end or corrupt an unescaped one — the systemd adapter learned the same lesson
+    about an apostrophe in `ExecStart` at the cost of a unit that would not start.
+    """
+    paths = {
+        "dev_root": dev_root,
+        "registry_path": registry_path,
+        "database_path": database_path,
+    }
+    values = DEFAULT_LIMITS if limits is None else limits
+    _require_exact_keys(paths, _PATH_KEYS, "generated paths")
+    _require_exact_keys(values, _LIMIT_KEYS, "generated limits")
+    rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
+    rendered_limits = "\n".join(f"{key} = {values[key]:d}" for key in sorted(values))
+    return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"
+
+
+def _toml_string(value: Path) -> str:
+    """Render one path as a TOML basic string, escaped the way TOML v1.0.0 requires.
+
+    Only the escapes a filesystem path can actually need: a backslash, a double quote, and the
+    control characters TOML refuses to carry raw. A newline in a directory name would otherwise
+    end the line and leave the rest to be parsed as a further key — the same injection the
+    systemd renderer refuses, arriving through a different format.
+    """
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    escaped = "".join(
+        character if character.isprintable() else f"\\u{ord(character):04X}" for character in text
+    )
+    return f'"{escaped}"'
