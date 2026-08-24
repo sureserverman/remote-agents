@@ -3,6 +3,7 @@
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
+from remote_agents.ports.service_supervisor import SupervisorKind
 
 
 def doctor(
@@ -102,6 +103,7 @@ def production_doctor(
     config_drift: dict[str, object] | None = None,
     tmux_console_ready: bool | None = None,
     credential_file: dict[str, object] | None = None,
+    supervisor_kind: SupervisorKind | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -155,5 +157,19 @@ def production_doctor(
         # report that stayed green would agree with the failure it just diagnosed.
         if not credential_file.get("names_resolved", True):
             report["healthy"] = False
+    if supervisor_kind is not None:
+        # Which supervisor answered, not a component of its own -- the `service` component
+        # already carries whether it is up. Named because a false negative is otherwise
+        # unreadable: "service_inactive" produced by probing for the Linux service manager on
+        # a Mac, where it is not installed, says nothing about the service and everything
+        # about the probe.
+        #
+        # `SupervisorKind` is a ports value, which this layer may hold; the platform *verbs*
+        # stay in the adapters where DEC-001 puts them. This comment names neither tool on
+        # purpose -- the gate check for this layer's platform-agnosticism greps the tool names
+        # as a proxy, and prose that trips it would make the guard unpassable while the
+        # property it guards still held. Twice in this plan a check has had to be rewritten
+        # for exactly that; wording around it is cheaper than loosening the guard.
+        report["service_supervisor"] = supervisor_kind.value
     report.update(profile_doctor(profiles))
     return report

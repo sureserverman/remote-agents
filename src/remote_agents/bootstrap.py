@@ -49,6 +49,8 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
 )
+from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
+from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
@@ -98,6 +100,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.service_supervisor import ServiceSupervisor
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
@@ -464,15 +467,14 @@ def main(
             closed_profiles(),
             resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
         )
+        supervisor = _supervisor_for_host()
         result = production_doctor(
             core_ready=registry.error is None,
             database_ready=database_is_ready(config.database_path),
             tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
             tmux_console_ready=_console_features_available(paths.home),
             telegram_ready=_telegram_credentials_are_private(paths),
-            service_ready=_command_succeeds(
-                ("systemctl", "--user", "is-active", "--quiet", "remote-agents.service")
-            ),
+            service_ready=_command_succeeds(supervisor.liveness_command()),
             profiles=profiles,
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
@@ -482,6 +484,7 @@ def main(
             # complaint. Silence and a passed check look identical otherwise.
             config_drift=drift,
             credential_file=_credential_file_state(paths),
+            supervisor_kind=supervisor.kind,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -1260,6 +1263,24 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     return completed.returncode == 0
 
 
+def _supervisor_for_host() -> ServiceSupervisor:
+    """Which supervisor actually runs this service here.
+
+    The one place the platform is decided. DEC-001 puts the *difference* in the adapters and
+    DEC-015 puts the *choosing* in a composition root, which is this file -- so `doctor` and
+    everything downstream ask the port a question and never learn which supervisor answered
+    it, except to report the name.
+
+    `sys.platform` rather than probing for an installed binary: the question is which
+    supervisor owns this host's user services, and a Mac with neither tool installed is still
+    a launchd host. Probing would answer "systemd" there the moment someone had a stray
+    `systemctl` on their PATH.
+    """
+    if sys.platform == "darwin":
+        return LaunchdSupervisor()
+    return SystemdSupervisor()
+
+
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     """Verify only the private credential-file boundary; never read or print its values."""
     try:
@@ -1267,7 +1288,6 @@ def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     except ConfigError:
         return False
     return True
-
 
 
 def _credential_file_state(paths: ProductionPaths) -> dict[str, object]:
