@@ -143,3 +143,78 @@ def test_blank_assignments_are_a_broken_injection_not_an_absent_one(
 
     with pytest.raises(ConfigError):
         _resolve_serve_secrets(paths, environment=environment)
+
+
+def test_permissions_a_world_readable_credential_file_is_refused(tmp_path: Path) -> None:
+    """0600 is enforced on the fallback path too, not only where the unit used to check it.
+
+    Reached through the resolver rather than through `require_private_environment` directly:
+    the point of the test is that the *serve* path cannot be made to read a loosened file, and
+    a test calling the guard on its own would still pass if the resolver stopped calling it.
+    """
+    paths = ProductionPaths.for_home(tmp_path)
+    _write_private_environment(paths)
+    os.chmod(paths.environment_path, 0o644)
+
+    with pytest.raises(ConfigError, match="must have mode 0600"):
+        _resolve_serve_secrets(paths, environment={})
+
+
+def test_permissions_a_symlinked_credential_file_is_refused(tmp_path: Path) -> None:
+    """A symlink is refused whatever it points at, so a 0600 target cannot launder one in."""
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.ensure_directories()
+    target = tmp_path / "elsewhere.env"
+    target.write_text(
+        "REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=linked\n"
+        "REMOTE_AGENTS_OWNER_USER_ID=1\n"
+        "REMOTE_AGENTS_OWNER_CHAT_ID=2\n",
+        encoding="utf-8",
+    )
+    os.chmod(target, 0o600)
+    paths.environment_path.symlink_to(target)
+
+    with pytest.raises(ConfigError, match="must be owned regular file"):
+        _resolve_serve_secrets(paths, environment={})
+
+
+def test_permissions_a_non_regular_credential_file_is_refused(tmp_path: Path) -> None:
+    """A directory (or any non-regular file) where the credential belongs is a refusal."""
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.ensure_directories()
+    paths.environment_path.mkdir()
+
+    # Without `match`, this passes even if the not-regular-file arm is deleted: `read_text`
+    # on a directory raises IsADirectoryError, which `_load_private_telegram_secrets` converts
+    # into a ConfigError of its own. Naming the branch is what makes the test able to fail.
+    with pytest.raises(ConfigError, match="must be owned regular file"):
+        _resolve_serve_secrets(paths, environment={})
+
+
+def test_permissions_a_missing_credential_file_is_refused(tmp_path: Path) -> None:
+    """The launchd host with nothing onboarded yet: no environment, no file, so no service."""
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.ensure_directories()
+
+    # Same masking risk as the directory case: a missing file reaches `read_text` as
+    # FileNotFoundError and comes back as "unreadable" if the lstat arm stops firing.
+    with pytest.raises(ConfigError, match="is missing"):
+        _resolve_serve_secrets(paths, environment={})
+
+
+def test_permissions_a_credential_file_owned_by_another_user_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ownership arm of the guard, which no other test here reaches.
+
+    It shares an `if` with the symlink and regular-file checks, so dropping just the uid clause
+    leaves every other case green. A second real user is not needed to reach it -- moving the
+    *caller's* idea of its own uid is enough, and is what keeps this runnable as an ordinary
+    unprivileged test on both platforms.
+    """
+    paths = ProductionPaths.for_home(tmp_path)
+    _write_private_environment(paths)
+    monkeypatch.setattr(os, "getuid", lambda: os.stat(paths.environment_path).st_uid + 1)
+
+    with pytest.raises(ConfigError, match="must be owned regular file"):
+        _resolve_serve_secrets(paths, environment={})
