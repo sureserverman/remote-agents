@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -100,6 +102,7 @@ def transient_agent() -> Iterator[Path]:
 
     interpreter = Path(sys.executable)
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{TEST_LABEL}.plist"
+    log_directory = Path(tempfile.mkdtemp(prefix="ra-drill-"))
     definition = {
         "Label": TEST_LABEL,
         "ProgramArguments": [str(interpreter), "-m", "remote_agents.service_probe"],
@@ -113,6 +116,12 @@ def transient_agent() -> Iterator[Path]:
             "PYTHONPATH": str(_REPOSITORY / "src"),
         },
         "RunAtLoad": False,
+        # The drill needs these for the same reason the production adapter does, and the first
+        # run proved it: the probe failed to start, and without them there was nothing to read
+        # -- launchd sends a job's output to /dev/null by default. A drill that cannot say *why*
+        # it failed is a drill that can only report that something did.
+        "StandardOutPath": str(log_directory / "probe.out"),
+        "StandardErrorPath": str(log_directory / "probe.err"),
         # The property under test. Without it launchd kills whatever shares the job's process
         # group when the job dies, which would take the probe's tmux server with it.
         "AbandonProcessGroup": True,
@@ -127,6 +136,11 @@ def transient_agent() -> Iterator[Path]:
         _launchctl("bootout", f"gui/{os.getuid()}/{TEST_LABEL}")
         _tmux("kill-server")
         plist_path.unlink(missing_ok=True)
+        for log in sorted(log_directory.glob("probe.*")):
+            text = log.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                print(f"\n--- {log.name} ---\n{text}", file=sys.stderr)
+        shutil.rmtree(log_directory, ignore_errors=True)
 
 
 def test_a_managed_tmux_session_survives_the_supervisor_stopping_the_service(
@@ -147,10 +161,15 @@ def test_a_managed_tmux_session_survives_the_supervisor_stopping_the_service(
     started = _launchctl("kickstart", target)
     assert started.returncode == 0, f"{started.stdout}\n{started.stderr}"
 
-    assert _wait_for(_probe_session_exists), (
-        "the probe never created its tmux session; the drill proves nothing about survival "
-        "because there was nothing to survive"
-    )
+    if not _wait_for(_probe_session_exists):
+        # The job's own account of itself, printed before the assertion so a failure explains
+        # itself instead of only announcing itself.
+        print(f"\n--- launchctl print {target} ---", file=sys.stderr)
+        print(_launchctl("print", target).stdout[:3000], file=sys.stderr)
+        raise AssertionError(
+            "the probe never created its tmux session; the drill proves nothing about "
+            "survival because there was nothing to survive"
+        )
 
     booted_out = _launchctl("bootout", target)
     assert booted_out.returncode == 0, f"{booted_out.stdout}\n{booted_out.stderr}"
