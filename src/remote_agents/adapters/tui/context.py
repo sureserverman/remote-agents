@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from remote_agents.application.backend import Backend
 from remote_agents.application.console import RecoveryReport
@@ -73,6 +74,18 @@ class TuiContext:
     # report with anything in it; every other pane is refused by `settle`'s own guard and
     # receives an empty one.
     console_recovery: RecoveryReport | None = None
+    # Where this surface remembers the one thing it remembers -- which order the projects
+    # pane opens in. A *path*, wired by the composition root (DEC-046), rather than a
+    # directory this surface derives for itself: `production.ProductionPaths` is the one
+    # place that knows the writable boundary, and an adapter that computed its own would be
+    # a second answer to that question.
+    #
+    # Optional, unlike `backend.sessions` and `backend.projects` above, and for the opposite
+    # reason: those are dereferenced straight and a composition that forgot one must die at
+    # construction. This one is read through `adapters/tui/preferences.py`, which is total in
+    # both directions and answers `None` with the default order. A host that wired no path
+    # forgets the choice between runs; it does not fail to draw a list.
+    preferences_path: Path | None = None
 
     def __post_init__(self) -> None:
         """Refuse a backend this surface cannot actually drive.

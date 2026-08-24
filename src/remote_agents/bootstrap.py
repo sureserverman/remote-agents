@@ -1172,6 +1172,9 @@ def local_context(config, connection, paths: ProductionPaths):
         console_flash=console_flash,
         console_show_projects=console_show_projects,
         console_recovery=console_recovery,
+        # The declared boundary's answer to where a surface preference lives, not this
+        # surface's own (DEC-046): the path is wired here and read through a total reader.
+        preferences_path=paths.preferences_path,
     )
 
 
