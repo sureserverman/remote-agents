@@ -154,6 +154,13 @@ class ProjectsScreen(ChoiceScreen):
         or moving the keyboard out of it.
         """
         query = self.query_one("#filter", Input).value
+        # Consume any search the last keystroke scheduled, for the reason `refresh_contents`
+        # does: a timer armed inside the 120ms debounce would otherwise fire after this render
+        # and re-search the same query, which is the duplicate work the debounce exists to
+        # remove. Harmless here -- the redundant render would use the same query and the new
+        # order -- but the two methods share one contract ("keep the query, do not move the
+        # keyboard") and an asymmetry between them is how the two quietly diverge.
+        self._flush_filter()
         await self.tui.switch_project_order()
         self.render_projects(query, keep_focus=True)
 

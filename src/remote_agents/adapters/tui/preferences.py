@@ -44,9 +44,18 @@ def read_project_order(path: Path | None) -> str:
         return DEFAULT_PROJECT_ORDER
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         # Absent is the ordinary case and unreadable is the surprising one, and neither is
         # worth a log line on a path that runs at every start.
+        #
+        # `UnicodeDecodeError` is a `ValueError` rather than an `OSError`, so `except OSError`
+        # alone let a file of non-UTF-8 bytes escape -- and this reader is called from
+        # `RemoteAgentsTui.__init__`, before Textual exists to catch anything, so it took down
+        # every pane process on the host rather than one project list. That is the fifth
+        # instance of a class this repo swept at a Stage 2 gate: `config.py` (twice),
+        # `bootstrap._load_private_telegram_secrets` and `session_runner.load_intent` all
+        # carry the same handler and the same note. Found by this stage's Tier-2 review,
+        # reproduced against a file of raw bytes.
         return DEFAULT_PROJECT_ORDER
     try:
         stored = json.loads(raw)
