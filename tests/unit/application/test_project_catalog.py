@@ -9,8 +9,10 @@ import pytest
 from remote_agents.application.project_catalog import (
     CatalogProject,
     build_catalogue,
+    order_alphabetically,
     paginate_catalogue,
     rank_by_recent_use,
+    rank_if_usage_is_reported,
     search_catalogue,
 )
 
@@ -232,3 +234,108 @@ def test_the_two_opaque_id_derivations_cannot_drift_apart() -> None:
         assert _entry(_P(), "Registered", canonical).opaque_id == _opaque_id(path), (
             f"the catalogue and the composition root disagree on the key for {path}"
         )
+
+
+@dataclass
+class UsageReporter:
+    """Stands in for the session use case the composition root wires, or does not."""
+
+    usage: list[Usage]
+    calls: int = 0
+
+    async def project_usage(self) -> list[Usage]:
+        self.calls += 1
+        return self.usage
+
+
+def test_alphabetical_order_sorts_on_area_then_name_case_insensitively(tmp_path: Path) -> None:
+    catalogue = build_catalogue(
+        [Candidate(tmp_path / "Infra" / "zulu", "zulu", "Infra")],
+        [
+            Candidate(tmp_path / "web" / "Vault", "Vault", "web"),
+            Candidate(tmp_path / "android" / "writer", "writer", "android"),
+            Candidate(tmp_path / "infra" / "alpha", "alpha", "infra"),
+        ],
+    )
+
+    ordered = order_alphabetically(catalogue)
+
+    # Registered-first is deliberately *not* preserved: this is the order the owner asked
+    # for by name, and "alphabetical, except one group floats" is not alphabetical.
+    assert [entry.name for entry in ordered] == ["writer", "alpha", "zulu", "Vault"]
+
+
+def test_alphabetical_order_invents_no_second_tie_break(tmp_path: Path) -> None:
+    catalogue = build_catalogue(
+        [],
+        [
+            Candidate(tmp_path / "one" / "infra" / "twin", "twin", "infra"),
+            Candidate(tmp_path / "two" / "infra" / "TWIN", "TWIN", "infra"),
+        ],
+    )
+
+    ordered = order_alphabetically(catalogue)
+
+    # Same area, same casefolded name: a stable sort must leave them exactly as they came
+    # rather than reaching for the opaque_id, the group, or the path to separate them.
+    assert [entry.opaque_id for entry in ordered] == [entry.opaque_id for entry in catalogue]
+
+
+async def test_ranking_leaves_the_catalogue_alone_when_the_host_reports_no_usage(
+    tmp_path: Path,
+) -> None:
+    catalogue = build_catalogue(
+        [Candidate(tmp_path / "infra" / "zulu", "zulu", "infra")],
+        [Candidate(tmp_path / "web" / "vault", "vault", "web")],
+    )
+    now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+
+    # A host with no session use case cannot report usage. The unranked catalogue is the
+    # honest answer; an empty one is not.
+    assert await rank_if_usage_is_reported(catalogue, None, now) == catalogue
+
+
+async def test_ranking_asks_the_host_for_usage_and_applies_it(tmp_path: Path) -> None:
+    catalogue = build_catalogue(
+        [],
+        [
+            Candidate(tmp_path / "infra" / "ancient", "ancient", "infra"),
+            Candidate(tmp_path / "infra" / "recent", "recent", "infra"),
+        ],
+    )
+    now = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    reporter = UsageReporter(
+        [
+            Usage(_identify(catalogue, "ancient"), 20, now - timedelta(days=365)),
+            Usage(_identify(catalogue, "recent"), 3, now - timedelta(days=1)),
+        ]
+    )
+
+    ranked = await rank_if_usage_is_reported(catalogue, reporter, now)
+
+    assert [entry.name for entry in ranked] == ["recent", "ancient"]
+    assert reporter.calls == 1
+
+
+async def test_ranking_takes_now_from_its_caller_and_reads_no_clock(tmp_path: Path) -> None:
+    catalogue = build_catalogue(
+        [],
+        [
+            Candidate(tmp_path / "infra" / "ancient", "ancient", "infra"),
+            Candidate(tmp_path / "infra" / "recent", "recent", "infra"),
+        ],
+    )
+    # Centuries from any wall clock, for the reason
+    # `test_rank_reads_only_the_now_it_is_given_and_repeats_itself` states: a real clock read
+    # here would future-date both sessions, decay them to nothing, and let raw counts win.
+    now = datetime(2400, 1, 1, tzinfo=UTC)
+    reporter = UsageReporter(
+        [
+            Usage(_identify(catalogue, "ancient"), 20, now - timedelta(days=365)),
+            Usage(_identify(catalogue, "recent"), 3, now - timedelta(days=1)),
+        ]
+    )
+
+    ranked = await rank_if_usage_is_reported(catalogue, reporter, now)
+
+    assert [entry.name for entry in ranked] == ["recent", "ancient"]

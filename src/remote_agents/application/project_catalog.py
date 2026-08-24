@@ -20,6 +20,12 @@ class ProjectLike(Protocol):
     area: str
 
 
+class UsageReporting(Protocol):
+    """The one thing the ranking wrapper asks of a session use case."""
+
+    async def project_usage(self) -> Iterable[ProjectUsage]: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogProject:
     opaque_id: str
@@ -94,6 +100,49 @@ def rank_by_recent_use(
     # invent a second tie-break of its own. Usage for a project missing from the
     # catalogue (deleted or unregistered) is simply never looked up.
     return tuple(sorted(catalogue, key=lambda project: -scores.get(project.opaque_id, 0.0)))
+
+
+def order_alphabetically(catalogue: Iterable[CatalogProject]) -> tuple[CatalogProject, ...]:
+    """Order by area then name, case-insensitively, and invent no second tie-break.
+
+    The other half of the pair `rank_by_recent_use` opens: the owner who wants to *find* a
+    project by name rather than resume the one they were just in. Registered-first is
+    deliberately not preserved here — "alphabetical, except one group floats" is not
+    alphabetical, and the owner asked for this order by name.
+
+    sorted() is stable, so two entries whose casefolded (area, name) match keep the order
+    they arrived in. Reaching for the opaque_id, the group or the path to separate them
+    would be a second tie-break nobody asked for, and one whose result the owner cannot
+    predict from what is on the screen.
+    """
+    return tuple(
+        sorted(catalogue, key=lambda project: (project.area.casefold(), project.name.casefold()))
+    )
+
+
+async def rank_if_usage_is_reported(
+    catalogue: tuple[CatalogProject, ...],
+    sessions: UsageReporting | None,
+    now: datetime,
+    *,
+    half_life_days: float = 14.0,
+) -> tuple[CatalogProject, ...]:
+    """Order the catalogue by recent use, or leave it exactly as it came.
+
+    A host with no session use case cannot report usage, and the unranked catalogue is the
+    honest answer rather than an empty one. This used to ask the launcher by name whether it
+    could report usage at all, which gave a composition that forgot to wire one the same
+    answer as a host that has none.
+
+    It lives here rather than on either frontend because both surfaces now ask it (DEC-043):
+    the rule that decides which order a project list opens in has one home, and each surface
+    keeps its own sentence about it. `now` stays the caller's argument, so `rank_by_recent_use`
+    remains pure and this wrapper reads no clock either.
+    """
+    if sessions is None:
+        return catalogue
+    usage = await sessions.project_usage()
+    return rank_by_recent_use(catalogue, usage, now, half_life_days=half_life_days)
 
 
 def paginate_catalogue(
