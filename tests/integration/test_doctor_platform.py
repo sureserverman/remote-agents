@@ -24,7 +24,7 @@ from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.bootstrap import main
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import ProfileCompatibility
-from remote_agents.ports.service_supervisor import SupervisorKind
+from remote_agents.ports.service_supervisor import LivenessMeaning, SupervisorKind
 
 
 class _DoctorPaths:
@@ -189,3 +189,39 @@ def test_doctor_runs_the_ported_liveness_argv_and_nothing_systemd_specific_on_a_
     capsys.readouterr()
     assert not any("systemctl" in argv[0] for argv in invoked), invoked
     assert ("launchctl", "print", "gui/501/remote-agents") in invoked
+
+
+@pytest.mark.parametrize(
+    ("supervisor", "meaning"),
+    [
+        pytest.param(_SUPERVISORS[0].values[0], LivenessMeaning.RUNNING, id="systemd"),
+        pytest.param(_SUPERVISORS[1].values[0], LivenessMeaning.REGISTERED, id="launchd"),
+    ],
+)
+def test_doctor_says_what_a_green_service_component_actually_establishes(
+    tmp_path, monkeypatch, capsys, supervisor, meaning
+) -> None:
+    """A green `service` is not the same sentence on both supervisors, so the report says which.
+
+    `systemctl is-active` is false for a unit that is loaded but not running, so zero means
+    running. `launchctl print` exits zero for any bootstrapped job -- including one that exited
+    cleanly and, under `KeepAlive={SuccessfulExit: False}`, is deliberately not being restarted.
+    Without this field those two cases render identically, and an operator on a Mac reads
+    "healthy" for a service that is never coming back.
+    """
+    _arrange(tmp_path, monkeypatch, supervisor, liveness_exit_zero=True)
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["components"]["service"]["status"] == "healthy"
+    assert report["service_liveness"] == meaning.value
+
+
+def test_the_two_supervisors_do_not_claim_the_same_liveness_meaning() -> None:
+    """The distinction is real, so the vocabulary must not collapse it back to one value."""
+    systemd, launchd = (parameters.values[0] for parameters in _SUPERVISORS)
+
+    assert systemd.liveness_meaning is LivenessMeaning.RUNNING
+    assert launchd.liveness_meaning is LivenessMeaning.REGISTERED
+    assert systemd.liveness_meaning is not launchd.liveness_meaning

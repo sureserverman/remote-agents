@@ -485,6 +485,7 @@ def main(
             config_drift=drift,
             credential_file=_credential_file_state(paths),
             supervisor_kind=supervisor.kind,
+            liveness_meaning=supervisor.liveness_meaning,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":

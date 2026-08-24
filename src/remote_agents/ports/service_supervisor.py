@@ -48,6 +48,27 @@ class SupervisorKind(Enum):
     LAUNCHD = "launchd"
 
 
+class LivenessMeaning(Enum):
+    """What a zero exit from `liveness_command()` actually establishes.
+
+    The two supervisors do not answer the same question, and the port used to claim they did.
+    `systemctl --user is-active --quiet` is false for a unit that is loaded but not running.
+    `launchctl print` exits zero for any *bootstrapped* service, including one that exited
+    cleanly and, under `KeepAlive={SuccessfulExit: False}`, is deliberately not being
+    restarted. Narrowing launchd's answer would mean parsing `print`'s output, which
+    `launchctl(1)` forbids -- so the difference cannot be engineered away.
+
+    What it can be is *told*. Documenting it in an adapter docstring left the divergence
+    legible only to someone reading that adapter's source, while `doctor` rendered both through
+    one shape: an operator on a Mac saw `service: healthy` for a cleanly-exited job that was
+    never coming back. This member is what carries the distinction out to the report, so the
+    vocabulary states the difference instead of papering over it.
+    """
+
+    RUNNING = "running"
+    REGISTERED = "registered"
+
+
 @dataclass(frozen=True, slots=True)
 class SupervisorArtifact:
     """One file an adapter installs: where it goes, and the whole of what goes in it.
@@ -76,6 +97,8 @@ class ServiceSupervisor(Protocol):
     """
 
     kind: SupervisorKind
+
+    liveness_meaning: LivenessMeaning
 
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         """Every file this version installs, rendered and ready to write."""
@@ -112,11 +135,18 @@ class ServiceSupervisor(Protocol):
         ...
 
     def liveness_command(self) -> tuple[str, ...]:
-        """A command whose **exit status alone** answers "is it running right now".
+        """A command whose **exit status alone** is this supervisor's liveness signal.
 
-        Zero means running. Nothing about its output is part of this contract, and no caller
-        may read it -- see this module's docstring on why that is load-bearing on the launchd
-        side rather than merely tidy.
+        Nothing about its output is part of this contract, and no caller may read it -- see
+        this module's docstring on why that is load-bearing on the launchd side rather than
+        merely tidy.
+
+        **What a zero exit means is `liveness_meaning`'s answer, not this method's.** It is
+        "running" on one supervisor and "registered" on the other, and this docstring used to
+        assert the former for both -- a contract the launchd adapter could not honour, since
+        the only way to narrow `launchctl print` is to parse output the man page forbids
+        parsing. A caller that needs to know which it got asks; a caller that treats them as
+        interchangeable is relying on something this port does not promise.
         """
         ...
 

@@ -53,7 +53,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from remote_agents.ports.service_supervisor import SupervisorArtifact, SupervisorKind
+from remote_agents.ports.service_supervisor import (
+    LivenessMeaning,
+    SupervisorArtifact,
+    SupervisorKind,
+)
 
 LABEL = "remote-agents"
 """The launchd job label, and every domain target's last component.
@@ -98,8 +102,14 @@ def homebrew_prefix(candidates: tuple[Path, ...] = _BREW_BINARIES) -> Path | Non
                 capture_output=True,
                 text=True,
                 check=False,
+                # Matching `_command_succeeds`' bound in `bootstrap`. brew can stall on an
+                # auto-update check, and this runs while rendering an artifact for an
+                # installer -- a probe with no bound turns "Homebrew is busy" into "the
+                # installer never returns". A timeout answers `None`, which is a defined
+                # result here rather than an error.
+                timeout=5,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             continue
         prefix = Path(completed.stdout.strip()) if completed.stdout.strip() else None
         if completed.returncode == 0 and prefix is not None and prefix.is_absolute():
@@ -129,6 +139,26 @@ class LaunchdSupervisor:
     homebrew_prefix: Callable[[], Path | None] = homebrew_prefix
 
     kind: ClassVar[SupervisorKind] = SupervisorKind.LAUNCHD
+
+    #: `print` exits zero for any bootstrapped job, including one that exited and will not be
+    #: restarted -- so zero means registered, and the report has to say so.
+    liveness_meaning: ClassVar[LivenessMeaning] = LivenessMeaning.REGISTERED
+
+    def __post_init__(self) -> None:
+        """Enforce the absolute-path invariant every docstring here asserts.
+
+        `ProductionPaths.for_home` refuses a relative home with a `ConfigError`; this is the
+        same rule, applied where the *artifacts* are rendered. Upheld by convention it was
+        upheld by nothing: the wired path only ever passes `Path.home()`, so a relative home
+        would arrive from a test fixture or a future caller and render a definition full of
+        relative paths that the supervisor resolves against its own working directory --
+        silently, and differently on each platform. `ValueError` rather than `ConfigError`
+        because an adapter may not import `remote_agents.config` under ARCH-02.
+        """
+        if not self.home.is_absolute():
+            raise ValueError(f"supervisor home must be absolute: {self.home}")
+        if not self.interpreter.is_absolute():
+            raise ValueError(f"supervisor interpreter must be absolute: {self.interpreter}")
 
     @property
     def plist_path(self) -> Path:

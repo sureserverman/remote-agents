@@ -32,7 +32,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
-from remote_agents.ports.service_supervisor import SupervisorArtifact, SupervisorKind
+from remote_agents.ports.service_supervisor import (
+    LivenessMeaning,
+    SupervisorArtifact,
+    SupervisorKind,
+)
 
 UNIT_NAME = "remote-agents.service"
 
@@ -77,7 +81,12 @@ def _command_word(value: Path) -> str:
     space in its name would silently become two arguments. Quoting is systemd's own: double
     quotes around the word, with `\\` and `"` escaped inside it.
     """
-    text = str(value)
+    # `%` first, and before anything else looks at the text. Specifier expansion is a
+    # *separate* parsing stage from word-splitting and quoting, and quotes do not protect a
+    # specifier: `%h` inside a quoted word still expands. So a literal `%` in a real directory
+    # name -- unusual but perfectly legal -- would otherwise be read as the start of a
+    # specifier and silently rewrite the path. `%%` is systemd's own escape for a literal one.
+    text = str(value).replace("%", "%%")
     if not any(character in text for character in ' \t"\\'):
         return text
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -97,6 +106,25 @@ class SystemdSupervisor:
     home: Path = field(default_factory=Path.home)
 
     kind: ClassVar[SupervisorKind] = SupervisorKind.SYSTEMD
+
+    #: `is-active` is false for a unit that is loaded but not running, so zero means running.
+    liveness_meaning: ClassVar[LivenessMeaning] = LivenessMeaning.RUNNING
+
+    def __post_init__(self) -> None:
+        """Enforce the absolute-path invariant every docstring here asserts.
+
+        `ProductionPaths.for_home` refuses a relative home with a `ConfigError`; this is the
+        same rule, applied where the *artifacts* are rendered. Upheld by convention it was
+        upheld by nothing: the wired path only ever passes `Path.home()`, so a relative home
+        would arrive from a test fixture or a future caller and render a definition full of
+        relative paths that the supervisor resolves against its own working directory --
+        silently, and differently on each platform. `ValueError` rather than `ConfigError`
+        because an adapter may not import `remote_agents.config` under ARCH-02.
+        """
+        if not self.home.is_absolute():
+            raise ValueError(f"supervisor home must be absolute: {self.home}")
+        if not self.interpreter.is_absolute():
+            raise ValueError(f"supervisor interpreter must be absolute: {self.interpreter}")
 
     @property
     def unit_path(self) -> Path:

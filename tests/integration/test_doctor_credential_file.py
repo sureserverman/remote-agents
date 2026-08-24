@@ -74,9 +74,9 @@ def test_no_report_ever_carries_a_credential_value(tmp_path: Path, body: str) ->
     paths = ProductionPaths.for_home(tmp_path)
     _write(paths, body)
 
-    rendered = repr(
-        credential_file_report(readable=True, names_resolved=True, reason=None)
-    ) + repr(credential_file_report(readable=False, names_resolved=False, reason="x"))
+    rendered = repr(credential_file_report(readable=True, names_resolved=True, reason=None)) + repr(
+        credential_file_report(readable=False, names_resolved=False, reason="x")
+    )
 
     for secret in ("plain-token", "quoted", "abc", "def", "7", "11"):
         assert secret not in rendered

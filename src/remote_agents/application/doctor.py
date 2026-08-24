@@ -3,7 +3,7 @@
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
-from remote_agents.ports.service_supervisor import SupervisorKind
+from remote_agents.ports.service_supervisor import LivenessMeaning, SupervisorKind
 
 
 def doctor(
@@ -104,6 +104,7 @@ def production_doctor(
     tmux_console_ready: bool | None = None,
     credential_file: dict[str, object] | None = None,
     supervisor_kind: SupervisorKind | None = None,
+    liveness_meaning: LivenessMeaning | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -171,5 +172,12 @@ def production_doctor(
         # property it guards still held. Twice in this plan a check has had to be rewritten
         # for exactly that; wording around it is cheaper than loosening the guard.
         report["service_supervisor"] = supervisor_kind.value
+    if liveness_meaning is not None:
+        # What a green `service` component actually establishes, which is not the same
+        # sentence on both supervisors: one reports "running", the other can only report
+        # "registered". Left out of the report, a cleanly-exited job that is deliberately
+        # not being restarted reads exactly like a running one, and the operator has no
+        # way to tell -- the difference would live only in an adapter docstring.
+        report["service_liveness"] = liveness_meaning.value
     report.update(profile_doctor(profiles))
     return report
