@@ -75,6 +75,29 @@ def _a_host_where_the_credential_is_reachable(
     credential_file.chmod(0o600)
 
 
+def _systemd_unescaped(text: str) -> str:
+    """Reverse what the systemd renderer does to a word, so an escaped secret is still found.
+
+    The exact mirror of the plist hole this file already pins, on the adapter it was never
+    applied to. `_exec_word` doubles `%` and `$` (specifier and variable expansion), then -- for
+    a word containing whitespace or a quote -- escapes `\\` and `"` and wraps the result in
+    double quotes. systemd undoes all of that before exec, so a credential containing any of
+    those characters is fully recoverable from the unit while being absent from its raw text.
+
+    Measured against the real renderer: tokens containing `%`, `"` or `\\` each rendered to
+    something a plain substring search could not find. The sentinels here are derived from
+    variable names and contain none of those characters, so they can never surface this on
+    their own -- which is why it needs its own reversal and its own test, exactly as the XML
+    case did.
+
+    Deliberately crude: it unescapes the whole document rather than word by word, because it is
+    a detector, not a parser. Over-recovering costs a false positive on a sweep that currently
+    finds nothing; under-recovering costs a missed credential.
+    """
+    recovered = text.replace('\\"', '"').replace("\\\\", "\\")
+    return recovered.replace("%%", "%").replace("$$", "$")
+
+
 def _leaf_strings(value: object) -> list[str]:
     """Every string reachable inside a parsed plist, however deeply nested."""
     if isinstance(value, str):
@@ -109,7 +132,7 @@ def _searchable_forms(text: str) -> tuple[str, ...]:
       is categorical rather than a list of characters somebody remembered, because it asks the
       same parser launchd will ask.
     """
-    forms = [text, unescape(text)]
+    forms = [text, unescape(text), _systemd_unescaped(text)]
     try:
         parsed = plistlib.loads(text.encode("utf-8"))
     except (plistlib.InvalidFileException, ExpatError, ValueError):
@@ -341,3 +364,22 @@ def test_the_sweep_would_notice_a_credential_read_from_the_file_rather_than_the_
     assert planted.is_file(), "the credential file was not planted where a renderer would look"
     contents = planted.read_text(encoding="utf-8")
     assert _leaks_in(contents), "the planted file does not contain anything the sweep detects"
+
+
+@pytest.mark.parametrize("secret", ["SENT%TOKEN", 'SENT"TOKEN', "SENT\\TOKEN", "SENT$TOKEN"])
+def test_a_secret_the_systemd_renderer_escaped_is_still_found(secret: str) -> None:
+    """The systemd twin of the plist escaping test, and it was missing until a review found it.
+
+    `_exec_word` is what a credential would pass through if one ever reached a rendered unit,
+    and it escapes exactly the characters a raw substring search then cannot see. Asserts the
+    same three links the XML case does: the renderer really transforms it, the transformation is
+    reversible (so the escaped form is a real leak and not a mangled one), and the detector
+    finds it anyway.
+    """
+    from remote_agents.adapters.supervisor.systemd import _exec_word
+
+    rendered = _exec_word(Path(f"/opt/{secret}/bin/remote-agents"))
+
+    assert secret not in rendered, f"premise failed: the renderer did not transform {secret!r}"
+    assert secret in _systemd_unescaped(rendered), "the escaped form is not recoverable"
+    assert any(secret in form for form in _searchable_forms(rendered))

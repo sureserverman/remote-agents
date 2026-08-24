@@ -522,11 +522,12 @@ def main(
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
-        paths.ensure_directories(
-            include_unit_directory=_supervisor_for_host().kind is SupervisorKind.SYSTEMD
-        )
+        wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+        paths.ensure_directories(include_unit_directory=wants_unit_directory)
         paths.require_private_environment()
-        connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        connection = paths.open_database(
+            open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+        )
         # Resolved **once** and threaded into both consumers. The duplicate call this
         # replaces was harmless while the only source was `os.environ`, which cannot change
         # inside a running process: two reads were the same read. The private-file fallback is
@@ -1036,10 +1037,11 @@ def _run_surface(
     except ConfigError as error:
         print(error, file=sys.stderr)
         return 1
-    paths.ensure_directories(
-        include_unit_directory=_supervisor_for_host().kind is SupervisorKind.SYSTEMD
-    )
-    paths.open_database(open_database, migrations=MIGRATIONS).close()
+    wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    paths.open_database(
+        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+    ).close()
     connection = leased_connection(config.database_path)
     request = None
     try:

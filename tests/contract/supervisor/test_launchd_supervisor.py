@@ -249,7 +249,7 @@ def test_launchd_verbs_are_argv_the_caller_runs() -> None:
         "-U",
         "501",
         "-f",
-        "/opt/ra/bin/remote-agents serve",
+        "remote-agents serve",
     )
 
 

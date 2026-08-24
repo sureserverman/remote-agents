@@ -92,7 +92,12 @@ def _exec_word(value: Path) -> str:
     unquoted `/home/o'brien/bin/x` is reported as `Unbalanced quoting, ignoring` and the unit
     is left with no `ExecStart` at all. Measured, not assumed.
     """
-    text = _escaped_specifiers(value)
+    # `$` as well as `%`, and quoting protects neither. Measured against a real unit:
+    # `ExecStart=/bin/echo "a${b}c"` delivers `ac`, with systemd logging "Referenced but unset
+    # environment variable evaluates to an empty string". `$$` is systemd's literal dollar.
+    # `systemd-analyze verify` cannot catch this -- it reports the *unexpanded* path -- so the
+    # verify-based tests are structurally blind to it and a dedicated assertion is what pins it.
+    text = _escaped_specifiers(value).replace("$", "$$")
     if not any(character in text for character in " \t\"\\'"):
         return text
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
@@ -144,21 +149,6 @@ class SystemdSupervisor:
             raise ValueError(f"supervisor home must be absolute: {self.home}")
         if not self.interpreter.is_absolute():
             raise ValueError(f"supervisor interpreter must be absolute: {self.interpreter}")
-        if any(character in str(self.interpreter) for character in "'\"\\"):
-            # systemd refuses this itself, and does so *after* quoting has done its job: the
-            # path round-trips correctly and is then rejected with "Executable name contains
-            # special characters", a fatal error that stops the unit starting. Measured against
-            # `systemd-analyze --user verify`, along with the bound -- the restriction is on the
-            # **executable name only**, so a home directory containing an apostrophe is fine
-            # and is deliberately still allowed; it reaches `WorkingDirectory` and the
-            # `--config` argument, both of which accept it.
-            #
-            # Refusing here turns a confusing failure at `systemctl start` time into an
-            # actionable one at install time, naming the path the operator has to move.
-            raise ValueError(
-                "systemd will not start an executable whose path contains a quote or "
-                f"backslash: {self.interpreter}"
-            )
         for path in (self.home, self.interpreter):
             if any(character in str(path) for character in "\n\r\0"):
                 # A newline in a path does not corrupt the unit -- it *extends* it. Whatever
@@ -182,8 +172,32 @@ class SystemdSupervisor:
         """Where the user manager reads unit files from, spelled out rather than deferred."""
         return self.home / ".config" / "systemd" / "user" / UNIT_NAME
 
+    def _refuse_an_unstartable_executable(self) -> None:
+        """systemd will not start an executable whose path holds a quote or backslash.
+
+        Its own rule, measured: quoting round-trips the path correctly and systemd *then*
+        rejects it with "Executable name contains special characters", fatally. Refusing here
+        names the path the operator has to move, instead of failing later with a message about
+        a character.
+
+        **Checked when rendering, not when constructing**, and that placement is the whole
+        point. `_supervisor_for_host()` builds an adapter at three sites that render nothing
+        and only want `.kind` -- `doctor`, `serve`, and the local surface. As a `__post_init__`
+        guard this refusal aborted all three for an operator whose virtualenv merely sits under
+        a home containing an apostrophe: a home this adapter deliberately supports, since the
+        restriction is on the executable name and reaches `WorkingDirectory` and `--config` not
+        at all. Three commands that worked before this plan stopped working, for a property
+        only the *unit* has to satisfy.
+        """
+        if any(character in str(self.interpreter) for character in "'\"\\"):
+            raise ValueError(
+                "systemd will not start an executable whose path contains a quote or "
+                f"backslash: {self.interpreter}"
+            )
+
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         """The one file this version installs: the user unit, fully rendered."""
+        self._refuse_an_unstartable_executable()
         content = _UNIT_TEMPLATE.format(
             working_directory=_directive_value(self.home),
             executable=_exec_word(self.interpreter.parent / "remote-agents"),

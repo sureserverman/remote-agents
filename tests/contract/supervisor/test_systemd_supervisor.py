@@ -292,5 +292,15 @@ def test_systemd_refuses_an_interpreter_path_it_could_never_start(refused: str) 
     apostrophe successfully: the restriction is on the executable name, so only the interpreter
     is constrained and an operator whose *home* is awkward is not turned away.
     """
+    supervisor = SystemdSupervisor(
+        interpreter=Path(f"/home/{refused}/bin/python3"), home=Path("/home/t")
+    )
+
+    # Constructing is fine and must stay fine: `_supervisor_for_host()` builds an adapter at
+    # three sites that render nothing and only want `.kind`, and refusing there took `doctor`,
+    # `serve` and the local surface down for an operator whose venv merely sits under a home
+    # with an apostrophe in it. The refusal belongs to the artifact, so it fires on render.
+    assert supervisor.kind is SupervisorKind.SYSTEMD
+
     with pytest.raises(ValueError, match="quote or backslash"):
-        SystemdSupervisor(interpreter=Path(f"/home/{refused}/bin/python3"), home=Path("/home/t"))
+        supervisor.artifacts()

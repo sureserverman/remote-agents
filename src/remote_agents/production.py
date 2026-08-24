@@ -182,9 +182,17 @@ class ProductionPaths:
         database_opener: Callable[[Path, Iterable[tuple[int, str]]], sqlite3.Connection],
         *,
         migrations: Iterable[tuple[int, str]],
+        include_unit_directory: bool = True,
     ) -> sqlite3.Connection:
-        """Migrate only the declared state database and make it owner-readable."""
-        self.ensure_directories()
+        """Migrate only the declared state database and make it owner-readable.
+
+        `include_unit_directory` is forwarded rather than defaulted away, because this method
+        re-runs `ensure_directories` and a default of `True` here silently undoes a `False`
+        passed by the caller one line earlier. That is exactly what happened: `serve` and the
+        local surface both asked for the systemd unit directory to be skipped on a launchd host
+        and then created it anyway, on the next statement, every time.
+        """
+        self.ensure_directories(include_unit_directory=include_unit_directory)
         connection = database_opener(self.database_path, migrations=migrations)
         os.chmod(self.database_path, 0o600)
         return connection

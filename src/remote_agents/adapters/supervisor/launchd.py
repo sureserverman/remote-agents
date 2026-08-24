@@ -372,21 +372,22 @@ class LaunchdSupervisor:
         practical risk small, and the port's exit-code-only contract is what stops it being
         narrowed further.
 
-        **The cost this probe carries, which the label-based one did not.** The pattern is
-        built from `self.interpreter`, and the *installed* job's `ProgramArguments[0]` was
-        rendered from whatever `sys.executable` was true when it was installed. Within one
-        supervisor instance those agree by construction; across an upgrade they need not.
-        Reinstall the tool into a new virtualenv or tool directory without reinstalling the
-        service, and this probe searches for a path the still-running, still-healthy process no
-        longer has -- reporting "not running" for a service that is fine. `launchctl print`
-        was immune to that, because it addressed the job by label rather than by a path
-        recomputed from the caller's own environment; the trade is deliberate, since that
-        immunity came with answering a question nobody asked (see above). It self-corrects the
-        moment the service is reinstalled, which is also when the plist would be rewritten.
-        Recorded as an accepted cost in DEC-054.
+        **Matched on the command name, not on the install prefix**, and that is a correction
+        rather than a preference. An earlier version built the pattern from `self.interpreter`,
+        so the probe searched for whatever path was current *in the process asking the
+        question*. That is wrong in the ordinary case, not merely across upgrades: `doctor` is
+        routinely run from a repository checkout's own virtualenv, or through `uv run`, while
+        the service runs from wherever it was installed -- so the probe looked for a path the
+        healthy process did not have and reported it dead. Anchoring on `remote-agents serve`
+        makes the answer independent of who is asking.
+
+        **The cost, accepted knowingly:** `-f` is an unanchored substring match, so a
+        `remote-agents serve` the owner started by hand in a terminal satisfies this too, even
+        with the launchd job dead. That is a defensible reading -- the service *is* running --
+        but it is not the same claim as "the supervisor has it up", and no exit-code-only
+        `launchctl` verb can make the narrower one. Recorded in DEC-054.
 
         `/usr/bin/pgrep` is inside `_PATH_STDPATH`, so unlike tmux or uv it resolves even from
         the bare environment launchd would hand a job.
         """
-        script = self.interpreter.parent / "remote-agents"
-        return ("pgrep", "-U", str(self.uid), "-f", f"{_literal_pattern(script)} serve")
+        return ("pgrep", "-U", str(self.uid), "-f", f"{_literal_pattern(Path(LABEL))} serve")

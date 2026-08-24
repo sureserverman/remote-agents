@@ -188,7 +188,7 @@ def test_doctor_runs_the_ported_liveness_argv_and_nothing_systemd_specific_on_a_
 
     capsys.readouterr()
     assert not any("systemctl" in argv[0] for argv in invoked), invoked
-    assert ("pgrep", "-U", "501", "-f", "/opt/ra/bin/remote-agents serve") in invoked
+    assert ("pgrep", "-U", "501", "-f", "remote-agents serve") in invoked
 
 
 @pytest.mark.parametrize(
@@ -203,11 +203,12 @@ def test_doctor_says_what_a_green_service_component_actually_establishes(
 ) -> None:
     """A green `service` is not the same sentence on both supervisors, so the report says which.
 
-    `systemctl is-active` is false for a unit that is loaded but not running, so zero means
-    running. `launchctl print` exits zero for any bootstrapped job -- including one that exited
-    cleanly and, under `KeepAlive={SuccessfulExit: False}`, is deliberately not being restarted.
-    Without this field those two cases render identically, and an operator on a Mac reads
-    "healthy" for a service that is never coming back.
+    Both adapters currently answer "running" -- systemd via `is-active --quiet`, launchd via
+    `pgrep`, which replaced `launchctl print` precisely because `print` exits zero for any
+    *bootstrapped* job, including one that exited and is deliberately not being restarted. The
+    field is reported rather than assumed because that agreement is a fact about today's two
+    adapters, not a guarantee of the port: a supervisor able to confirm only registration would
+    say so here instead of being read as "healthy".
     """
     _arrange(tmp_path, monkeypatch, supervisor, liveness_exit_zero=True)
 
