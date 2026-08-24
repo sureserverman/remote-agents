@@ -1270,10 +1270,19 @@ def _resolve_serve_secrets(
     """Resolve the Telegram credential for a serving process, from either supported source.
 
     The environment is tried first and the checked private file second, and that order is the
-    decision rather than an implementation detail. systemd injects the three variables through
-    `EnvironmentFile=`, so an existing host must keep resolving exactly what it resolved before
-    this function existed -- preferring the file would silently change which credential a
-    restart picks up on the one host already in production.
+    decision rather than an implementation detail.
+
+    The reason is **not** that the two sources hold different credentials. On the Linux host
+    they are the same path: the unit's `EnvironmentFile=` names exactly `environment_path`, so
+    ordering alone cannot change which values arrive. What differs is the *parser*. systemd
+    unquotes a shell-style value; the reader below is a `partition("=")` with a matched-quote
+    strip bolted on to match it. Letting the file win on a host whose unit already declares
+    `EnvironmentFile=` would move that host onto a second parser for no gain, and would make
+    `systemctl cat` stop describing what the service actually reads.
+
+    So env-first is what keeps the one host in production inert under this change, and it stops
+    mattering the day `EnvironmentFile=` leaves the unit -- which is the honest way to retire
+    the second source, rather than re-ranking it underneath a running service.
 
     The fallback is what makes a launchd host possible at all. `launchd.plist(5)` has no
     `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the
@@ -1339,6 +1348,14 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
         name, separator, value = stripped.partition("=")
         if not separator:
             raise ConfigError("Telegram environment file contains an invalid assignment")
+        # A *matched* surrounding quote pair is stripped, because on the Linux host this file
+        # and the unit's `EnvironmentFile=` are the same path -- so systemd's parser reads it
+        # there and this one reads it on macOS, and the two disagreeing means identical bytes
+        # produce two different bot tokens. systemd unquotes; a bare `partition` would keep the
+        # quotes and authenticate as `"token"`, failing at runtime with nothing pointing back
+        # here. Unbalanced quotes are left alone rather than half-eaten.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
         environment[name] = value
     secrets = load_secrets(environment)
     assert secrets is not None

@@ -205,3 +205,38 @@ def test_permissions_a_credential_file_owned_by_another_user_is_refused(
 
     with pytest.raises(ConfigError, match="must be owned regular file"):
         _resolve_serve_secrets(paths, environment={})
+
+
+@pytest.mark.parametrize(
+    ("written", "expected"),
+    [
+        ('"quoted-token"', "quoted-token"),
+        ("'single-quoted'", "single-quoted"),
+        ("bare-token", "bare-token"),
+        ('"', '"'),
+        ("'mismatched\"", "'mismatched\""),
+    ],
+)
+def test_the_file_parser_unquotes_the_way_systemd_does(
+    tmp_path: Path, written: str, expected: str
+) -> None:
+    """The same file must yield the same credential to both readers.
+
+    On the Linux host the unit's `EnvironmentFile=` and `ProductionPaths.environment_path` are
+    *the same file* -- so it is read by systemd's parser there and by this one on macOS, and a
+    divergence between them is a different bot token from identical bytes. systemd unquotes a
+    shell-style value; a bare `partition("=")` keeps the quotes, which authenticates as
+    `"token"` and fails at runtime with nothing pointing back at the file. Only a *matched*
+    pair is stripped, so an unbalanced quote stays literal rather than being half-eaten.
+    """
+    paths = ProductionPaths.for_home(tmp_path)
+    paths.ensure_directories()
+    paths.environment_path.write_text(
+        f"REMOTE_AGENTS_TELEGRAM_BOT_TOKEN={written}\n"
+        "REMOTE_AGENTS_OWNER_USER_ID=111\n"
+        "REMOTE_AGENTS_OWNER_CHAT_ID=222\n",
+        encoding="utf-8",
+    )
+    os.chmod(paths.environment_path, 0o600)
+
+    assert _resolve_serve_secrets(paths, environment={}).bot_token == expected

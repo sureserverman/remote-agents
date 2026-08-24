@@ -195,7 +195,11 @@ TELEGRAM_SECRET_VARIABLES = (
 def load_secrets(
     environment: Mapping[str, str] | None = None, *, production: bool = True
 ) -> TelegramSecrets | None:
-    """Load Telegram credentials exclusively from the environment."""
+    """Load Telegram credentials from a mapping of variables, defaulting to the environment.
+
+    No longer environment-only: the serve resolver also hands it a mapping parsed out of the
+    private credential file, which is the only source a launchd host has.
+    """
     values = os.environ if environment is None else environment
     names = TELEGRAM_SECRET_VARIABLES
     missing = [name for name in names if not values.get(name)]
