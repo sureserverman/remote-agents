@@ -617,9 +617,35 @@ class _Paths:
 
 
 class _DoctorPaths:
+    """Stands in for `ProductionPaths` in every `doctor` test.
+
+    It carries a real 0600 credential file because `doctor` parses one. Task 2.0 retired
+    `EnvironmentFile=` so that exactly one parser reads that file, and added
+    `_credential_file_state` to report whether the in-process parser still resolves it -- the
+    check that made the retirement safe to do at all. That check calls
+    `require_private_environment`, which this stub did not have, so `doctor` raised
+    `AttributeError` for every test routed through here between 71b52f8 and this commit.
+
+    A stub that answered `None` would have been worse than the crash: `doctor` would report a
+    resolving credential file on a host where nothing had been parsed, which is precisely the
+    false green the new check exists to prevent. So the file is real, and the parser really
+    reads it.
+    """
+
     def __init__(self, config_path) -> None:
         self.config_path = config_path
         self.home = config_path.parent
+        self.environment_path = config_path.parent / "telegram.env"
+        self.environment_path.write_text(
+            "REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=test-token\n"
+            "REMOTE_AGENTS_OWNER_USER_ID=7\n"
+            "REMOTE_AGENTS_OWNER_CHAT_ID=11\n",
+            encoding="utf-8",
+        )
+        self.environment_path.chmod(0o600)
+
+    def require_private_environment(self):
+        return self.environment_path
 
 
 class _AuditPaths:
