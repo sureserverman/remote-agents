@@ -182,16 +182,22 @@ def load_config(path: Path) -> AppConfig:
     )
 
 
+#: The three variables a supervisor may inject, named once because two readers now ask about
+#: them: this loader, and the serve resolver that must tell "nothing injected these" apart
+#: from "something injected them badly".
+TELEGRAM_SECRET_VARIABLES = (
+    "REMOTE_AGENTS_TELEGRAM_BOT_TOKEN",
+    "REMOTE_AGENTS_OWNER_USER_ID",
+    "REMOTE_AGENTS_OWNER_CHAT_ID",
+)
+
+
 def load_secrets(
     environment: Mapping[str, str] | None = None, *, production: bool = True
 ) -> TelegramSecrets | None:
     """Load Telegram credentials exclusively from the environment."""
     values = os.environ if environment is None else environment
-    names = (
-        "REMOTE_AGENTS_TELEGRAM_BOT_TOKEN",
-        "REMOTE_AGENTS_OWNER_USER_ID",
-        "REMOTE_AGENTS_OWNER_CHAT_ID",
-    )
+    names = TELEGRAM_SECRET_VARIABLES
     missing = [name for name in names if not values.get(name)]
     if missing:
         if production:

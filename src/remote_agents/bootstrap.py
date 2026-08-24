@@ -84,6 +84,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.config import (
+    TELEGRAM_SECRET_VARIABLES,
     ConfigError,
     TelegramSecrets,
     describe_schema_drift,
@@ -518,7 +519,7 @@ def main(
         try:
             asyncio.run(
                 _serve_with_reconciliation(
-                    load_secrets(),
+                    _resolve_serve_secrets(paths),
                     _private_boundary(config, connection, paths),
                     serve_runner,
                     _RECONCILE_INTERVAL_SECONDS,
@@ -708,7 +709,7 @@ def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComp
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal
-    secrets = load_secrets()
+    secrets = _resolve_serve_secrets(paths)
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
@@ -1252,8 +1253,62 @@ def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     return True
 
 
+def _resolve_serve_secrets(
+    paths: ProductionPaths, *, environment: Mapping[str, str] | None = None
+) -> TelegramSecrets:
+    """Resolve the Telegram credential for a serving process, from either supported source.
+
+    The environment is tried first and the checked private file second, and that order is the
+    decision rather than an implementation detail. systemd injects the three variables through
+    `EnvironmentFile=`, so an existing host must keep resolving exactly what it resolved before
+    this function existed -- preferring the file would silently change which credential a
+    restart picks up on the one host already in production.
+
+    The fallback is what makes a launchd host possible at all. `launchd.plist(5)` has no
+    `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the
+    value inside the plist, where `launchctl print` reads it back. So on macOS nothing injects
+    the variables and the file is the only source; `require_private_environment` has always
+    enforced 0600, owner and regular-file-ness on it, and does so identically on both platforms.
+
+    **A partial environment refuses rather than falling back**, and that distinction is the
+    reason this is a function rather than an `or`. Absent means nothing injected the variables,
+    which is what a launchd host looks like. Partial means something tried and got it wrong --
+    a typo'd variable name, a rotation that rewrote only the token line -- and the two are
+    indistinguishable to a check that merely asks whether all three arrived. Falling back there
+    would start the service on the *previous* credential and say nothing, which is strictly
+    worse than the pre-existing behaviour it would replace: both serve call sites used to reach
+    `load_secrets()` at its raising default, so any missing variable stopped the process.
+    Nothing downstream would catch it either -- `doctor`'s Telegram component checks the file's
+    permissions, not which credential the running service actually resolved.
+    """
+    values = os.environ if environment is None else environment
+    # **Membership, not truthiness.** A blank assignment -- `REMOTE_AGENTS_OWNER_CHAT_ID=` --
+    # is a line somebody wrote, and one upstream template variable going empty blanks all three
+    # at once. Asking whether any *value* is truthy answers "no" for that file exactly as it
+    # does for a host that injected nothing, so the resolver would fall back and serve the
+    # previous credential without a word. Asking whether the *key* is there separates "nothing
+    # ran" from "something ran and produced nothing".
+    if any(name in values for name in TELEGRAM_SECRET_VARIABLES):
+        # An injection mechanism is present and is expected to supply all three.
+        # `production=True` is what turns a gap -- missing or blank, which `load_secrets`
+        # already treats alike -- into a ConfigError naming the variables, rather than a silent
+        # fall-through to a different credential.
+        injected = load_secrets(values)
+        assert injected is not None
+        return injected
+    return _load_private_telegram_secrets(paths)
+
+
 def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
-    """Read the checked private EnvironmentFile for this read-only metadata audit."""
+    """Read the checked private credential file, for the audit *and* for a serving process.
+
+    It had one caller when it was written -- the read-only `telegram-ui-audit` -- and the
+    docstring said so. It now has two: `_resolve_serve_secrets` reaches it on any host where
+    nothing injected the variables, which is every launchd host. That makes this a live
+    credential path rather than a diagnostic one, so an error path loosened or a result cached
+    here on the assumption that only a diagnostic reads it would change what the running
+    service authenticates as.
+    """
     environment_path = paths.require_private_environment()
     environment: dict[str, str] = {}
     try:
