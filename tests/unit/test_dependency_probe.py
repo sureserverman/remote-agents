@@ -19,11 +19,15 @@ import pytest
 
 from remote_agents.application.dependencies import (
     AVAILABLE,
+    HOMEBREW_INSTALL_INSTRUCTION,
     MISSING,
     REQUIRED_DEPENDENCIES,
     VERSION_PROBE_FAILED,
     DependencyStatus,
+    PackageManager,
+    Remediation,
     probe_dependencies,
+    render_remediation,
 )
 
 
@@ -132,3 +136,76 @@ def test_a_missing_dependency_may_not_carry_a_version() -> None:
 def test_a_state_outside_the_closed_pair_is_refused() -> None:
     with pytest.raises(ValueError):
         DependencyStatus(name="tmux", state="probably")
+
+
+def _remediation(
+    missing: tuple[str, ...],
+    manager: PackageManager = PackageManager.APT,
+    *,
+    homebrew_installed: bool = True,
+) -> object:
+    return render_remediation(
+        missing, package_manager=manager, homebrew_installed=homebrew_installed
+    )
+
+
+def test_remediation_on_debian_is_apt_get() -> None:
+    """The Linux answer is a command, and the printed line is exactly what would run."""
+    fix = _remediation(("tmux",))
+
+    assert fix.command == ("sudo", "apt-get", "install", "-y", "tmux")
+    assert fix.instruction == "sudo apt-get install -y tmux"
+    assert fix.runnable
+
+
+def test_remediation_on_macos_with_homebrew_is_brew_install() -> None:
+    """Homebrew present is the ordinary Mac case, and it is runnable like the Linux one."""
+    fix = _remediation(("tmux",), PackageManager.HOMEBREW)
+
+    assert fix.command == ("brew", "install", "tmux")
+    assert fix.instruction == "brew install tmux"
+    assert fix.runnable
+
+
+def test_remediation_on_macos_without_homebrew_offers_homebrews_own_installer() -> None:
+    """A `brew install` on a host with no `brew` is a line the operator cannot use.
+
+    So the answer is not a command at all: it is Homebrew's own documented install line,
+    offered as text to read. `command is None` is what stops Task 1.3 running it, and it is
+    asked as a field rather than inferred from the wording of `instruction`.
+    """
+    fix = _remediation(("tmux",), PackageManager.HOMEBREW, homebrew_installed=False)
+
+    assert fix.command is None
+    assert not fix.runnable
+    assert fix.instruction == HOMEBREW_INSTALL_INSTRUCTION
+    assert "brew install" not in fix.instruction
+
+
+def test_remediation_for_several_dependencies_is_one_command_in_the_order_asked() -> None:
+    """One install, not one per package, and ordered by the caller rather than sorted.
+
+    `("tmux", "git")` is deliberately not alphabetical: a renderer that sorted would pass a
+    single-package test and reorder the operator's own list here.
+    """
+    apt = _remediation(("tmux", "git"))
+    brew = _remediation(("tmux", "git"), PackageManager.HOMEBREW)
+
+    assert apt.instruction == "sudo apt-get install -y tmux git"
+    assert brew.instruction == "brew install tmux git"
+
+
+def test_remediation_for_nothing_missing_is_refused() -> None:
+    """Nothing missing has no remediation, and an empty install command is not the answer.
+
+    `apt-get install -y` with no packages is a command that runs and does something else, so
+    the empty case is refused at construction rather than rendered into one.
+    """
+    with pytest.raises(ValueError):
+        _remediation(())
+
+
+def test_remediation_instruction_and_command_cannot_disagree() -> None:
+    """The two fields are one fact rendered twice; a report and a run must not diverge."""
+    with pytest.raises(ValueError):
+        Remediation(instruction="brew install tmux", command=("brew", "install", "git"))
