@@ -236,3 +236,46 @@ def test_both_supervisors_now_answer_the_same_liveness_question() -> None:
     assert systemd.liveness_meaning is LivenessMeaning.RUNNING
     assert launchd.liveness_meaning is LivenessMeaning.RUNNING
     assert LivenessMeaning.REGISTERED in set(LivenessMeaning)
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("darwin", SupervisorKind.LAUNCHD), ("linux", SupervisorKind.SYSTEMD)],
+)
+def test_the_host_is_matched_to_its_own_supervisor(monkeypatch, platform, expected) -> None:
+    """DEC-054 calls `_supervisor_for_host` the single place the platform is decided.
+
+    Every other test in this file monkeypatches it in order to inject an adapter, so until this
+    existed the function itself was covered by nothing: inverting its branch -- darwin to
+    systemd -- left the whole suite green while `doctor` probed for a tool that is not
+    installed. The one place a decision is made is the one place worth pinning.
+    """
+    from remote_agents import bootstrap
+
+    monkeypatch.setattr(bootstrap.sys, "platform", platform)
+
+    assert bootstrap._supervisor_for_host().kind is expected
+
+
+def test_a_host_that_cannot_be_described_is_a_config_error_not_a_traceback(monkeypatch) -> None:
+    """The adapters refuse a home they cannot render faithfully; `serve` must survive saying so.
+
+    `_supervisor_for_host` is reached from `serve` and the local surface, neither of which
+    installs anything, so an adapter's `ValueError` would surface there as a traceback rather
+    than as the handled bad-configuration path every other such answer travels.
+    """
+    from remote_agents import bootstrap
+    from remote_agents.config import ConfigError
+
+    def _refuses(*_args, **_kwargs):
+        # The real refusal, raised the way the real adapter raises it. Driven through a stub
+        # because the adapters read the host in a `default_factory` captured at import, so a
+        # colon cannot be injected into `Path.home` after the fact -- and the behaviour under
+        # test is the *conversion*, not which input triggers it.
+        raise ValueError("supervisor home must not contain a colon: /Users/a:b")
+
+    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
+    monkeypatch.setattr(bootstrap, "LaunchdSupervisor", _refuses)
+
+    with pytest.raises(ConfigError, match="cannot be described"):
+        bootstrap._supervisor_for_host()

@@ -206,6 +206,10 @@ class SystemdSupervisor:
         """
         return ()
 
+    def required_directories(self) -> tuple[Path, ...]:
+        """The unit directory, which `install(1)` will not create on the way past."""
+        return (self.unit_path.parent,)
+
     def install_command(self) -> tuple[str, ...]:
         """Register the written unit and bring it up, as the runbook already documents."""
         return ("systemctl", "--user", "enable", "--now", UNIT_NAME)

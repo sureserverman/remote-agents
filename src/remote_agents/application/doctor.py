@@ -173,11 +173,11 @@ def production_doctor(
         # for exactly that; wording around it is cheaper than loosening the guard.
         report["service_supervisor"] = supervisor_kind.value
     if liveness_meaning is not None:
-        # What a green `service` component actually establishes, which is not the same
-        # sentence on both supervisors: one reports "running", the other can only report
-        # "registered". Left out of the report, a cleanly-exited job that is deliberately
-        # not being restarted reads exactly like a running one, and the operator has no
-        # way to tell -- the difference would live only in an adapter docstring.
+        # What a green `service` component actually establishes. Both supervisors currently
+        # answer "running", but that is a fact about the adapters rather than a guarantee of
+        # the port -- a supervisor able to confirm only registration would report so here, and
+        # the operator would see the difference instead of reading "healthy" for a service that
+        # had exited. Reported rather than assumed, which is the whole point of the field.
         report["service_liveness"] = liveness_meaning.value
     report.update(profile_doctor(profiles))
     return report

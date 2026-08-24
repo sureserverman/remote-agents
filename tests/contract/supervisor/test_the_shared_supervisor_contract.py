@@ -102,3 +102,24 @@ def test_the_adapter_refuses_a_relative_home(supervisor: ServiceSupervisor) -> N
     """Every adapter enforces the absolute-path invariant its own docstrings assert."""
     with pytest.raises(ValueError):
         type(supervisor)(interpreter=Path("/opt/ra/bin/python3"), home=Path("relative/home"))
+
+
+@_PARAMS
+def test_every_required_directory_is_absolute_and_contains_an_installed_artifact_or_log(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """An installer creates these before installing; a wrong answer is a cold-start failure.
+
+    Stated as a property of every adapter because both supervisors needed it and neither could
+    say so: launchd opens a job's log files itself, before the process runs, and `install(1)`
+    creates no parent for a systemd unit. The directory holding each rendered artifact must be
+    named, or the installer has no way to know it owes it.
+    """
+    required = supervisor.required_directories()
+
+    assert required, f"{supervisor.kind.value} names no directory an installer must create"
+    assert all(path.is_absolute() for path in required), required
+    for artifact in supervisor.artifacts():
+        assert artifact.path.parent in required, (
+            f"{artifact.path} is installed into a directory no one is told to create"
+        )

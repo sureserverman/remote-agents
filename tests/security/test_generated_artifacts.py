@@ -256,6 +256,9 @@ class _PoisonedSupervisor:
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         return ()
 
+    def required_directories(self) -> tuple[Path, ...]:
+        return ()
+
     def install_command(self) -> tuple[str, ...]:
         return ("true",)
 

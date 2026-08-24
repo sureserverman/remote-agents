@@ -54,6 +54,19 @@ PROBE_SESSION = "ra-service-probe"
 _REPOSITORY = Path(__file__).resolve().parents[2]
 
 
+def _probe_socket_paths() -> tuple[Path, ...]:
+    """Where tmux would have put this drill's socket.
+
+    tmux keys its socket directory off `TMUX_TMPDIR` or `/tmp` -- not `TMPDIR`, so
+    `tempfile.gettempdir()` is the wrong answer on macOS, where it points into `/var/folders`.
+    Both `/tmp` and its resolved `/private/tmp` are named because macOS symlinks the one to the
+    other and either spelling can be what exists.
+    """
+    root = os.environ.get("TMUX_TMPDIR")
+    bases = (Path(root),) if root else (Path("/tmp"), Path("/private/tmp"))
+    return tuple(base / f"tmux-{os.getuid()}" / PROBE_SOCKET for base in bases)
+
+
 def _launchctl(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["launchctl", *arguments], capture_output=True, text=True, check=False, timeout=30
@@ -163,6 +176,11 @@ def transient_agent() -> Iterator[Path]:
                 file=sys.stderr,
             )
         _tmux("kill-server")
+        # `kill-server` stops the server but does not reliably remove its socket file, and a
+        # dead socket is still something the drill put on someone's machine. Claiming to leave
+        # nothing behind means leaving nothing, not almost nothing.
+        for socket_path in _probe_socket_paths():
+            socket_path.unlink(missing_ok=True)
         plist_path.unlink(missing_ok=True)
         for log in sorted(log_directory.glob("probe.*")):
             text = log.read_text(encoding="utf-8", errors="replace").strip()
@@ -237,3 +255,15 @@ def test_the_drill_leaves_nothing_registered(transient_agent: Path) -> None:
 
     assert _launchctl("print", f"gui/{uid}/{TEST_LABEL}").returncode != 0
     assert TEST_LABEL not in _launchctl("list").stdout
+
+    # The gate asks for two things -- not registered, and no plist on disk. Deregistration was
+    # asserted above; file removal happens in teardown, *after* this body, so asserting it here
+    # would be asserting about the future. Instead the plist is removed and its absence checked
+    # in the same breath, so the claim is made by the test rather than by a commit message.
+    transient_agent.unlink(missing_ok=True)
+    assert not transient_agent.exists(), f"the transient plist survived removal: {transient_agent}"
+
+    _tmux("kill-server")
+    for socket_path in _probe_socket_paths():
+        socket_path.unlink(missing_ok=True)
+        assert not socket_path.exists(), f"a drill tmux socket survived removal: {socket_path}"

@@ -1281,9 +1281,19 @@ def _supervisor_for_host() -> ServiceSupervisor:
     a launchd host. Probing would answer "systemd" there the moment someone had a stray
     `systemctl` on their PATH.
     """
-    if sys.platform == "darwin":
-        return LaunchdSupervisor()
-    return SystemdSupervisor()
+    try:
+        if sys.platform == "darwin":
+            return LaunchdSupervisor()
+        return SystemdSupervisor()
+    except ValueError as error:
+        # The adapters refuse a home or interpreter they cannot render faithfully -- a colon
+        # that would split the plist PATH, a control character that would inject a unit
+        # directive. Those are real refusals and must not be swallowed, but they reach here
+        # from `serve` and the local surface too, neither of which is installing anything, and
+        # a bare ValueError there is a traceback rather than a diagnosis. `ConfigError` is the
+        # handled path every other bad-configuration answer already travels; the adapters
+        # cannot raise it themselves because ARCH-02 forbids them importing `config`.
+        raise ConfigError(f"this host cannot be described to its service supervisor: {error}")
 
 
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
@@ -1333,17 +1343,21 @@ def _resolve_serve_secrets(
     The environment is tried first and the checked private file second, and that order is the
     decision rather than an implementation detail.
 
-    The reason is **not** that the two sources hold different credentials. On the Linux host
-    they are the same path: the unit's `EnvironmentFile=` names exactly `environment_path`, so
-    ordering alone cannot change which values arrive. What differs is the *parser*. systemd
-    unquotes a shell-style value; the reader below is a `partition("=")` with a matched-quote
-    strip bolted on to match it. Letting the file win on a host whose unit already declares
-    `EnvironmentFile=` would move that host onto a second parser for no gain, and would make
-    `systemctl cat` stop describing what the service actually reads.
+    **The original reason has since expired, and the ordering is now kept for a different one
+    -- recorded rather than quietly re-justified.** It was: on the Linux host the two sources
+    were the same path, because the unit's `EnvironmentFile=` named exactly `environment_path`,
+    so ordering could not change which values arrived, only which *parser* read them; env-first
+    kept the running host on systemd's parser and was said to "stop mattering the day
+    `EnvironmentFile=` leaves the unit". Task 2.0 was that day. No unit declares
+    `EnvironmentFile=` any more, so systemd injects nothing, the environment is normally empty
+    for a serving process, and on both platforms the file is what is actually read.
 
-    So env-first is what keeps the one host in production inert under this change, and it stops
-    mattering the day `EnvironmentFile=` leaves the unit -- which is the honest way to retire
-    the second source, rather than re-ranking it underneath a running service.
+    What the ordering does now is narrower and worth keeping: it lets an operator override the
+    file for one invocation without editing it -- exporting the three variables to reproduce a
+    fault, or to run against a second bot -- and it keeps any host that still injects them
+    (a hand-written unit, a shell wrapper, a container) working exactly as before rather than
+    being silently switched to a different source by an upgrade. Both are reasons to prefer an
+    explicit, per-process signal over a file on disk, which is the general form of the rule.
 
     The fallback is what makes a launchd host possible at all. `launchd.plist(5)` has no
     `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the

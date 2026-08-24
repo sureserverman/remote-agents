@@ -320,6 +320,16 @@ class LaunchdSupervisor:
         """
         return ()
 
+    def required_directories(self) -> tuple[Path, ...]:
+        """`~/Library/LaunchAgents` and the log directory, both needed before the first load.
+
+        The log directory is the one that bites. launchd opens `StandardOutPath` and
+        `StandardErrorPath` before the job runs, so on a fresh Mac the service never reaches
+        the code that would have created its own state directory -- the job fails to start for
+        a reason that has nothing to do with the service.
+        """
+        return (self.plist_path.parent, self.log_directory)
+
     def install_command(self) -> tuple[str, ...]:
         """`bootstrap` the plist into the per-user GUI domain.
 

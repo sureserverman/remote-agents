@@ -51,18 +51,19 @@ class SupervisorKind(Enum):
 class LivenessMeaning(Enum):
     """What a zero exit from `liveness_command()` actually establishes.
 
-    The two supervisors do not answer the same question, and the port used to claim they did.
-    `systemctl --user is-active --quiet` is false for a unit that is loaded but not running.
-    `launchctl print` exits zero for any *bootstrapped* service, including one that exited
-    cleanly and, under `KeepAlive={SuccessfulExit: False}`, is deliberately not being
-    restarted. Narrowing launchd's answer would mean parsing `print`'s output, which
-    `launchctl(1)` forbids -- so the difference cannot be engineered away.
+    A supervisor's obvious liveness probe does not always answer the question a caller means.
+    `launchctl print` exits zero for any *bootstrapped* job, running or not -- measured against
+    real jobs -- so an adapter built on it could only honestly report REGISTERED, while
+    `systemctl is-active --quiet` reports RUNNING. Rendering both through one boolean meant a
+    Mac operator read "healthy" for a service that had exited and was deliberately not being
+    restarted.
 
-    What it can be is *told*. Documenting it in an adapter docstring left the divergence
-    legible only to someone reading that adapter's source, while `doctor` rendered both through
-    one shape: an operator on a Mac saw `service: healthy` for a cleanly-exited job that was
-    never coming back. This member is what carries the distinction out to the report, so the
-    vocabulary states the difference instead of papering over it.
+    **Both shipped adapters now declare RUNNING**, because the launchd side stopped asking
+    `launchctl` and asks `pgrep` instead -- exit-code-only, so the no-parsing rule still holds.
+    REGISTERED therefore has no current implementor, and is kept deliberately: it is what an
+    adapter whose supervisor can only confirm registration would have to declare, and *having
+    to declare it* is what stops such an adapter passing itself off as equivalent. That is the
+    failure this member was added to surface, and deleting it would restore the silence.
     """
 
     RUNNING = "running"
@@ -113,6 +114,25 @@ class ServiceSupervisor(Protocol):
         longer named is a definition no version of this tool can take away, and the operator
         cannot work around it by uninstalling first, because that would mean running the old
         uninstaller before taking the upgrade.
+        """
+        ...
+
+    def required_directories(self) -> tuple[Path, ...]:
+        """Directories that must exist **before** the supervisor is asked to install anything.
+
+        Not a tidy-up: on macOS this is a cold-start bug without it. launchd opens a job's
+        `StandardOutPath` and `StandardErrorPath` *itself*, before the process runs, so a plist
+        naming a log directory the service would have created on startup names one that does
+        not exist yet on a fresh host. The service creates its own state directory; it never
+        gets the chance to.
+
+        The systemd side has the same shape for a duller reason -- a unit has to be written into
+        `~/.config/systemd/user/` before `systemctl` can enable it, and `install(1)` makes no
+        parent directories. Both supervisors needed this and neither could say so, which is why
+        it belongs in the shared vocabulary rather than in whichever installer notices first.
+
+        The installer creates these; nothing here does. A port that returns argv rather than
+        running it returns paths rather than making them, for the same reason.
         """
         ...
 

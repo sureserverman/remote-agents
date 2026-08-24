@@ -1,9 +1,11 @@
 """Where the serve path is allowed to find its Telegram credential.
 
-The environment is not the only source any more. systemd injects the three variables from an
-`EnvironmentFile`; launchd has no equivalent and a plist's contents are readable through
-`launchctl print`, so a macOS host has to read the checked private file itself. Both hosts run
-the same resolver, and these tests pin which source wins when both are present.
+The environment is not the only source any more -- and since Task 2.0 retired
+`EnvironmentFile=`, it is no longer the *usual* one either. systemd used to inject the three
+variables from that file; no unit declares it now, launchd never had an equivalent (a plist's
+contents are readable through `launchctl print`), so on both platforms the checked private file
+is what a serving process actually reads. The environment survives as a deliberate per-process
+override, and these tests pin which source wins when both are present.
 """
 
 from __future__ import annotations
