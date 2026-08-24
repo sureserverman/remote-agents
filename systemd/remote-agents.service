@@ -6,7 +6,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/dev/infra/remote-agents
-EnvironmentFile=%h/.config/remote-agents/telegram.env
 ExecStart=%h/dev/infra/remote-agents/.venv/bin/remote-agents serve --config %h/.config/remote-agents/config.toml
 Restart=on-failure
 RestartSec=5s

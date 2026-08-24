@@ -76,7 +76,11 @@ from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
-from remote_agents.application.doctor import production_doctor, profile_doctor
+from remote_agents.application.doctor import (
+    credential_file_report,
+    production_doctor,
+    profile_doctor,
+)
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
@@ -477,6 +481,7 @@ def main(
             # compared rather than leaving the operator to infer it from the absence of a
             # complaint. Silence and a passed check look identical otherwise.
             config_drift=drift,
+            credential_file=_credential_file_state(paths),
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -1262,6 +1267,37 @@ def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     except ConfigError:
         return False
     return True
+
+
+
+def _credential_file_state(paths: ProductionPaths) -> dict[str, object]:
+    """Ask the in-process parser whether the credential file still resolves, without reading it out.
+
+    This is the check that makes retiring `EnvironmentFile=` safe to do at all. While systemd
+    read the file, its parser was the one that mattered and this one was exercised only on
+    macOS; afterwards ours is the only reader on both platforms. The two disagree about quoted
+    values, `;` comments, lines without `=`, backslash escapes and line continuations, so a
+    file that started the service yesterday can refuse to start it after the unit changes --
+    and the previous Telegram check would still report green, because it stats permissions
+    without parsing.
+
+    Nothing about the file's contents reaches the report: a diagnostic that prints the token to
+    explain that the token is wrong has done more damage than the fault it names.
+    """
+    try:
+        paths.require_private_environment()
+    except ConfigError:
+        # Already reported by the `telegram` component; named here so the two agree.
+        return credential_file_report(
+            readable=False, names_resolved=False, reason="credential_file_unavailable"
+        )
+    try:
+        _load_private_telegram_secrets(paths)
+    except ConfigError:
+        return credential_file_report(
+            readable=True, names_resolved=False, reason="credential_file_unresolved"
+        )
+    return credential_file_report(readable=True, names_resolved=True, reason=None)
 
 
 def _resolve_serve_secrets(

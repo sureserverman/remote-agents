@@ -30,6 +30,27 @@ def doctor(
     }
 
 
+def credential_file_report(
+    *, readable: bool, names_resolved: bool, reason: str | None
+) -> dict[str, object]:
+    """Render what the in-process parser made of the credential file, and nothing it contains.
+
+    Arrives as plain data for the same reason `config_drift` does: DEC-015 confines this layer
+    to `application`, `domain` and `ports`, so the parser -- which lives beside the composition
+    root -- is not importable here.
+
+    The report is deliberately three booleans and a code. Retiring `EnvironmentFile=` hands
+    this file from systemd's parser to ours, and the two disagree about quoting, `;` comments,
+    lines without `=`, backslash escapes and line continuations. An operator needs to know
+    *that* the file no longer resolves, which is actionable; they do not need the diagnostic to
+    read their bot token back to them, which is the one thing this must never do.
+    """
+    report: dict[str, object] = {"readable": readable, "names_resolved": names_resolved}
+    if reason is not None:
+        report["reason"] = reason
+    return report
+
+
 def profile_doctor(
     profiles: tuple[ProfileCompatibility, ...],
     resume_capabilities: tuple[ProfileResumeCapability, ...] = (),
@@ -80,6 +101,7 @@ def production_doctor(
     catalogue_projects: int,
     config_drift: dict[str, object] | None = None,
     tmux_console_ready: bool | None = None,
+    credential_file: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -124,6 +146,14 @@ def production_doctor(
         # drift without letting it move `healthy` would leave the report agreeing with the
         # failure it just diagnosed.
         if not config_drift.get("readable", True):
+            report["healthy"] = False
+    if credential_file is not None:
+        report["credential_file"] = credential_file
+        # Same reasoning as an unreadable config: every other component can be green while the
+        # service cannot authenticate. Once `EnvironmentFile=` is retired this parser is the
+        # only reader, so a file it cannot resolve is a service that will not start -- and a
+        # report that stayed green would agree with the failure it just diagnosed.
+        if not credential_file.get("names_resolved", True):
             report["healthy"] = False
     report.update(profile_doctor(profiles))
     return report
