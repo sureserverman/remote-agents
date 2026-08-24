@@ -522,8 +522,11 @@ def main(
         # a file on disk, so two independent resolutions can straddle a credential rotation
         # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
         # ACL. Making it a parameter is what stops the pair coming apart.
-        serve_secrets = _resolve_serve_secrets(paths)
         try:
+            # Inside the `try`, not above it: resolution raises on a partial environment or on
+            # a credential file that fails its guard, and the database is already open by then.
+            # Above the `try`, that exception skips `finally` and leaves the connection open.
+            serve_secrets = _resolve_serve_secrets(paths)
             asyncio.run(
                 _serve_with_reconciliation(
                     serve_secrets,

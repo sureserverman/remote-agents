@@ -34,7 +34,7 @@ from remote_agents.bootstrap import (
     _watch_quiet_once,
     main,
 )
-from remote_agents.config import TelegramSecrets
+from remote_agents.config import ConfigError, TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -1977,3 +1977,47 @@ async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path)
         assert len(bot.sends) == 1
     finally:
         connection.close()
+
+
+def test_serve_closes_the_database_when_secret_resolution_fails(tmp_path, monkeypatch) -> None:
+    """The database is opened before the credential is resolved, so the close must be guarded.
+
+    Resolution raises on a partial environment or a credential file that fails its 0600/owner
+    guard, and by then the connection is already open. When the resolving call sat above the
+    `try`, that exception skipped `finally` and left it unclosed -- a regression introduced by
+    threading the credential through as a parameter, and invisible to every other test here
+    because they all resolve successfully.
+    """
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[paths]\n"
+        f'dev_root = "{tmp_path}"\n'
+        f'registry_path = "{tmp_path / "registry.yaml"}"\n'
+        f'database_path = "{tmp_path / "sessions.sqlite3"}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        encoding="utf-8",
+    )
+    closed: list[bool] = []
+
+    class _SpyConnection(_Connection):
+        def close(self) -> None:
+            closed.append(True)
+
+    class _SpyPaths(_Paths):
+        def open_database(self, *_args, **_kwargs):
+            return _SpyConnection()
+
+    def _refuse(_paths):
+        raise ConfigError("Telegram environment file is missing")
+
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.ProductionPaths.for_home",
+        lambda _home: _SpyPaths(tmp_path / "sessions.sqlite3"),
+    )
+    monkeypatch.setattr("remote_agents.bootstrap._resolve_serve_secrets", _refuse)
+
+    with pytest.raises(ConfigError):
+        main(["serve", "--config", str(config)])
+
+    assert closed == [True], "the open connection must be closed when resolution refuses"
