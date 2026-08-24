@@ -22,15 +22,25 @@ from __future__ import annotations
 from dataclasses import replace
 
 from textual import events
+from textual.binding import Binding
 from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection
+from remote_agents.adapters.tui.preferences import ALPHABETICAL, RECENCY
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
 )
 from remote_agents.application.project_catalog import search_catalogue
+
+#: What the status line says about each order. The sentence names the order the list is in
+#: *and* the key, because the key is the only way to discover it and the footer's "Reorder"
+#: does not say what the other order would be.
+_ORDER_SENTENCE = {
+    RECENCY: "most recently used first. Type to filter, ctrl+t for alphabetical.",
+    ALPHABETICAL: "in alphabetical order. Type to filter, ctrl+t for most recently used.",
+}
 
 #: How long the filter waits for the typing to stop before it re-searches the catalogue.
 #: Every keystroke used to run `search_catalogue` over the whole catalogue and rebuild every
@@ -53,6 +63,16 @@ class ProjectsScreen(ChoiceScreen):
     filter_placeholder = "Filter projects"
     can_refresh = True
     crumb = "Projects"
+
+    BINDINGS = [
+        # `ctrl+t` rather than a bare letter: `render_projects` focuses the filter, so this
+        # pane holds the keyboard in an `Input` by construction and a plain `t` would be
+        # *typed* rather than bound. `ctrl+o` was the other instinct and is already Resume.
+        #
+        # A screen binding, not an app-level one: it means something only where a project
+        # list is drawn, and `ChoiceScreen.check_action` answers only for the app's six.
+        Binding("ctrl+t", "toggle_project_order", "Reorder"),
+    ]
 
     async def populate(self) -> None:
         # Before the first draw, not after it. `ChoiceScreen.on_mount` awaits this method and
@@ -110,7 +130,11 @@ class ProjectsScreen(ChoiceScreen):
         entry = self.query_one("#filter", Input)
         entry.display = True
         entry.placeholder = "Filter projects"
-        self.set_status(f"Choose a project — {len(projects)} available. Type to filter.")
+        # The active order is named in words and the region takes no severity: DEC-010 is
+        # explicit that colour is a second signal and never the only one, and an order is a
+        # fact about the list rather than a condition to report.
+        order = _ORDER_SENTENCE[self.tui.project_order]
+        self.set_status(f"Choose a project — {len(projects)} available, {order}")
         self.show_choices(
             tuple(
                 (project.opaque_id, f"{project.area}/{project.name}  [{project.group}]")
@@ -121,6 +145,17 @@ class ProjectsScreen(ChoiceScreen):
         if not keep_focus:
             entry.value = ""
             entry.focus()
+
+    async def action_toggle_project_order(self) -> None:
+        """Swap the order, keep the query, and say which order is now in force.
+
+        `keep_focus=True` for the reason Refresh was corrected by: this key does not leave the
+        position, so it has no business discarding what the owner has typed in the filter --
+        or moving the keyboard out of it.
+        """
+        query = self.query_one("#filter", Input).value
+        await self.tui.switch_project_order()
+        self.render_projects(query, keep_focus=True)
 
     def __init__(self) -> None:
         super().__init__()

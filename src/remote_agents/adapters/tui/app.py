@@ -30,7 +30,9 @@ from remote_agents.adapters.tui.model import (
 )
 from remote_agents.adapters.tui.preferences import (
     ALPHABETICAL,
+    RECENCY,
     read_project_order,
+    write_project_order,
 )
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
@@ -212,6 +214,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
+        #: The catalogue exactly as it was read, before either order is applied. Held apart
+        #: from `_catalogue` so a switch re-orders the *snapshot* rather than the list it is
+        #: looking at: `rank_by_recent_use` is a stable sort, so ranking an already
+        #: alphabetical list would silently take alphabetical as the tie-break and lose
+        #: DEC-012's registered-first-then-alphabetical fallback after one round trip.
+        self._raw_catalogue = context.backend.catalogue
         self._catalogue = context.backend.catalogue
         #: Which of the two orders the projects list is in. Read once, from the file the
         #: composition root pointed at, and total in every failure -- an unreadable
@@ -309,7 +317,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         if self._catalogue_ordered:
             return
         self._catalogue_ordered = True
-        self._catalogue = await self._ordered(self._catalogue)
+        self._catalogue = await self._ordered(self._raw_catalogue)
+
+    async def switch_project_order(self) -> str:
+        """Move to the other order, record the choice, and answer which one is now in force.
+
+        On the app because the catalogue and the chosen order are both app state, while the
+        caller is a screen -- the same split `reload_catalogue` is on, and for the same
+        reason: the sentence that reports it is the screen's.
+
+        The write is total (`adapters/tui/preferences.py`) and the path may be absent, so a
+        host that wired no preferences file switches exactly like one that did and forgets
+        between runs. Re-orders the *unordered* snapshot, never the drawn list.
+        """
+        self._project_order = RECENCY if self._project_order == ALPHABETICAL else ALPHABETICAL
+        write_project_order(self._services.preferences_path, self._project_order)
+        self._catalogue = await self._ordered(self._raw_catalogue)
+        self._catalogue_ordered = True
+        return self._project_order
 
     async def _ordered(self, catalogue: tuple[CatalogProject, ...]) -> tuple[CatalogProject, ...]:
         """The one place either order is applied, so the two draw paths cannot disagree.
@@ -641,9 +666,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except Exception:
             _LOG.exception("catalogue refresh failed")
             return False
-        # A refresh is exactly where a new order is expected, and it is the *only* other
-        # place one is computed (DEC-012). Marked ordered so a screen mounting afterwards
-        # does not rank the same snapshot a second time.
+        # A refresh is exactly where a new order is expected, and it is one of the three
+        # places an order is computed at all -- the other two being the first draw and the
+        # owner pressing the key (DEC-012: never per render). Marked ordered so a screen
+        # mounting afterwards does not rank the same snapshot a second time.
+        self._raw_catalogue = read
         self._catalogue = await self._ordered(read)
         self._catalogue_ordered = True
         return True

@@ -22,10 +22,17 @@ from pathlib import Path
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
 from textual.widgets import Input, OptionList, Static
+from tui_filter import settle_filter
 from tui_positions import position
 
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import ProjectsPane
+from remote_agents.adapters.tui.preferences import (
+    ALPHABETICAL,
+    RECENCY,
+    read_project_order,
+    write_project_order,
+)
 from remote_agents.adapters.tui.screens.dashboard import (
     ProjectChooserScreen,
     ProjectsPaneScreen,
@@ -437,3 +444,130 @@ async def test_a_store_that_cannot_report_usage_still_draws_the_list() -> None:
         choices = app.screen.query_one("#choices", OptionList)
 
         assert [option.id for option in choices.options] == ["opaque-infra", "opaque-tools"]
+
+
+_ORDER_KEY = "ctrl+t"
+
+
+def _drawn(status: Static) -> str:
+    """What the one-line region actually renders, which is the only thing the owner reads."""
+    return "".join(status.render_line(row).text for row in range(status.size.height))
+
+
+async def test_one_key_switches_the_order_and_the_rows_follow(tmp_path: Path) -> None:
+    launcher = _Launcher(usage=(_usage("opaque-tools", 5, 1), _usage("opaque-infra", 40, 400)))
+    app = ProjectsPane(_context(sessions=launcher, preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        # dev-area/opaque-shift before infra/remote-agents: area first, then name.
+        assert [option.id for option in choices.options] == ["opaque-tools", "opaque-infra"]
+        assert app.project_order == ALPHABETICAL
+
+
+async def test_the_switch_reorders_without_re_reading_the_catalogue(tmp_path: Path) -> None:
+    """The key changes the order, not the contents. A filesystem scan is a refresh's job."""
+    reads = 0
+
+    def _scan():
+        nonlocal reads
+        reads += 1
+        return (_INFRA, _TOOLS)
+
+    app = ProjectsPane(_context(refresh_catalogue=_scan, preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        before = reads
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert reads == before
+
+
+async def test_the_status_line_names_the_active_order_in_words(tmp_path: Path) -> None:
+    """DEC-010: the words carry it, so the region takes no severity and no colour."""
+    app = ProjectsPane(_context(preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        status = app.screen.query_one("#status", Static)
+        recency_sentence = _drawn(status)
+        assert "recent" in recency_sentence.casefold()
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        alphabetical_sentence = _drawn(status)
+        assert "alphabetical" in alphabetical_sentence.casefold()
+        assert alphabetical_sentence != recency_sentence
+        assert not status.has_class("-error") and not status.has_class("-warning")
+
+
+async def test_the_filter_survives_the_switch(tmp_path: Path) -> None:
+    """Reordering does not leave the position, so it has no business discarding the query.
+
+    The same argument Ctrl+R was corrected by: a key that stays put must keep what is typed.
+    """
+    app = ProjectsPane(_context(preferences_path=tmp_path / "prefs.json"))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        entry = app.screen.query_one("#filter", Input)
+        await pilot.click("#filter")
+        await pilot.press(*"opaque-shift")
+        await settle_filter(pilot)
+        choices = app.screen.query_one("#choices", OptionList)
+        assert [option.id for option in choices.options] == ["opaque-tools"]
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert entry.value == "opaque-shift"
+        assert [option.id for option in choices.options] == ["opaque-tools"]
+
+
+async def test_the_new_mode_is_written_once_per_press(tmp_path: Path) -> None:
+    path = tmp_path / "prefs.json"
+    app = ProjectsPane(_context(preferences_path=path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert not path.exists(), "opening the list is not a choice worth recording"
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+        assert read_project_order(path) == ALPHABETICAL
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+        assert read_project_order(path) == RECENCY
+
+
+async def test_the_remembered_order_is_the_one_the_surface_opens_in(tmp_path: Path) -> None:
+    """The whole point of writing it: a restart lands where the owner left off."""
+    path = tmp_path / "prefs.json"
+    write_project_order(path, ALPHABETICAL)
+
+    app = ProjectsPane(_context(preferences_path=path))
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        assert app.project_order == ALPHABETICAL
+        status = app.screen.query_one("#status", Static)
+        assert "alphabetical" in _drawn(status).casefold()
+
+
+async def test_a_host_that_wired_no_preferences_path_still_switches(tmp_path: Path) -> None:
+    """It forgets between runs; it does not refuse the key."""
+    app = ProjectsPane(_context())
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        await pilot.press(_ORDER_KEY)
+        await pilot.pause()
+
+        assert app.project_order == ALPHABETICAL
+        assert list(tmp_path.iterdir()) == []
