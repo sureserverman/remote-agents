@@ -516,11 +516,18 @@ def main(
         paths.ensure_directories()
         paths.require_private_environment()
         connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        # Resolved **once** and threaded into both consumers. The duplicate call this
+        # replaces was harmless while the only source was `os.environ`, which cannot change
+        # inside a running process: two reads were the same read. The private-file fallback is
+        # a file on disk, so two independent resolutions can straddle a credential rotation
+        # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
+        # ACL. Making it a parameter is what stops the pair coming apart.
+        serve_secrets = _resolve_serve_secrets(paths)
         try:
             asyncio.run(
                 _serve_with_reconciliation(
-                    _resolve_serve_secrets(paths),
-                    _private_boundary(config, connection, paths),
+                    serve_secrets,
+                    _private_boundary(config, connection, paths, serve_secrets),
                     serve_runner,
                     _RECONCILE_INTERVAL_SECONDS,
                     config.activity_poll_seconds,
@@ -705,11 +712,12 @@ def compose_backend(
     )
 
 
-def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
+def _private_boundary(
+    config, connection, paths: ProductionPaths, secrets: TelegramSecrets
+) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal
-    secrets = _resolve_serve_secrets(paths)
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
@@ -1268,7 +1276,8 @@ def _resolve_serve_secrets(
     `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the
     value inside the plist, where `launchctl print` reads it back. So on macOS nothing injects
     the variables and the file is the only source; `require_private_environment` has always
-    enforced 0600, owner and regular-file-ness on it, and does so identically on both platforms.
+    enforced 0600, owner and regular-file-ness on it, by the same POSIX calls on both platforms
+    (no test runs on Darwin yet, so that is a claim about the code, not a measured one).
 
     **A partial environment refuses rather than falling back**, and that distinction is the
     reason this is a function rather than an `or`. Absent means nothing injected the variables,

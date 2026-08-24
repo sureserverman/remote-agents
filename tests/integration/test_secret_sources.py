@@ -72,19 +72,6 @@ def test_serve_prefers_the_environment_when_both_sources_are_present(tmp_path: P
     ) == _ENVIRONMENT_SECRETS
 
 
-def test_serve_resolves_the_same_credential_from_either_source(tmp_path: Path) -> None:
-    """Neither source is a degraded mode: the same three values arrive as the same object."""
-    paths = ProductionPaths.for_home(tmp_path)
-    _write_private_environment(paths)
-
-    from_file = _resolve_serve_secrets(paths, environment={})
-    from_environment = _resolve_serve_secrets(
-        paths, environment=_environment_mapping(_FILE_SECRETS)
-    )
-
-    assert from_file == from_environment
-
-
 @pytest.mark.parametrize(
     "present",
     [

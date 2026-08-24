@@ -489,7 +489,7 @@ def test_serve_command_loads_config_and_runs_the_injected_private_bot(
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
-        lambda _config, _connection, _paths: ServiceComposition(
+        lambda _config, _connection, _paths, _secrets: ServiceComposition(
             build_private_bot(7, 11), _SilentTerminal(), _SilentReconciler()
         ),
     )
@@ -563,7 +563,7 @@ def test_serve_ranks_the_catalogue_before_the_first_screen_can_be_drawn(
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap._private_boundary",
-        lambda _config, _connection, _paths: ServiceComposition(
+        lambda _config, _connection, _paths, _secrets: ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler()
         ),
     )
