@@ -91,31 +91,46 @@ def test_systemd_unit_renders_absolute_paths_from_the_two_constructor_inputs() -
     )
 
 
+#: The directives whose values are host paths, and so are *expected* to differ between the
+#: shipped unit and a generated one -- that difference is the entire point of generating it.
+_PATH_DIRECTIVES = frozenset({"WorkingDirectory", "ExecStart"})
+
+_SHIPPED_UNIT = Path(__file__).resolve().parents[3] / "systemd" / "remote-agents.service"
+
+
+def _operative_directives(unit_text: str) -> set[str]:
+    """Every `key=value` line that is not a path and not prose."""
+    return {
+        line.strip()
+        for line in unit_text.splitlines()
+        if "=" in line
+        and not line.startswith("[")
+        and line.split("=", 1)[0] not in _PATH_DIRECTIVES
+        and not line.startswith("Description=")
+    }
+
+
 def test_systemd_unit_keeps_the_shipped_units_operative_directives() -> None:
     """Generating the unit must not be how a hardening or lifecycle directive gets lost.
 
-    `KillMode=process` is the load-bearing one: it is what lets the managed tmux sessions
-    outlive a stop of the service that launched them.
-    """
-    contents = _unit_contents(ELSEWHERE)
+    Compared against the **shipped file itself**, not a list copied out of it. A hardcoded list
+    pins the generated unit to whatever was true when the list was typed, so the shipped unit
+    and the generated one could each be edited without the other noticing -- and while the
+    operator's documented install path is still the shipped file, the two really are two
+    definitions of one service. This makes them one.
 
-    for directive in (
-        "Type=simple",
-        "Restart=on-failure",
-        "RestartSec=5s",
-        "TimeoutStopSec=30s",
-        "KillMode=process",
-        "UMask=0077",
-        "NoNewPrivileges=yes",
-        "RestrictSUIDSGID=yes",
-        "LockPersonality=yes",
-        "ProtectControlGroups=yes",
-        "ProtectKernelTunables=yes",
-        "After=network-online.target",
-        "Wants=network-online.target",
-        "WantedBy=default.target",
-    ):
-        assert directive in contents
+    Path directives are excluded because differing there is the whole purpose of generating the
+    unit; everything else must survive the translation, `KillMode=process` most of all, since it
+    is what lets managed tmux sessions outlive a stop of the service that launched them.
+    """
+    shipped = _operative_directives(_SHIPPED_UNIT.read_text(encoding="utf-8"))
+    generated = _operative_directives(_unit_contents(ELSEWHERE))
+
+    assert shipped, "the shipped unit parsed to nothing -- this comparison would be vacuous"
+    assert shipped <= generated, (
+        "the generated unit dropped directives the shipped one carries: "
+        f"{sorted(shipped - generated)}"
+    )
 
 
 def test_systemd_unit_carries_no_environment_mechanism() -> None:

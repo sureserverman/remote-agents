@@ -606,7 +606,7 @@ class _Paths:
     def __init__(self, database_path) -> None:
         self.database_path = database_path
 
-    def ensure_directories(self) -> None:
+    def ensure_directories(self, **_kwargs) -> None:
         return None
 
     def require_private_environment(self):

@@ -91,15 +91,29 @@ class ProductionPaths:
         """
         return self.state_directory / "preferences.json"
 
-    def ensure_directories(self) -> None:
-        """Create only declared directories and repair their private modes."""
-        for path in (
+    def ensure_directories(self, *, include_unit_directory: bool = True) -> None:
+        """Create only declared directories and repair their private modes.
+
+        `include_unit_directory` exists because `unit_directory` is the one entry here that is
+        not platform-neutral: `~/.config/systemd/user` means nothing on a launchd host, and
+        creating it there left a Mac with a dead directory no supervisor would ever read. The
+        composition root passes `False` when the host's supervisor is not systemd -- it is
+        already the single place the platform is decided (`_supervisor_for_host`), so this does
+        not add a second one.
+
+        Defaulted to `True` so that every existing caller keeps its behaviour: on a systemd host
+        the directory is still made, which is what the documented manual install relies on
+        (`install(1)` does not create parent directories without `-D`).
+        """
+        directories = [
             self.config_directory,
             self.state_directory,
-            self.unit_directory,
             self.intent_directory,
             self.activity_directory,
-        ):
+        ]
+        if include_unit_directory:
+            directories.append(self.unit_directory)
+        for path in directories:
             self._reject_symlink_ancestors(path)
             if path.exists() and not path.is_dir():
                 raise ConfigError(f"production path is not a directory: {path}")

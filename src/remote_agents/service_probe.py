@@ -1,4 +1,9 @@
-"""Transient systemd probe that creates one isolated tmux session and then waits."""
+"""Transient supervisor probe that creates one isolated tmux session and then waits.
+
+Named for the supervisor rather than for systemd since Stage 2 gave the concept two
+implementations: Stage 3 drives this same probe from a launchd agent, where the survival
+property it exists to demonstrate is `AbandonProcessGroup` rather than `KillMode=process`.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ async def _session_is_ready() -> bool:
 
 
 async def main() -> None:
-    """Start the exact harmless session once; systemd stopping this process leaves it alive."""
+    """Start the exact harmless session once; the supervisor stopping this leaves it alive."""
     if (
         not await _session_is_ready()
         and await _run_tmux("new-session", "-d", "-s", _SESSION, "/usr/bin/sleep", "3600") != 0

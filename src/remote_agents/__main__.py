@@ -9,7 +9,7 @@ paying for the whole composition root to be told it has nothing to do. See
 `main` is defined at module scope, and has to be: `[project.scripts]` resolves
 `remote_agents.__main__:main`, so the generated `remote-agents` shim imports this module and
 reads that attribute. Deferring the imports *inside* it is what makes the branch cheap;
-deferring the definition itself broke the console script, and with it the systemd unit and
+deferring the definition itself broke the console script, and with it the generated unit and
 every documented command, while `python -m remote_agents` kept working because it takes the
 `__name__` branch below.
 """

@@ -100,7 +100,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
-from remote_agents.ports.service_supervisor import ServiceSupervisor
+from remote_agents.ports.service_supervisor import ServiceSupervisor, SupervisorKind
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
@@ -522,7 +522,9 @@ def main(
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
-        paths.ensure_directories()
+        paths.ensure_directories(
+            include_unit_directory=_supervisor_for_host().kind is SupervisorKind.SYSTEMD
+        )
         paths.require_private_environment()
         connection = paths.open_database(open_database, migrations=MIGRATIONS)
         # Resolved **once** and threaded into both consumers. The duplicate call this
@@ -1034,7 +1036,9 @@ def _run_surface(
     except ConfigError as error:
         print(error, file=sys.stderr)
         return 1
-    paths.ensure_directories()
+    paths.ensure_directories(
+        include_unit_directory=_supervisor_for_host().kind is SupervisorKind.SYSTEMD
+    )
     paths.open_database(open_database, migrations=MIGRATIONS).close()
     connection = leased_connection(config.database_path)
     request = None
