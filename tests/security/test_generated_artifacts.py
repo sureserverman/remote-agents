@@ -21,6 +21,7 @@ renderer to prove it fires.
 
 from __future__ import annotations
 
+import os
 import plistlib
 from pathlib import Path
 from xml.parsers.expat import ExpatError
@@ -46,16 +47,32 @@ SENTINEL_SECRETS = {
 
 
 @pytest.fixture(autouse=True)
-def _a_host_whose_environment_is_full_of_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+def _a_host_where_the_credential_is_reachable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Render on a host where the credential *is* present, which is the only useful case.
 
-    A renderer that never had access to a secret cannot leak one, so sweeping on a clean
-    environment would pass for the wrong reason. Every variable is set to a sentinel before
-    any artifact is rendered, so anything that reaches for the environment picks up something
-    this test can then find.
+    A renderer that never had access to a secret cannot leak one, so sweeping a clean host
+    would pass for the wrong reason.
+
+    The credential is planted in **both** places it actually lives, and the second one matters
+    more than it looks. Planting only in the environment would have left a real gap: after Task
+    2.0 the environment is no longer where this project reads its credential from -- the 0600
+    file is -- so a renderer that opened that file and emitted the value would have been
+    invisible to a sweep whose sentinels only ever existed in `os.environ`. `HOME` is
+    redirected too, so `registered_supervisors()` builds adapters rooted at the fake home and
+    anything reaching for the real file finds the fake one first.
     """
     for name, value in SENTINEL_SECRETS.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    credential_file = tmp_path / ".config" / "remote-agents" / "telegram.env"
+    credential_file.parent.mkdir(parents=True, exist_ok=True)
+    credential_file.write_text(
+        "".join(f"{name}={value}\n" for name, value in SENTINEL_SECRETS.items()),
+        encoding="utf-8",
+    )
+    credential_file.chmod(0o600)
 
 
 def _leaf_strings(value: object) -> list[str]:
@@ -120,6 +137,22 @@ def _every_rendered_artifact() -> list[tuple[SupervisorKind, SupervisorArtifact]
         (supervisor.kind, artifact)
         for supervisor in registered_supervisors()
         for artifact in supervisor.artifacts()
+    ]
+
+
+def _every_verb_argv() -> list[tuple[SupervisorKind, str, tuple[str, ...]]]:
+    """Every command the port hands a caller to run, as argv.
+
+    Swept alongside the artifacts because argv is a *worse* place for a credential than a
+    file, not a better one: a file can be 0600, while a command line is visible in `ps` to
+    every process on the machine for as long as it runs. Nothing routes a secret through these
+    today; this exists so that a future verb that did -- `launchctl setenv TOKEN <value>` is
+    the obvious shape -- cannot slip past a sweep that only ever read rendered files.
+    """
+    return [
+        (supervisor.kind, name, tuple(getattr(supervisor, name)()))
+        for supervisor in registered_supervisors()
+        for name in ("install_command", "remove_command", "start_command", "liveness_command")
     ]
 
 
@@ -275,3 +308,33 @@ def test_a_secret_the_xml_encoder_escaped_is_still_found(secret: str) -> None:
     )
     assert plistlib.loads(content.encode("utf-8"))["E"]["T"] == secret
     assert any(secret in form for form in _searchable_forms(content))
+
+
+def test_no_supervisor_verb_carries_the_credential_on_its_command_line() -> None:
+    """A command line is public to every process on the box; a 0600 file is not."""
+    verbs = _every_verb_argv()
+
+    assert verbs, "no verbs were swept"
+    offenders = [
+        (kind.value, name, _leaks_in(" ".join(argv)))
+        for kind, name, argv in verbs
+        if _leaks_in(" ".join(argv))
+    ]
+
+    assert offenders == [], f"a supervisor verb carries the credential in argv: {offenders}"
+
+
+def test_the_sweep_would_notice_a_credential_read_from_the_file_rather_than_the_environment() -> (
+    None
+):
+    """The fixture plants the secret in the credential file too, so prove that plant works.
+
+    Without this, the previous claim is untested scaffolding: a fixture that wrote the file to
+    the wrong path, or with the wrong contents, would leave the file-sourced half of the sweep
+    inert and nothing would say so.
+    """
+    planted = Path(os.environ["HOME"]) / ".config" / "remote-agents" / "telegram.env"
+
+    assert planted.is_file(), "the credential file was not planted where a renderer would look"
+    contents = planted.read_text(encoding="utf-8")
+    assert _leaks_in(contents), "the planted file does not contain anything the sweep detects"

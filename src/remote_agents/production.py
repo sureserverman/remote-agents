@@ -145,7 +145,13 @@ class ProductionPaths:
                 raise ConfigError("production paths cannot traverse symlinks")
 
     def require_private_environment(self) -> Path:
-        """Return the systemd EnvironmentFile only when it is a private regular file."""
+        """Return the private credential file only when it is a private regular file.
+
+        Named for what it is rather than for who used to read it: Task 2.0 retired
+        `EnvironmentFile=`, so systemd no longer parses this path and the in-process parser is
+        its only reader on both platforms. The old name described the mechanism that was
+        removed, which is the one thing this stage was about.
+        """
         path = self.environment_path
         try:
             details = path.lstat()

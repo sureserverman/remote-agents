@@ -198,3 +198,84 @@ def test_systemd_adapter_is_reachable_through_the_registry() -> None:
     kinds = {supervisor.kind for supervisor in registered_supervisors()}
 
     assert SupervisorKind.SYSTEMD in kinds
+
+
+@pytest.mark.parametrize(
+    "awkward",
+    ["my user", "o'brien", "50%off"],
+    ids=["space", "apostrophe", "percent"],
+)
+def test_systemd_unit_survives_an_awkward_but_legal_home(tmp_path: Path, awkward: str) -> None:
+    """systemd itself accepts the unit for every path shape the renderer claims to handle.
+
+    This is the test whose absence let a real defect ship for a whole task. `verify` was only
+    ever run against `SystemdSupervisor()` -- the clean host default -- so every branch of the
+    quoting logic was unexercised against systemd, and two of them were wrong: a quoted
+    `WorkingDirectory` is a fatal error (`path is not absolute`), and an unquoted apostrophe in
+    `ExecStart` makes systemd discard the line entirely (`Unbalanced quoting, ignoring`, then
+    `Service has no ExecStart=`). Both were rendered by the adapter and neither was caught.
+
+    The paths are built for real, with a real executable at the end of them, because `verify`
+    resolves `ExecStart` on disk -- a unit naming a path that does not exist fails for a reason
+    that has nothing to do with quoting and would mask the thing under test.
+    """
+    if shutil.which("systemd-analyze") is None:
+        pytest.skip("BLOCKED: systemd-analyze is not installed")
+    environment = _user_manager_environment()
+    if environment is None:
+        pytest.skip("BLOCKED: no XDG_RUNTIME_DIR for a --user manager to initialise against")
+
+    home = tmp_path / awkward
+    home.mkdir()
+    # The interpreter lives *outside* the awkward home on purpose. systemd constrains the
+    # executable name specifically, so mixing the two would conflate "does the renderer handle
+    # an awkward home" with "does systemd accept an awkward executable" -- and the second
+    # question has its own test, which asserts the adapter refuses it up front.
+    binaries = tmp_path / "venv" / "bin"
+    binaries.mkdir(parents=True)
+    for name in ("python3", "remote-agents"):
+        executable = binaries / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o700)
+
+    (artifact,) = SystemdSupervisor(interpreter=binaries / "python3", home=home).artifacts()
+    written = tmp_path / artifact.path.name
+    written.write_text(artifact.content, encoding="utf-8")
+
+    completed = subprocess.run(
+        ["systemd-analyze", "--user", "verify", str(written)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, f"{completed.stdout}\n{completed.stderr}\n{artifact.content}"
+    # `verify` reports a bad directive on stderr while still exiting 0 for some classes, so the
+    # diagnostics are asserted too rather than trusting the status alone.
+    assert "not absolute" not in completed.stderr, completed.stderr
+    assert "Unbalanced quoting" not in completed.stderr, completed.stderr
+
+
+@pytest.mark.parametrize("hostile", ["new\nline", "carriage\rreturn"])
+def test_systemd_refuses_a_path_that_would_inject_a_directive(hostile: str) -> None:
+    """A newline in a path extends the unit with a line of someone else's choosing."""
+    with pytest.raises(ValueError, match="control character"):
+        SystemdSupervisor(interpreter=Path("/opt/ra/bin/python3"), home=Path(f"/home/{hostile}"))
+
+
+@pytest.mark.parametrize("refused", ["o'brien", 'quote"d', "back\\slash"])
+def test_systemd_refuses_an_interpreter_path_it_could_never_start(refused: str) -> None:
+    """A path systemd will reject is refused here instead, while it can still be acted on.
+
+    systemd's own rule, measured rather than assumed: quoting round-trips the path correctly
+    and systemd *then* rejects it with "Executable name contains special characters", fatally.
+    Rendering the unit anyway would move the failure to `systemctl start`, where the message
+    names a character rather than a fix.
+
+    The bound is asserted by the sibling test above, which still renders a home containing an
+    apostrophe successfully: the restriction is on the executable name, so only the interpreter
+    is constrained and an operator whose *home* is awkward is not turned away.
+    """
+    with pytest.raises(ValueError, match="quote or backslash"):
+        SystemdSupervisor(interpreter=Path(f"/home/{refused}/bin/python3"), home=Path("/home/t"))

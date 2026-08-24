@@ -129,9 +129,20 @@ def test_launchd_plist_keeps_the_shipped_units_operative_lifecycle() -> None:
     parsed = _plist(ELSEWHERE)
 
     assert parsed["AbandonProcessGroup"] is True
-    assert parsed["ThrottleInterval"] == 5
     assert parsed["ExitTimeOut"] == 30
     assert parsed["Umask"] == 0o077
+
+    # `RestartSec=5s` is deliberately NOT mirrored. `ThrottleInterval` is the nearest key and
+    # it is a *floor* on respawn frequency, already 10 seconds by default -- so writing 5 would
+    # have halved launchd's own crash-loop protection while reading like it added some. Its
+    # absence is the setting, which is exactly the kind of thing that gets "helpfully" restored
+    # later, so it is asserted rather than left to the reader.
+    assert "ThrottleInterval" not in parsed
+
+    # Without these two a LaunchAgent's output goes to /dev/null and the macOS service is
+    # undiagnosable -- there is no journald on this side to fall back to.
+    assert parsed["StandardOutPath"].endswith("/.local/state/remote-agents/remote-agents.log")
+    assert parsed["StandardErrorPath"].endswith("/.local/state/remote-agents/remote-agents.err")
 
 
 def test_launchd_plist_carries_no_credential_in_its_environment() -> None:

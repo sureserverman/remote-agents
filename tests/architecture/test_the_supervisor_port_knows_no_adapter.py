@@ -15,6 +15,7 @@ from pathlib import Path
 from check_imports import internal_imports
 
 from remote_agents.ports.service_supervisor import (
+    LivenessMeaning,
     ServiceSupervisor,
     SupervisorArtifact,
     SupervisorKind,
@@ -84,6 +85,7 @@ class _FakeSupervisor:
     """
 
     kind: SupervisorKind = SupervisorKind.SYSTEMD
+    liveness_meaning: LivenessMeaning = LivenessMeaning.RUNNING
 
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         return (SupervisorArtifact(path=Path("/installed/now.conf"), content="body"),)

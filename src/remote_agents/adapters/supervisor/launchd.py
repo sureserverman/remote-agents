@@ -159,6 +159,24 @@ class LaunchdSupervisor:
             raise ValueError(f"supervisor home must be absolute: {self.home}")
         if not self.interpreter.is_absolute():
             raise ValueError(f"supervisor interpreter must be absolute: {self.interpreter}")
+        if ":" in str(self.home):
+            # `search_path` joins on `:`, so a colon in the home directory would silently
+            # split one entry into two -- putting a truncated prefix on PATH and losing
+            # `~/.local/bin`, which is where this project's own console script lives. A colon
+            # is legal in an APFS name, and PATH simply cannot represent it.
+            raise ValueError(f"supervisor home must not contain a colon: {self.home}")
+
+    @property
+    def log_directory(self) -> Path:
+        """Where the agent's stdout and stderr are kept, under the owner's private state.
+
+        Beside the rest of this project's state rather than in `~/Library/Logs`, so one
+        `state_directory` holds everything the service writes. launchd creates these files
+        itself before the job runs, and does so **without** applying `Umask` -- that governs
+        what the *job* creates -- so they land 0644 and the directory's own mode is what keeps
+        them from being world-readable.
+        """
+        return self.home / ".local" / "state" / "remote-agents"
 
     @property
     def plist_path(self) -> Path:
@@ -223,15 +241,26 @@ class LaunchdSupervisor:
             # `Restart=on-failure`. A bare `KeepAlive = true` is a different policy: it would
             # also restart the service after it exited cleanly, which is what a stop looks like.
             "KeepAlive": {"SuccessfulExit": False},
-            # `RestartSec=5s`. ThrottleInterval is a floor on respawn frequency rather than a
-            # delay, but it is the only key that answers "do not spin on a crash loop".
-            "ThrottleInterval": 5,
             # `TimeoutStopSec=30s`: how long SIGTERM has before launchd escalates to SIGKILL.
             "ExitTimeOut": 30,
             # `KillMode=process`, and the load-bearing one. launchd otherwise kills whatever is
             # left in the job's process group when the job dies, which would take the managed
             # tmux sessions down with a restart of the service that merely launched them.
             "AbandonProcessGroup": True,
+            # `RestartSec=5s` has **no** launchd analogue and deliberately none is written.
+            # `ThrottleInterval` is the nearest key and it is a *floor* on respawn frequency,
+            # already 10s by default -- so mirroring the digit 5 across would have *halved*
+            # launchd's own crash-loop protection while reading like it added some. Omitted is
+            # stricter than the obvious translation.
+            #
+            # The service logs to stderr and leans on the supervisor to keep it, which on Linux
+            # is journald -- the runbook and three acceptance documents all say
+            # `journalctl --user -u remote-agents.service`. A LaunchAgent has no such default:
+            # without these two keys its output goes to /dev/null and the macOS service is
+            # undiagnosable, which would leave Stage 3's drill with no procedure for a wrong
+            # reading. Apple's own guidance is to set these rather than redirect to /dev/null.
+            "StandardOutPath": str(self.log_directory / "remote-agents.log"),
+            "StandardErrorPath": str(self.log_directory / "remote-agents.err"),
             "Umask": 0o077,
         }
         content = plistlib.dumps(definition, fmt=plistlib.FMT_XML).decode("utf-8")

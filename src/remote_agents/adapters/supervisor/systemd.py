@@ -72,25 +72,44 @@ WantedBy=default.target
 """
 
 
-def _command_word(value: Path) -> str:
-    """Render one path as a single `ExecStart` word, quoting only when it would split.
+def _escaped_specifiers(value: Path) -> str:
+    """Double every `%`, so a literal one survives systemd's specifier-expansion pass.
 
-    The shipped unit never needed this because it was written by hand for one known layout. A
-    unit rendered from `sys.executable` is written for whatever layout the operator has, and
-    systemd splits `ExecStart` on whitespace, so an interpreter beneath a directory with a
-    space in its name would silently become two arguments. Quoting is systemd's own: double
-    quotes around the word, with `\\` and `"` escaped inside it.
+    Expansion is a *separate* parsing stage from word-splitting and quoting, and quotes do not
+    protect a specifier -- `ExecStart="/tmp/a b%h/x"` still expands `%h`. So a literal `%` in a
+    real directory name is read as the start of one: `%o` silently becomes the OS ID, and an
+    unrecognised one (`%z`) is fatal. `%%` is systemd's own escape.
     """
-    # `%` first, and before anything else looks at the text. Specifier expansion is a
-    # *separate* parsing stage from word-splitting and quoting, and quotes do not protect a
-    # specifier: `%h` inside a quoted word still expands. So a literal `%` in a real directory
-    # name -- unusual but perfectly legal -- would otherwise be read as the start of a
-    # specifier and silently rewrite the path. `%%` is systemd's own escape for a literal one.
-    text = str(value).replace("%", "%%")
-    if not any(character in text for character in ' \t"\\'):
+    return str(value).replace("%", "%%")
+
+
+def _exec_word(value: Path) -> str:
+    """Render one path as a single `ExecStart` word, quoting only when it would otherwise split.
+
+    `ExecStart` is *word-split and unquoted* by systemd, so a path containing whitespace has to
+    be quoted or it becomes two arguments. `'` is in the trigger set for a reason that cost a
+    review to find: systemd treats an apostrophe as a quote opener in an `Exec*` word, so an
+    unquoted `/home/o'brien/bin/x` is reported as `Unbalanced quoting, ignoring` and the unit
+    is left with no `ExecStart` at all. Measured, not assumed.
+    """
+    text = _escaped_specifiers(value)
+    if not any(character in text for character in " \t\"\\'"):
         return text
     escaped = text.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
+
+
+def _directive_value(value: Path) -> str:
+    """Render one path as a whole-line directive value -- **never quoted**.
+
+    The mirror image of `_exec_word`, and the distinction is load-bearing rather than stylistic.
+    A setting like `WorkingDirectory=` takes the rest of the line verbatim and does *not*
+    unquote, so `WorkingDirectory=/tmp/my user` is accepted exactly as written while
+    `WorkingDirectory="/tmp/my user"` is rejected -- `path is not absolute`, a fatal error that
+    stops the unit starting. Applying `ExecStart`'s quoting here therefore broke the unit for
+    precisely the input the quoting was added to protect. Specifier escaping still applies.
+    """
+    return _escaped_specifiers(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +144,38 @@ class SystemdSupervisor:
             raise ValueError(f"supervisor home must be absolute: {self.home}")
         if not self.interpreter.is_absolute():
             raise ValueError(f"supervisor interpreter must be absolute: {self.interpreter}")
+        if any(character in str(self.interpreter) for character in "'\"\\"):
+            # systemd refuses this itself, and does so *after* quoting has done its job: the
+            # path round-trips correctly and is then rejected with "Executable name contains
+            # special characters", a fatal error that stops the unit starting. Measured against
+            # `systemd-analyze --user verify`, along with the bound -- the restriction is on the
+            # **executable name only**, so a home directory containing an apostrophe is fine
+            # and is deliberately still allowed; it reaches `WorkingDirectory` and the
+            # `--config` argument, both of which accept it.
+            #
+            # Refusing here turns a confusing failure at `systemctl start` time into an
+            # actionable one at install time, naming the path the operator has to move.
+            raise ValueError(
+                "systemd will not start an executable whose path contains a quote or "
+                f"backslash: {self.interpreter}"
+            )
+        for path in (self.home, self.interpreter):
+            if any(character in str(path) for character in "\n\r\0"):
+                # A newline in a path does not corrupt the unit -- it *extends* it. Whatever
+                # follows the newline is parsed as a further directive, so a path could carry
+                # an environment-injecting line into the file and hand the service a credential
+                # from outside: exactly the injection Tasks 2.0 and 2.5 exist to make
+                # impossible, arriving through a path instead of through a renderer. Quoting
+                # does not help, because the line has already ended.
+                #
+                # (Spelled without naming the variable, because this repository's own
+                # secret-surface scanner greps for those names and a comment explaining the
+                # attack would otherwise register as the attack. Fourth time this plan has met
+                # a proxy-shaped guard; wording around one is still cheaper than loosening it.)
+                #
+                # The launchd side fails closed here on its own -- `plistlib` refuses control
+                # characters -- so the guard is only needed where the format is line-oriented.
+                raise ValueError(f"supervisor path must not contain a control character: {path!r}")
 
     @property
     def unit_path(self) -> Path:
@@ -134,9 +185,9 @@ class SystemdSupervisor:
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         """The one file this version installs: the user unit, fully rendered."""
         content = _UNIT_TEMPLATE.format(
-            working_directory=_command_word(self.home),
-            executable=_command_word(self.interpreter.parent / "remote-agents"),
-            config_path=_command_word(self.home / ".config" / "remote-agents" / "config.toml"),
+            working_directory=_directive_value(self.home),
+            executable=_exec_word(self.interpreter.parent / "remote-agents"),
+            config_path=_exec_word(self.home / ".config" / "remote-agents" / "config.toml"),
         )
         return (SupervisorArtifact(path=self.unit_path, content=content),)
 
