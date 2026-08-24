@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from remote_agents.ports.terminal_text import sanitize_terminal_text
+from remote_agents.ports.terminal_text import probe_version_line, sanitize_terminal_text
 
 _BOUNDS = {"max_lines": 100, "max_bytes": 64 * 1024}
 
@@ -91,3 +91,49 @@ def test_a_non_positive_bound_is_refused(bound: dict[str, int]) -> None:
 
     with pytest.raises(ValueError):
         sanitize_terminal_text(b"anything", **limits)
+
+
+class TestProbeVersionLine:
+    """The version-line reducer, tested at its new shared home rather than through two probes.
+
+    It was a private copy in `adapters/tmux/profiles.py` and another in
+    `application/dependencies.py`, and neither had a test of its own — so the two could drift
+    and the only thing that would notice was whichever caller happened to be exercised.
+    """
+
+    def test_the_first_non_empty_line_is_what_a_report_gets(self) -> None:
+        assert probe_version_line("tmux 3.4\ncopyright\n") == "tmux 3.4"
+        assert probe_version_line("\n\n  git version 2.43.0  \n") == "git version 2.43.0"
+
+    def test_output_with_nothing_usable_in_it_is_nothing_rather_than_an_empty_string(self) -> None:
+        """`None`, not `""`, and that is a deliberate change from what the adapter copy did.
+
+        The old private version returned an empty string for a first line that was entirely
+        non-printable, so `probe_profiles` reported an available profile carrying `version=""`
+        and no note — an "AVAILABLE, nothing to say" row that had in fact failed to read a
+        version. Both callers now have one answer for "the probe did not answer".
+        """
+        assert probe_version_line("") is None
+        assert probe_version_line("\n \n\t\n") is None
+        assert probe_version_line("\x07\x07\n") is None
+
+    def test_ansi_and_the_invisible_code_points_do_not_survive(self) -> None:
+        """`str.isprintable()` is False for `Cc` and `Cf`, which is wider than it looks."""
+        assert probe_version_line("\x1b[31mtmux 3.4\x1b[0m") == "[31mtmux 3.4[0m"
+        assert probe_version_line("tmux‮3.4") == "tmux3.4"
+        assert probe_version_line("tmux​3.4") == "tmux3.4"
+
+    def test_the_returned_line_is_bounded(self) -> None:
+        assert len(probe_version_line("v" * 500)) == 160
+
+    def test_the_input_is_bounded_too_and_a_late_version_is_the_accepted_cost(self) -> None:
+        """The bound is on what is read, not only on what is returned.
+
+        Bounding the result alone left `splitlines`, the strip and the filtered join all running
+        over whatever a foreign program chose to print, and a program can print gigabytes inside
+        the five seconds its runner allows. The cost, stated rather than hidden: a version banner
+        preceded by four kilobytes of blank lines is now reported as no version at all. A version
+        banner that does not fit in four kilobytes is not a version banner.
+        """
+        assert probe_version_line("\n" * 5000 + "tmux 3.4") is None
+        assert probe_version_line("\n" * 100 + "tmux 3.4") == "tmux 3.4"

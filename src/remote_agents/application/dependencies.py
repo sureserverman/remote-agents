@@ -51,30 +51,47 @@ VERSION_PROBE_FAILED = "version_probe_failed"
 #: by `probe_profiles`, and a host with only one of the five installed is a working host.
 REQUIRED_DEPENDENCIES = ("tmux", "git")
 
-#: What may be spelled as a package name, and therefore what may reach an argv that runs
-#: privileged. Debian's own policy for a package name, which Homebrew formulae also satisfy.
-#:
-#: Today every name here comes from `REQUIRED_DEPENDENCIES`, a module constant, so nothing
-#: unvalidated can reach the argv and this pattern refuses nothing that is currently asked. It
-#: is here because of what the *next* caller could be, and because the hazard is not the one a
-#: reader expects: there is no shell on this path -- `run` takes a tuple and nothing passes
-#: `shell=True` -- so `;rm -rf /` is one literal argv word that apt reports as an unknown
-#: package. What does work is **option injection**, which `shlex.join` renders unquoted and
-#: therefore innocuously: `--allow-remove-essential` is an apt option, `git=1.0-1` pins a
-#: downgrade to a chosen build, and `./x.deb` makes `apt-get install` unpack a local archive
-#: and run its maintainer scripts as root. A trailing `--` does not close any of those.
-#:
-#: The probe half is guarded by the same pattern for a smaller but live reason: a name
-#: containing a `/` resolves through `shutil.which` as a literal path, so an unvalidated name
-#: would be *executed* with a version flag -- unprivileged, but before anything is confirmed.
+#: The shape a name must have before anything else looks at it. Kept as a first, cheap refusal
+#: with a readable message; it is **not** the boundary, for the reason below.
 _PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
 
 
 def _require_package_names(names: Sequence[str]) -> tuple[str, ...]:
-    """Refuse anything that is not a package name before it can become an argv word."""
+    """Refuse anything this tool does not itself require, before it can become an argv word.
+
+    **An allow-list, not a pattern, and the pattern that came first is why.** The first attempt
+    validated against Debian's own policy for what a package may be *named* — `^[a-z0-9][a-z0-9
+    +.-]*$` — which is the wrong grammar, because `apt-get install` accepts a superset of it.
+    Measured on apt 2.8.3 with `-s`:
+
+    - `apt-get -s install tmux-` reports **"The following packages will be REMOVED: tmux"**. A
+      trailing `-` is apt's *remove* modifier, it is inside that character class, and
+      a confirmed `sudo apt-get install -y tmux-` is one glyph away from the line the
+      operator meant to approve. `+` is the matching install modifier.
+    - `apt-get -s install x.deb` reports **180 packages to install**: when a literal name misses,
+      apt falls back to matching it as an ERE, and `.` and `+` are metacharacters. One
+      pattern-passing name is therefore an arbitrary package-set selector.
+
+    So the syntactic check cannot be the boundary — apt has a second grammar layered on top of
+    argv, and any pattern that permits the punctuation real package names contain also permits
+    apt's own operators. What *is* a boundary is the set this tool installs, which is closed and
+    is the same constant the probe reports on: a name that is not something this project
+    requires has no business in a privileged argv, whoever asked for it.
+
+    The probe is held to the same list for a smaller but live reason: a name containing `/`
+    resolves through `shutil.which` as a literal path, so an unvalidated name would be
+    *executed* with a version flag — unprivileged, but before anything is confirmed.
+
+    A bare `str` is refused explicitly. `Sequence[str]` accepts one, and iterating it yields
+    characters, so `render_remediation("tmux", …)` silently became four one-letter packages.
+    """
+    if isinstance(names, str):
+        raise ValueError(f"package names must be a sequence, not one string: {names!r}")
     for name in names:
         if not _PACKAGE_NAME.match(name):
             raise ValueError(f"not a package name: {name!r}")
+        if name not in REQUIRED_DEPENDENCIES:
+            raise ValueError(f"not a dependency this tool installs: {name!r}")
     return tuple(names)
 
 
@@ -267,7 +284,15 @@ class Remediation:
             installer = _installer_prefix(self.command)
             if not installer:
                 raise ValueError("a runnable remediation may only install packages")
-            _require_package_names(self.command[len(installer) :])
+            packages = self.command[len(installer) :]
+            if not packages:
+                # A confirmed `sudo apt-get install -y` alone passes the prefix check, exits 0,
+                # would have had `InstallAttempt.resolved` report True for an install that
+                # installed nothing -- the one lie `resolved`'s docstring exists to avoid. The
+                # renderer already refuses an empty set; the *type* is what was repositioned as
+                # the boundary, so the check belongs here too.
+                raise ValueError("a runnable remediation must name something to install")
+            _require_package_names(packages)
 
     @property
     def runnable(self) -> bool:
@@ -316,7 +341,13 @@ def render_remediation(
     if package_manager is PackageManager.APT:
         return _runnable((*_APT_INSTALL, *packages))
     if package_manager is PackageManager.HOMEBREW:
-        if not homebrew_installed:
+        # `is not True`, not `not`, and for the reason `confirm_and_install` gives one function
+        # down: this is a bool-annotated parameter in a codebase with no type checker, and the
+        # composition root reads its answer from a host probe that could as easily be an
+        # environment variable, where `"false"` and `"0"` are both truthy. Getting it wrong here
+        # shows an operator a `brew install` on a host with no `brew` and asks them to approve
+        # it -- exactly what the unrunnable branch exists to prevent.
+        if homebrew_installed is not True:
             return Remediation(instruction=HOMEBREW_INSTALL_INSTRUCTION)
         return _runnable((*_BREW_INSTALL, *packages))
     raise ValueError(f"no remediation is defined for {package_manager}")
@@ -424,11 +455,19 @@ def confirm_and_install(
         return InstallAttempt(outcome=DECLINED, instruction=remediation.instruction)
     try:
         code = run(argv)
-    except OSError:
+    except Exception:  # noqa: BLE001 -- see below; a failed install is not a traceback
         # The confirmed installer could not even be started -- no `sudo` on a minimal
         # container, no `brew` despite the caller saying there was one. That is a failed
         # install, not a traceback out of a command whose whole job is to report on a host
         # that is missing things.
+        #
+        # Broad, and narrowed to `OSError` first, which was the same mistake `probe_dependencies`
+        # was just fixed for: the runner a composition root will most plausibly copy is
+        # `profiles._run_version`, i.e. `subprocess.run(..., check=True, timeout=5)`, whose
+        # `CalledProcessError` and `TimeoutExpired` are not `OSError` subclasses. An apt that
+        # exits non-zero, or one that hangs on a debconf prompt past its timeout, would have
+        # come out as a traceback from a confirmed install. `run`'s contract is therefore
+        # "return an exit status"; anything else it does is a failed install.
         return InstallAttempt(outcome=INSTALL_FAILED, instruction=remediation.instruction)
     outcome = INSTALLED if code == 0 else INSTALL_FAILED
     return InstallAttempt(outcome=outcome, instruction=remediation.instruction)

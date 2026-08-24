@@ -524,3 +524,74 @@ def test_confirm_reports_an_installer_that_cannot_start_as_a_failed_install() ->
 
     assert attempt.outcome == INSTALL_FAILED
     assert not attempt.resolved
+
+
+def test_a_runnable_remediation_must_name_something_to_install() -> None:
+    """`sudo apt-get install -y` alone passes the prefix check and installs nothing.
+
+    It would exit 0 and have `resolved` report an install that installed nothing, which is the
+    one claim that property's wording exists to avoid making. The renderer already refuses an
+    empty set; the type is what was repositioned as the boundary, so it refuses too.
+    """
+    with pytest.raises(ValueError):
+        Remediation(
+            instruction="sudo apt-get install -y", command=("sudo", "apt-get", "install", "-y")
+        )
+    with pytest.raises(ValueError):
+        Remediation(instruction="brew install", command=("brew", "install"))
+
+
+def test_a_name_apt_would_read_as_a_removal_is_refused() -> None:
+    """`tmux-` is a package name by Debian's grammar and a *removal* by apt's.
+
+    Measured on apt 2.8.3: `apt-get -s install tmux-` reports "The following packages will be
+    REMOVED: tmux". `x.deb` is the other half of the same problem -- apt matches an unfound name
+    as an ERE, so `.` and `+` select package *sets*. A syntactic pattern cannot separate these
+    from real names, which is why the boundary is the closed set this tool installs.
+    """
+    for name in ("tmux-", "git+", "x.deb", "t.ux"):
+        with pytest.raises(ValueError):
+            _remediation((name,))
+
+
+def test_a_bare_string_is_not_a_sequence_of_package_names() -> None:
+    """`Sequence[str]` accepts one string, and iterating it yields four one-letter packages."""
+    with pytest.raises(ValueError):
+        render_remediation("tmux", package_manager=PackageManager.APT, homebrew_installed=False)
+
+
+def test_whether_homebrew_is_installed_must_be_answered_and_answered_with_a_bool() -> None:
+    """The default was the defect; a truthy string would be the same defect wearing a type.
+
+    Omitting the keyword used to render a runnable `brew install` for a host with no `brew`.
+    Nothing pinned that fix until this test, which is the failure mode the fix was about.
+    """
+    with pytest.raises(TypeError):
+        render_remediation(("tmux",), package_manager=PackageManager.HOMEBREW)
+
+    fix = _remediation(("tmux",), PackageManager.HOMEBREW, homebrew_installed="false")
+
+    assert fix.command is None
+    assert fix.instruction == HOMEBREW_INSTALL_INSTRUCTION
+
+
+def test_confirm_reports_an_installer_that_fails_in_any_way_as_a_failed_install() -> None:
+    """Not only `OSError`: the runner a composition root will copy uses `check=True`.
+
+    `subprocess.CalledProcessError` and `TimeoutExpired` are not `OSError` subclasses, so an apt
+    that exits non-zero -- or one that hangs on a debconf prompt past its timeout -- would have
+    come out as a traceback from a confirmed install.
+    """
+
+    class _NotAnOSError(Exception):
+        pass
+
+    def _explode(_argv: tuple[str, ...]) -> int:
+        raise _NotAnOSError("returned non-zero exit status 100")
+
+    attempt = confirm_and_install(
+        _APT_FIX, announce=_Announcer(), confirm=lambda _prompt: True, run=_explode
+    )
+
+    assert attempt.outcome == INSTALL_FAILED
+    assert not attempt.resolved
