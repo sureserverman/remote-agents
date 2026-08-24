@@ -20,11 +20,14 @@ same reason: those two calls are the whole of what touches the host.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
+from remote_agents.ports.terminal_text import probe_version_line
 
 #: The two states a requirement can be in. Closed, and closed at two on purpose: a third
 #: ("too old", "unsupported") is the version gate DEC-002 forbids, arriving as an enum member
@@ -47,6 +50,33 @@ VERSION_PROBE_FAILED = "version_probe_failed"
 #: The agent CLIs themselves are deliberately absent: they are probed already, per profile,
 #: by `probe_profiles`, and a host with only one of the five installed is a working host.
 REQUIRED_DEPENDENCIES = ("tmux", "git")
+
+#: What may be spelled as a package name, and therefore what may reach an argv that runs
+#: privileged. Debian's own policy for a package name, which Homebrew formulae also satisfy.
+#:
+#: Today every name here comes from `REQUIRED_DEPENDENCIES`, a module constant, so nothing
+#: unvalidated can reach the argv and this pattern refuses nothing that is currently asked. It
+#: is here because of what the *next* caller could be, and because the hazard is not the one a
+#: reader expects: there is no shell on this path -- `run` takes a tuple and nothing passes
+#: `shell=True` -- so `;rm -rf /` is one literal argv word that apt reports as an unknown
+#: package. What does work is **option injection**, which `shlex.join` renders unquoted and
+#: therefore innocuously: `--allow-remove-essential` is an apt option, `git=1.0-1` pins a
+#: downgrade to a chosen build, and `./x.deb` makes `apt-get install` unpack a local archive
+#: and run its maintainer scripts as root. A trailing `--` does not close any of those.
+#:
+#: The probe half is guarded by the same pattern for a smaller but live reason: a name
+#: containing a `/` resolves through `shutil.which` as a literal path, so an unvalidated name
+#: would be *executed* with a version flag -- unprivileged, but before anything is confirmed.
+_PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9+.-]*$")
+
+
+def _require_package_names(names: Sequence[str]) -> tuple[str, ...]:
+    """Refuse anything that is not a package name before it can become an argv word."""
+    for name in names:
+        if not _PACKAGE_NAME.match(name):
+            raise ValueError(f"not a package name: {name!r}")
+    return tuple(names)
+
 
 #: How each requirement is asked. tmux answers `-V` and rejects `--version`, so the argument
 #: is per-name rather than the single `--version` the curated agent profiles all share.
@@ -96,36 +126,39 @@ def probe_dependencies(
 
     Every name yields exactly one status, including the ones that are missing: a report an
     operator reads to find out what is wrong cannot answer by leaving the wrong thing out.
+
+    **`run_version` may fail however it likes and this stays a report.** The contract is
+    deliberately not "raises `OSError`", which is what an earlier version of this docstring
+    implied by pointing at `probe_profiles` as the template to copy: that probe's real runner
+    uses `subprocess.run(..., check=True, timeout=5)`, whose `CalledProcessError` and
+    `TimeoutExpired` are **not** `OSError` subclasses, so an adapter written from the cited
+    template crashed the whole dependency report on one executable that exited non-zero. A
+    `tmux` present but unable to load a shared library is exactly the host onboarding exists to
+    diagnose, and it is the host this raised a traceback on.
+
+    So the failure is caught broadly, and this module refuses to specify an exception type it
+    cannot name (it may not import `subprocess` under ARCH-02, which is the structural reason
+    the narrow catch was unfixable in place). `bootstrap._console_features_available` reached
+    the same conclusion for the same kind of probe, in the same words: a diagnostic probe
+    reports, it never raises.
     """
     statuses: list[DependencyStatus] = []
-    for name in names:
+    for name in _require_package_names(names):
         located = resolve(name)
         if located is None:
             statuses.append(DependencyStatus(name=name, state=MISSING))
             continue
         argv = (str(located), *VERSION_ARGUMENTS.get(name, ("--version",)))
         try:
-            version = _sanitized(run_version(argv))
-        except OSError:
+            printed = run_version(argv)
+        except Exception:  # noqa: BLE001 -- a diagnostic probe reports, it never raises
+            printed = None
+        version = None if printed is None else probe_version_line(printed)
+        if version is None:
             statuses.append(DependencyStatus(name=name, state=AVAILABLE, note=VERSION_PROBE_FAILED))
             continue
         statuses.append(DependencyStatus(name=name, state=AVAILABLE, version=version))
     return tuple(statuses)
-
-
-def _sanitized(value: str) -> str:
-    """Reduce whatever an executable printed to one printable, bounded line.
-
-    A version string is about to be rendered into an operator's terminal and, on the
-    onboarding path, into a report. It is the output of a program this project did not write,
-    so it is treated as untrusted text: first non-empty line only, non-printable characters
-    dropped, length bounded. `probe_profiles._sanitize_version` does exactly this for agent
-    executables and the reasoning is not specific to them.
-    """
-    line = next((part.strip() for part in value.splitlines() if part.strip()), "")
-    if not line:
-        raise OSError("version probe returned no text")
-    return "".join(character for character in line if character.isprintable())[:160]
 
 
 class PackageManager(Enum):
@@ -169,6 +202,26 @@ _APT_INSTALL = ("sudo", "apt-get", "install", "-y")  # never run outside the con
 
 _BREW_INSTALL = ("brew", "install")
 
+#: The complete set of argv heads a `Remediation` may carry, checked at construction.
+#:
+#: This is what turns the comment above from a claim about how callers behave into a property
+#: of the type. It was the former, and an evaluator was right that "an unconfirmed install is
+#: unrepresentable" overstated it. The honest claim now: a `Remediation` can only ever name a
+#: package install, and there is exactly one function that offers to run one, which always
+#: confirms. The residual, stated because hiding it would be worse: `instruction` is public and
+#: splits back into an argv, so a caller determined to run a privileged command without asking
+#: does not need this type's help -- what it can no longer do is get one from here and believe
+#: it was vetted.
+_INSTALLERS = (_APT_INSTALL, _BREW_INSTALL)
+
+
+def _installer_prefix(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """Return whichever known installer head this argv opens with, or the empty tuple."""
+    for installer in _INSTALLERS:
+        if argv[: len(installer)] == installer:
+            return installer
+    return ()
+
 
 @dataclass(frozen=True, slots=True)
 class Remediation:
@@ -185,6 +238,17 @@ class Remediation:
     than documented: a report that prints one field and an installer that runs the other are
     two renderings of one fact, and the failure mode of letting them drift is an operator who
     is shown a line that is not the line that ran.
+
+    **Three things are checked at construction, and each closes a way the type could have lied
+    about what it holds.** The equality above is the first. The second is that the instruction
+    is a single printable line: `shlex.quote` *wraps* a control character in quotes rather than
+    removing it, so `tmux\r\x1b[2Kgit` satisfies the equality and still hands `announce` a
+    string that erases the line the operator just read and redraws it -- and the instruction is
+    the one thing here that a security decision is displayed on. The third is that the argv is
+    a package install and nothing else: without it this type is "an arbitrary argv plus a
+    matching label" while reading as "a vetted remediation", so any future caller that built one
+    from something other than `render_remediation` would get arbitrary privileged execution with
+    a `y` as the only remaining gate.
     """
 
     instruction: str
@@ -193,11 +257,17 @@ class Remediation:
     def __post_init__(self) -> None:
         if not self.instruction.strip():
             raise ValueError("a remediation must say something an operator can act on")
+        if self.instruction.splitlines()[1:] or not self.instruction.isprintable():
+            raise ValueError("a remediation's instruction must be one printable line")
         if self.command is not None:
             if not self.command:
                 raise ValueError("a runnable remediation needs an argv")
             if self.instruction != shlex.join(self.command):
                 raise ValueError("a remediation's instruction must be the command it runs")
+            installer = _installer_prefix(self.command)
+            if not installer:
+                raise ValueError("a runnable remediation may only install packages")
+            _require_package_names(self.command[len(installer) :])
 
     @property
     def runnable(self) -> bool:
@@ -209,7 +279,7 @@ def render_remediation(
     missing: Sequence[str],
     *,
     package_manager: PackageManager,
-    homebrew_installed: bool = True,
+    homebrew_installed: bool,
 ) -> Remediation:
     """Say how to install everything that is missing, in one command where one exists.
 
@@ -226,11 +296,21 @@ def render_remediation(
     Homebrew is a third-party install a fresh Mac does not have -- and a generic flag would
     invite a caller to claim apt is absent, for which there is no bootstrap line to print.
 
-    An empty `missing` is refused rather than rendered. `apt-get install -y` with no packages is
-    not a no-op; it is a command that runs and does something else, and the caller that reached
-    here with nothing missing has a bug this is the cheapest place to show them.
+    **It has no default, and losing the default was a fix.** `= True` meant that omitting the
+    keyword on a fresh Mac rendered a *runnable* `brew install`, which the confirmation helper
+    would then offer to execute on a host with no `brew` -- the exact case the unrunnable branch
+    below exists to prevent, defeated by a forgotten argument. A safe answer that depends on the
+    caller remembering to ask for it is the same anti-pattern `confirm_and_install` refuses one
+    function down.
+
+    An empty `missing` is refused rather than rendered: a caller that reached here with nothing
+    missing has a bug, and this is the cheapest place to show them. *(The reason first written
+    here -- that `apt-get install -y` with no packages "runs and does something else" -- was
+    measured and is false on apt 2.8.3: `apt-get install -y -s` reports "0 upgraded, 0 newly
+    installed" and no upgrade phase. The guard is right; the story about apt was not, and this
+    project cites measurements rather than asserting them.)*
     """
-    packages = tuple(missing)
+    packages = _require_package_names(tuple(missing))
     if not packages:
         raise ValueError("there is nothing to remediate")
     if package_manager is PackageManager.APT:
@@ -276,7 +356,14 @@ class InstallAttempt:
 
     @property
     def resolved(self) -> bool:
-        """Whether the missing dependency is now present because of this attempt."""
+        """Whether the installer ran and reported success.
+
+        Deliberately not "the dependency is now present", which is what this said and is more
+        than a zero exit status establishes: `brew install` exits 0 for a formula that was
+        already there, and an installer can succeed at installing something other than what was
+        asked for. Onboarding re-probes afterwards and reports what it then finds, so the
+        stronger claim is made by the thing that can actually check it.
+        """
         return self.outcome == INSTALLED
 
 
@@ -298,6 +385,17 @@ def confirm_and_install(
     unnecessary, which is why `assume_yes` is a parameter with no host-derived default and why
     the non-interactive case below is a refusal rather than a fallback.
 
+    **Consent is `is True`, not truthiness, and that is the fix a security pass earned.** This
+    project runs no type checker, so `Callable[[str], bool]` is documentation and nothing more.
+    The most obvious adapter anyone would write -- `confirm=lambda prompt: input(prompt)` --
+    returns the string the operator typed, and `"n"`, `"no"`, `"N"` and `"abort"` are every one
+    of them truthy: a plain refusal would have installed. The only refusals a truthiness test
+    honoured were a bare Enter and a literal `False`. So this confirm step authorises a `sudo`
+    install on exactly one value, the one whose identity it checks -- the same discipline the
+    module already applies to `_STATES` and `_OUTCOMES`. `assume_yes` gets the same treatment
+    for the same reason: it can arrive from an environment variable, and `"false"` and `"0"`
+    are truthy too.
+
     `confirm=None` means *there is no terminal to ask*, which is the case an unattended
     installer arrives in, and it is answered `UNCONFIRMED`: nothing runs, the instruction is
     carried out to the caller to print, and the gap is reported open so the caller can exit
@@ -316,14 +414,21 @@ def confirm_and_install(
     argv = remediation.command
     if argv is None:
         return InstallAttempt(outcome=MANUAL, instruction=remediation.instruction)
-    if assume_yes:
+    if assume_yes is True:
         approved = True
     elif confirm is None:
         return InstallAttempt(outcome=UNCONFIRMED, instruction=remediation.instruction)
     else:
-        approved = confirm(f"Run this now? [{remediation.instruction}]")
+        approved = confirm(f"Run this now? [{remediation.instruction}]") is True
     if not approved:
         return InstallAttempt(outcome=DECLINED, instruction=remediation.instruction)
-    code = run(argv)
+    try:
+        code = run(argv)
+    except OSError:
+        # The confirmed installer could not even be started -- no `sudo` on a minimal
+        # container, no `brew` despite the caller saying there was one. That is a failed
+        # install, not a traceback out of a command whose whole job is to report on a host
+        # that is missing things.
+        return InstallAttempt(outcome=INSTALL_FAILED, instruction=remediation.instruction)
     outcome = INSTALLED if code == 0 else INSTALL_FAILED
     return InstallAttempt(outcome=outcome, instruction=remediation.instruction)
