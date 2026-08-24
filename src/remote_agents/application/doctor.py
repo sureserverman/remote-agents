@@ -3,6 +3,7 @@
 from remote_agents.application.health import health_report
 from remote_agents.domain.conversations import ProfileResumeCapability
 from remote_agents.domain.profiles import ProfileCompatibility
+from remote_agents.ports.service_supervisor import LivenessMeaning, SupervisorKind
 
 
 def doctor(
@@ -28,6 +29,27 @@ def doctor(
         },
         "terminal": {"fake_ready": fake_terminal},
     }
+
+
+def credential_file_report(
+    *, readable: bool, names_resolved: bool, reason: str | None
+) -> dict[str, object]:
+    """Render what the in-process parser made of the credential file, and nothing it contains.
+
+    Arrives as plain data for the same reason `config_drift` does: DEC-015 confines this layer
+    to `application`, `domain` and `ports`, so the parser -- which lives beside the composition
+    root -- is not importable here.
+
+    The report is deliberately three booleans and a code. Retiring `EnvironmentFile=` hands
+    this file from systemd's parser to ours, and the two disagree about quoting, `;` comments,
+    lines without `=`, backslash escapes and line continuations. An operator needs to know
+    *that* the file no longer resolves, which is actionable; they do not need the diagnostic to
+    read their bot token back to them, which is the one thing this must never do.
+    """
+    report: dict[str, object] = {"readable": readable, "names_resolved": names_resolved}
+    if reason is not None:
+        report["reason"] = reason
+    return report
 
 
 def profile_doctor(
@@ -80,6 +102,9 @@ def production_doctor(
     catalogue_projects: int,
     config_drift: dict[str, object] | None = None,
     tmux_console_ready: bool | None = None,
+    credential_file: dict[str, object] | None = None,
+    supervisor_kind: SupervisorKind | None = None,
+    liveness_meaning: LivenessMeaning | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -125,5 +150,34 @@ def production_doctor(
         # failure it just diagnosed.
         if not config_drift.get("readable", True):
             report["healthy"] = False
+    if credential_file is not None:
+        report["credential_file"] = credential_file
+        # Same reasoning as an unreadable config: every other component can be green while the
+        # service cannot authenticate. Once `EnvironmentFile=` is retired this parser is the
+        # only reader, so a file it cannot resolve is a service that will not start -- and a
+        # report that stayed green would agree with the failure it just diagnosed.
+        if not credential_file.get("names_resolved", True):
+            report["healthy"] = False
+    if supervisor_kind is not None:
+        # Which supervisor answered, not a component of its own -- the `service` component
+        # already carries whether it is up. Named because a false negative is otherwise
+        # unreadable: "service_inactive" produced by probing for the Linux service manager on
+        # a Mac, where it is not installed, says nothing about the service and everything
+        # about the probe.
+        #
+        # `SupervisorKind` is a ports value, which this layer may hold; the platform *verbs*
+        # stay in the adapters where DEC-001 puts them. This comment names neither tool on
+        # purpose -- the gate check for this layer's platform-agnosticism greps the tool names
+        # as a proxy, and prose that trips it would make the guard unpassable while the
+        # property it guards still held. Twice in this plan a check has had to be rewritten
+        # for exactly that; wording around it is cheaper than loosening the guard.
+        report["service_supervisor"] = supervisor_kind.value
+    if liveness_meaning is not None:
+        # What a green `service` component actually establishes. Both supervisors currently
+        # answer "running", but that is a fact about the adapters rather than a guarantee of
+        # the port -- a supervisor able to confirm only registration would report so here, and
+        # the operator would see the difference instead of reading "healthy" for a service that
+        # had exited. Reported rather than assumed, which is the whole point of the field.
+        report["service_liveness"] = liveness_meaning.value
     report.update(profile_doctor(profiles))
     return report

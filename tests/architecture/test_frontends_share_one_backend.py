@@ -681,9 +681,15 @@ def test_the_sweep_reads_every_adapter_module() -> None:
         "were genuinely removed, lower this floor deliberately rather than by accident"
     )
     packages = {module.split("/")[0] for module, _ in modules if "/" in module}
-    assert packages == {"agents", "projects", "sqlite", "telegram", "tmux", "tui"}, (
-        f"the sweep covered {sorted(packages)}, not every adapter package"
-    )
+    assert packages == {
+        "agents",
+        "projects",
+        "sqlite",
+        "supervisor",
+        "telegram",
+        "tmux",
+        "tui",
+    }, f"the sweep covered {sorted(packages)}, not every adapter package"
 
 
 def test_an_empty_source_root_fails_rather_than_passing(tmp_path: Path) -> None:

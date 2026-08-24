@@ -127,7 +127,7 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
         SQLiteStandingNotificationStore,
     )
     from remote_agents.bootstrap import _private_boundary
-    from remote_agents.config import AppConfig
+    from remote_agents.config import AppConfig, load_secrets
     from remote_agents.production import ProductionPaths
 
     monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
@@ -140,7 +140,7 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
-        composition = _private_boundary(config, connection, paths)
+        composition = _private_boundary(config, connection, paths, load_secrets())
     finally:
         connection.close()
 
@@ -173,7 +173,7 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.adapters.sqlite.migrations import MIGRATIONS
     from remote_agents.bootstrap import _console_composer, _private_boundary
-    from remote_agents.config import AppConfig
+    from remote_agents.config import AppConfig, load_secrets
     from remote_agents.production import ProductionPaths
 
     monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "test-token")
@@ -186,7 +186,7 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
     config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
-        composition = _private_boundary(config, connection, paths)
+        composition = _private_boundary(config, connection, paths, load_secrets())
     finally:
         connection.close()
 
@@ -383,7 +383,7 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
     """
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.bootstrap import _private_boundary, local_context
-    from remote_agents.config import load_config
+    from remote_agents.config import load_config, load_secrets
     from remote_agents.production import ProductionPaths
 
     monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
@@ -395,7 +395,7 @@ def test_both_compositions_wire_hide_in_console_from_their_own_composers(
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths)
+        composition = _private_boundary(config, connection, paths, load_secrets())
         context = local_context(config, connection, paths)
 
         assert composition.boundary.backend.sessions._hide_in_console is not None, (  # noqa: SLF001
@@ -426,7 +426,7 @@ def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_pa
     """
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.bootstrap import _private_boundary
-    from remote_agents.config import load_config
+    from remote_agents.config import load_config, load_secrets
     from remote_agents.production import ProductionPaths
 
     monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
@@ -437,7 +437,7 @@ def test_the_reconciler_and_the_backend_share_one_lock_map(composed_home, tmp_pa
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths)
+        composition = _private_boundary(config, connection, paths, load_secrets())
 
         assert composition.boundary.backend.sessions._locks is composition.reconciler._locks, (  # noqa: SLF001
             "the service and the reconciler hold different lock maps (DEC-030)"
@@ -467,7 +467,7 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.application.profiles import ProfileAvailability
     from remote_agents.bootstrap import _private_boundary
-    from remote_agents.config import load_config
+    from remote_agents.config import load_config, load_secrets
     from remote_agents.production import ProductionPaths
 
     monkeypatch.setenv("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN", "1:aa")
@@ -478,7 +478,7 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
     config = load_config(_config_file(composed_home, paths))
     connection = open_database(tmp_path / "sessions.sqlite3")
     try:
-        composition = _private_boundary(config, connection, paths)
+        composition = _private_boundary(config, connection, paths, load_secrets())
 
         assert composition.boundary.profiles, "the wizard was offered no profiles at all"
         for profile in composition.boundary.profiles:

@@ -11,7 +11,12 @@ def test_user_unit_has_private_paths_bounded_restart_and_tmux_survival() -> None
     contents = UNIT.read_text(encoding="utf-8")
 
     assert "WorkingDirectory=%h/dev/infra/remote-agents" in contents
-    assert "EnvironmentFile=%h/.config/remote-agents/telegram.env" in contents
+    # Retired deliberately: while this line existed, the credential file had two parsers --
+    # systemd's here and this project's on macOS -- and they disagree about quoting, `;`
+    # comments, lines without `=`, backslash escapes and continuations. The same bytes could
+    # therefore yield two different bot tokens. The service reads the file itself now, so the
+    # unit must not reintroduce a second reader.
+    assert "EnvironmentFile=" not in contents
     assert "ExecStart=%h/dev/infra/remote-agents/.venv/bin/remote-agents serve" in contents
     assert "Restart=on-failure" in contents
     assert "RestartSec=5s" in contents
@@ -27,9 +32,12 @@ def test_user_unit_has_private_paths_bounded_restart_and_tmux_survival() -> None
 def test_user_unit_contains_no_secret_literal() -> None:
     contents = UNIT.read_text(encoding="utf-8")
 
-    assert "=" not in next(
-        line for line in contents.splitlines() if line.startswith("EnvironmentFile=")
-    ).removeprefix("EnvironmentFile=")
+    # The unit carries no environment mechanism at all now, which is a stronger guarantee
+    # than the one this test used to make: it checked that the `EnvironmentFile=` line named a
+    # path rather than inlining a value. With neither directive present, there is nowhere in
+    # the unit for a credential to be written in the first place.
+    assert "EnvironmentFile=" not in contents
+    assert not any(line.startswith("Environment=") for line in contents.splitlines())
     assert "123456:" not in contents
 
 

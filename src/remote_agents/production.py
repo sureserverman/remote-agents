@@ -91,15 +91,29 @@ class ProductionPaths:
         """
         return self.state_directory / "preferences.json"
 
-    def ensure_directories(self) -> None:
-        """Create only declared directories and repair their private modes."""
-        for path in (
+    def ensure_directories(self, *, include_unit_directory: bool = True) -> None:
+        """Create only declared directories and repair their private modes.
+
+        `include_unit_directory` exists because `unit_directory` is the one entry here that is
+        not platform-neutral: `~/.config/systemd/user` means nothing on a launchd host, and
+        creating it there left a Mac with a dead directory no supervisor would ever read. The
+        composition root passes `False` when the host's supervisor is not systemd -- it is
+        already the single place the platform is decided (`_supervisor_for_host`), so this does
+        not add a second one.
+
+        Defaulted to `True` so that every existing caller keeps its behaviour: on a systemd host
+        the directory is still made, which is what the documented manual install relies on
+        (`install(1)` does not create parent directories without `-D`).
+        """
+        directories = [
             self.config_directory,
             self.state_directory,
-            self.unit_directory,
             self.intent_directory,
             self.activity_directory,
-        ):
+        ]
+        if include_unit_directory:
+            directories.append(self.unit_directory)
+        for path in directories:
             self._reject_symlink_ancestors(path)
             if path.exists() and not path.is_dir():
                 raise ConfigError(f"production path is not a directory: {path}")
@@ -145,7 +159,13 @@ class ProductionPaths:
                 raise ConfigError("production paths cannot traverse symlinks")
 
     def require_private_environment(self) -> Path:
-        """Return the systemd EnvironmentFile only when it is a private regular file."""
+        """Return the private credential file only when it is a private regular file.
+
+        Named for what it is rather than for who used to read it: Task 2.0 retired
+        `EnvironmentFile=`, so systemd no longer parses this path and the in-process parser is
+        its only reader on both platforms. The old name described the mechanism that was
+        removed, which is the one thing this stage was about.
+        """
         path = self.environment_path
         try:
             details = path.lstat()
@@ -162,9 +182,17 @@ class ProductionPaths:
         database_opener: Callable[[Path, Iterable[tuple[int, str]]], sqlite3.Connection],
         *,
         migrations: Iterable[tuple[int, str]],
+        include_unit_directory: bool = True,
     ) -> sqlite3.Connection:
-        """Migrate only the declared state database and make it owner-readable."""
-        self.ensure_directories()
+        """Migrate only the declared state database and make it owner-readable.
+
+        `include_unit_directory` is forwarded rather than defaulted away, because this method
+        re-runs `ensure_directories` and a default of `True` here silently undoes a `False`
+        passed by the caller one line earlier. That is exactly what happened: `serve` and the
+        local surface both asked for the systemd unit directory to be skipped on a launchd host
+        and then created it anyway, on the next statement, every time.
+        """
+        self.ensure_directories(include_unit_directory=include_unit_directory)
         connection = database_opener(self.database_path, migrations=migrations)
         os.chmod(self.database_path, 0o600)
         return connection

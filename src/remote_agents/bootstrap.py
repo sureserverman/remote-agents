@@ -49,6 +49,8 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
 )
+from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
+from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     audit_owner_metadata,
@@ -76,7 +78,11 @@ from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
-from remote_agents.application.doctor import production_doctor, profile_doctor
+from remote_agents.application.doctor import (
+    credential_file_report,
+    production_doctor,
+    profile_doctor,
+)
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
@@ -84,6 +90,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.config import (
+    TELEGRAM_SECRET_VARIABLES,
     ConfigError,
     TelegramSecrets,
     describe_schema_drift,
@@ -93,6 +100,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.service_supervisor import ServiceSupervisor, SupervisorKind
 from remote_agents.production import ProductionPaths
 
 _LOG = logging.getLogger(__name__)
@@ -459,15 +467,14 @@ def main(
             closed_profiles(),
             resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
         )
+        supervisor = _supervisor_for_host()
         result = production_doctor(
             core_ready=registry.error is None,
             database_ready=database_is_ready(config.database_path),
             tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
             tmux_console_ready=_console_features_available(paths.home),
             telegram_ready=_telegram_credentials_are_private(paths),
-            service_ready=_command_succeeds(
-                ("systemctl", "--user", "is-active", "--quiet", "remote-agents.service")
-            ),
+            service_ready=_command_succeeds(supervisor.liveness_command()),
             profiles=profiles,
             registered_projects=len(registry.projects),
             discovered_projects=len(discovered),
@@ -476,6 +483,9 @@ def main(
             # compared rather than leaving the operator to infer it from the absence of a
             # complaint. Silence and a passed check look identical otherwise.
             config_drift=drift,
+            credential_file=_credential_file_state(paths),
+            supervisor_kind=supervisor.kind,
+            liveness_meaning=supervisor.liveness_meaning,
         )
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
@@ -512,14 +522,27 @@ def main(
     if arguments.command == "serve":
         paths = ProductionPaths.for_home(Path.home())
         config = _private_state_config(arguments.config, paths)
-        paths.ensure_directories()
+        wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+        paths.ensure_directories(include_unit_directory=wants_unit_directory)
         paths.require_private_environment()
-        connection = paths.open_database(open_database, migrations=MIGRATIONS)
+        connection = paths.open_database(
+            open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+        )
+        # Resolved **once** and threaded into both consumers. The duplicate call this
+        # replaces was harmless while the only source was `os.environ`, which cannot change
+        # inside a running process: two reads were the same read. The private-file fallback is
+        # a file on disk, so two independent resolutions can straddle a credential rotation
+        # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
+        # ACL. Making it a parameter is what stops the pair coming apart.
         try:
+            # Inside the `try`, not above it: resolution raises on a partial environment or on
+            # a credential file that fails its guard, and the database is already open by then.
+            # Above the `try`, that exception skips `finally` and leaves the connection open.
+            serve_secrets = _resolve_serve_secrets(paths)
             asyncio.run(
                 _serve_with_reconciliation(
-                    load_secrets(),
-                    _private_boundary(config, connection, paths),
+                    serve_secrets,
+                    _private_boundary(config, connection, paths, serve_secrets),
                     serve_runner,
                     _RECONCILE_INTERVAL_SECONDS,
                     config.activity_poll_seconds,
@@ -704,11 +727,12 @@ def compose_backend(
     )
 
 
-def _private_boundary(config, connection, paths: ProductionPaths) -> ServiceComposition:
+def _private_boundary(
+    config, connection, paths: ProductionPaths, secrets: TelegramSecrets
+) -> ServiceComposition:
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal
-    secrets = load_secrets()
     store = SQLiteSessionStore(connection)
     # One lock map, shared by the two objects that write session state. See the note on the
     # ReconciliationService below: this single binding is the fix, and two instances here
@@ -1013,8 +1037,11 @@ def _run_surface(
     except ConfigError as error:
         print(error, file=sys.stderr)
         return 1
-    paths.ensure_directories()
-    paths.open_database(open_database, migrations=MIGRATIONS).close()
+    wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    paths.open_database(
+        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+    ).close()
     connection = leased_connection(config.database_path)
     request = None
     try:
@@ -1243,6 +1270,34 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     return completed.returncode == 0
 
 
+def _supervisor_for_host() -> ServiceSupervisor:
+    """Which supervisor actually runs this service here.
+
+    The one place the platform is decided. DEC-001 puts the *difference* in the adapters and
+    DEC-015 puts the *choosing* in a composition root, which is this file -- so `doctor` and
+    everything downstream ask the port a question and never learn which supervisor answered
+    it, except to report the name.
+
+    `sys.platform` rather than probing for an installed binary: the question is which
+    supervisor owns this host's user services, and a Mac with neither tool installed is still
+    a launchd host. Probing would answer "systemd" there the moment someone had a stray
+    `systemctl` on their PATH.
+    """
+    try:
+        if sys.platform == "darwin":
+            return LaunchdSupervisor()
+        return SystemdSupervisor()
+    except ValueError as error:
+        # The adapters refuse a home or interpreter they cannot render faithfully -- a colon
+        # that would split the plist PATH, a control character that would inject a unit
+        # directive. Those are real refusals and must not be swallowed, but they reach here
+        # from `serve` and the local surface too, neither of which is installing anything, and
+        # a bare ValueError there is a traceback rather than a diagnosis. `ConfigError` is the
+        # handled path every other bad-configuration answer already travels; the adapters
+        # cannot raise it themselves because ARCH-02 forbids them importing `config`.
+        raise ConfigError(f"this host cannot be described to its service supervisor: {error}")
+
+
 def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     """Verify only the private credential-file boundary; never read or print its values."""
     try:
@@ -1252,8 +1307,106 @@ def _telegram_credentials_are_private(paths: ProductionPaths) -> bool:
     return True
 
 
+def _credential_file_state(paths: ProductionPaths) -> dict[str, object]:
+    """Ask the in-process parser whether the credential file still resolves, without reading it out.
+
+    This is the check that makes retiring `EnvironmentFile=` safe to do at all. While systemd
+    read the file, its parser was the one that mattered and this one was exercised only on
+    macOS; afterwards ours is the only reader on both platforms. The two disagree about quoted
+    values, `;` comments, lines without `=`, backslash escapes and line continuations, so a
+    file that started the service yesterday can refuse to start it after the unit changes --
+    and the previous Telegram check would still report green, because it stats permissions
+    without parsing.
+
+    Nothing about the file's contents reaches the report: a diagnostic that prints the token to
+    explain that the token is wrong has done more damage than the fault it names.
+    """
+    try:
+        paths.require_private_environment()
+    except ConfigError:
+        # Already reported by the `telegram` component; named here so the two agree.
+        return credential_file_report(
+            readable=False, names_resolved=False, reason="credential_file_unavailable"
+        )
+    try:
+        _load_private_telegram_secrets(paths)
+    except ConfigError:
+        return credential_file_report(
+            readable=True, names_resolved=False, reason="credential_file_unresolved"
+        )
+    return credential_file_report(readable=True, names_resolved=True, reason=None)
+
+
+def _resolve_serve_secrets(
+    paths: ProductionPaths, *, environment: Mapping[str, str] | None = None
+) -> TelegramSecrets:
+    """Resolve the Telegram credential for a serving process, from either supported source.
+
+    The environment is tried first and the checked private file second, and that order is the
+    decision rather than an implementation detail.
+
+    **The original reason has since expired, and the ordering is now kept for a different one
+    -- recorded rather than quietly re-justified.** It was: on the Linux host the two sources
+    were the same path, because the unit's `EnvironmentFile=` named exactly `environment_path`,
+    so ordering could not change which values arrived, only which *parser* read them; env-first
+    kept the running host on systemd's parser and was said to "stop mattering the day
+    `EnvironmentFile=` leaves the unit". Task 2.0 was that day. No unit declares
+    `EnvironmentFile=` any more, so systemd injects nothing, the environment is normally empty
+    for a serving process, and on both platforms the file is what is actually read.
+
+    What the ordering does now is narrower and worth keeping: it lets an operator override the
+    file for one invocation without editing it -- exporting the three variables to reproduce a
+    fault, or to run against a second bot -- and it keeps any host that still injects them
+    (a hand-written unit, a shell wrapper, a container) working exactly as before rather than
+    being silently switched to a different source by an upgrade. Both are reasons to prefer an
+    explicit, per-process signal over a file on disk, which is the general form of the rule.
+
+    The fallback is what makes a launchd host possible at all. `launchd.plist(5)` has no
+    `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the
+    value inside the plist, where `launchctl print` reads it back. So on macOS nothing injects
+    the variables and the file is the only source; `require_private_environment` has always
+    enforced 0600, owner and regular-file-ness on it, by the same POSIX calls on both platforms
+    (no test runs on Darwin yet, so that is a claim about the code, not a measured one).
+
+    **A partial environment refuses rather than falling back**, and that distinction is the
+    reason this is a function rather than an `or`. Absent means nothing injected the variables,
+    which is what a launchd host looks like. Partial means something tried and got it wrong --
+    a typo'd variable name, a rotation that rewrote only the token line -- and the two are
+    indistinguishable to a check that merely asks whether all three arrived. Falling back there
+    would start the service on the *previous* credential and say nothing, which is strictly
+    worse than the pre-existing behaviour it would replace: both serve call sites used to reach
+    `load_secrets()` at its raising default, so any missing variable stopped the process.
+    Nothing downstream would catch it either -- `doctor`'s Telegram component checks the file's
+    permissions, not which credential the running service actually resolved.
+    """
+    values = os.environ if environment is None else environment
+    # **Membership, not truthiness.** A blank assignment -- `REMOTE_AGENTS_OWNER_CHAT_ID=` --
+    # is a line somebody wrote, and one upstream template variable going empty blanks all three
+    # at once. Asking whether any *value* is truthy answers "no" for that file exactly as it
+    # does for a host that injected nothing, so the resolver would fall back and serve the
+    # previous credential without a word. Asking whether the *key* is there separates "nothing
+    # ran" from "something ran and produced nothing".
+    if any(name in values for name in TELEGRAM_SECRET_VARIABLES):
+        # An injection mechanism is present and is expected to supply all three.
+        # `production=True` is what turns a gap -- missing or blank, which `load_secrets`
+        # already treats alike -- into a ConfigError naming the variables, rather than a silent
+        # fall-through to a different credential.
+        injected = load_secrets(values)
+        assert injected is not None
+        return injected
+    return _load_private_telegram_secrets(paths)
+
+
 def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
-    """Read the checked private EnvironmentFile for this read-only metadata audit."""
+    """Read the checked private credential file, for the audit *and* for a serving process.
+
+    It had one caller when it was written -- the read-only `telegram-ui-audit` -- and the
+    docstring said so. It now has two: `_resolve_serve_secrets` reaches it on any host where
+    nothing injected the variables, which is every launchd host. That makes this a live
+    credential path rather than a diagnostic one, so an error path loosened or a result cached
+    here on the assumption that only a diagnostic reads it would change what the running
+    service authenticates as.
+    """
     environment_path = paths.require_private_environment()
     environment: dict[str, str] = {}
     try:
@@ -1272,6 +1425,14 @@ def _load_private_telegram_secrets(paths: ProductionPaths) -> TelegramSecrets:
         name, separator, value = stripped.partition("=")
         if not separator:
             raise ConfigError("Telegram environment file contains an invalid assignment")
+        # A *matched* surrounding quote pair is stripped, because on the Linux host this file
+        # and the unit's `EnvironmentFile=` are the same path -- so systemd's parser reads it
+        # there and this one reads it on macOS, and the two disagreeing means identical bytes
+        # produce two different bot tokens. systemd unquotes; a bare `partition` would keep the
+        # quotes and authenticate as `"token"`, failing at runtime with nothing pointing back
+        # here. Unbalanced quotes are left alone rather than half-eaten.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
         environment[name] = value
     secrets = load_secrets(environment)
     assert secrets is not None
