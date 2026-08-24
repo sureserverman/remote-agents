@@ -17,11 +17,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
 from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
 from remote_agents.ports.service_supervisor import ServiceSupervisor, SupervisorKind
 
 SUPERVISOR_FACTORIES: Mapping[SupervisorKind, Callable[[], ServiceSupervisor]] = {
     SupervisorKind.SYSTEMD: SystemdSupervisor,
+    SupervisorKind.LAUNCHD: LaunchdSupervisor,
 }
 
 
@@ -30,4 +32,9 @@ def registered_supervisors() -> tuple[ServiceSupervisor, ...]:
     return tuple(factory() for factory in SUPERVISOR_FACTORIES.values())
 
 
-__all__ = ["SUPERVISOR_FACTORIES", "SystemdSupervisor", "registered_supervisors"]
+__all__ = [
+    "SUPERVISOR_FACTORIES",
+    "LaunchdSupervisor",
+    "SystemdSupervisor",
+    "registered_supervisors",
+]
