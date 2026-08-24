@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from remote_agents.config import ConfigError
+from remote_agents.config import TELEGRAM_SECRET_VARIABLES, ConfigError, TelegramSecrets
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +177,66 @@ class ProductionPaths:
             raise ConfigError("Telegram environment file must have mode 0600")
         return path
 
+    def write_private_environment(self, secrets: TelegramSecrets) -> Path:
+        """Write the credential file 0600, once, in a form its own reader will get back.
+
+        The mirror of `require_private_environment`, and it lives beside it because they are one
+        contract: that guard refuses anything but an owned, regular, 0600 file, so a writer that
+        left 0644 behind would produce a service that will not start and an operator who cannot
+        tell a wrong token from a wrong mode. `os.open` with `0o600` and `O_EXCL` is what makes
+        the mode true at creation rather than a `chmod` later -- there is no window in which the
+        file exists readable.
+
+        **It refuses rather than clobbers**, which is `install_agent_hooks`' rule applied to the
+        one file in this project whose contents cannot be regenerated. An operator re-running
+        onboarding to correct a path must not lose the token they pasted the first time, and
+        nothing here can tell a deliberate re-run from a mistake, so the refusal names the file
+        to remove and leaves the choice with them. `O_EXCL` makes that a property of the syscall
+        rather than of a check-then-write, so a second onboarding running concurrently loses the
+        race instead of the token.
+
+        **The values are checked against the parser that will read them back**, not against a
+        general idea of a safe string. `_load_private_telegram_secrets` splits on the first `=`,
+        skips `#` lines, and strips a *matched* surrounding quote pair -- the last because
+        systemd's `EnvironmentFile` read this same path on Linux and the two parsers had to agree
+        on identical bytes. So a quoted token round-trips without its quotes and authenticates as
+        something else, and a token holding a newline arrives as a second assignment. Both are
+        refused here, where the diagnosis is one sentence, rather than later as a login failure
+        with nothing pointing back at this file.
+        """
+        for name, value in zip(TELEGRAM_SECRET_VARIABLES, _secret_values(secrets), strict=True):
+            _refuse_a_value_the_parser_would_change(name, value)
+        self.ensure_directories(include_unit_directory=False)
+        self._reject_symlink_ancestors(self.environment_path)
+        rendered = "".join(
+            f"{name}={value}\n"
+            for name, value in zip(TELEGRAM_SECRET_VARIABLES, _secret_values(secrets), strict=True)
+        )
+        try:
+            descriptor = os.open(self.environment_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as error:
+            # "Something", not "a credential file": `O_EXCL` refuses whatever is at that path,
+            # and a directory or a FIFO left by an unrelated failure would otherwise be
+            # described to the operator as a credential they never wrote.
+            raise ConfigError(
+                f"something already exists at {self.environment_path}; "
+                "remove it first if you mean to write a credential file there"
+            ) from error
+        except OSError as error:
+            raise ConfigError(f"cannot write the credential file: {error}") from error
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(rendered)
+        except OSError as error:
+            # A write that fails part-way (a full disk is the ordinary case) leaves a 0600 file
+            # holding half a token -- and the refuse-rather-than-clobber rule above then blocks
+            # every retry with "already exists", sending the operator to delete a file they have
+            # no reason to believe is theirs to delete. Removing it here keeps the failure
+            # recoverable by re-running, which is what an operator will do first.
+            self.environment_path.unlink(missing_ok=True)
+            raise ConfigError(f"cannot write the credential file: {error}") from error
+        return self.environment_path
+
     def open_database(
         self,
         database_opener: Callable[[Path, Iterable[tuple[int, str]]], sqlite3.Connection],
@@ -196,3 +256,44 @@ class ProductionPaths:
         connection = database_opener(self.database_path, migrations=migrations)
         os.chmod(self.database_path, 0o600)
         return connection
+
+
+def _secret_values(secrets: TelegramSecrets) -> tuple[str, str, str]:
+    """The three values in the order `TELEGRAM_SECRET_VARIABLES` names them.
+
+    Zipped against that tuple rather than written out as three lines, so a fourth credential
+    variable cannot be added to the name list and silently left unwritten here -- the `strict=`
+    zip turns that into an exception instead of a file missing a value.
+    """
+    return (secrets.bot_token, str(secrets.owner_user_id), str(secrets.owner_chat_id))
+
+
+def _refuse_a_value_the_parser_would_change(name: str, value: str) -> None:
+    """Refuse any value that would not read back as itself."""
+    if not value.strip():
+        raise ConfigError(f"{name} must not be empty")
+    if value != value.strip():
+        # The reader strips each line before splitting, so surrounding whitespace is silently
+        # eaten. Refused rather than trimmed: a token the operator pasted with a stray space is
+        # a token they should be told about, not one this writer quietly edits.
+        raise ConfigError(f"{name} must not begin or end with whitespace")
+    if "\0" in value:
+        raise ConfigError(f"{name} must not contain a null byte")
+    if value.splitlines() != [value]:
+        # **Asked of the reader's own splitter, not of a hand-written list of characters.** The
+        # first version of this check refused `\n`, `\r` and `\0`, which is the set a reader
+        # expects to matter and is not the set that does: `str.splitlines` -- which is what
+        # `_load_private_telegram_secrets` splits the file with -- also breaks on `\v`, `\f`,
+        # `\x1c`, `\x1d`, `\x1e`, `\x85`, `\u2028` and `\u2029`. Measured:
+        # `"abc\x0bdef".splitlines()` is `["abc", "def"]`. So a token holding a vertical tab was
+        # written as one line, read back as two, and authenticated as its own truncated prefix
+        # -- silently, because the tail stripped to empty and was skipped as a blank line. That
+        # is the exact failure this function's docstring claims to prevent, reached through a
+        # character nobody thinks about.
+        #
+        # `!= [value]` rather than `len(...) > 1`, because a *trailing* boundary produces no
+        # final element: `"abc\x0b".splitlines()` is `["abc"]`, length one, and would have
+        # passed a count check while still truncating the token.
+        raise ConfigError(f"{name} must not contain a line break")
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        raise ConfigError(f"{name} must not be wrapped in quotes")

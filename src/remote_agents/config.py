@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -15,7 +15,17 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class TelegramSecrets:
-    bot_token: str
+    """The three credentials, with the one that is a secret kept out of the default repr.
+
+    `repr=False` on `bot_token` is not decoration. Onboarding constructs this type from a
+    prompt, a file and the environment, so it now travels through several error paths that did
+    not exist when only `serve` built it -- and one `logging.debug("resolved %r", secrets)`, one
+    f-string in an exception, or one uncaught traceback rendering its locals would print the
+    token verbatim, defeating every careful message this project writes elsewhere. Closing it on
+    the type closes it for every caller at once, rather than asking each future one to remember.
+    """
+
+    bot_token: str = field(repr=False)
     owner_user_id: int
     owner_chat_id: int
 

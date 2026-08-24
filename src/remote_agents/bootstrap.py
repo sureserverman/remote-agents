@@ -1271,6 +1271,89 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     return completed.returncode == 0
 
 
+def onboarding_secrets(
+    *,
+    token_file: Path | None,
+    owner_user_id: int | None,
+    owner_chat_id: int | None,
+    environment: Mapping[str, str],
+    ask: Callable[[str], str] | None,
+    ask_secretly: Callable[[str], str] | None,
+) -> TelegramSecrets:
+    """Resolve the three credentials from a flag, the environment, or a prompt -- in that order.
+
+    **There is deliberately no `--bot-token VALUE`, and its absence is the security decision in
+    this function.** On Linux `/proc/<pid>/cmdline` is world-readable, so a token passed as an
+    argument is disclosed to every process on the host for as long as onboarding runs, and it
+    lands in the operator's shell history besides. That is precisely the exposure the 0600 file
+    exists to prevent, arriving one command earlier. `--bot-token-file` names a path instead --
+    the value never becomes argv -- and a run driven by a supervisor or a script supplies all
+    three through the environment, which `load_secrets` already reads for `serve`.
+
+    The precedence is flag, then environment, then prompt, because a flag is what the operator
+    typed *this time* while an exported variable may be a rotation ago. A missing value with no
+    terminal to ask is a refusal naming the variable to supply, never a prompt into a closed
+    stdin: an unattended run that blocks forever on an invisible `getpass` is the worst of the
+    available failures, because nothing on screen says what it is waiting for.
+
+    **Nothing here renders the token.** It is read through `ask_secretly` (a `getpass`, wired by
+    the caller) and never through `ask`, and every error raised below names a *variable*, never a
+    value -- the error paths being where a credential is most likely to be printed by accident,
+    since they are the paths a fixture is least likely to cover.
+    """
+    names = TELEGRAM_SECRET_VARIABLES
+    token = _first_supplied(
+        _token_from_file(token_file),
+        environment.get(names[0]),
+        lambda: None if ask_secretly is None else ask_secretly("Telegram bot token: "),
+    )
+    user_id = _first_supplied(
+        None if owner_user_id is None else str(owner_user_id),
+        environment.get(names[1]),
+        lambda: None if ask is None else ask("Owner user id: "),
+    )
+    chat_id = _first_supplied(
+        None if owner_chat_id is None else str(owner_chat_id),
+        environment.get(names[2]),
+        lambda: None if ask is None else ask("Owner chat id: "),
+    )
+    resolved = dict(zip(names, (token, user_id, chat_id), strict=True))
+    missing = [name for name, value in resolved.items() if not value]
+    if missing:
+        raise ConfigError(f"missing required values: {', '.join(missing)}")
+    secrets = load_secrets(resolved)
+    assert secrets is not None
+    return secrets
+
+
+def _first_supplied(
+    flag: str | None, injected: str | None, asked: Callable[[], str | None]
+) -> str | None:
+    """Take the first source that answered, asking only if neither earlier one did.
+
+    A callable for the third, so a prompt is never raised for a value that was already supplied
+    -- which is what makes the fully-non-interactive path provably silent rather than silent by
+    luck.
+    """
+    for value in (flag, injected):
+        if value:
+            return value.strip()
+    answered = asked()
+    return None if answered is None else answered.strip()
+
+
+def _token_from_file(path: Path | None) -> str | None:
+    """Read a token out of a file the operator named, so the value never becomes argv."""
+    if path is None:
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        # Named without the path's contents: this file holds a credential, and a decode error
+        # from a binary file would otherwise put a fragment of it in the message.
+        raise ConfigError(f"cannot read the bot token file {path}") from error
+
+
 def detected_config(home: Path) -> str:
     """Render this host's configuration from the one thing onboarding actually knows: its home.
 
