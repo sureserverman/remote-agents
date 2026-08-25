@@ -123,3 +123,24 @@ def test_every_required_directory_is_absolute_and_contains_an_installed_artifact
         assert artifact.path.parent in required, (
             f"{artifact.path} is installed into a directory no one is told to create"
         )
+
+
+@_PARAMS
+def test_removal_can_never_sweep_the_operators_own_files(supervisor: ServiceSupervisor) -> None:
+    """The uninstaller takes away daemon definitions and cannot reach a config or a credential.
+
+    `remove_daemon` deletes every path `artifact_paths_to_remove` returns, so what that union may
+    contain is the whole of what an uninstall can destroy. Until this test, the guarantee that it
+    never contains the operator's own files rested entirely on docstring discipline -- and a
+    credential file deleted by an uninstaller is the one loss in this project that cannot be
+    undone, because its contents came from Telegram and not from anything on the host.
+
+    Checked against `ProductionPaths` rather than against a literal, so a future change to where
+    either file lives is checked too rather than silently escaping the assertion.
+    """
+    from remote_agents.production import ProductionPaths
+
+    paths = ProductionPaths.for_home(Path("/home/tester"))
+    operator_files = {paths.config_path, paths.environment_path, paths.database_path}
+
+    assert not operator_files & set(artifact_paths_to_remove(supervisor))

@@ -30,7 +30,9 @@ remote-agents onboard --install-daemon
 ```
 
 It probes the system dependencies and prints the exact command to install anything
-missing — running that command only after you confirm it. It generates
+missing — running that command only after you confirm it. It creates `~/dev`, the
+projects tree the generated config names (`--dev-root` if yours is elsewhere), since
+the config will not load without it. It generates
 `~/.config/remote-agents/config.toml` from your own home rather than copying
 `config/remote-agents.example.toml`, whose paths exist on no machine but the one it
 was written on. It asks for the three Telegram values and writes them to

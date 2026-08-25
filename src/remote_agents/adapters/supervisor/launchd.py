@@ -330,6 +330,15 @@ class LaunchdSupervisor:
         """
         return (self.plist_path.parent, self.log_directory)
 
+    def reload_command(self) -> tuple[str, ...]:
+        """Nothing, and empty is the answer rather than a gap.
+
+        launchd reads a plist at `bootstrap` time and caches no fragment the way systemd does,
+        so there is no reload verb to run and inventing one would mean naming a `launchctl`
+        subcommand that does something else. The installer skips an empty tuple.
+        """
+        return ()
+
     def install_command(self) -> tuple[str, ...]:
         """`bootstrap` the plist into the per-user GUI domain.
 

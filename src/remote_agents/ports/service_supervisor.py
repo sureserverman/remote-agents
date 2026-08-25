@@ -92,9 +92,10 @@ class SupervisorArtifact:
 class ServiceSupervisor(Protocol):
     """The four verbs and the two ownership questions, in one vocabulary.
 
-    Deliberately seven members. Each traces to something a caller needs: the goal names
+    Deliberately eight members. Each traces to something a caller needs: the goal names
     installing, removing, starting and observing; DEC-051 makes an installer name what it
-    owns *and* what it used to own; and `doctor` has to say which supervisor answered.
+    owns *and* what it used to own; `doctor` has to say which supervisor answered; and a
+    supervisor that caches what it read has to be told to read again.
     """
 
     kind: SupervisorKind
@@ -133,6 +134,24 @@ class ServiceSupervisor(Protocol):
 
         The installer creates these; nothing here does. A port that returns argv rather than
         running it returns paths rather than making them, for the same reason.
+        """
+        ...
+
+    def reload_command(self) -> tuple[str, ...]:
+        """Make the supervisor re-read a definition that changed on disk, or `()` if it need not.
+
+        The eighth member, added at Stage 2's gate because the vocabulary could not express a
+        real defect. systemd caches a loaded unit's fragment, and this project's own runbook has
+        always put `systemctl --user daemon-reload` between writing a unit file and enabling it
+        (`docs/operator-runbook.md:10`) -- while the installer wrote a changed unit and went
+        straight to `enable --now`, which can start the cached definition and report success. On
+        the upgrade path, where the whole point is that `ExecStart` moved, that is a silently
+        wrong success with `doctor` reporting green against the *old* process.
+
+        **`()` is a legitimate answer and launchd gives it.** A plist is read at `bootstrap`
+        time; there is no cached fragment and no reload verb, so an adapter with nothing to do
+        says so rather than inventing a command. The installer skips an empty tuple, which is why
+        this can be a plain member rather than an optional one.
         """
         ...
 

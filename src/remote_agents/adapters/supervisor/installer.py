@@ -23,6 +23,7 @@ parents.
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -127,6 +128,12 @@ def install_daemon(
     run(supervisor.remove_command())
     for artifact in changed:
         _write_privately(artifact.path, artifact.content)
+    # Between the write and the register, which is the only place it does anything: systemd
+    # would otherwise `enable --now` a fragment it had already cached, starting the definition
+    # this run just replaced. Skipped when the adapter has nothing to reload.
+    reload_argv = supervisor.reload_command()
+    if reload_argv:
+        run(reload_argv)
     code = run(supervisor.install_command())
     written = ", ".join(str(artifact.path) for artifact in (changed or artifacts))
     verb = "installed" if changed else "re-registered"
@@ -168,11 +175,18 @@ def remove_daemon(
     removed = [
         path for path in artifact_paths_to_remove(supervisor) if path.is_file() or path.is_symlink()
     ]
-    for path in removed:
-        path.unlink()
     if not removed:
         return DaemonOutcome(False, f"no daemon installed for {supervisor.kind.value}")
     swept = ", ".join(str(path) for path in removed)
+    try:
+        for path in removed:
+            path.unlink()
+    except OSError as error:
+        # Reported the way `install_daemon` reports a failed register, rather than raised. This
+        # loop had no handler at all, so a permission error -- or a concurrent deletion racing
+        # the check just above it -- came out as a traceback from the one command an operator
+        # runs when a host is already in a state they do not understand.
+        return DaemonOutcome(True, f"could not remove every daemon file: {error}", False)
     return DaemonOutcome(True, f"removed the {supervisor.kind.value} daemon from {swept}")
 
 
@@ -196,8 +210,17 @@ def _write_privately(path: Path, content: str) -> None:
     sweeps every adapter to prove it -- but a daemon definition still names paths inside the
     owner's private tree, and the mode costs nothing.
     """
-    temporary = path.with_name(f"{path.name}.partial")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # `mkstemp`, not a fixed `<name>.partial`. The fixed name was predictable, opened without
+    # `O_EXCL` or `O_NOFOLLOW`, and reused across runs, which cost three properties at once: a
+    # symlink planted there was **written through**, and `os.replace` then renamed the *link*, so
+    # the installed unit became a symlink to a file outside the private directory that the next
+    # run's byte comparison would read straight through -- a permanent redirection of `ExecStart`
+    # that `doctor` reports as healthy. An ordinary file pre-planted 0666 kept its mode, because
+    # `O_CREAT`'s mode is ignored for a file that already exists, which falsified this
+    # function's own guarantee. And two concurrent installs collided on the one name.
+    # `mkstemp` is `O_EXCL|O_NOFOLLOW`-equivalent, 0600 by construction, and unique per call.
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".partial")
+    temporary = Path(name)
     written = False
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:

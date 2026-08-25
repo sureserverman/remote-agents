@@ -224,6 +224,16 @@ class SystemdSupervisor:
         """The unit directory, which `install(1)` will not create on the way past."""
         return (self.unit_path.parent,)
 
+    def reload_command(self) -> tuple[str, ...]:
+        """`daemon-reload`, which this project's runbook has always put before `enable`.
+
+        systemd caches a loaded unit's fragment, so `enable --now` after a rewritten file can
+        start the definition it already had. `docs/operator-runbook.md:10` has carried this
+        between the install and the enable since the service first shipped; the generated-unit
+        path had dropped it.
+        """
+        return ("systemctl", "--user", "daemon-reload")
+
     def install_command(self) -> tuple[str, ...]:
         """Register the written unit and bring it up, as the runbook already documents."""
         return ("systemctl", "--user", "enable", "--now", UNIT_NAME)

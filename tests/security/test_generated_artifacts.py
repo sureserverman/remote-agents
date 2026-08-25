@@ -282,6 +282,9 @@ class _PoisonedSupervisor:
     def required_directories(self) -> tuple[Path, ...]:
         return ()
 
+    def reload_command(self) -> tuple[str, ...]:
+        return ()
+
     def install_command(self) -> tuple[str, ...]:
         return ("true",)
 

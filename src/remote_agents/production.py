@@ -227,7 +227,13 @@ class ProductionPaths:
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 handle.write(rendered)
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
+            # `UnicodeError` as well as `OSError`, because an unencodable value reaches the write
+            # rather than the open, and it is a `ValueError` -- so this handler, whose whole job
+            # is to leave no half-written credential behind, did not cover the one failure that
+            # actually left one. The check above now refuses such a value outright; this stays as
+            # the backstop, because the guarantee is "no partial file", not "no partial file from
+            # the causes we thought of".
             # A write that fails part-way (a full disk is the ordinary case) leaves a 0600 file
             # holding half a token -- and the refuse-rather-than-clobber rule above then blocks
             # every retry with "already exists", sending the operator to delete a file they have
@@ -297,3 +303,14 @@ def _refuse_a_value_the_parser_would_change(name: str, value: str) -> None:
         raise ConfigError(f"{name} must not contain a line break")
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
         raise ConfigError(f"{name} must not be wrapped in quotes")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        # On Linux `os.environ` decodes with `surrogateescape`, so a credential variable holding
+        # non-UTF-8 bytes arrives as lone surrogates -- legal in memory, refused by every
+        # encoder. The write then raised `UnicodeEncodeError`, which is a `ValueError` and not an
+        # `OSError`, so the handler that exists to unlink a half-written credential file never
+        # ran: a zero-byte 0600 `telegram.env` was left behind, which every later run then
+        # reported as a credential file it was keeping. Refused here, by name, because the
+        # exception's own message carries the offending character and a byte offset.
+        raise ConfigError(f"{name} must be valid UTF-8") from error

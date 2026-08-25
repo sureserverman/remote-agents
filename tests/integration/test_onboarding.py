@@ -396,6 +396,9 @@ class _FakeSupervisor:
     def required_directories(self) -> tuple[Path, ...]:
         return (self.artifact_path.parent, self.log_directory)
 
+    def reload_command(self) -> tuple[str, ...]:
+        return ("fake", "reload")
+
     def install_command(self) -> tuple[str, ...]:
         return ("fake", "install")
 
@@ -640,6 +643,26 @@ class TestTheDaemonInstall:
         assert upgraded.artifact_path.read_text(encoding="utf-8") == "unit-v2"
         assert outcome.changed
         assert supervisor.calls.index(("run", "fake", "remove")) < supervisor.calls.index(
+            ("run", "fake", "install")
+        )
+
+    def test_a_changed_definition_is_reloaded_between_the_write_and_the_register(
+        self, tmp_path: Path
+    ) -> None:
+        """systemd caches a loaded unit's fragment, so `enable --now` can start the old one.
+
+        This project's runbook has put `daemon-reload` between writing the file and enabling it
+        since the service first shipped; the generated-unit path had dropped it. On the upgrade
+        path -- where the whole point is that `ExecStart` moved -- that is a silently wrong
+        success, with `doctor` reporting green against the process it was meant to replace.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+
+        install_daemon(supervisor, run=self._runner(supervisor))
+
+        assert supervisor.calls.index(("run", "fake", "reload")) < supervisor.calls.index(
             ("run", "fake", "install")
         )
 
@@ -903,3 +926,177 @@ class TestOnboardingEndsWithTheDoctor:
 
         assert json.dumps(report, sort_keys=True) in capsys.readouterr().out
         assert json.dumps(report, sort_keys=True) in onboarded
+
+
+class TestWhatAFreshHostActuallyGets:
+    """The cases every other fixture in this file quietly manufactures for the product.
+
+    A gate evaluator found the Blocking defect below by running the command against an empty
+    `$HOME` -- something no test here did, because each fixture creates `~/dev` before calling
+    onboarding. The suite was building the precondition the product did not, which is the exact
+    shape of a test that cannot fail.
+    """
+
+    def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from remote_agents import bootstrap
+        from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+
+        home = tmp_path / "Users" / "tester"
+        home.mkdir(parents=True)
+        supervisor = _FakeSupervisor(home)
+        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(
+            bootstrap,
+            "_dependency_probe",
+            lambda: bootstrap.probe_dependencies(
+                ("tmux", "git"),
+                resolve=lambda name: Path("/usr/bin") / name,
+                run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
+            ),
+        )
+        for name, value in zip(
+            TELEGRAM_SECRET_VARIABLES, ("1234567:abcdefGH", "7", "11"), strict=True
+        ):
+            monkeypatch.setenv(name, value)
+        return home, supervisor
+
+    def test_a_home_with_no_projects_tree_gets_one_and_a_config_that_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The generated config names `~/dev`, and `load_config` requires it to exist.
+
+        Without this, onboarding wrote a config its own loader rejects, registered a daemon that
+        crash-looped against it under `Restart=on-failure`, and exited 1 naming no path -- on a
+        fresh Mac, which is the host this generator exists for. It is the same failure the
+        shipped example has, with the hardcoded home taken out and the missing directory left in.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.config import load_config
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        assert not (home / "dev").exists()
+
+        main(["onboard", "--install-daemon"])
+
+        assert (home / "dev").is_dir()
+        assert load_config(ProductionPaths.for_home(home).config_path).dev_root == home / "dev"
+
+    def test_a_named_projects_tree_is_used_instead_of_the_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator who keeps projects elsewhere says so, rather than getting a second tree."""
+        from remote_agents.bootstrap import main
+        from remote_agents.config import load_config
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        elsewhere = tmp_path / "work" / "code"
+
+        main(["onboard", "--install-daemon", "--dev-root", str(elsewhere)])
+
+        assert elsewhere.is_dir()
+        assert not (home / "dev").exists()
+        assert load_config(ProductionPaths.for_home(home).config_path).dev_root == elsewhere
+
+    def test_the_bot_token_flag_argparse_would_have_invented_is_refused_without_echoing_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """argparse accepts any unambiguous prefix, so `--bot-token` existed after all.
+
+        It was an abbreviation of `--bot-token-file`, so the value landed in a path variable and
+        was printed back in "cannot read the bot token file <token>" -- putting the credential in
+        argv, in shell history, and in the transcript people paste into issues. The whole point
+        of having no such flag was defeated by argparse inventing one.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch)
+
+        assert main(["onboard", "--bot-token", "1234567:supersecret"]) == 1
+
+        printed = capsys.readouterr()
+        assert "supersecret" not in printed.out
+        assert "supersecret" not in printed.err
+        assert "--bot-token-file" in printed.err
+
+    def test_a_token_file_that_does_not_exist_is_not_echoed_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A path that does not exist is overwhelmingly likely to *be* the token."""
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch)
+
+        assert main(["onboard", "--bot-token-file", "1234567:supersecret"]) == 1
+
+        printed = capsys.readouterr()
+        assert "supersecret" not in printed.out + printed.err
+
+    def test_a_config_path_standing_as_a_dangling_symlink_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`exists()` follows links and answers False for a broken one, so the write went through.
+
+        Measured before the fix: a dangling link at `config.toml` pointing outside the private
+        tree had a file created at the link's target, 0600, with `wrote …/config.toml` printed --
+        a boundary escape past the check `_reject_symlink_ancestors` exists to make.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        paths = ProductionPaths.for_home(home)
+        paths.ensure_directories(include_unit_directory=False)
+        victim = tmp_path / "victim"
+        paths.config_path.symlink_to(victim)
+
+        main(["onboard"])
+
+        assert not victim.exists()
+
+    def test_a_credential_path_that_is_a_directory_is_not_reported_as_kept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`exists()` says nothing about type, size or mode.
+
+        So a directory at `telegram.env` -- or the zero-byte file a failed write used to leave --
+        was reported as a credential file being kept, and the refusal written for exactly that
+        case was unreachable because the caller short-circuited before it.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        paths = ProductionPaths.for_home(home)
+        paths.ensure_directories(include_unit_directory=False)
+        paths.environment_path.mkdir()
+
+        assert main(["onboard"]) == 1
+
+        printed = capsys.readouterr()
+        assert "kept the existing" not in printed.out
+        assert "already exists" in printed.err
+
+    def test_a_token_that_is_not_utf8_is_refused_and_leaves_no_file_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`os.environ` decodes with `surrogateescape`, so non-UTF-8 bytes arrive as surrogates.
+
+        The write then raised `UnicodeEncodeError` -- a `ValueError`, not an `OSError` -- so the
+        handler that exists to unlink a half-written credential never ran, and a zero-byte 0600
+        `telegram.env` was left behind for every later run to report as a file it was keeping.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        monkeypatch.setenv(TELEGRAM_SECRET_VARIABLES[0], "1234567:ab\udcffcd")
+
+        assert main(["onboard"]) == 1
+
+        assert not ProductionPaths.for_home(home).environment_path.exists()
+        assert "valid UTF-8" in capsys.readouterr().err
