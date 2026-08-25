@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import os
@@ -74,10 +75,22 @@ if TYPE_CHECKING:
     # reach the bot — naming them here would undo that.
     from remote_agents.adapters.tui.context import TuiContext
     from remote_agents.adapters.tui.model import AttachRequest
+from remote_agents.adapters.supervisor.installer import (
+    DaemonInstallError,
+    install_daemon,
+    remove_daemon,
+)
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.dependencies import (
+    MISSING,
+    PackageManager,
+    confirm_and_install,
+    probe_dependencies,
+    render_remediation,
+)
 from remote_agents.application.doctor import (
     credential_file_report,
     production_doctor,
@@ -394,6 +407,19 @@ def main(
     subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
+    onboard_parser = subcommands.add_parser("onboard")
+    # Mutually exclusive, because the two are opposite intentions and the handler has to check
+    # one of them first: `--install-daemon --remove` silently removed and never installed, with
+    # nothing said. argparse refuses the pair before anything is composed.
+    onboard_daemon = onboard_parser.add_mutually_exclusive_group()
+    onboard_daemon.add_argument("--install-daemon", action="store_true")
+    onboard_daemon.add_argument("--remove", action="store_true")
+    onboard_parser.add_argument("--yes", action="store_true")
+    # A path, never a value: `/proc/<pid>/cmdline` is world-readable on Linux, so a token given
+    # as an argument is disclosed to every process on the host and kept in shell history.
+    onboard_parser.add_argument("--bot-token-file", type=Path)
+    onboard_parser.add_argument("--owner-user-id", type=int)
+    onboard_parser.add_argument("--owner-chat-id", type=int)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
@@ -420,6 +446,12 @@ def main(
             return 1
         print(outcome.summary)
         return 0
+    if arguments.command == "onboard":
+        try:
+            return _onboard(arguments)
+        except ConfigError as error:
+            print(error, file=sys.stderr)
+            return 1
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(probe_profiles(closed_profiles()))
@@ -1269,6 +1301,205 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
+
+
+def _onboard(arguments) -> int:
+    """Take a freshly installed package to a configured, registered service on this host.
+
+    The whole of onboarding is composition -- the dependency policy is in `application`, the
+    schema is in `config`, the private tree is in `production`, and the daemon is behind the
+    supervisor port -- so this function is where DEC-015 says it belongs and is deliberately not
+    a fifth place that knows how to do any of those things itself.
+
+    **It never clobbers what it did not write.** A config the operator has edited and a
+    credential they pasted are both left exactly as found, with a line saying so; a re-run is
+    what someone does when they are unsure what state a host is in, and it must be safe. The
+    daemon is the one thing this tool does own outright, and even that is only rewritten when the
+    definition actually changed.
+
+    `--remove` takes away the daemon and nothing else. The config and the credential are the
+    operator's data, and an uninstaller that deleted a bot token would be unrecoverable in the
+    one way that matters.
+    """
+    home = Path.home()
+    paths = ProductionPaths.for_home(home)
+    supervisor = _supervisor_for_host()
+    wants_unit_directory = supervisor.kind is SupervisorKind.SYSTEMD
+    if arguments.remove:
+        outcome = remove_daemon(supervisor, run=_run_command)
+        print(outcome.summary)
+        print(f"left alone: {paths.config_path} and {paths.environment_path}")
+        return 0
+    interactive = sys.stdin.isatty()
+    print("checking system dependencies:")
+    if _dependency_preflight(assume_yes=arguments.yes, interactive=interactive):
+        return 1
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    print(_written_or_kept(paths.config_path, lambda: detected_config(home)))
+    try:
+        print(_credential_summary(paths, arguments, interactive))
+    except ConfigError as error:
+        # Named without its cause's value: everything raised out of `onboarding_secrets` and
+        # `write_private_environment` names a variable rather than a value, and this is the one
+        # place that would undo that by printing whatever it caught.
+        print(error, file=sys.stderr)
+        return 1
+    if arguments.install_daemon:
+        try:
+            outcome = install_daemon(supervisor, run=_run_command)
+        except DaemonInstallError as error:
+            print(error, file=sys.stderr)
+            return 1
+        print(outcome.summary)
+        if not outcome.succeeded:
+            return 1
+        if supervisor.kind is SupervisorKind.LAUNCHD:
+            # Not a caveat in a document somewhere: `gui/<uid>` exists only once someone has
+            # logged in at the Mac's screen (owner decision, DEC-054), so a Mac that has rebooted
+            # and is sitting at the login window is a Mac where this service is legitimately
+            # absent. Unless onboarding says it here, that reads as a fault.
+            print("note: on macOS this service runs only while you are logged in at the screen")
+    return 0
+
+
+def _written_or_kept(path: Path, render) -> str:
+    """Write a generated file, or keep what is already there and say which happened."""
+    if path.exists():
+        return f"kept the existing {path}"
+    path.write_text(render(), encoding="utf-8")
+    os.chmod(path, 0o600)
+    return f"wrote {path}"
+
+
+def _credential_summary(paths: ProductionPaths, arguments, interactive: bool) -> str:
+    """Write the credential file, or report the one that is already private and readable."""
+    if paths.environment_path.exists():
+        return f"kept the existing {paths.environment_path}"
+    secrets = onboarding_secrets(
+        token_file=arguments.bot_token_file,
+        owner_user_id=arguments.owner_user_id,
+        owner_chat_id=arguments.owner_chat_id,
+        environment=os.environ,
+        ask=input if interactive else None,
+        ask_secretly=getpass.getpass if interactive else None,
+    )
+    return f"wrote {paths.write_private_environment(secrets)}"
+
+
+def _run_command(argv: tuple[str, ...]) -> int:
+    """Run one fixed local command and return its exit status, without a shell.
+
+    The sibling of `_command_succeeds`, and separate from it because the two answer different
+    questions: that one asks whether a probe passed and throws the status away, this one is what
+    an installer needs when it has to report *how* something failed. Output is inherited rather
+    than captured -- an operator watching `apt-get` or `systemctl` should see it work.
+    """
+    try:
+        return subprocess.run(argv, check=False, stdin=subprocess.DEVNULL, timeout=600).returncode
+    except (OSError, subprocess.SubprocessError):
+        # Same shape as `_command_succeeds`: a command that could not start is a command that
+        # failed, and the caller's own reporting is better than a traceback from here.
+        return 1
+
+
+def _package_manager_for_host() -> PackageManager:
+    """Which package manager installs system dependencies here.
+
+    A second platform question, deliberately not answered by re-reading the first. DEC-054 makes
+    `SupervisorKind` a label that nothing may branch on, and the correlation it would express is
+    false anyway: a systemd host may install with `dnf`, and Homebrew runs on Linux. Both
+    questions are decided here, in a composition root, which is DEC-015's rule.
+    """
+    return PackageManager.HOMEBREW if sys.platform == "darwin" else PackageManager.APT
+
+
+def _homebrew_is_installed() -> bool:
+    """Whether `brew` is on this host's PATH, answered as a real bool.
+
+    `render_remediation` takes this as a keyword with no default and reads it with `is not True`,
+    so a probe that answered with a path or a string would render a `brew install` for a host
+    with no `brew`. Coercing here is what makes that contract hold.
+    """
+    return shutil.which("brew") is not None
+
+
+def _dependency_preflight(*, assume_yes: bool, interactive: bool) -> int:
+    """Report what the host is missing, offer the exact fix, and re-probe rather than assume.
+
+    The re-probe is the point of the last three lines. `InstallAttempt.resolved` means the
+    installer reported success, which is not the same claim as "the dependency is there" -- brew
+    exits 0 for a formula that was already present, and an installer can succeed at installing
+    something other than what was asked for. So the answer onboarding acts on comes from looking
+    again, not from an exit status.
+    """
+    probe = _dependency_probe()
+    missing = [status.name for status in probe if status.state == MISSING]
+    for status in probe:
+        detail = status.version or status.note or "no version reported"
+        print(f"  {status.name}: {status.state} ({detail})")
+    if not missing:
+        return 0
+    remediation = render_remediation(
+        missing,
+        package_manager=_package_manager_for_host(),
+        homebrew_installed=_homebrew_is_installed(),
+    )
+    attempt = confirm_and_install(
+        remediation,
+        announce=lambda line: print(f"  to install what is missing: {line}"),
+        confirm=_ask_to_confirm if interactive else None,
+        run=_run_command,
+        assume_yes=assume_yes,
+    )
+    if not attempt.resolved:
+        print(f"  not installed ({attempt.outcome}); run the command above and re-run onboarding")
+        return 1
+    still_missing = [status.name for status in _dependency_probe() if status.state == MISSING]
+    if still_missing:
+        print(f"  the installer reported success but {', '.join(still_missing)} is still missing")
+        return 1
+    return 0
+
+
+def _dependency_probe():
+    """Probe this host's required executables, with the two effects supplied from here."""
+    return probe_dependencies(
+        resolve=lambda name: _resolved_executable(name),
+        run_version=lambda argv: (
+            subprocess.run(
+                argv,
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            ).stdout
+        ),
+    )
+
+
+def _resolved_executable(name: str) -> Path | None:
+    resolved = shutil.which(name)
+    return Path(resolved) if resolved is not None else None
+
+
+def _ask_to_confirm(prompt: str) -> bool:
+    """Ask a yes/no question and answer it with a **bool**, never with what was typed.
+
+    `confirm_and_install` takes consent as `is True` rather than as truthiness, because a
+    `confirm` that returned the operator's own text would have installed on "n" -- every plain
+    refusal is a non-empty string. This is the adapter that makes that contract hold: the typing
+    happens here, and only `y`/`yes` becomes `True`.
+    """
+    try:
+        answer = input(f"{prompt} [y/N] ")
+    except EOFError:
+        # A closed stdin is not a yes. Reached when a run that looked interactive turns out not
+        # to be -- a pipe, a CI shell -- and treating the exception as anything but a refusal
+        # would install without a human present.
+        return False
+    return answer.strip().lower() in ("y", "yes")
 
 
 def onboarding_secrets(

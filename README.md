@@ -23,30 +23,57 @@ process model the terminal and the service share.
 
 ## Production operation
 
-Keep both runtime files outside the repository and owner-readable only:
+One command sets the host up, on Ubuntu and on macOS alike:
 
 ```bash
-install -d -m 700 ~/.config/remote-agents ~/.local/state/remote-agents
-install -m 600 config/remote-agents.example.toml ~/.config/remote-agents/config.toml
-${EDITOR:-vi} ~/.config/remote-agents/telegram.env
+remote-agents onboard --install-daemon
 ```
 
-`telegram.env` contains these three values and nothing else:
+It probes the system dependencies and prints the exact command to install anything
+missing — running that command only after you confirm it. It generates
+`~/.config/remote-agents/config.toml` from your own home rather than copying
+`config/remote-agents.example.toml`, whose paths exist on no machine but the one it
+was written on. It asks for the three Telegram values and writes them to
+`~/.config/remote-agents/telegram.env` at mode 0600. And it writes and registers the
+daemon your platform actually uses: a systemd user unit on Linux, a LaunchAgent on
+macOS. Re-running it is safe — it keeps a config or a credential file you already
+have, and rewrites the daemon only if the definition changed.
 
-```text
-REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=replace-me
-REMOTE_AGENTS_OWNER_USER_ID=replace-me
-REMOTE_AGENTS_OWNER_CHAT_ID=replace-me
-```
+One side effect of re-running is worth knowing: `--install-daemon` means "register
+and start", so if the service is down it will be brought up, including when you
+stopped it yourself. There is no way to ask a supervisor "is this registered?"
+without either running the service or parsing output macOS documents as not being an
+interface, so a stopped service and an absent one look the same from here. Stop it
+again after onboarding, or use `--remove`.
 
-Install and start the user service:
+**The bot token is never a command-line argument.** On Linux `/proc/<pid>/cmdline` is
+world-readable and argv lands in shell history, so for an unattended run supply the
+three values through the environment, or point `--bot-token-file` at a file:
 
 ```bash
-install -m 600 systemd/remote-agents.service ~/.config/systemd/user/remote-agents.service
-systemctl --user daemon-reload
-systemctl --user enable --now remote-agents.service
-systemctl --user is-active remote-agents.service
-uv run --locked remote-agents doctor --json | python -m json.tool
+REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=… REMOTE_AGENTS_OWNER_USER_ID=… \
+  REMOTE_AGENTS_OWNER_CHAT_ID=… remote-agents onboard --install-daemon --yes
+```
+
+`remote-agents onboard --remove` unregisters the daemon and deletes the files it
+installed. Your config and your credential file are left alone.
+
+**On macOS the service runs only while you are logged in at the screen.** The
+LaunchAgent targets `gui/<uid>`, whose domain exists only after a console login — so a
+Mac sitting at the login window after a reboot is one where this service is
+legitimately absent rather than broken. That is an owner decision, recorded as DEC-054.
+
+`systemd/remote-agents.service` is still in the repository as the behavioural reference
+the generated unit is pinned against by
+`tests/contract/supervisor/test_systemd_supervisor.py`. Do not install it by hand: it
+carries a `%h` specifier and a hardcoded checkout path that the generated unit
+deliberately does not, and a host running it is running a definition no version of this
+tool would produce.
+
+Check the result at any time:
+
+```bash
+remote-agents doctor --json | python -m json.tool
 ```
 
 The configured owner sees `/launch`, `/resume`, `/sessions`, and `/help` in Telegram's command

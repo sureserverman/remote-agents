@@ -353,3 +353,469 @@ class TestWhereTheSecretComesFrom:
             )
 
         assert self._TOKEN not in str(raised.value)
+
+
+class _FakeSupervisor:
+    """A supervisor whose verbs are recorded rather than run, plus one artifact it owns.
+
+    Injected instead of the host's own, for the reason the port returns argv rather than
+    executing it: an installer test that ran `systemctl` would be a test of this host, would not
+    run at all on the Mac this plan exists for, and would leave a real unit behind when it failed.
+    """
+
+    from remote_agents.ports.service_supervisor import LivenessMeaning, SupervisorKind
+
+    kind = SupervisorKind.SYSTEMD
+    liveness_meaning = LivenessMeaning.RUNNING
+
+    def __init__(
+        self, home: Path, content: str = "unit-v1", retired: tuple[Path, ...] = ()
+    ) -> None:
+        self.home = home
+        self.content = content
+        self._retired = retired
+        self.calls: list[tuple[str, ...]] = []
+
+    @property
+    def artifact_path(self) -> Path:
+        return self.home / ".config" / "systemd" / "user" / "remote-agents.service"
+
+    @property
+    def log_directory(self) -> Path:
+        return self.home / ".local" / "state" / "remote-agents"
+
+    def artifacts(self):
+        from remote_agents.ports.service_supervisor import SupervisorArtifact
+
+        return (SupervisorArtifact(path=self.artifact_path, content=self.content),)
+
+    def retired_artifact_paths(self) -> tuple[Path, ...]:
+        return self._retired
+
+    def required_directories(self) -> tuple[Path, ...]:
+        return (self.artifact_path.parent, self.log_directory)
+
+    def install_command(self) -> tuple[str, ...]:
+        return ("fake", "install")
+
+    def remove_command(self) -> tuple[str, ...]:
+        return ("fake", "remove")
+
+    def start_command(self) -> tuple[str, ...]:
+        return ("fake", "start")
+
+    def liveness_command(self) -> tuple[str, ...]:
+        return ("fake", "liveness")
+
+
+class TestTheDaemonInstall:
+    """Installing through the port, and the two things that are only true if the order is right."""
+
+    def _runner(self, supervisor: _FakeSupervisor, codes: dict[str, int] | None = None):
+        """Record every argv and answer each verb with the exit status a test chose.
+
+        Answering everything `0` is what hid two defects from the first version of this class:
+        an `install_command` that fails, and a liveness probe that says the service is not
+        registered. Both are ordinary states of a real host.
+        """
+        codes = codes or {}
+
+        def run(argv: tuple[str, ...]) -> int:
+            supervisor.calls.append(("run", *argv))
+            return codes.get(argv[-1], 0)
+
+        return run
+
+    def test_the_daemon_artifact_is_written_and_then_registered(self, tmp_path: Path) -> None:
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+
+        outcome = install_daemon(supervisor, run=self._runner(supervisor))
+
+        assert supervisor.artifact_path.read_text(encoding="utf-8") == "unit-v1"
+        assert ("run", "fake", "install") in supervisor.calls
+        assert outcome.changed
+
+    def test_the_daemon_directories_exist_before_the_artifact_is_written(
+        self, tmp_path: Path
+    ) -> None:
+        """Sub-plan 1 left `required_directories()` with no caller, and this is why it has one.
+
+        launchd opens a job's `StandardOutPath` and `StandardErrorPath` *itself*, before the
+        process runs, so a plist naming a log directory the service would have created on startup
+        names one that does not exist yet on a fresh host -- the job fails to start for a reason
+        that has nothing to do with the service. The systemd side needs the same thing for a
+        duller reason: `install(1)` makes no parent directories.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        assert not supervisor.log_directory.exists()
+
+        install_daemon(supervisor, run=self._runner(supervisor))
+
+        assert supervisor.log_directory.is_dir()
+        assert supervisor.artifact_path.parent.is_dir()
+
+    def test_a_second_daemon_install_reports_already_current_and_registers_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """The `install-agent-hooks` wording, and the reason it must skip the command too.
+
+        `launchctl bootstrap` on an already-bootstrapped job exits non-zero, so an installer that
+        re-registered an unchanged definition would report a failure on the most ordinary thing
+        an operator does: run it twice.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(supervisor, run=self._runner(supervisor))
+
+        assert not outcome.changed
+        assert "already current" in outcome.summary
+        assert ("run", "fake", "install") not in supervisor.calls
+        assert ("run", "fake", "remove") not in supervisor.calls
+        assert ("run", "fake", "liveness") in supervisor.calls
+
+    def test_an_unchanged_daemon_that_is_down_is_started_rather_than_reinstalled(
+        self, tmp_path: Path
+    ) -> None:
+        """ "Already current" is a claim about the supervisor, not about a file's bytes.
+
+        The signal available is *running*, not *registered* -- the port is explicit that liveness
+        cannot answer the narrower question -- so a down service is either stopped or absent and
+        this cannot tell which. It tries the surgical verb first: `start_command()` starts an
+        already-registered service without re-registering it.
+
+        **The accepted trade, named because it is a side effect:** an operator who deliberately
+        stopped the service and then re-runs `--install-daemon` gets it started again. That is
+        what the command says -- it is `enable --now` on the systemd side -- so it is doing what
+        was asked rather than overriding them.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(supervisor, run=self._runner(supervisor, {"liveness": 1}))
+
+        assert outcome.changed
+        assert "started the already-current daemon" in outcome.summary
+        assert ("run", "fake", "start") in supervisor.calls
+        assert ("run", "fake", "install") not in supervisor.calls
+
+    def test_an_unchanged_daemon_that_cannot_be_started_is_registered_again(
+        self, tmp_path: Path
+    ) -> None:
+        """A job that is absent rather than merely stopped: a Mac before its console login.
+
+        `launchctl kickstart` cannot start a job that was never bootstrapped, so the failure of
+        the surgical verb is the signal that the definition needs registering rather than
+        starting -- which is the case an exit-code-only probe could not distinguish up front.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor, {"liveness": 1, "start": 1})
+        )
+
+        assert outcome.changed
+        assert "re-registered" in outcome.summary
+        assert ("run", "fake", "install") in supervisor.calls
+
+    def test_a_register_that_fails_is_reported_as_a_failure_not_as_an_install(
+        self, tmp_path: Path
+    ) -> None:
+        """A definition on disk with no service running is not a successful install.
+
+        The unregister's exit status is ignored on purpose -- nothing was registered on a first
+        install, which is not a failure. The register's is not, and treating them alike told an
+        operator it worked while `doctor` was about to disagree.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+
+        outcome = install_daemon(supervisor, run=self._runner(supervisor, {"install": 1}))
+
+        assert not outcome.succeeded
+        assert "refused to register" in outcome.summary
+
+    def test_removal_sweeps_a_dangling_symlink_left_at_an_artifact_path(
+        self, tmp_path: Path
+    ) -> None:
+        """`is_file()` follows the link and answers False for a broken one.
+
+        So a dangling symlink at an artifact path -- left by a partial failure, or by someone
+        else -- was neither removed nor reported by a sweep whose whole claim is that it takes
+        away everything any version of this tool ever installed. `unlink` removes the link
+        itself and never its target, so widening the test cannot make removal reach further.
+        """
+        from remote_agents.adapters.supervisor.installer import remove_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        supervisor.artifact_path.parent.mkdir(parents=True)
+        supervisor.artifact_path.symlink_to(tmp_path / "gone")
+
+        outcome = remove_daemon(supervisor, run=self._runner(supervisor))
+
+        assert not supervisor.artifact_path.is_symlink()
+        assert outcome.changed
+
+    def test_a_current_definition_that_can_neither_start_nor_register_says_so_exactly(
+        self, tmp_path: Path
+    ) -> None:
+        """The one branch that writes nothing and fails: it must not claim to have written.
+
+        Reached on a Mac sitting at the login window -- the definition is already correct,
+        `kickstart` cannot start an unbootstrapped job, and `bootstrap` has no `gui/<uid>` domain
+        to load it into. Telling the operator this run "wrote" the plist would send them to look
+        at a file it never touched.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+
+        outcome = install_daemon(
+            supervisor, run=self._runner(supervisor, {"liveness": 1, "start": 1, "install": 1})
+        )
+
+        assert not outcome.succeeded
+        assert "is current but" in outcome.summary
+        assert "wrote" not in outcome.summary
+
+    def test_a_daemon_directory_standing_as_a_symlink_is_refused(self, tmp_path: Path) -> None:
+        """`mkdir(exist_ok=True)` calls `is_dir()`, which resolves links.
+
+        So a link planted where a daemon directory belongs reports success and every write
+        afterwards lands wherever it points. It matters more here than for the spools this
+        project already guards: launchd creates a job's log files itself and does **not** apply
+        the plist's `Umask`, so they land 0644 and the directory's own mode is the only thing
+        keeping them private.
+        """
+        from remote_agents.adapters.supervisor.installer import DaemonInstallError, install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        supervisor.log_directory.parent.mkdir(parents=True)
+        supervisor.log_directory.symlink_to(elsewhere)
+
+        with pytest.raises(DaemonInstallError):
+            install_daemon(supervisor, run=self._runner(supervisor))
+
+        assert not (elsewhere / "remote-agents.service").exists()
+
+    def test_a_changed_daemon_definition_is_unregistered_before_it_is_registered_again(
+        self, tmp_path: Path
+    ) -> None:
+        """`launchctl bootstrap` will not replace a loaded job; the reload is bootout first.
+
+        The stop this implies is deliberate and is what sub-plan 1's drill measured: the managed
+        tmux sessions survive it, because `KillMode=process` and `AbandonProcessGroup` are what
+        keep a session alive when the control plane that launched it goes down.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+        upgraded = _FakeSupervisor(tmp_path, content="unit-v2")
+        upgraded.calls = supervisor.calls
+
+        outcome = install_daemon(upgraded, run=self._runner(upgraded))
+
+        assert upgraded.artifact_path.read_text(encoding="utf-8") == "unit-v2"
+        assert outcome.changed
+        assert supervisor.calls.index(("run", "fake", "remove")) < supervisor.calls.index(
+            ("run", "fake", "install")
+        )
+
+    def test_removing_the_daemon_unregisters_it_and_deletes_what_it_owns(
+        self, tmp_path: Path
+    ) -> None:
+        from remote_agents.adapters.supervisor.installer import install_daemon, remove_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        install_daemon(supervisor, run=self._runner(supervisor))
+        supervisor.calls.clear()
+
+        outcome = remove_daemon(supervisor, run=self._runner(supervisor))
+
+        assert not supervisor.artifact_path.exists()
+        assert ("run", "fake", "remove") in supervisor.calls
+        assert outcome.changed
+
+    def test_removing_a_daemon_that_was_never_installed_is_a_reported_no_op(
+        self, tmp_path: Path
+    ) -> None:
+        """Uninstalling from a host never installed to costs nothing and is not an error."""
+        from remote_agents.adapters.supervisor.installer import remove_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+
+        outcome = remove_daemon(supervisor, run=self._runner(supervisor))
+
+        assert not outcome.changed
+        assert "no daemon" in outcome.summary
+
+
+class TestTheOnboardCommandInstallingTheDaemon:
+    """`onboard --install-daemon` end to end, over an injected supervisor and runner.
+
+    The command is composed in `bootstrap`, which is where DEC-015 puts composition, and it
+    reaches the supervisor only through the port -- the Stage 2 gate greps `application/` and
+    `domain/` for a supervisor tool name precisely because a shortcut there would be invisible in
+    a passing test.
+    """
+
+    def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supervisor=None):
+        from remote_agents import bootstrap
+        from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+
+        home = tmp_path / "Users" / "tester"
+        (home / "dev").mkdir(parents=True, exist_ok=True)
+        supervisor = supervisor or _FakeSupervisor(home)
+        ran: list[tuple[str, ...]] = []
+
+        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
+        # The probe itself is patched rather than its two effects, because this class is about
+        # what the *command* does with a satisfied host -- Stage 1's own tests are where the
+        # probe's answers are pinned, and reproducing them here would be a second copy of them.
+        monkeypatch.setattr(
+            bootstrap,
+            "_dependency_probe",
+            lambda: bootstrap.probe_dependencies(
+                ("tmux", "git"),
+                resolve=lambda name: Path("/usr/bin") / name,
+                run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
+            ),
+        )
+        names = TELEGRAM_SECRET_VARIABLES
+        for name, value in zip(names, ("1234567:abcdefGH", "7", "11"), strict=True):
+            monkeypatch.setenv(name, value)
+        return home, supervisor, ran
+
+    def test_onboard_installs_the_daemon_and_says_what_it_did(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from remote_agents.bootstrap import main
+
+        home, supervisor, ran = self._arrange(tmp_path, monkeypatch)
+
+        code = main(["onboard", "--install-daemon"])
+
+        assert code == 0
+        assert supervisor.artifact_path.read_text(encoding="utf-8") == "unit-v1"
+        assert ("fake", "install") in ran
+        printed = capsys.readouterr().out
+        assert str(supervisor.artifact_path) in printed
+        assert "1234567" not in printed
+
+    def test_onboard_writes_the_config_and_the_credential_file_it_generated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from remote_agents.bootstrap import main
+        from remote_agents.config import load_config
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor, _ran = self._arrange(tmp_path, monkeypatch)
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        paths = ProductionPaths.for_home(home)
+        assert load_config(paths.config_path).dev_root == home / "dev"
+        assert paths.require_private_environment() == paths.environment_path
+
+    def test_a_second_onboard_of_the_same_daemon_is_a_no_op_that_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Re-running onboarding must be safe, because it is what an operator does when unsure."""
+        from remote_agents.bootstrap import main
+
+        home, _supervisor, ran = self._arrange(tmp_path, monkeypatch)
+        assert main(["onboard", "--install-daemon"]) == 0
+        ran.clear()
+        capsys.readouterr()
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "already current" in printed
+        assert ("fake", "install") not in ran
+
+    def test_onboard_on_a_launchd_host_says_the_service_needs_a_console_login(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`gui/<uid>` exists only once someone has logged in at the Mac's screen.
+
+        So a Mac that has rebooted and is sitting at the login window is a Mac where this service
+        is legitimately absent -- and unless onboarding says so, that reads as a fault. Owner
+        decision, recorded in DEC-054.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.ports.service_supervisor import SupervisorKind
+
+        home = tmp_path / "Users" / "tester"
+        (home / "dev").mkdir(parents=True)
+        supervisor = _FakeSupervisor(home)
+        supervisor.kind = SupervisorKind.LAUNCHD
+        self._arrange(tmp_path, monkeypatch, supervisor)
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        printed = capsys.readouterr().out
+        assert "logged in" in printed
+
+    def test_onboard_exits_non_zero_when_the_daemon_will_not_register(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A definition on disk with no service registered is not a successful onboarding.
+
+        Checked through `main` rather than only at the installer, because the exit status is
+        what a script or a bootstrap installer reads -- and the three lines carrying it out of
+        `install_daemon` are exactly the kind that look right and are never run.
+        """
+        from remote_agents import bootstrap
+        from remote_agents.bootstrap import main
+
+        home, supervisor, ran = self._arrange(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            bootstrap,
+            "_run_command",
+            lambda argv: ran.append(tuple(argv)) or (1 if argv[-1] == "install" else 0),
+        )
+
+        assert main(["onboard", "--install-daemon"]) == 1
+        assert "refused to register" in capsys.readouterr().out
+
+    def test_onboard_remove_takes_the_daemon_away_and_leaves_the_operators_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A daemon is this tool's to remove; a config and a credential are the operator's."""
+        from remote_agents.bootstrap import main
+        from remote_agents.production import ProductionPaths
+
+        home, supervisor, ran = self._arrange(tmp_path, monkeypatch)
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        assert main(["onboard", "--remove"]) == 0
+
+        paths = ProductionPaths.for_home(home)
+        assert not supervisor.artifact_path.exists()
+        assert ("fake", "remove") in ran
+        assert paths.config_path.exists()
+        assert paths.environment_path.exists()
