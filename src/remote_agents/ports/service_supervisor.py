@@ -138,6 +138,29 @@ class ServiceSupervisor(Protocol):
         """
         ...
 
+    def definition_path(self) -> Path:
+        """Which single file carries this version's definition of the service.
+
+        The third answer to "which file", and the narrowest. `artifacts()` says what is
+        written, `installed_artifact_paths()` says what is left behind, and this says which of
+        those an operator means when they ask *where the daemon is* -- the unit or the plist,
+        never the log files launchd opens or the enable-symlink systemd writes.
+
+        **It answers without rendering, for DEC-055's reason rather than by coincidence.** The
+        systemd adapter refuses at render time to describe an executable whose path holds a
+        quote, because systemd will not start one; a locate-the-file answer reached through
+        `artifacts()` would therefore be unavailable on exactly the host whose operator most
+        needs to find the file, which is the stranding that removal already had to be split in
+        two to escape. Asking *where* must never go through asking *what*, at any caller.
+
+        It is deliberately one path rather than a tuple. Both shipped adapters write exactly one
+        definition, the caller that motivated this member substitutes the answer into a shell
+        command where a second line would be a filename nothing can open, and a version that
+        wrote two definitions should be a reviewable edit here rather than a quietly longer
+        tuple -- the same reasoning that keeps `SupervisorKind` a closed set.
+        """
+        ...
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """Every path an *older* version installed, which this one must still remove.
 

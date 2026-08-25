@@ -365,3 +365,24 @@ def test_every_retired_unit_entry_is_swept_and_is_not_also_installed(tmp_path: P
 
     for relative in RETIRED_UNIT_PATHS:
         assert not (tmp_path / relative).exists(), f"{relative} was left stranded"
+
+
+def test_the_definition_path_answers_on_a_host_this_adapter_refuses_to_render_for() -> None:
+    """DEC-055's rule applied to a third caller: asking *where* must never go through *what*.
+
+    The adapter refuses at render time to describe an executable whose path holds a quote --
+    systemd will not start one -- and that refusal is right. It is also exactly why removal
+    stopped reading `artifacts()`: the one host this tool declines to install to must not be the
+    one host it can never uninstall from, and a `--print-daemon-path` built on the renderer
+    would reintroduce that stranding through the command an operator reaches for *because* their
+    host is in a state they do not understand.
+
+    Mutation-checked: implement `definition_path()` as `artifacts()[0].path` and this fails
+    while every other test in the file still passes.
+    """
+    awkward = SystemdSupervisor(interpreter=Path("/home/o'brien/bin/python3"), home=Path("/home/t"))
+
+    with pytest.raises(ValueError, match="quote or backslash"):
+        awkward.artifacts()
+
+    assert awkward.definition_path() == Path("/home/t/.config/systemd/user/remote-agents.service")

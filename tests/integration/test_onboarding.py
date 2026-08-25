@@ -419,6 +419,9 @@ class _FakeSupervisor:
         """
         return self.log_directory / "remote-agents.log"
 
+    def definition_path(self) -> Path:
+        return self.artifact_path
+
     def installed_artifact_paths(self) -> tuple[Path, ...]:
         return (*(artifact.path for artifact in self.artifacts()), self.log_path)
 
@@ -1515,3 +1518,116 @@ def test_an_install_followed_by_a_remove_leaves_the_private_tree_as_it_was_found
     )
     assert surviving == [], f"a daemon artifact survived removal: {surviving}"
     assert paths.config_path.exists() and paths.environment_path.exists()
+
+
+class TestAskingWhereTheDaemonDefinitionIs:
+    """`onboard --print-daemon-path` answers *where*, and does nothing else at all.
+
+    Two properties, and both are the point rather than tidiness.
+
+    It **asks where without asking what** (DEC-055). The supervisor port grew
+    `installed_artifact_paths()` precisely because reaching a path through the renderer made the
+    one host this tool declines to install to the one host it could never uninstall from; a
+    locate-the-file command built on `artifacts()` would rebuild that stranding in the command an
+    operator reaches for when their host is already in a state they do not understand.
+
+    It **does no onboarding**. Nothing is stubbed here beyond the home and the supervisor -- no
+    credential in the environment, no dependency probe, no doctor -- so an implementation that
+    fell through into onboarding proper cannot reach exit 0: it would refuse for a missing
+    secret in a non-interactive run. The absence of stubs is the assertion.
+    """
+
+    def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interpreter: str):
+        from remote_agents import bootstrap
+        from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
+
+        home = tmp_path / "home" / "tester"
+        home.mkdir(parents=True)
+        supervisor = SystemdSupervisor(interpreter=Path(interpreter), home=home)
+        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        return home, supervisor
+
+    def test_it_prints_exactly_one_path_and_that_path_is_the_definitions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """One line, because the caller is a shell substituting it into a command.
+
+        The Stage 2 gate greps `"$(remote-agents onboard --print-daemon-path)"`. A second line
+        would make that one argument holding a newline -- a filename nothing can open, so `grep`
+        would exit 2, and the check's leading `!` would turn that into a pass having read no
+        file at all. The gate would go green by failing to run.
+        """
+        from remote_agents.bootstrap import main
+
+        _home, supervisor = self._arrange(tmp_path, monkeypatch, "/opt/ra/bin/python3")
+
+        code = main(["onboard", "--print-daemon-path"])
+
+        printed = capsys.readouterr().out
+        assert code == 0
+        assert printed.splitlines() == [str(supervisor.definition_path())]
+
+    def test_it_writes_nothing_and_asks_the_supervisor_for_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A query that installs a config, or registers a service, is not a query.
+
+        `--print-daemon-path` is what a gate check and a puzzled operator both run, and either
+        would be running it on a host they are not ready to change.
+        """
+        from remote_agents import bootstrap
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch, "/opt/ra/bin/python3")
+        ran: list[tuple[str, ...]] = []
+        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
+
+        assert bootstrap.main(["onboard", "--print-daemon-path"]) == 0
+
+        capsys.readouterr()
+        assert ran == []
+        assert list(home.iterdir()) == []
+
+    def test_it_answers_on_a_host_the_renderer_refuses_to_describe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The DEC-055 stranding class, at the CLI boundary rather than at the port.
+
+        Mutation-checked: implement the flag as `supervisor.artifacts()[0].path` and the
+        renderer's refusal propagates out of the command, so the `code == 0` assertion below is
+        the one that fails, while the other two tests here still pass. The refusal's own
+        message is asserted where it belongs, on the adapter, in `test_systemd_supervisor.py`.
+        """
+        from remote_agents.bootstrap import main
+
+        _home, supervisor = self._arrange(tmp_path, monkeypatch, "/home/o'brien/bin/python3")
+
+        code = main(["onboard", "--print-daemon-path"])
+
+        printed = capsys.readouterr().out
+        assert code == 0
+        assert printed.splitlines() == [str(supervisor.definition_path())]
+
+    def test_it_refuses_to_be_combined_with_an_action_that_changes_the_host(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Asking and acting are opposite intentions, so argparse refuses the pair.
+
+        The same reasoning that already makes `--install-daemon --remove` an error: the handler
+        has to check one of them first, and whichever loses is silently ignored.
+
+        **The message is asserted, not just the exit code**, because exit 2 is also what an
+        *unrecognized* option produces -- so a version-of-this-test that checked the code alone
+        passed before the flag existed at all. It did, in this task's first RED run.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, "/opt/ra/bin/python3")
+
+        for other in ("--install-daemon", "--remove"):
+            with pytest.raises(SystemExit) as raised:
+                main(["onboard", "--print-daemon-path", other])
+            complaint = capsys.readouterr().err
+            assert raised.value.code == 2
+            assert "not allowed with" in complaint, complaint
+            assert "unrecognized" not in complaint, complaint

@@ -90,6 +90,9 @@ class _FakeSupervisor:
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         return (SupervisorArtifact(path=Path("/installed/now.conf"), content="body"),)
 
+    def definition_path(self) -> Path:
+        return Path("/installed/now.conf")
+
     def installed_artifact_paths(self) -> tuple[Path, ...]:
         return tuple(artifact.path for artifact in self.artifacts())
 

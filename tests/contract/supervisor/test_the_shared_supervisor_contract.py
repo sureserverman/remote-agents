@@ -196,6 +196,9 @@ class _SupervisorWithHistory:
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         return (SupervisorArtifact(path=self.current, content="a unit"),)
 
+    def definition_path(self) -> Path:
+        return self.current
+
     def installed_artifact_paths(self) -> tuple[Path, ...]:
         return (self.current,)
 
@@ -456,3 +459,32 @@ def test_a_retired_entry_cannot_name_a_file_outside_the_operators_home(
 
     with pytest.raises(ValueError):
         artifact_paths_to_remove(_Escaping(tmp_path))
+
+
+@_PARAMS
+def test_the_definition_path_is_one_of_the_paths_removal_sweeps(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """Whatever inspection names, removal must already know how to take away.
+
+    `definition_path()` exists so an operator -- and the gate that greps the file -- can ask
+    *where this host's daemon definition is* without asking what is in it. A path this project
+    is willing to name and not willing to sweep would be DEC-051's stranding arriving through
+    the one command whose whole job is to point at the file.
+    """
+    assert supervisor.definition_path() in set(supervisor.installed_artifact_paths())
+
+
+@_PARAMS
+def test_the_definition_path_is_where_the_definition_is_actually_rendered(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """The third answer to "which file", pinned to the other two wherever all three can be given.
+
+    `artifacts()` says what is written, `installed_artifact_paths()` says what is left behind,
+    and this says which of those is the definition. Three answers drift; this is what stops the
+    named one pointing somewhere the renderer never writes.
+    """
+    (artifact,) = supervisor.artifacts()
+
+    assert supervisor.definition_path() == artifact.path

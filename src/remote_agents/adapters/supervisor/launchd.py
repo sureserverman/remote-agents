@@ -341,6 +341,15 @@ class LaunchdSupervisor:
             *(self.log_directory / name for name in _LOG_NAMES),
         )
 
+    def definition_path(self) -> Path:
+        """The plist, and not the two log files launchd opens beside it.
+
+        The distinction this member exists for is at its sharpest here: `installed_artifact_paths`
+        deliberately answers wider than the definition, so on this adapter "where is the daemon"
+        and "what does removal sweep" are genuinely different sets rather than the same one.
+        """
+        return self.plist_path
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """The ledger's retired half; the reasoning is on `RETIRED_PLIST_PATHS`."""
         return tuple(self.home / relative for relative in RETIRED_PLIST_PATHS)

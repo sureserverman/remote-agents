@@ -424,6 +424,10 @@ def main(
     onboard_daemon = onboard_parser.add_mutually_exclusive_group()
     onboard_daemon.add_argument("--install-daemon", action="store_true")
     onboard_daemon.add_argument("--remove", action="store_true")
+    # In the same group, because asking is the opposite intention from acting and the handler
+    # has to check one of them first -- whichever lost would be silently ignored, which is the
+    # defect that put `--install-daemon` and `--remove` in a group to begin with.
+    onboard_daemon.add_argument("--print-daemon-path", action="store_true")
     onboard_parser.add_argument("--yes", action="store_true")
     # A path, never a value: `/proc/<pid>/cmdline` is world-readable on Linux, so a token given
     # as an argument is disclosed to every process on the host and kept in shell history.
@@ -1351,6 +1355,23 @@ def _onboard(arguments) -> int:
     paths = ProductionPaths.for_home(home)
     supervisor = _supervisor_for_host()
     wants_unit_directory = supervisor.kind is SupervisorKind.SYSTEMD
+    if arguments.print_daemon_path:
+        # **Before every other branch, and it changes nothing.** This is what an operator runs
+        # when they do not yet know what state the host is in, and what the upgrade contract's
+        # own check runs to read the definition back -- so it must not create a directory,
+        # write a config, or ask for a credential on the way to answering.
+        #
+        # `definition_path()`, never `artifacts()[0].path` (DEC-055): the systemd adapter
+        # refuses at render time to describe an executable whose path holds a quote, so an
+        # answer reached through the renderer would be unavailable on precisely the host whose
+        # operator most needs to find the file.
+        #
+        # One line, no prose around it. The Stage 2 gate substitutes this into
+        # `grep -rn … "$(…)"`, where a second line becomes one argument holding a newline --
+        # a filename nothing can open, so `grep` exits 2 and the check's leading `!` reports
+        # success having read no file at all.
+        print(supervisor.definition_path())
+        return 0
     if arguments.remove:
         try:
             outcome = remove_daemon(supervisor, run=_run_command)

@@ -123,3 +123,27 @@ fi
 say ""
 say "Installed. The executable is ${installed_bin}/remote-agents"
 say "If that directory is not on your PATH, run: uv tool update-shell"
+say ""
+# **Deliberately does not name `uv tool upgrade`.** Measured against uv 0.11.9 on 2026-08-25:
+# with `remote-agents @ git+<url>@v0.19.0` installed, that command prints "Nothing to upgrade"
+# and exits 0, because it honours the requirement the tool was installed with -- and this
+# installer writes a pinned tag into that requirement. Re-running this script at a newer tag
+# does move the install -- measured against this repository's own published tags: installing
+# at v0.16.0 and then at v0.19.0 replaced 0.16.0 with 0.19.0 and rewrote the receipt's rev --
+# because the spec itself changed. Sending an operator to a command that exits 0 and does
+# nothing is worse than saying nothing at all.
+say "To upgrade: re-run this installer. It pins a tag, so a newer tag is what moves the"
+say "  install; then run 'remote-agents onboard --install-daemon' again, because the daemon"
+say "  definition names the executable by absolute path and an install that moved leaves it"
+say "  pointing at the old one."
+say ""
+# **Order is the contract here, not a preference.** `uv tool uninstall` deletes the console
+# script (measured: it is gone from uv's bin directory afterwards), so an operator who takes
+# the tool away first has nothing left to run the uninstaller with -- while the daemon stays
+# registered naming an ExecStart that no longer exists, which under Restart=on-failure is a
+# service that keeps trying rather than one that is gone.
+say "To remove, in this order -- the daemon first, or nothing can take it away afterwards:"
+say "  remote-agents onboard --remove      # unregister the daemon and delete what it installed"
+say "  uv tool uninstall remote-agents     # then take the tool itself away"
+say ""
+say "To see where the daemon definition is: remote-agents onboard --print-daemon-path"

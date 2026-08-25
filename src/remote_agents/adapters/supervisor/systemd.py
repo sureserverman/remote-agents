@@ -264,6 +264,14 @@ class SystemdSupervisor:
             self.unit_path.parent.joinpath(*_WANTS_LINK),
         )
 
+    def definition_path(self) -> Path:
+        """The unit file, named without rendering it.
+
+        `unit_path` is arithmetic on the home, so this holds on a host whose interpreter path
+        `artifacts()` refuses -- which is the whole point of the member existing separately.
+        """
+        return self.unit_path
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """The ledger's retired half, joined to this host's unit directory.
 

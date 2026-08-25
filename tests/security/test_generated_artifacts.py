@@ -276,6 +276,9 @@ class _PoisonedSupervisor:
         ).decode("utf-8")
         return (SupervisorArtifact(path=Path("/tmp/poisoned.plist"), content=content),)
 
+    def definition_path(self) -> Path:
+        return Path("/tmp/poisoned.plist")
+
     def installed_artifact_paths(self) -> tuple[Path, ...]:
         return tuple(artifact.path for artifact in self.artifacts())
 

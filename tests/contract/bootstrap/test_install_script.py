@@ -9,7 +9,6 @@ The sandbox replaces `curl` and `uv` with recording stubs on `PATH` and lets the
 """
 
 import hashlib
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -229,7 +228,9 @@ def test_verification_works_on_a_host_with_shasum_but_no_sha256sum(tmp_path: Pat
     _, env = _sandbox(tmp_path, uv_present=False)
     macos_like = tmp_path / "macos-bin"
     macos_like.mkdir()
-    for tool in ("bash", "mktemp", "awk", "rm", "sh", "shasum", "chmod", "mkdir", "touch", "printf"):
+    for tool in (
+        "bash", "mktemp", "awk", "rm", "sh", "shasum", "chmod", "mkdir", "touch", "printf"
+    ):
         found = shutil.which(tool)
         if found:
             (macos_like / tool).symlink_to(found)
@@ -311,3 +312,56 @@ def test_the_onboard_handoff_puts_no_credential_on_the_command_line(tmp_path: Pa
     invocation = Path(env["REMOTE_AGENTS_LOG"]).read_text(encoding="utf-8")
 
     assert invocation.strip() == "onboard", f"passed more than the subcommand: {invocation!r}"
+
+
+def test_the_script_tells_the_operator_how_to_upgrade_without_naming_a_command_that_cannot(
+    tmp_path: Path,
+) -> None:
+    """The upgrade path for a pinned install is re-running this script -- not `uv tool upgrade`.
+
+    Measured against uv 0.11.9 on 2026-08-25 rather than reasoned about: with `remote-agents @
+    git+<url>@v0.19.0` installed, `uv tool upgrade remote-agents` prints "Nothing to upgrade"
+    and exits 0, because it honours the requirement the tool was installed with and that
+    requirement pins a tag. Re-running this script at a newer tag *does* move the install:
+    against this repository's own published tags, installing at `v0.16.0` and then at
+    `v0.19.0` replaced `0.16.0` with `0.19.0` and rewrote the receipt's `rev` -- because the
+    spec itself changed. Both tags are in this repo, so the measurement is reproducible here.
+
+    So the failure this pins is a script that sends an operator to a command which exits 0 and
+    does nothing, leaving them believing they upgraded.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 0, result.stderr
+    assert "uv tool upgrade" not in result.stdout, "points at a no-op for a pinned install"
+    assert "re-run" in result.stdout.lower(), "never says how to upgrade"
+
+
+def test_the_script_documents_removal_daemon_first_because_the_other_order_strands_it(
+    tmp_path: Path,
+) -> None:
+    """Order, not presence -- and the order is the whole content of the uninstall contract.
+
+    `uv tool uninstall remote-agents` deletes the console script (measured 2026-08-25: the
+    executable is gone from uv's bin directory afterwards). An operator who runs it first has
+    nothing left to run `onboard --remove` with, while the daemon definition stays registered
+    naming an `ExecStart` that no longer exists -- which under `Restart=on-failure` is a service
+    that keeps trying rather than one that is simply gone. That is DEC-051's stranding arriving
+    through the package manager instead of through a dropped ledger entry.
+
+    A test asserting both commands are merely *mentioned* would pass on the order that strands
+    the host, which is the only order worth testing for.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env, "--no-onboard")
+    printed = result.stdout
+
+    assert result.returncode == 0, result.stderr
+    assert "onboard --remove" in printed, "never says how to remove the daemon"
+    assert "uv tool uninstall remote-agents" in printed, "never says how to remove the tool"
+    assert printed.index("onboard --remove") < printed.index("uv tool uninstall remote-agents"), (
+        "documents removing the tool before the daemon, which strands the daemon"
+    )
