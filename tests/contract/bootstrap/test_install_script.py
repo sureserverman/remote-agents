@@ -9,6 +9,9 @@ The sandbox replaces `curl` and `uv` with recording stubs on `PATH` and lets the
 """
 
 import hashlib
+import os
+import pty
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -92,6 +95,10 @@ def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]
     installed.write_text(
         "#!/bin/sh\n"
         'echo "$@" >> "$REMOTE_AGENTS_LOG"\n'
+        'if [ -n "${STUB_TTY_REPORT:-}" ]; then\n'
+        '  if [ -t 0 ]; then echo tty > "$STUB_TTY_REPORT";\n'
+        '  else echo not-a-tty > "$STUB_TTY_REPORT"; fi\n'
+        "fi\n"
         'if [ -n "${STUB_STDIN_LOG:-}" ]; then cat > "$STUB_STDIN_LOG"; fi\n'
         'exit "${STUB_ONBOARD_EXIT:-0}"\n',
         encoding="utf-8",
@@ -108,6 +115,7 @@ def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]
         "INSTALLER_RAN_MARKER": str(tmp_path / "installer-ran"),
         "FAKE_PAYLOAD": FAKE_INSTALLER,
         "UV_STUB_PATH": str(uv_stub_path),
+        "STUB_TTY_REPORT": str(tmp_path / "stub-saw-tty"),
     }
     (tmp_path / "home").mkdir()
     return bin_dir, env
@@ -590,3 +598,143 @@ def test_the_handoff_does_not_hand_the_child_the_rest_of_the_installer(tmp_path:
 
     assert result.returncode == 0, result.stderr
     assert drained.read_text(encoding="utf-8") == "", "the child was handed the installer's tail"
+
+
+def _run_with_a_terminal(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    """Run the script with a REAL tty on stdin, so `[ -t 0 ]` takes its other branch.
+
+    Every other test here drives the script through `subprocess.run(..., capture_output=True)`,
+    where stdin is not a terminal -- so the whole tty branch of the onboard handoff went
+    unexercised. A reviewer proved that was a live gap rather than a tidy one: dropping
+    `--install-daemon`, and separately dropping the status capture, from the tty branch alone
+    left all twenty-five tests green. That is the headline defect of this stage reintroduced on
+    exactly the branch the script's own header tells an operator to prefer.
+    """
+    primary, secondary = pty.openpty()
+    try:
+        return subprocess.run(
+            ["bash", str(SCRIPT), *args],
+            env=env,
+            stdin=secondary,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        os.close(primary)
+        os.close(secondary)
+
+
+def test_a_terminal_run_also_asks_for_the_daemon(tmp_path: Path) -> None:
+    """The flag has to be on both branches, and only one of them was ever run."""
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run_with_a_terminal(env)
+
+    assert result.returncode == 0, result.stderr
+    invocation = Path(env["REMOTE_AGENTS_LOG"]).read_text(encoding="utf-8").strip()
+    assert invocation == "onboard --install-daemon"
+
+
+def test_a_terminal_run_also_survives_a_failed_onboarding_and_reports_it(tmp_path: Path) -> None:
+    """Status capture, pinned on the branch a saved-and-run invocation actually takes."""
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["STUB_ONBOARD_EXIT"] = "4"
+
+    result = _run_with_a_terminal(env)
+
+    assert result.returncode == 4
+    assert "onboard --remove" in result.stdout, "the contract was skipped on the tty branch"
+    assert "onboarding exited 4" in result.stdout
+
+
+def test_a_terminal_run_keeps_the_terminal_for_onboarding_to_prompt_on(tmp_path: Path) -> None:
+    """The redirect must be conditional, not unconditional.
+
+    Closing the piped-stdin hazard by always passing `</dev/null` would take the terminal away
+    from the one invocation that has one -- and onboarding needs it, because that is how an
+    operator who did not pre-set the credentials is asked for them.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run_with_a_terminal(env)
+
+    assert result.returncode == 0, result.stderr
+    assert Path(env["STUB_TTY_REPORT"]).read_text(encoding="utf-8").strip() == "tty"
+
+
+def test_the_verified_line_names_the_committed_pin_when_nothing_overrode_it(
+    tmp_path: Path,
+) -> None:
+    """The default wording, which is the one the operator normally sees, was unasserted.
+
+    Only the override wording was pinned, so reverting this branch to a bare "Verified." --
+    precisely the claim that was judged to overstate what the script can know -- passed every
+    test. A message is a behavioural claim like any other.
+    """
+    _, env = _sandbox(tmp_path, uv_present=False)
+    # No preimage of the real digest exists to hand a stub curl, so the constant is what moves:
+    # a copy of the script whose *committed* pin is the sandbox payload's. The branch under
+    # test is "did the pin come from the environment", and leaving the variable unset -- which
+    # `_sandbox` does -- is what selects it.
+    committed = re.sub(
+        r"(REMOTE_AGENTS_UV_INSTALLER_SHA256:=)[0-9a-f]{64}",
+        rf"\g<1>{FAKE_INSTALLER_SHA}",
+        SCRIPT.read_text(encoding="utf-8"),
+    )
+    script_copy = tmp_path / "install-with-a-different-committed-pin.sh"
+    script_copy.write_text(committed, encoding="utf-8")
+    assert FAKE_INSTALLER_SHA in script_copy.read_text(encoding="utf-8"), "pin substitution failed"
+    assert "REMOTE_AGENTS_UV_INSTALLER_SHA256" not in env, "the override branch would be taken"
+
+    result = subprocess.run(
+        ["bash", str(script_copy), "--no-onboard"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "against the digest committed to this repository" in result.stdout
+    assert "supplied in the environment" not in result.stdout
+
+
+def test_the_fetched_installer_is_not_handed_the_rest_of_this_script(tmp_path: Path) -> None:
+    """The same stdin hazard as the onboard handoff, on the path where it costs more.
+
+    This is the clean-host branch: `uv` is absent, so the child is third-party code this
+    project did not write, and it runs *before* anything is installed. Reproduced before the
+    fix by giving the payload a `cat`: a piped run swallowed the entire remainder of this
+    script, so nothing was installed, nothing onboarded, no contract printed -- and the script
+    exited 0. A silent success is worse than the abort that was fixed first, which at least
+    propagated a status.
+
+    Latent today, because the pinned installer touches stdin only through a heredoc. The header
+    documents rolling that pin forward, which is exactly when "latent" stops being a defence.
+    """
+    drained = tmp_path / "installer-stdin"
+    payload = (
+        "#!/bin/sh\n"
+        'touch "$INSTALLER_RAN_MARKER"\n'
+        f'cat > "{drained}"\n'
+        'mkdir -p "$HOME/.local/bin"\n'
+        'cp "$UV_STUB_PATH" "$HOME/.local/bin/uv"\n'
+        'chmod +x "$HOME/.local/bin/uv"\n'
+    )
+    _, env = _sandbox(tmp_path, uv_present=False)
+    env["FAKE_PAYLOAD"] = payload
+    env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = hashlib.sha256(payload.encode()).hexdigest()
+
+    result = subprocess.run(
+        ["bash", "-s", "--", "--no-onboard"],
+        input=SCRIPT.read_text(encoding="utf-8"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert Path(env["INSTALLER_RAN_MARKER"]).exists(), "the installer never ran"
+    assert drained.read_text(encoding="utf-8") == "", "the installer ate this script's tail"
+    assert "Installed. The executable is" in result.stdout, "the script was truncated"

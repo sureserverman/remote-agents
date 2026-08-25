@@ -25,7 +25,14 @@
 # Save it and run it in a terminal instead, and onboarding will prompt for the credentials.
 #
 # Prerequisites this script needs and does not install: `curl` (implied -- it is how you got
-# here), and `git`, which uv shells out to for a `git+https://` install.
+# here), `git`, which uv shells out to for a `git+https://` install, and `tmux`, which
+# onboarding requires and will not install without being asked.
+#
+# THE UNATTENDED FORM NEEDS TMUX ALREADY PRESENT. This script deliberately does not pass
+# `--yes` to onboarding, so on a bare image onboarding prints the `apt-get`/`brew` command and
+# stops rather than escalating privileges on its own -- correct, and it means a piped run on a
+# host without tmux ends at exit 1 with nothing registered. Install tmux in the provisioning
+# step before this one, or run the saved script in a terminal and answer the prompt.
 #
 # What this script trusts, stated plainly because it fetches code and runs it:
 #
@@ -186,7 +193,18 @@ ensure_uv() {
   else
     say "Verified the fetched installer against the digest committed to this repository."
   fi
-  sh "${installer_temporary_file}"
+  # Same hazard as the onboard handoff below, on a path where it matters MORE: this is the
+  # clean-host branch, the child is code this project did not write, and the failure is
+  # silent. Reproduced with a payload containing `cat`: a piped run swallowed the entire
+  # remaining 5648 bytes of this script, so nothing was installed, nothing was onboarded, no
+  # contract printed -- and the script exited 0. The pinned 0.12.5 installer touches stdin
+  # only through a heredoc today, so this is latent; the header documents rolling that pin
+  # forward, which is exactly when latent stops being a defence.
+  if [ -t 0 ]; then
+    sh "${installer_temporary_file}"
+  else
+    sh "${installer_temporary_file}" </dev/null
+  fi
 
   # `uv` lands in ~/.local/bin, which is not on a fresh login shell's PATH and is not on
   # macOS's _PATH_STDPATH at all, so this process cannot see it yet.
@@ -260,10 +278,17 @@ else
   # the script right here, and every line below -- where the executable is, how to upgrade, the
   # order removal has to happen in -- never printed. The operator who most needs that guidance
   # is exactly the one whose onboarding just failed.
+  # One call site names the command and its flag; the branches differ only in the redirect.
+  # Spelled twice, a reviewer's mutation showed `--install-daemon` could be dropped from the
+  # tty branch alone and every test stayed green -- the headline defect of this gate,
+  # reintroduced on the one branch the header tells operators to prefer.
+  run_onboarding() {
+    "${installed_bin}/remote-agents" onboard --install-daemon
+  }
   if [ -t 0 ]; then
-    "${installed_bin}/remote-agents" onboard --install-daemon || onboard_status=$?
+    run_onboarding || onboard_status=$?
   else
-    "${installed_bin}/remote-agents" onboard --install-daemon </dev/null || onboard_status=$?
+    run_onboarding </dev/null || onboard_status=$?
   fi
 fi
 
