@@ -345,3 +345,33 @@ def test_the_launchd_ledger_covers_the_log_files_launchd_creates_itself(tmp_path
     survivors = sorted(path.name for path in supervisor.log_directory.iterdir())
     assert survivors == [], f"the state directory still holds daemon output: {survivors}"
     assert not supervisor.plist_path.exists()
+
+
+def test_every_retired_plist_entry_is_swept_and_is_not_also_installed(tmp_path: Path) -> None:
+    """The launchd counterpart, which was missing.
+
+    The systemd side got a per-entry sweep when the `== ()` assertion was replaced; on this side
+    the old assertion was deleted and nothing took its place, so the commit describing the change
+    described it as applying to both when it applied to one. Vacuous while the ledger is empty,
+    by construction, and real the moment an entry appears -- which is the point of iterating the
+    ledger rather than asserting its length.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+    from remote_agents.adapters.supervisor.launchd import RETIRED_PLIST_PATHS
+
+    supervisor = LaunchdSupervisor(
+        interpreter=tmp_path / "venv" / "bin" / "python3",
+        home=tmp_path,
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+    installed = set(supervisor.installed_artifact_paths())
+    for path in supervisor.retired_artifact_paths():
+        assert path not in installed, f"{path} is in both halves of the ledger"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("a plist an older version installed", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    for relative in RETIRED_PLIST_PATHS:
+        assert not (tmp_path / relative).exists(), f"{relative} was left stranded"

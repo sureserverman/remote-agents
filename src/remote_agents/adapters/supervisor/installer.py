@@ -163,8 +163,12 @@ def remove_daemon(
     outside that union is touched -- a file that merely shares the directory was written by
     somebody else, and this installer has no way to give it back.
 
-    The unregister command's exit status is ignored for the reason it is ignored on install: a
-    host that was never installed to is not a failure, it is the answer.
+    The unregister command's exit status is ignored **only when nothing was removed** -- a host
+    that was never installed to is not a failure, it is the answer, and `systemctl --user
+    disable` on a unit that was never enabled exits non-zero. Where files *were* removed it is
+    consulted, because deleted files plus a supervisor that still holds the service is not a
+    completed removal. (This paragraph said the status was ignored outright, which its own body
+    had stopped doing.)
     """
     unregistered = run(supervisor.remove_command())
     # `is_file()` alone follows the link and answers False for a broken one, so a dangling

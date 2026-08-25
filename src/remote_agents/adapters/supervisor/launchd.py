@@ -342,7 +342,7 @@ class LaunchdSupervisor:
         )
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
-        """The ledger's retired half; the reasoning is on `RETIRED_PLIST_NAMES`."""
+        """The ledger's retired half; the reasoning is on `RETIRED_PLIST_PATHS`."""
         return tuple(self.home / relative for relative in RETIRED_PLIST_PATHS)
 
     def required_directories(self) -> tuple[Path, ...]:

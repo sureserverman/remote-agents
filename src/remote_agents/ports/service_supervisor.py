@@ -234,9 +234,31 @@ def artifact_paths_to_remove(supervisor: ServiceSupervisor) -> tuple[Path, ...]:
     (an adapter mid-migration naming the same file twice) is removed once.
     """
     seen: dict[Path, None] = {}
+    home = getattr(supervisor, "home", None)
     # `installed_artifact_paths()`, not `artifacts()`. Rendering can refuse -- and on the one
     # host where it does, this function is what an operator needs most.
     installed = supervisor.installed_artifact_paths()
     for path in (*installed, *supervisor.retired_artifact_paths()):
+        # **The containment the adapters' docstrings claim, enforced where the sweep is built.**
+        # Both said a retired entry "can never name a file outside the operator's own tree"
+        # because entries are joined to home -- and `Path(home) / "/etc/hosts"` is `/etc/hosts`,
+        # while `../escapee` escapes too. A reviewer planted an absolute retired entry and
+        # `remove_daemon` deleted a file in another tree. A stated guarantee in file-deleting
+        # code, backed by nothing, is worse than no guarantee: it is why nobody checks.
+        if home is not None and not _resolved(path).is_relative_to(_resolved(home)):
+            raise ValueError(f"a removable artifact must stay under the operator's home: {path}")
         seen.setdefault(path, None)
     return tuple(seen)
+
+
+def _resolved(path: Path) -> Path:
+    """Normalise without touching the filesystem, so `..` cannot walk out of the check.
+
+    `is_relative_to` is a string comparison: it answers True for `<home>/../escapee`, which is
+    outside the home by every meaning except the one it compares. `os.path.normpath` collapses
+    the traversal; `Path.resolve()` is avoided because it follows symlinks and would make the
+    answer depend on what happens to exist.
+    """
+    import os
+
+    return Path(os.path.normpath(path))

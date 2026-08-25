@@ -174,7 +174,15 @@ def load_config(path: Path) -> AppConfig:
         # one matters independently: `serve`, `tui` and `add-project` all reach here, and a
         # non-UTF-8 config crashed each of them with a decode traceback instead of the
         # `ConfigError` every other malformed-config path produces.
-        raise ConfigError(_unreadable(path, error)) from error
+        # `from None` when the path is not one, deliberately breaking the exception chain:
+        # `raise ... from error` keeps the cause, and Python prints the cause *above* the message
+        # -- so a redacted "the path is not shown" was printed underneath a
+        # `FileNotFoundError: … '<token>'` that showed it. Redacting a message while the
+        # traceback repeats it is not redaction. When the file exists the path is a real path,
+        # the cause is diagnostic, and it is kept.
+        if path.exists():
+            raise ConfigError(_unreadable(path, error)) from error
+        raise ConfigError(_unreadable(path, error)) from None
     _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root")
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")

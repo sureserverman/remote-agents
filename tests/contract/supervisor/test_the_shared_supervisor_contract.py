@@ -290,7 +290,11 @@ def test_the_ledger_covers_all_artifacts(supervisor: ServiceSupervisor) -> None:
     swept = set(artifact_paths_to_remove(supervisor))
 
     assert written <= swept
-    assert set(supervisor.installed_artifact_paths()) <= swept
+    # `installed <= swept` is a tautology -- `artifact_paths_to_remove` *is* installed ∪ retired
+    # -- so it was assertion-shaped and powerless. What is worth pinning is the other direction:
+    # the installed half must cover everything rendered *and* the side-effect paths, which is
+    # the widening a gate evaluator had to find by driving a real adapter.
+    assert written < set(supervisor.installed_artifact_paths()) or not supervisor.artifacts()
 
 
 def test_removal_leaves_a_foreign_file_in_the_same_directory_alone(tmp_path: Path) -> None:
@@ -428,3 +432,27 @@ def test_no_registered_adapter_would_sweep_a_foreign_directory(
     assert all(path.is_relative_to(supervisor.home) for path in swept), (
         "a swept path escapes the operator's home"
     )
+
+
+@pytest.mark.parametrize(
+    "escape",
+    ["/etc/hosts", "../outside/the/home", "sub/../../outside"],
+    ids=["absolute", "parent-traversal", "traversal-through-a-subdirectory"],
+)
+def test_a_retired_entry_cannot_name_a_file_outside_the_operators_home(
+    tmp_path: Path, escape: str
+) -> None:
+    """The adapters promise this and nothing enforced it, in code that deletes files.
+
+    `Path(home) / "/etc/hosts"` is `/etc/hosts`, and `is_relative_to` is a string comparison that
+    answers True for `<home>/../escapee`. A reviewer planted an absolute retired entry and watched
+    `remove_daemon` delete a file in another tree. A guarantee stated in a docstring and backed by
+    nothing is worse than none, because it is why nobody checks.
+    """
+
+    class _Escaping(_SupervisorWithHistory):
+        def retired_artifact_paths(self) -> tuple[Path, ...]:
+            return (Path(tmp_path) / escape,)
+
+    with pytest.raises(ValueError):
+        artifact_paths_to_remove(_Escaping(tmp_path))

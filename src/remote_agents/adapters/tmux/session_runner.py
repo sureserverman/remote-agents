@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 from dataclasses import dataclass
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from remote_agents.domain.models import ProfileId, SessionId
+from remote_agents.ports.argv_text import NonEchoingArgumentParser
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +74,10 @@ def run_session(session_id: SessionId, intent_directory: Path) -> NoReturn:
 
 def main() -> None:
     """Run a managed intent addressed only by a canonical session UUID."""
-    parser = argparse.ArgumentParser()
+    # This one's argv is machine-built by the runtime rather than typed, so the leak is latent
+    # here -- but "latent" is what the other one was until `__main__` routed to it. Every parser
+    # in this project is the same class, and an architecture test says so.
+    parser = NonEchoingArgumentParser()
     parser.add_argument("session_id")
     parser.add_argument("--intent-dir", type=Path, required=True)
     arguments = parser.parse_args()

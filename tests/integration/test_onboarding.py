@@ -978,7 +978,37 @@ class TestOnboardingEndsWithTheDoctor:
 
         assert main(["onboard", "--install-daemon"]) == 0
 
+        # Reachable only because a healthy report returns before the line is built -- which a
+        # reviewer noted makes this weaker than its name suggests. Kept, because "a healthy run
+        # says nothing about degraded components" is still the property, and paired below with
+        # the case that exercises the rendering itself.
         assert "not healthy yet" not in capsys.readouterr().err
+
+    def test_a_degraded_report_names_only_the_components_that_are_degraded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The reachable half: a mixed report must name the bad one and not the good one."""
+        from remote_agents import bootstrap
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, healthy=False)
+        monkeypatch.setattr(
+            bootstrap,
+            "_doctor_report",
+            lambda *_a, **_k: {
+                "healthy": False,
+                "components": {
+                    "store": {"status": "healthy", "reason": None},
+                    "service": {"status": "degraded", "reason": "service_inactive"},
+                },
+            },
+        )
+
+        assert main(["onboard", "--install-daemon"]) == 1
+
+        message = capsys.readouterr().err
+        assert "service (service_inactive)" in message
+        assert "store" not in message
 
     def test_the_doctor_command_and_onboarding_emit_the_same_report(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1295,6 +1325,69 @@ class TestTheDefencesNothingElsePins:
 
         printed = capsys.readouterr()
         assert "supersecret" not in printed.out + printed.err
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["onboard", "--dev-root=TOKEN"], id="dev-root"),
+            pytest.param(["install-agent-hooks", "--settings=TOKEN"], id="settings"),
+            pytest.param(["install-agent-hooks", "--activity-dir=TOKEN"], id="activity-dir"),
+        ],
+    )
+    def test_a_path_option_refuses_something_shaped_like_a_bot_token(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Redaction covers what an *error* prints; these values are accepted and then echoed.
+
+        Each of these options takes a path in a tool that also takes a credential file, and each
+        echoed an accepted value through ordinary success output -- `installed 3 agent hooks in
+        <token>` -- while `--dev-root` additionally wrote it into the generated `config.toml`,
+        where it stays on disk. There is nothing to redact in a success message except the thing
+        that makes it useful, so the shape is refused instead, and the operator is told to rotate.
+        """
+        from remote_agents.bootstrap import main
+
+        secret = "8123456789:AAHsupersecretTOKENvalue"
+        with contextlib.suppress(SystemExit):
+            main([word.replace("TOKEN", secret) for word in argv])
+
+        printed = capsys.readouterr()
+        assert "supersecret" not in printed.out + printed.err
+        assert "rotate" in printed.err
+
+    def test_an_unreadable_config_does_not_chain_an_exception_that_names_the_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A redacted message printed underneath a traceback that shows the value is not redacted.
+
+        `serve` had no handler, so its `ConfigError` reached the interpreter -- and
+        `raise ... from error` prints the cause *above* the message, so
+        `FileNotFoundError: … '<token>'` appeared over "the path is not shown". The chain is
+        broken only for a path that does not exist; where the file is real the cause is a
+        diagnostic worth keeping, and this asserts both.
+        """
+        from remote_agents.config import ConfigError, load_config
+
+        with pytest.raises(ConfigError) as absent:
+            load_config(tmp_path / "8123456789:AAHsupersecretTOKENvalue")
+
+        assert absent.value.__cause__ is None
+        assert "supersecret" not in str(absent.value)
+
+    def test_an_unreadable_config_that_does_exist_still_explains_itself(
+        self, tmp_path: Path
+    ) -> None:
+        """The other direction: a real path is named, and its cause is kept."""
+        from remote_agents.config import ConfigError, load_config
+
+        unreadable = tmp_path / "config.toml"
+        unreadable.mkdir()
+
+        with pytest.raises(ConfigError) as raised:
+            load_config(unreadable)
+
+        assert raised.value.__cause__ is not None
+        assert str(unreadable) in str(raised.value)
 
     def test_an_argparse_error_still_says_what_kind_of_thing_was_wrong(
         self, capsys: pytest.CaptureFixture[str]

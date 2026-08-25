@@ -267,7 +267,7 @@ class SystemdSupervisor:
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """The ledger's retired half, joined to this host's unit directory.
 
-        The reasoning lives on `RETIRED_UNIT_NAMES`, where the entries are, rather than here
+        The reasoning lives on `RETIRED_UNIT_PATHS`, where the entries are, rather than here
         where they are only assembled.
         """
         return tuple(self.home / relative for relative in RETIRED_UNIT_PATHS)

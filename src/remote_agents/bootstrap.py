@@ -8,7 +8,6 @@ import getpass
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -18,7 +17,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
@@ -116,6 +115,10 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.argv_text import (
+    NonEchoingArgumentParser,
+    refuse_a_credential_shaped_value,
+)
 from remote_agents.ports.service_supervisor import ServiceSupervisor, SupervisorKind
 from remote_agents.production import ProductionPaths
 
@@ -354,50 +357,6 @@ def _resolved_project_path(path: Path) -> Path | None:
         return None
 
 
-#: Anything argparse quoted back at the operator. Its messages that echo input all render the
-#: offending text `'like this'` -- `invalid int value: '…'` is the one that matters, because the
-#: `--owner-*` options sit in the same command as `--bot-token-file` and a token typed into one
-#: of them is an ordinary slip.
-_QUOTED_IN_AN_ARGPARSE_MESSAGE = re.compile(r"'[^']*'")
-
-
-class _ParserThatWillNotEchoAValue(argparse.ArgumentParser):
-    """An `ArgumentParser` whose errors cannot print something the operator typed.
-
-    **Third attempt, and the first two are why this one is unconditional.** The first defended a
-    flag *spelling*: `--bot-token` was declared so it could be refused quietly, and
-    `allow_abbrev` was turned off so argparse would stop inventing it. A reviewer then typed
-    `--bot-tok <token>`, and argparse printed the credential itself through
-    `unrecognized arguments:`. The second defended a word *shape*: redact any word in that
-    message not beginning with `-`. A second reviewer typed `--bot-tok=<token>` -- the most
-    ordinary way anyone passes a value to a long option -- which is one word beginning with `-`
-    that *contains* the value, and it printed in full. So did `-b<token>`, and so did
-    `--owner-user-id=<token>` through an entirely different message, `invalid int value:
-    '<token>'`, which the second version's docstring asserted was safe and a test asserted must
-    stay verbatim.
-
-    Each attempt defended the example it had been shown. The mechanism is that **argparse
-    re-emits operator input**, and it does so in exactly two shapes: everything after
-    `unrecognized arguments:`, and anything it quotes. Both are redacted here without looking at
-    what they contain, because looking at what they contain is what failed twice.
-
-    The cost, taken knowingly: a legitimate diagnostic loses the word it was complaining about --
-    `doctor --config a.toml b.toml` reports `unrecognized arguments: <not shown>` rather than
-    naming the file. The option name is gone with it, which is a real loss; erring toward saying
-    less is still the right direction for a command that handles a credential, and the operator
-    can see their own command line.
-    """
-
-    def error(self, message: str) -> NoReturn:
-        prefix = "unrecognized arguments: "
-        if message.startswith(prefix):
-            # The whole tail, unconditionally. Not word by word: `--flag=VALUE` is a single word
-            # beginning with `-` that *carries* a value, and no rule about how a word begins can
-            # tell the two apart. That rule was the previous version, and it printed a token.
-            message = f"{prefix}<not shown>"
-        super().error(_QUOTED_IN_AN_ARGPARSE_MESSAGE.sub("<not shown>", message))
-
-
 def main(
     argv: list[str] | None = None,
     *,
@@ -406,7 +365,7 @@ def main(
     ),
 ) -> int:
     """Run the current composition-root command-line interface."""
-    parser = _ParserThatWillNotEchoAValue(
+    parser = NonEchoingArgumentParser(
         prog="remote-agents",
         description="Private Telegram control plane for local agent sessions.",
     )
@@ -490,17 +449,25 @@ def main(
         # promises never to raise would eventually stop agreeing about how it does that.
         return spool_from_stdin(arguments.activity_dir)
     if arguments.command == "install-agent-hooks":
+        # Wrapped below rather than at each call: `refuse_a_credential_shaped_value` raises
+        # `ValueError`, and this branch already turns a `HookInstallError` into a printed line.
         # --settings names the file to operate on, and --activity-dir the spool the installed
         # command will write to. Both default to the owner's real ones and exist so that the
         # live drill can drive a real agent end to end without going near either.
-        settings_path = arguments.settings or default_settings_path(Path.home())
         try:
+            for option, given in (
+                ("--settings", arguments.settings),
+                ("--activity-dir", arguments.activity_dir),
+            ):
+                if given is not None:
+                    refuse_a_credential_shaped_value(option, str(given))
+            settings_path = arguments.settings or default_settings_path(Path.home())
             outcome = (
                 remove_agent_hooks(settings_path)
                 if arguments.remove
                 else install_agent_hooks(settings_path, activity_directory=arguments.activity_dir)
             )
-        except HookInstallError as error:
+        except (HookInstallError, ValueError) as error:
             print(error, file=sys.stderr)
             return 1
         print(outcome.summary)
@@ -508,7 +475,7 @@ def main(
     if arguments.command == "onboard":
         try:
             return _onboard(arguments)
-        except ConfigError as error:
+        except (ConfigError, ValueError) as error:
             print(error, file=sys.stderr)
             return 1
     if arguments.command == "doctor":
@@ -586,41 +553,59 @@ def main(
     if arguments.command == "upgrade-sessions":
         return _upgrade_sessions()
     if arguments.command == "serve":
-        paths = ProductionPaths.for_home(Path.home())
-        config = _private_state_config(arguments.config, paths)
-        wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
-        paths.ensure_directories(include_unit_directory=wants_unit_directory)
-        paths.require_private_environment()
-        connection = paths.open_database(
-            open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
-        )
-        # Resolved **once** and threaded into both consumers. The duplicate call this
-        # replaces was harmless while the only source was `os.environ`, which cannot change
-        # inside a running process: two reads were the same read. The private-file fallback is
-        # a file on disk, so two independent resolutions can straddle a credential rotation
-        # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
-        # ACL. Making it a parameter is what stops the pair coming apart.
-        try:
-            # Inside the `try`, not above it: resolution raises on a partial environment or on
-            # a credential file that fails its guard, and the database is already open by then.
-            # Above the `try`, that exception skips `finally` and leaves the connection open.
-            serve_secrets = _resolve_serve_secrets(paths)
-            asyncio.run(
-                _serve_with_reconciliation(
-                    serve_secrets,
-                    _private_boundary(config, connection, paths, serve_secrets),
-                    serve_runner,
-                    _RECONCILE_INTERVAL_SECONDS,
-                    config.activity_poll_seconds,
-                )
-            )
-        finally:
-            connection.close()
+        # **Deliberately unguarded, and the leak it was blamed for is closed elsewhere.** A
+        # reviewer found `serve --config=<token>` printing `FileNotFoundError: … '<token>'`
+        # above the redacted message, and the obvious repair was a handler here. The actual
+        # cause was the *exception chain*: `raise ... from error` prints the cause above the
+        # message, so redacting the message while the traceback repeats it is not redacting.
+        # `config._unreadable`'s raise breaks the chain for a path that does not exist, which
+        # fixes it for every reader rather than for this one.
+        #
+        # A handler here would also change what `serve` promises: it raises `ConfigError` today,
+        # `tests/integration/test_live_service.py` pins that it does so *after* closing its
+        # database, and swallowing it into an exit status is a contract change this plan has no
+        # business making on the way past.
+        return _serve(arguments, serve_runner)
     if arguments.command is None:
         # The bare name was unclaimed — no arguments fell through every branch above and
         # exited 0 silently — so this claims it for the one thing a bare invocation can
         # mean: enter the console.
         return _enter_console()
+    return 0
+
+
+def _serve(arguments, serve_runner) -> int:
+    """Run the installed service. Extracted so `main` can guard it like every other command."""
+    paths = ProductionPaths.for_home(Path.home())
+    config = _private_state_config(arguments.config, paths)
+    wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    paths.require_private_environment()
+    connection = paths.open_database(
+        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+    )
+    # Resolved **once** and threaded into both consumers. The duplicate call this
+    # replaces was harmless while the only source was `os.environ`, which cannot change
+    # inside a running process: two reads were the same read. The private-file fallback is
+    # a file on disk, so two independent resolutions can straddle a credential rotation
+    # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
+    # ACL. Making it a parameter is what stops the pair coming apart.
+    try:
+        # Inside the `try`, not above it: resolution raises on a partial environment or on
+        # a credential file that fails its guard, and the database is already open by then.
+        # Above the `try`, that exception skips `finally` and leaves the connection open.
+        serve_secrets = _resolve_serve_secrets(paths)
+        asyncio.run(
+            _serve_with_reconciliation(
+                serve_secrets,
+                _private_boundary(config, connection, paths, serve_secrets),
+                serve_runner,
+                _RECONCILE_INTERVAL_SECONDS,
+                config.activity_poll_seconds,
+            )
+        )
+    finally:
+        connection.close()
     return 0
 
 
@@ -1395,6 +1380,11 @@ def _onboard(arguments) -> int:
     # one that was just closed. Resolving here fixes the flag; `render_config` refusing a
     # relative path fixes the class, and the config is now proved loadable before any daemon is
     # registered, which fixes it for whatever rule is broken next.
+    if arguments.dev_root is not None:
+        # A path option in the same command as a credential file. The argparse redaction covers
+        # what an *error* prints; this value is accepted, echoed by ordinary success output, and
+        # written into the generated config where it stays on disk.
+        refuse_a_credential_shaped_value("--dev-root", str(arguments.dev_root))
     dev_root = (arguments.dev_root or home / "dev").expanduser().resolve()
     interactive = sys.stdin.isatty()
     print("checking system dependencies:")
