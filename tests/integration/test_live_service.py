@@ -1794,7 +1794,7 @@ def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagn
 ) -> None:
     """The real incident: a deployed config that predates two keys the code now requires.
 
-    `docs/acceptance-2026-08-11-agent-activity.md:258-271` records the service crash-looping
+    `docs/acceptance-2026-08-11-agent-activity.md:268-281` records the service crash-looping
     through three restarts on exactly this, and `doctor` -- the command an operator runs
     *before* trusting a deploy -- died the same way, with a traceback instead of a diagnosis.
     """
