@@ -30,3 +30,22 @@ def test_the_version_is_a_release_number_and_not_a_placeholder() -> None:
 
     assert len(parts) == 3, __version__
     assert all(part.isdigit() for part in parts), __version__
+
+
+def test_the_distribution_declares_the_metadata_a_registry_needs() -> None:
+    """Classifiers and project URLs are present, so a built artifact is describable.
+
+    Asserted here rather than left to `twine check`, which passes on a distribution carrying
+    none of this: that command validates the metadata a project *declares*, and says nothing
+    about metadata it omits. A gate that cannot fail on the absence it is meant to detect is
+    not a gate, so the presence check lives where it can actually go red.
+
+    The licence is deliberately not asserted. This project ships without one, which makes it
+    all-rights-reserved by default -- a legal position its owner holds across every public
+    repository they publish, and not one a test should quietly convert into a claim.
+    """
+    project = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["project"]
+
+    assert project.get("classifiers"), "no classifiers: the distribution is uncategorised"
+    assert project.get("urls"), "no project URLs: a registry page would link nowhere"
+    assert "Repository" in project["urls"], sorted(project["urls"])
