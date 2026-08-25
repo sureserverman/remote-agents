@@ -18,8 +18,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: Communications :: Chat",
-  "Topic :: Software Development :: Build Tools",
   "Topic :: System :: Systems Administration",
+  "Topic :: Terminals",
 ]
 dependencies = [
   "PyYAML==6.0.3",
