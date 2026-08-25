@@ -290,3 +290,87 @@ def test_the_ledger_covers_all_artifacts(supervisor: ServiceSupervisor) -> None:
 
     assert written <= swept
     assert set(supervisor.installed_artifact_paths()) == written
+
+
+def test_removal_leaves_a_foreign_file_in_the_same_directory_alone(tmp_path: Path) -> None:
+    """`~/.config/systemd/user` and `~/Library/LaunchAgents` are shared directories.
+
+    Other tools register their own units and agents there -- Homebrew services put LaunchAgents
+    in exactly that folder -- so an uninstaller that swept a directory rather than a ledger would
+    take somebody else's service down with ours. The sweep is over named paths for that reason,
+    and this is what pins it: `install-agent-hooks` has the same rule about the operator's own
+    hooks, and its docstring's line applies here unchanged -- this module has no way to give back
+    what it deletes.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+    supervisor.current.write_text("a unit", encoding="utf-8")
+    someone_elses = tmp_path / "com.example.other.service"
+    someone_elses.write_text("not ours", encoding="utf-8")
+    look_alike = tmp_path / "remote-agents.service.bak"
+    look_alike.write_text("an operator's own backup", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    assert not supervisor.current.exists()
+    assert someone_elses.read_text(encoding="utf-8") == "not ours"
+    assert look_alike.read_text(encoding="utf-8") == "an operator's own backup"
+
+
+def test_removal_of_a_foreign_host_that_was_never_installed_to_is_a_reported_no_op(
+    tmp_path: Path,
+) -> None:
+    """Uninstalling from a machine that was never installed to costs nothing and is not an error.
+
+    Same rule `remove_agent_hooks` follows for a settings file that does not exist: an operator
+    running the uninstaller to be sure is the ordinary case, and answering them with a failure
+    teaches them to stop checking.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+
+    outcome = remove_daemon(supervisor, run=lambda argv: 0)
+
+    assert not outcome.changed
+    assert "no daemon installed" in outcome.summary
+    assert outcome.succeeded
+
+
+def test_removal_is_safe_to_repeat_and_still_spares_a_foreign_file(tmp_path: Path) -> None:
+    """The second run is the one an operator makes when they are unsure the first worked."""
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+    supervisor.current.write_text("a unit", encoding="utf-8")
+    someone_elses = tmp_path / "com.example.other.service"
+    someone_elses.write_text("not ours", encoding="utf-8")
+
+    first = remove_daemon(supervisor, run=lambda argv: 0)
+    second = remove_daemon(supervisor, run=lambda argv: 0)
+
+    assert first.changed and not second.changed
+    assert "no daemon installed" in second.summary
+    assert someone_elses.exists()
+
+
+@_PARAMS
+def test_no_registered_adapter_would_sweep_a_foreign_directory(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """Every path either adapter can delete is a file it names, never a directory it lives in.
+
+    A sweep that ever grew a `glob` or a `parent` would pass every test above -- they each plant
+    one foreign file -- while taking out an arbitrary number of them on a real host. This asserts
+    the shape rather than the sample: nothing in the ledger is a directory any other tool writes
+    into, and every entry is a leaf.
+    """
+    swept = artifact_paths_to_remove(supervisor)
+    directories = set(supervisor.required_directories())
+
+    assert swept
+    assert not directories & set(swept), "a directory is in the removal set"
+    assert all(path.parent in directories for path in swept), (
+        "a swept path escapes the declared directories"
+    )
