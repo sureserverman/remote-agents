@@ -4,7 +4,10 @@
 > author's live installation. Before this repository was made public, every project identifier
 > in it except this project's own was replaced with a synthetic placeholder from the `opaque-*`
 > family used throughout the test suite. `remote-agents` is the only real name that remains.
-> No Telegram identifier appears in this file.
+> No Telegram identifier appears in this file. One artifact of the substitution is worth
+> knowing: the registry order below was alphabetical in the original names and the
+> placeholders do not preserve that, so the list is a faithful record of the order Launch
+> showed, not a sorted one.
 > Session counts, timestamps, PIDs, message ids and every observation are unaltered, and the
 > substitution is consistent across the whole history, so a placeholder always denotes the same
 > project it did in the original run. What is lost is which real project that was, not the
