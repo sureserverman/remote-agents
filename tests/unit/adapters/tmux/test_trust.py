@@ -4,6 +4,11 @@ from remote_agents.domain.trust import TrustState
 # The real dialog, as captured from a managed pane whose launch had just failed. Kept whole
 # rather than trimmed to the two matched markers: a classifier tuned to a fragment of the
 # thing it classifies is only tested against its own assumptions.
+#
+# One line is not verbatim: the workspace path was replaced with a synthetic one before this
+# repository was published, because the original named an unrelated project of the author's.
+# The classifier does not read that line -- it matches the question and its affirmative option
+# -- so the substitution costs the fixture nothing it was testing.
 _REAL_PROMPT = """
 ────────────────────────────────────────────────────────────────────────────────
  Accessing workspace:
