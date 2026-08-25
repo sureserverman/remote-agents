@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -13,9 +13,37 @@ class ConfigError(ValueError):
     """Raised when configuration is unsafe, incomplete, or not in the closed schema."""
 
 
+def _unreadable(path: Path, error: Exception) -> str:
+    """Say why a configuration could not be read, naming the path only when there is one.
+
+    **A path that does not exist is quite likely not a path.** `--config` and `--bot-token-file`
+    sit in the same tool, an operator who puts a bot token in the wrong one gets it read back --
+    and this message goes to stdout in `doctor`'s report and to stderr from `serve`, `tui` and
+    `add-project`. Found by a parametrised sweep looking for exactly this shape somewhere else;
+    the same rule already governs `bootstrap._token_from_file`, and it belongs wherever an
+    operator-supplied path reaches a message.
+
+    When the file *does* exist, the path is a real path and naming it is what makes the error
+    actionable -- a permission problem or a bad encoding needs to say which file.
+    """
+    if path.exists():
+        return f"cannot read configuration: {error}"
+    return "cannot read configuration: no such file (the path is not shown)"
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramSecrets:
-    bot_token: str
+    """The three credentials, with the one that is a secret kept out of the default repr.
+
+    `repr=False` on `bot_token` is not decoration. Onboarding constructs this type from a
+    prompt, a file and the environment, so it now travels through several error paths that did
+    not exist when only `serve` built it -- and one `logging.debug("resolved %r", secrets)`, one
+    f-string in an exception, or one uncaught traceback rendering its locals would print the
+    token verbatim, defeating every careful message this project writes elsewhere. Closing it on
+    the type closes it for every caller at once, rather than asking each future one to remember.
+    """
+
+    bot_token: str = field(repr=False)
     owner_user_id: int
     owner_chat_id: int
 
@@ -82,7 +110,7 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         # decode traceback rather than a diagnosis, from the command whose whole job is to
         # diagnose an unusable config. Reported by the Stage 2 gate evaluator, reproduced
         # against a file of raw bytes.
-        report["detail"] = f"cannot read configuration: {error}"
+        report["detail"] = _unreadable(path, error)
         return report
 
     unknown: set[str] = set()
@@ -119,7 +147,7 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         # property of `pathlib`'s error handling, not of anything stated here, and it has
         # changed between releases before. A guarantee that holds only because of an
         # unrelated module's current behaviour is worth one line to make it hold outright.
-        report["detail"] = f"cannot read configuration: {error}"
+        report["detail"] = _unreadable(path, error)
         return report
     report["readable"] = True
     return report
@@ -146,7 +174,15 @@ def load_config(path: Path) -> AppConfig:
         # one matters independently: `serve`, `tui` and `add-project` all reach here, and a
         # non-UTF-8 config crashed each of them with a decode traceback instead of the
         # `ConfigError` every other malformed-config path produces.
-        raise ConfigError(f"cannot read configuration: {error}") from error
+        # `from None` when the path is not one, deliberately breaking the exception chain:
+        # `raise ... from error` keeps the cause, and Python prints the cause *above* the message
+        # -- so a redacted "the path is not shown" was printed underneath a
+        # `FileNotFoundError: … '<token>'` that showed it. Redacting a message while the
+        # traceback repeats it is not redaction. When the file exists the path is a real path,
+        # the cause is diagnostic, and it is kept.
+        if path.exists():
+            raise ConfigError(_unreadable(path, error)) from error
+        raise ConfigError(_unreadable(path, error)) from None
     _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root")
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")
@@ -254,3 +290,81 @@ def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
         raise ConfigError(f"{name} must be an integer between {minimum} and {maximum}")
     return value
+
+
+#: What a freshly generated configuration starts at, and the values the shipped example has
+#: carried since it was written. They are here rather than in the generator's caller because
+#: the bounds that accept them are here: `_bounded_int` is what says 40 is a legal label length,
+#: and a default living somewhere else could drift outside a bound nothing would re-check until
+#: an operator's first `serve`.
+DEFAULT_LIMITS: dict[str, int] = {
+    "max_label_length": 40,
+    "project_page_size": 10,
+    "activity_poll_seconds": 30,
+    "activity_quiet_polls": 3,
+}
+
+
+def render_config(
+    *,
+    dev_root: Path,
+    registry_path: Path,
+    database_path: Path,
+    limits: dict[str, int] | None = None,
+) -> str:
+    """Render a complete configuration for one host, checked against this build's own schema.
+
+    **Rendered, never copied.** `config/remote-agents.example.toml` spells out `/home/user/dev`
+    and a `/home/user/.claude/…` registry path, and the README has told operators to
+    `install -m 600` it into place. That cannot work anywhere but this developer's own machine:
+    `load_config` refuses a `paths.dev_root` that is not an existing directory, so a copied
+    example fails on a macOS host at the first `serve` rather than at install time — on the
+    platform the cross-platform installer exists to support.
+
+    Lives beside the loader for `describe_schema_drift`'s reason: the closed key sets are here,
+    `application/` may not import this module (DEC-015), and a renderer that restated the schema
+    would be a second copy free to fall behind the first. Here it can be *checked* against it —
+    the key sets below are the loader's own, so a key added to `_PATH_KEYS` and forgotten here
+    raises when this function is called rather than producing a file that fails
+    `_require_exact_keys` on an operator's host and nowhere else.
+
+    The values are TOML basic strings, escaped. A home directory may legally hold a `"` or a
+    `\\`, and both end or corrupt an unescaped one — the systemd adapter learned the same lesson
+    about an apostrophe in `ExecStart` at the cost of a unit that would not start.
+    """
+    paths = {
+        "dev_root": dev_root,
+        "registry_path": registry_path,
+        "database_path": database_path,
+    }
+    values = DEFAULT_LIMITS if limits is None else limits
+    _require_exact_keys(paths, _PATH_KEYS, "generated paths")
+    _require_exact_keys(values, _LIMIT_KEYS, "generated limits")
+    for key, value in paths.items():
+        # **Values, not only key sets**, and the difference cost a second gate round. The first
+        # version checked that every required key was present and nothing more, so
+        # `--dev-root relative/tree` was written straight through -- and `load_config` refuses a
+        # relative path, so the generator produced a config its own loader rejects for a second
+        # time, through a different rule than the one just closed. A renderer whose whole purpose
+        # is "the file this writes will load" has to be held to the loader's rules, not to half
+        # of them.
+        if not value.is_absolute():
+            raise ConfigError(f"generated paths.{key} must be an absolute path: {value}")
+    rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
+    rendered_limits = "\n".join(f"{key} = {values[key]:d}" for key in sorted(values))
+    return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"
+
+
+def _toml_string(value: Path) -> str:
+    """Render one path as a TOML basic string, escaped the way TOML v1.0.0 requires.
+
+    Only the escapes a filesystem path can actually need: a backslash, a double quote, and the
+    control characters TOML refuses to carry raw. A newline in a directory name would otherwise
+    end the line and leave the rest to be parsed as a further key — the same injection the
+    systemd renderer refuses, arriving through a different format.
+    """
+    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    escaped = "".join(
+        character if character.isprintable() else f"\\u{ord(character):04X}" for character in text
+    )
+    return f'"{escaped}"'

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -74,10 +76,22 @@ if TYPE_CHECKING:
     # reach the bot — naming them here would undo that.
     from remote_agents.adapters.tui.context import TuiContext
     from remote_agents.adapters.tui.model import AttachRequest
+from remote_agents.adapters.supervisor.installer import (
+    DaemonInstallError,
+    install_daemon,
+    remove_daemon,
+)
 from remote_agents.agent_event import spool_from_stdin
 from remote_agents.application.activity import PaneQuietWatcher, drain_activity
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.dependencies import (
+    MISSING,
+    PackageManager,
+    confirm_and_install,
+    probe_dependencies,
+    render_remediation,
+)
 from remote_agents.application.doctor import (
     credential_file_report,
     production_doctor,
@@ -96,10 +110,15 @@ from remote_agents.config import (
     describe_schema_drift,
     load_config,
     load_secrets,
+    render_config,
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.argv_text import (
+    NonEchoingArgumentParser,
+    refuse_a_credential_shaped_value,
+)
 from remote_agents.ports.service_supervisor import ServiceSupervisor, SupervisorKind
 from remote_agents.production import ProductionPaths
 
@@ -346,7 +365,7 @@ def main(
     ),
 ) -> int:
     """Run the current composition-root command-line interface."""
-    parser = argparse.ArgumentParser(
+    parser = NonEchoingArgumentParser(
         prog="remote-agents",
         description="Private Telegram control plane for local agent sessions.",
     )
@@ -393,6 +412,32 @@ def main(
     subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
+    # `allow_abbrev=False` is load-bearing, not tidiness. argparse accepts any unambiguous
+    # prefix by default, so `--bot-token` -- the obvious name, the one an operator reaches for
+    # first -- was silently accepted as an abbreviation of `--bot-token-file`, which put a
+    # credential in argv and then printed it in the "cannot read the bot token file …" error.
+    # The whole point of having no such flag was defeated by argparse inventing one.
+    onboard_parser = subcommands.add_parser("onboard", allow_abbrev=False)
+    # Mutually exclusive, because the two are opposite intentions and the handler has to check
+    # one of them first: `--install-daemon --remove` silently removed and never installed, with
+    # nothing said. argparse refuses the pair before anything is composed.
+    onboard_daemon = onboard_parser.add_mutually_exclusive_group()
+    onboard_daemon.add_argument("--install-daemon", action="store_true")
+    onboard_daemon.add_argument("--remove", action="store_true")
+    onboard_parser.add_argument("--yes", action="store_true")
+    # A path, never a value: `/proc/<pid>/cmdline` is world-readable on Linux, so a token given
+    # as an argument is disclosed to every process on the host and kept in shell history.
+    onboard_parser.add_argument("--bot-token-file", type=Path)
+    # Declared **so that it can be refused**, which is the only way to refuse it quietly:
+    # argparse's own "unrecognized arguments: --bot-token <value>" prints the value too, so
+    # leaving the name undefined is not the same as making it unusable. `SUPPRESS` keeps it out
+    # of `--help`, where advertising it would invite the mistake this exists to catch.
+    onboard_parser.add_argument(
+        "--bot-token", dest="rejected_token", default=None, help=argparse.SUPPRESS
+    )
+    onboard_parser.add_argument("--owner-user-id", type=_owner_id)
+    onboard_parser.add_argument("--dev-root", type=Path)
+    onboard_parser.add_argument("--owner-chat-id", type=_owner_id)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
@@ -404,21 +449,35 @@ def main(
         # promises never to raise would eventually stop agreeing about how it does that.
         return spool_from_stdin(arguments.activity_dir)
     if arguments.command == "install-agent-hooks":
+        # Wrapped below rather than at each call: `refuse_a_credential_shaped_value` raises
+        # `ValueError`, and this branch already turns a `HookInstallError` into a printed line.
         # --settings names the file to operate on, and --activity-dir the spool the installed
         # command will write to. Both default to the owner's real ones and exist so that the
         # live drill can drive a real agent end to end without going near either.
-        settings_path = arguments.settings or default_settings_path(Path.home())
         try:
+            for option, given in (
+                ("--settings", arguments.settings),
+                ("--activity-dir", arguments.activity_dir),
+            ):
+                if given is not None:
+                    refuse_a_credential_shaped_value(option, str(given))
+            settings_path = arguments.settings or default_settings_path(Path.home())
             outcome = (
                 remove_agent_hooks(settings_path)
                 if arguments.remove
                 else install_agent_hooks(settings_path, activity_directory=arguments.activity_dir)
             )
-        except HookInstallError as error:
+        except (HookInstallError, ValueError) as error:
             print(error, file=sys.stderr)
             return 1
         print(outcome.summary)
         return 0
+    if arguments.command == "onboard":
+        try:
+            return _onboard(arguments)
+        except (ConfigError, ValueError) as error:
+            print(error, file=sys.stderr)
+            return 1
     if arguments.command == "doctor":
         if arguments.profiles:
             result = profile_doctor(probe_profiles(closed_profiles()))
@@ -460,33 +519,7 @@ def main(
         except ConfigError as error:
             print(error, file=sys.stderr)
             return 1
-        registry = load_registry(config.registry_path)
-        discovered = discover_projects(config.dev_root)
-        catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
-        profiles = probe_profiles(
-            closed_profiles(),
-            resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
-        )
-        supervisor = _supervisor_for_host()
-        result = production_doctor(
-            core_ready=registry.error is None,
-            database_ready=database_is_ready(config.database_path),
-            tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
-            tmux_console_ready=_console_features_available(paths.home),
-            telegram_ready=_telegram_credentials_are_private(paths),
-            service_ready=_command_succeeds(supervisor.liveness_command()),
-            profiles=profiles,
-            registered_projects=len(registry.projects),
-            discovered_projects=len(discovered),
-            catalogue_projects=len(catalogue.catalogue),
-            # Carried on the healthy path too, so a green report says the config *was*
-            # compared rather than leaving the operator to infer it from the absence of a
-            # complaint. Silence and a passed check look identical otherwise.
-            config_drift=drift,
-            credential_file=_credential_file_state(paths),
-            supervisor_kind=supervisor.kind,
-            liveness_meaning=supervisor.liveness_meaning,
-        )
+        result = _doctor_report(paths, config, drift)
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
         restore_database(arguments.database, arguments.backup)
@@ -520,41 +553,59 @@ def main(
     if arguments.command == "upgrade-sessions":
         return _upgrade_sessions()
     if arguments.command == "serve":
-        paths = ProductionPaths.for_home(Path.home())
-        config = _private_state_config(arguments.config, paths)
-        wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
-        paths.ensure_directories(include_unit_directory=wants_unit_directory)
-        paths.require_private_environment()
-        connection = paths.open_database(
-            open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
-        )
-        # Resolved **once** and threaded into both consumers. The duplicate call this
-        # replaces was harmless while the only source was `os.environ`, which cannot change
-        # inside a running process: two reads were the same read. The private-file fallback is
-        # a file on disk, so two independent resolutions can straddle a credential rotation
-        # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
-        # ACL. Making it a parameter is what stops the pair coming apart.
-        try:
-            # Inside the `try`, not above it: resolution raises on a partial environment or on
-            # a credential file that fails its guard, and the database is already open by then.
-            # Above the `try`, that exception skips `finally` and leaves the connection open.
-            serve_secrets = _resolve_serve_secrets(paths)
-            asyncio.run(
-                _serve_with_reconciliation(
-                    serve_secrets,
-                    _private_boundary(config, connection, paths, serve_secrets),
-                    serve_runner,
-                    _RECONCILE_INTERVAL_SECONDS,
-                    config.activity_poll_seconds,
-                )
-            )
-        finally:
-            connection.close()
+        # **Deliberately unguarded, and the leak it was blamed for is closed elsewhere.** A
+        # reviewer found `serve --config=<token>` printing `FileNotFoundError: … '<token>'`
+        # above the redacted message, and the obvious repair was a handler here. The actual
+        # cause was the *exception chain*: `raise ... from error` prints the cause above the
+        # message, so redacting the message while the traceback repeats it is not redacting.
+        # `config._unreadable`'s raise breaks the chain for a path that does not exist, which
+        # fixes it for every reader rather than for this one.
+        #
+        # A handler here would also change what `serve` promises: it raises `ConfigError` today,
+        # `tests/integration/test_live_service.py` pins that it does so *after* closing its
+        # database, and swallowing it into an exit status is a contract change this plan has no
+        # business making on the way past.
+        return _serve(arguments, serve_runner)
     if arguments.command is None:
         # The bare name was unclaimed — no arguments fell through every branch above and
         # exited 0 silently — so this claims it for the one thing a bare invocation can
         # mean: enter the console.
         return _enter_console()
+    return 0
+
+
+def _serve(arguments, serve_runner) -> int:
+    """Run the installed service. Extracted so `main` can guard it like every other command."""
+    paths = ProductionPaths.for_home(Path.home())
+    config = _private_state_config(arguments.config, paths)
+    wants_unit_directory = _supervisor_for_host().kind is SupervisorKind.SYSTEMD
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    paths.require_private_environment()
+    connection = paths.open_database(
+        open_database, migrations=MIGRATIONS, include_unit_directory=wants_unit_directory
+    )
+    # Resolved **once** and threaded into both consumers. The duplicate call this
+    # replaces was harmless while the only source was `os.environ`, which cannot change
+    # inside a running process: two reads were the same read. The private-file fallback is
+    # a file on disk, so two independent resolutions can straddle a credential rotation
+    # and pair a new bot token with a stale owner id -- and the owner id is what seeds the
+    # ACL. Making it a parameter is what stops the pair coming apart.
+    try:
+        # Inside the `try`, not above it: resolution raises on a partial environment or on
+        # a credential file that fails its guard, and the database is already open by then.
+        # Above the `try`, that exception skips `finally` and leaves the connection open.
+        serve_secrets = _resolve_serve_secrets(paths)
+        asyncio.run(
+            _serve_with_reconciliation(
+                serve_secrets,
+                _private_boundary(config, connection, paths, serve_secrets),
+                serve_runner,
+                _RECONCILE_INTERVAL_SECONDS,
+                config.activity_poll_seconds,
+            )
+        )
+    finally:
+        connection.close()
     return 0
 
 
@@ -1268,6 +1319,591 @@ def _command_succeeds(argv: tuple[str, ...]) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
+
+
+def _onboard(arguments) -> int:
+    """Take a freshly installed package to a configured, registered service on this host.
+
+    The whole of onboarding is composition -- the dependency policy is in `application`, the
+    schema is in `config`, the private tree is in `production`, and the daemon is behind the
+    supervisor port -- so this function is where DEC-015 says it belongs and is deliberately not
+    a fifth place that knows how to do any of those things itself.
+
+    **It never clobbers what it did not write.** A config the operator has edited and a
+    credential they pasted are both left exactly as found, with a line saying so; a re-run is
+    what someone does when they are unsure what state a host is in, and it must be safe. The
+    daemon is the one thing this tool does own outright, and even that is only rewritten when the
+    definition actually changed.
+
+    `--remove` takes away the daemon and nothing else. The config and the credential are the
+    operator's data, and an uninstaller that deleted a bot token would be unrecoverable in the
+    one way that matters.
+    """
+    if arguments.rejected_token is not None:
+        # The value is already in argv and in shell history by the time this runs -- nothing
+        # here can take it back, so the message says so and does not repeat it.
+        raise ConfigError(
+            "--bot-token takes no value here; use --bot-token-file <path> instead. "
+            "The value you passed is now in this host's process list and shell history: "
+            "rotate that token."
+        )
+    home = Path.home()
+    paths = ProductionPaths.for_home(home)
+    supervisor = _supervisor_for_host()
+    wants_unit_directory = supervisor.kind is SupervisorKind.SYSTEMD
+    if arguments.remove:
+        try:
+            outcome = remove_daemon(supervisor, run=_run_command)
+        except ValueError as error:
+            # `SystemdSupervisor` refuses at *render* time to describe an executable whose path
+            # holds a quote or a backslash, and that refusal is deliberate. It once fired here,
+            # so a home containing an apostrophe got a traceback out of the uninstaller.
+            #
+            # It no longer fires on this path at all: `artifact_paths_to_remove` reads
+            # `installed_artifact_paths()`, which does not render, so the host this tool declines
+            # to install to is no longer the host it cannot uninstall from. That was the DEC-051
+            # hole and it is closed structurally rather than by reporting. This handler stays
+            # because a future adapter could refuse for a reason removal does have to ask about,
+            # and a traceback is the wrong way to learn that.
+            print(
+                f"this host cannot be described to its service supervisor: {error}",
+                file=sys.stderr,
+            )
+            return 1
+        print(outcome.summary)
+        print(f"left alone: {paths.config_path} and {paths.environment_path}")
+        return 0 if outcome.succeeded else 1
+    # **Resolved, because a relative one reopened the defect this stage's own gate found.**
+    # `--dev-root relative/tree` was written into the config verbatim, and `load_config` refuses
+    # a `dev_root` that is not absolute -- so onboarding again wrote a config its own loader
+    # rejects and registered a daemon against it, through a different validation rule than the
+    # one that was just closed. Resolving here fixes the flag; `render_config` refusing a
+    # relative path fixes the class, and the config is now proved loadable before any daemon is
+    # registered, which fixes it for whatever rule is broken next.
+    if arguments.dev_root is not None:
+        # A path option in the same command as a credential file. The argparse redaction covers
+        # what an *error* prints; this value is accepted, echoed by ordinary success output, and
+        # written into the generated config where it stays on disk.
+        refuse_a_credential_shaped_value("--dev-root", str(arguments.dev_root))
+    dev_root = (arguments.dev_root or home / "dev").expanduser().resolve()
+    interactive = sys.stdin.isatty()
+    print("checking system dependencies:")
+    if _dependency_preflight(assume_yes=arguments.yes, interactive=interactive):
+        return 1
+    paths.ensure_directories(include_unit_directory=wants_unit_directory)
+    print(_prepared_dev_root(dev_root))
+    print(_written_or_kept(paths.config_path, lambda: detected_config(home, dev_root)))
+    try:
+        print(_credential_summary(paths, arguments, interactive))
+    except ConfigError as error:
+        # Named without its cause's value: everything raised out of `onboarding_secrets` and
+        # `write_private_environment` names a variable rather than a value, and this is the one
+        # place that would undo that by printing whatever it caught.
+        print(error, file=sys.stderr)
+        return 1
+    unloadable = describe_schema_drift(paths.config_path)
+    if not unloadable["readable"]:
+        # **Before the daemon, not after it.** A config the loader rejects is a service that
+        # crash-loops under `Restart=on-failure` the moment it is registered, so registering one
+        # against a config already known to be bad turns a diagnosable state into a running
+        # fault. The closing report would have said so a few lines later -- with the daemon
+        # already installed and looping.
+        print(f"the configuration at {paths.config_path} cannot be loaded", file=sys.stderr)
+        print(f"  {unloadable['detail']}", file=sys.stderr)
+        return 1
+    if arguments.install_daemon:
+        try:
+            outcome = install_daemon(supervisor, run=_run_command)
+        except (DaemonInstallError, ValueError) as error:
+            print(error, file=sys.stderr)
+            return 1
+        print(outcome.summary)
+        if not outcome.succeeded:
+            return 1
+        if supervisor.kind is SupervisorKind.LAUNCHD:
+            # Not a caveat in a document somewhere: `gui/<uid>` exists only once someone has
+            # logged in at the Mac's screen (owner decision, DEC-054), so a Mac that has rebooted
+            # and is sitting at the login window is a Mac where this service is legitimately
+            # absent. Unless onboarding says it here, that reads as a fault.
+            print("note: on macOS this service runs only while you are logged in at the screen")
+        _wait_for_the_service(supervisor)
+    return _report_on_the_onboarded_host(paths)
+
+
+def _wait_for_the_service(supervisor: ServiceSupervisor, sleep=time.sleep) -> None:
+    """Give a just-started service a moment to be running before the report asks.
+
+    Both supervisors return before the service is up. `enable --now` returns for a `Type=simple`
+    unit as soon as the process is forked, and `launchctl bootstrap` with `RunAtLoad` is
+    asynchronous outright -- while the very next thing onboarding does is run `doctor`, whose
+    exit status this command adopts. Measured on Linux, the race is won comfortably (the
+    database appears ~0.17s after exec, and `probe_profiles` spends longer than that running five
+    `--version` subprocesses first), but it is won *incidentally*: a cold first start on a slower
+    host, or a Mac where nothing is warm, narrows a margin nobody chose.
+
+    Bounded and quiet: at most a couple of seconds, and no output. A service that is not up by
+    then has something wrong with it, and saying what is `doctor`'s job one line later -- this
+    exists to stop the report answering before the question is fair, not to make it wait for an
+    answer it is not going to get.
+    """
+    for attempt in range(_SERVICE_START_ATTEMPTS):
+        # `_run_command`, the same helper `install_daemon` was handed, rather than
+        # `_command_succeeds`: they answer the same question, and using two means a caller (or a
+        # test) that substitutes one still reaches the other.
+        if _run_command(supervisor.liveness_command()) == 0:
+            return
+        if attempt + 1 < _SERVICE_START_ATTEMPTS:
+            sleep(_SERVICE_START_INTERVAL_SECONDS)
+
+
+def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
+    """End onboarding with `doctor`'s own report, and let it decide the exit status.
+
+    **A host that onboarded and cannot serve is not a successful onboarding.** The exit status is
+    what a bootstrap script reads, so returning 0 beside a report saying `healthy: false` would
+    leave an unattended install believing it had finished -- which is the one failure a one-line
+    installer must not have, because nobody is watching the output.
+
+    The config is re-read from disk rather than carried from the generation step above, so what
+    is reported on is the file the service will actually load. Onboarding may have kept an
+    existing config rather than writing one, and that file is the one that matters.
+    """
+    drift = describe_schema_drift(paths.config_path)
+    if not drift["readable"]:
+        print(json.dumps({"healthy": False, "config": drift, "checked": False}, sort_keys=True))
+        return 1
+    report = _doctor_report(paths, load_config(paths.config_path), drift)
+    print(json.dumps(report, sort_keys=True))
+    if report.get("healthy"):
+        return 0
+    # The report is machine-readable and the exit status is one bit, so an operator who gets a
+    # 1 has to read a JSON blob to find out which of seven components said no. Naming them costs
+    # a line and is the difference between "onboarding failed" and "install codex, or don't".
+    # `status`/`reason`, which is what `health_report` actually emits. The first version asked
+    # for a `ready` key that exists nowhere in the product -- it was written against a test
+    # double that invented one, so the line never rendered and no test noticed. That is the same
+    # failure as this stage's Blocking defect (a fixture supplying what the product does not),
+    # reproduced inside the commit that diagnosed it, which is worth saying out loud.
+    unhealthy = sorted(
+        f"{name} ({component.get('reason')})"
+        for name, component in (report.get("components") or {}).items()
+        if isinstance(component, dict) and component.get("status") != "healthy"
+    )
+    if unhealthy:
+        print(f"not healthy yet: {', '.join(unhealthy)}", file=sys.stderr)
+    return 1
+
+
+def _prepared_dev_root(dev_root: Path) -> str:
+    """Make the projects tree the generated config is about to name, before naming it.
+
+    **This is the defect a gate evaluator found, and it is the same one this whole stage was
+    written to close, one directory over.** `load_config` refuses a `paths.dev_root` that is not
+    an *existing* directory -- which is exactly why the shipped example cannot be copied onto
+    another host -- and the generator replaced the example's hardcoded `/home/user/dev` with a
+    detected `~/dev` that nothing created. On a fresh Mac, which is the platform this exists for,
+    onboarding wrote a config its own loader rejects, registered a daemon that then crash-looped
+    against it under `Restart=on-failure`, and exited 1 with a message naming no path.
+
+    Every test missed it because every fixture manufactured `~/dev` first: the suite created the
+    precondition the product did not.
+
+    Created rather than refused, because `~/dev` on a machine that has never had one is a
+    directory the operator is about to want, not a mistake to report. An operator who keeps
+    projects elsewhere says so with `--dev-root`. It is deliberately **not** 0700 and not part of
+    `ProductionPaths`: this is the operator's own working tree, outside the private boundary that
+    type declares, and tightening a directory this tool does not own is not its business.
+    """
+    if dev_root.is_dir():
+        return f"projects tree: {dev_root}"
+    try:
+        dev_root.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ConfigError(f"cannot create the projects tree {dev_root}: {error}") from error
+    return f"created the projects tree {dev_root}"
+
+
+def _written_or_kept(path: Path, render) -> str:
+    """Create a generated file owner-only, or keep what is there -- and say which happened.
+
+    Three properties, and this function had none of them until a review took it apart against
+    its own siblings. `path.exists()` **follows links and answers False for a dangling one**, so
+    a symlink planted at `config.toml` pointing outside the private tree was written through:
+    measured, it created a file at the attacker's chosen path, 0600, with `wrote …/config.toml`
+    printed -- a boundary escape past the very check `ProductionPaths._reject_symlink_ancestors`
+    exists to make. `write_text` then created at `0666 & ~umask` and narrowed afterwards, the
+    window `write_private_environment` opens `O_EXCL` at 0600 specifically to avoid. And the
+    `exists()`-then-write pair was a check-then-act besides.
+
+    One `os.open` answers all three, and `O_EXCL` carries most of it: `O_CREAT|O_EXCL` fails on
+    an existing entry *of any kind*, a symlink included and a dangling one too, so "already
+    there" becomes a syscall result rather than a guess and the link is refused rather than
+    written through. `O_NOFOLLOW` is redundant beside it and kept as depth, not as the property
+    -- a mutation check confirmed the test still passes without it, which is worth writing down
+    rather than leaving a docstring claiming a flag is load-bearing when it is not. The mode is
+    true at creation. The other two writers in this stage reached the same shape by different
+    routes; this is the one that had not.
+    """
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return f"kept the existing {path}"
+    except OSError as error:
+        raise ConfigError(f"cannot write {path}: {error}") from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(render())
+    return f"wrote {path}"
+
+
+def _credential_summary(paths: ProductionPaths, arguments, interactive: bool) -> str:
+    """Write the credential file, or report the one that is already private and readable."""
+    try:
+        return f"kept the existing {paths.require_private_environment()}"
+    except ConfigError as refusal:
+        # `exists()` was the check here, and it follows links and says nothing about type, size
+        # or mode -- so a directory left at that path, or the zero-byte file a failed write used
+        # to leave, was reported as a credential file being kept. The guard that already knows
+        # what a usable credential file is answers instead.
+        #
+        # **And its answer is kept**, which the first version of this discarded with a bare
+        # `pass`. A 0644 credential file made the guard say "must have mode 0600" -- precisely
+        # the actionable sentence -- and the operator instead got "something already exists;
+        # remove it first", about a file holding a token they may not be able to get again.
+        # Only a genuinely absent file falls through to the writer.
+        if paths.environment_path.exists() or paths.environment_path.is_symlink():
+            raise ConfigError(f"the credential file cannot be used: {refusal}") from refusal
+    secrets = onboarding_secrets(
+        token_file=arguments.bot_token_file,
+        owner_user_id=arguments.owner_user_id,
+        owner_chat_id=arguments.owner_chat_id,
+        environment=os.environ,
+        ask=input if interactive else None,
+        ask_secretly=getpass.getpass if interactive else None,
+    )
+    return f"wrote {paths.write_private_environment(secrets)}"
+
+
+#: How long onboarding will wait for a service it just started, before reporting on it.
+#: Two seconds total, in short steps: long enough for a fork plus an import, short enough that
+#: nobody watching notices, and bounded so a service that will never start does not hold the
+#: command open.
+_SERVICE_START_ATTEMPTS = 8
+_SERVICE_START_INTERVAL_SECONDS = 0.25
+
+
+def _owner_id(value: str) -> int:
+    """Parse an owner id without argparse echoing it back when it is not one.
+
+    `type=int` looks harmless and is not: argparse renders a converter's failure as
+    `invalid int value: '<what you typed>'`, and these two options sit in the same command as
+    `--bot-token-file`. An operator who puts the token in the wrong one gets it printed back.
+    Raising `ArgumentTypeError` makes the message this function's own, and this one names no
+    value.
+
+    Belt and braces with the parser's quoted-text redaction, deliberately: that redaction is a
+    net under every message argparse can produce, and this is the one place the message can
+    simply be right.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer (the value is not shown)") from None
+
+
+def _run_command(argv: tuple[str, ...]) -> int:
+    """Run one fixed local command and return its exit status, without a shell.
+
+    The sibling of `_command_succeeds`, and separate from it because the two answer different
+    questions: that one asks whether a probe passed and throws the status away, this one is what
+    an installer needs when it has to report *how* something failed. Output is inherited rather
+    than captured -- an operator watching `apt-get` or `systemctl` should see it work.
+    """
+    # The credential is stripped from the child's environment. `sudo` scrubs it anyway under the
+    # default `env_reset`, but `brew` does not, and a Homebrew formula is arbitrary Ruby running
+    # with whatever it inherited -- while the README's own unattended form puts the token in this
+    # process's environment. Nothing this command runs has any use for it.
+    environment = {
+        name: value for name, value in os.environ.items() if name not in TELEGRAM_SECRET_VARIABLES
+    }
+    try:
+        return subprocess.run(
+            argv, check=False, stdin=subprocess.DEVNULL, timeout=600, env=environment
+        ).returncode
+    except (OSError, subprocess.SubprocessError):
+        # Same shape as `_command_succeeds`: a command that could not start is a command that
+        # failed, and the caller's own reporting is better than a traceback from here.
+        return 1
+
+
+def _package_manager_for_host() -> PackageManager:
+    """Which package manager installs system dependencies here.
+
+    A second platform question, deliberately not answered by re-reading the first. DEC-054 makes
+    `SupervisorKind` a label that nothing may branch on, and the correlation it would express is
+    false anyway: a systemd host may install with `dnf`, and Homebrew runs on Linux. Both
+    questions are decided here, in a composition root, which is DEC-015's rule.
+    """
+    return PackageManager.HOMEBREW if sys.platform == "darwin" else PackageManager.APT
+
+
+def _homebrew_is_installed() -> bool:
+    """Whether `brew` is on this host's PATH, answered as a real bool.
+
+    `render_remediation` takes this as a keyword with no default and reads it with `is not True`,
+    so a probe that answered with a path or a string would render a `brew install` for a host
+    with no `brew`. Coercing here is what makes that contract hold.
+    """
+    return shutil.which("brew") is not None
+
+
+def _dependency_preflight(*, assume_yes: bool, interactive: bool) -> int:
+    """Report what the host is missing, offer the exact fix, and re-probe rather than assume.
+
+    The re-probe is the point of the last three lines. `InstallAttempt.resolved` means the
+    installer reported success, which is not the same claim as "the dependency is there" -- brew
+    exits 0 for a formula that was already present, and an installer can succeed at installing
+    something other than what was asked for. So the answer onboarding acts on comes from looking
+    again, not from an exit status.
+    """
+    probe = _dependency_probe()
+    missing = [status.name for status in probe if status.state == MISSING]
+    for status in probe:
+        detail = status.version or status.note or "no version reported"
+        print(f"  {status.name}: {status.state} ({detail})")
+    if not missing:
+        return 0
+    remediation = render_remediation(
+        missing,
+        package_manager=_package_manager_for_host(),
+        homebrew_installed=_homebrew_is_installed(),
+    )
+    attempt = confirm_and_install(
+        remediation,
+        announce=lambda line: print(f"  to install what is missing: {line}"),
+        confirm=_ask_to_confirm if interactive else None,
+        run=_run_command,
+        assume_yes=assume_yes,
+    )
+    if not attempt.resolved:
+        print(f"  not installed ({attempt.outcome}); run the command above and re-run onboarding")
+        return 1
+    still_missing = [status.name for status in _dependency_probe() if status.state == MISSING]
+    if still_missing:
+        print(f"  the installer reported success but {', '.join(still_missing)} is still missing")
+        return 1
+    return 0
+
+
+def _dependency_probe():
+    """Probe this host's required executables, with the two effects supplied from here."""
+    return probe_dependencies(
+        resolve=lambda name: _resolved_executable(name),
+        run_version=lambda argv: (
+            subprocess.run(
+                argv,
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+            ).stdout
+        ),
+    )
+
+
+def _resolved_executable(name: str) -> Path | None:
+    resolved = shutil.which(name)
+    return Path(resolved) if resolved is not None else None
+
+
+def _ask_to_confirm(prompt: str) -> bool:
+    """Ask a yes/no question and answer it with a **bool**, never with what was typed.
+
+    `confirm_and_install` takes consent as `is True` rather than as truthiness, because a
+    `confirm` that returned the operator's own text would have installed on "n" -- every plain
+    refusal is a non-empty string. This is the adapter that makes that contract hold: the typing
+    happens here, and only `y`/`yes` becomes `True`.
+    """
+    try:
+        answer = input(f"{prompt} [y/N] ")
+    except EOFError:
+        # A closed stdin is not a yes. Reached when a run that looked interactive turns out not
+        # to be -- a pipe, a CI shell -- and treating the exception as anything but a refusal
+        # would install without a human present.
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
+def onboarding_secrets(
+    *,
+    token_file: Path | None,
+    owner_user_id: int | None,
+    owner_chat_id: int | None,
+    environment: Mapping[str, str],
+    ask: Callable[[str], str] | None,
+    ask_secretly: Callable[[str], str] | None,
+) -> TelegramSecrets:
+    """Resolve the three credentials from a flag, the environment, or a prompt -- in that order.
+
+    **There is deliberately no `--bot-token VALUE`, and its absence is the security decision in
+    this function.** On Linux `/proc/<pid>/cmdline` is world-readable, so a token passed as an
+    argument is disclosed to every process on the host for as long as onboarding runs, and it
+    lands in the operator's shell history besides. That is precisely the exposure the 0600 file
+    exists to prevent, arriving one command earlier. `--bot-token-file` names a path instead --
+    the value never becomes argv -- and a run driven by a supervisor or a script supplies all
+    three through the environment, which `load_secrets` already reads for `serve`.
+
+    The precedence is flag, then environment, then prompt, because a flag is what the operator
+    typed *this time* while an exported variable may be a rotation ago. A missing value with no
+    terminal to ask is a refusal naming the variable to supply, never a prompt into a closed
+    stdin: an unattended run that blocks forever on an invisible `getpass` is the worst of the
+    available failures, because nothing on screen says what it is waiting for.
+
+    **Nothing here renders the token.** It is read through `ask_secretly` (a `getpass`, wired by
+    the caller) and never through `ask`, and every error raised below names a *variable*, never a
+    value -- the error paths being where a credential is most likely to be printed by accident,
+    since they are the paths a fixture is least likely to cover.
+
+    **Why this policy lives in the composition root rather than in `application/`, where Stage 1
+    put the dependency policy.** A Tier-2 review was right that the shape is the same -- a
+    precedence rule with its effects injected -- and would be right that `application/` is where
+    such a rule belongs, except that this one cannot go there: it is built out of
+    `TELEGRAM_SECRET_VARIABLES`, `TelegramSecrets`, `load_secrets` and `ConfigError`, every one of
+    them from `remote_agents.config`, which DEC-015 forbids `application/` to import and
+    `tests/architecture/check_imports.py` enforces. Moving it would mean a second copy of the
+    variable names in another layer, which is the shadow-copy this project has already been
+    bitten by twice. `describe_schema_drift` sits where it does for exactly this reason, and this
+    is the same trade recorded a second time so the next reader does not re-open it.
+    """
+    names = TELEGRAM_SECRET_VARIABLES
+    token = _first_supplied(
+        _token_from_file(token_file),
+        environment.get(names[0]),
+        lambda: None if ask_secretly is None else ask_secretly("Telegram bot token: "),
+    )
+    user_id = _first_supplied(
+        None if owner_user_id is None else str(owner_user_id),
+        environment.get(names[1]),
+        lambda: None if ask is None else ask("Owner user id: "),
+    )
+    chat_id = _first_supplied(
+        None if owner_chat_id is None else str(owner_chat_id),
+        environment.get(names[2]),
+        lambda: None if ask is None else ask("Owner chat id: "),
+    )
+    resolved = dict(zip(names, (token, user_id, chat_id), strict=True))
+    missing = [name for name, value in resolved.items() if not value]
+    if missing:
+        raise ConfigError(f"missing required values: {', '.join(missing)}")
+    secrets = load_secrets(resolved)
+    if secrets is None:
+        # `load_secrets(production=True)` raises rather than returning None, so this is
+        # unreachable -- and it was an `assert`, which `python -O` deletes. An unreachable branch
+        # that a flag can turn into `return None` from a function annotated to return a value is
+        # not the place to save two lines.
+        raise ConfigError("the Telegram credentials could not be resolved")
+    return secrets
+
+
+def _first_supplied(
+    flag: str | None, injected: str | None, asked: Callable[[], str | None]
+) -> str | None:
+    """Take the first source that answered, asking only if neither earlier one did.
+
+    A callable for the third, so a prompt is never raised for a value that was already supplied
+    -- which is what makes the fully-non-interactive path provably silent rather than silent by
+    luck.
+    """
+    for value in (flag, injected):
+        if value:
+            return value.strip()
+    answered = asked()
+    return None if answered is None else answered.strip()
+
+
+def _token_from_file(path: Path | None) -> str | None:
+    """Read a token out of a file the operator named, so the value never becomes argv."""
+    if path is None:
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        # **The path is rendered only when it exists.** A path that does not is overwhelmingly
+        # likely to *be* the token -- someone typed `--bot-token-file <the token>`, or reached
+        # for `--bot-token` and had it abbreviated into this one -- so naming it is the leak
+        # rather than the diagnosis. When the file does exist the path is a genuine path and
+        # printing it is what makes the error actionable.
+        if path.exists():
+            raise ConfigError(f"cannot read the bot token file {path}") from error
+        raise ConfigError("--bot-token-file names no such file (the value is not shown)") from error
+
+
+def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> dict[str, object]:
+    """Build the installed service's health report -- the one `doctor` prints, for both callers.
+
+    Extracted from `doctor`'s own branch when onboarding needed to end with it. Extracted rather
+    than reimplemented, and that is the whole decision: a bespoke "did that work?" summary at the
+    end of onboarding would be a second report to keep in step with the first, and the second one
+    is the one nobody remembers to update when a component is added. Now there is one function,
+    and `doctor` and `onboard` cannot disagree about what a healthy host is.
+    """
+    registry = load_registry(config.registry_path)
+    discovered = discover_projects(config.dev_root)
+    catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
+    profiles = probe_profiles(
+        closed_profiles(),
+        resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
+    )
+    supervisor = _supervisor_for_host()
+    return production_doctor(
+        core_ready=registry.error is None,
+        database_ready=database_is_ready(config.database_path),
+        tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+        tmux_console_ready=_console_features_available(paths.home),
+        telegram_ready=_telegram_credentials_are_private(paths),
+        service_ready=_command_succeeds(supervisor.liveness_command()),
+        profiles=profiles,
+        registered_projects=len(registry.projects),
+        discovered_projects=len(discovered),
+        catalogue_projects=len(catalogue.catalogue),
+        # Carried on the healthy path too, so a green report says the config *was* compared
+        # rather than leaving the operator to infer it from the absence of a complaint. Silence
+        # and a passed check look identical otherwise.
+        config_drift=drift,
+        credential_file=_credential_file_state(paths),
+        supervisor_kind=supervisor.kind,
+        liveness_meaning=supervisor.liveness_meaning,
+    )
+
+
+def detected_config(home: Path, dev_root: Path | None = None) -> str:
+    """Render this host's configuration from the one thing onboarding actually knows: its home.
+
+    The composition root is where this belongs, and not by default. `render_config` holds the
+    schema and refuses an incomplete set of keys; `ProductionPaths` holds the private tree and
+    where the database goes. This function is the only place that knows *both*, plus the two
+    paths that are neither -- the operator's dev tree and the projects registry, which live in
+    their home but outside the boundary `ProductionPaths` declares itself the owner of. DEC-015
+    puts exactly that kind of joining here.
+
+    `~/dev` and `~/.claude/projects-registry.yaml` are the shipped example's two paths with the
+    hardcoded home taken out, so an operator whose layout already matches the example gets the
+    file they would have written. An operator whose does not gets a config that loads and a
+    `doctor` that tells them the registry is unavailable, which is the honest answer for a host
+    that has no registry yet -- and is a different sentence from the crash a copied example
+    produces at the first `serve`.
+
+    Public, unusually for this module, because the onboarding test has to read what would be
+    written without writing it. The alternative was asserting on a file, which would have made
+    every case in that test a filesystem case.
+    """
+    paths = ProductionPaths.for_home(home)
+    return render_config(
+        dev_root=home / "dev" if dev_root is None else dev_root,
+        registry_path=home / ".claude" / "projects-registry.yaml",
+        database_path=paths.database_path,
+    )
 
 
 def _supervisor_for_host() -> ServiceSupervisor:

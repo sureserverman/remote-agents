@@ -70,6 +70,23 @@ reports one service name on both platforms instead of two spellings of the same 
 
 PLIST_NAME = f"{LABEL}.plist"
 
+#: The plist filenames this version installs, and the ones it used to -- DEC-051's ledger, the
+#: same shape the systemd adapter keeps and for the same reasons, which are argued there.
+INSTALLED_PLIST_NAMES: tuple[str, ...] = (PLIST_NAME,)
+
+#: What launchd is told to write the job's output to, named once because two places need it: the
+#: plist that asks for them and the ledger that must take them away. Spelled out twice, they
+#: would drift the moment either changed -- and the drift would be silent, because a stale name
+#: in the ledger deletes nothing and a missing one leaves output behind.
+_LOG_NAMES = ("remote-agents.log", "remote-agents.err")
+
+RETIRED_PLIST_PATHS: tuple[str, ...] = ()
+"""Nothing, for a simpler reason than on the systemd side: no released version of this project
+has ever installed a plist at all. `git log --all --diff-filter=A --name-only -- '*.plist'` finds
+none, and `git log --all -S LaunchAgents` finds only the port. There is no history here to
+strand, and a name invented to look complete is a file an uninstaller would go and delete.
+"""
+
 #: Where a brew binary lives on each architecture's default install, as absolute paths.
 #:
 #: Probed in this order rather than found on PATH, because on the Mac Stage 3 drills PATH does
@@ -296,29 +313,37 @@ class LaunchdSupervisor:
             # without these two keys its output goes to /dev/null and the macOS service is
             # undiagnosable, which would leave Stage 3's drill with no procedure for a wrong
             # reading. Apple's own guidance is to set these rather than redirect to /dev/null.
-            "StandardOutPath": str(self.log_directory / "remote-agents.log"),
-            "StandardErrorPath": str(self.log_directory / "remote-agents.err"),
+            "StandardOutPath": str(self.log_directory / _LOG_NAMES[0]),
+            "StandardErrorPath": str(self.log_directory / _LOG_NAMES[1]),
             "Umask": 0o077,
         }
         content = plistlib.dumps(definition, fmt=plistlib.FMT_XML).decode("utf-8")
         return (SupervisorArtifact(path=self.plist_path, content=content),)
 
-    def retired_artifact_paths(self) -> tuple[Path, ...]:
-        """Nothing, and empty is the honest answer rather than an unfinished one.
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        """The plist, **and the two log files launchd creates on this job's behalf.**
 
-        DEC-051's rule is that an artifact leaves `artifacts()` by *moving* here rather than by
-        disappearing, so a path no current version installs is still a path every current
-        version can take away. It has had no occasion to fire on this side, for a simpler
-        reason than on the systemd side: no released version of this project has ever installed
-        a plist at all. `git log --all --diff-filter=A --name-only -- '*.plist'` finds none,
-        and `git log --all -S LaunchAgents` finds only the port added one commit ago. There is
-        no history here to strand.
+        Neither log file is rendered here -- launchd opens `StandardOutPath` and
+        `StandardErrorPath` itself, before the job runs -- but both exist *because* this plist
+        named them, inside a directory this installer created, and an uninstaller that left them
+        would leave the state directory holding daemon output after the daemon was removed. That
+        is the gate criterion "the state directory contains no daemon artifact afterwards",
+        failing on the one platform the criterion was written for; it was found by driving the
+        real adapter through install-then-remove rather than by reading, because the test
+        asserting it ran against a fake whose install creates nothing.
 
-        Inventing an entry to look complete would be worse than empty. `artifact_paths_to_remove`
-        feeds an uninstaller, so a path named here is a path something will go and delete on the
-        strength of a claim that this project once installed it.
+        This is why the installed half of the ledger is "every path this version *causes to
+        exist*" rather than "every path it writes". The systemd side names its `enable` symlink
+        for the same reason.
         """
-        return ()
+        return (
+            *(self.plist_path.parent / name for name in INSTALLED_PLIST_NAMES),
+            *(self.log_directory / name for name in _LOG_NAMES),
+        )
+
+    def retired_artifact_paths(self) -> tuple[Path, ...]:
+        """The ledger's retired half; the reasoning is on `RETIRED_PLIST_PATHS`."""
+        return tuple(self.home / relative for relative in RETIRED_PLIST_PATHS)
 
     def required_directories(self) -> tuple[Path, ...]:
         """`~/Library/LaunchAgents` and the log directory, both needed before the first load.
@@ -329,6 +354,15 @@ class LaunchdSupervisor:
         a reason that has nothing to do with the service.
         """
         return (self.plist_path.parent, self.log_directory)
+
+    def reload_command(self) -> tuple[str, ...]:
+        """Nothing, and empty is the answer rather than a gap.
+
+        launchd reads a plist at `bootstrap` time and caches no fragment the way systemd does,
+        so there is no reload verb to run and inventing one would mean naming a `launchctl`
+        subcommand that does something else. The installer skips an empty tuple.
+        """
+        return ()
 
     def install_command(self) -> tuple[str, ...]:
         """`bootstrap` the plist into the per-user GUI domain.

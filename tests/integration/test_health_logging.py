@@ -14,7 +14,7 @@ from remote_agents.application.health import health_report, structured_event
     [
         ("telegram", "offline"),
         ("registry", "unavailable"),
-        ("profiles", "profile_blocked"),
+        ("profiles", "no_profile_available"),
         ("tmux", "unavailable"),
         ("database", "unavailable"),
         ("sessions", "orphaned"),

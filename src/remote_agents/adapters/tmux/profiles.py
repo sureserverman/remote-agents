@@ -17,6 +17,7 @@ from remote_agents.domain.profiles import (
     ProfileError,
 )
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
+from remote_agents.ports.terminal_text import probe_version_line
 
 _RESUME_ARGUMENTS = {
     "claude": ("--resume",),
@@ -59,8 +60,11 @@ def probe_profiles(
             )
             continue
         try:
-            version = _sanitize_version(run_version((str(path), *profile.version_argv)))
+            printed = run_version((str(path), *profile.version_argv))
         except (OSError, subprocess.SubprocessError):
+            printed = None
+        version = None if printed is None else probe_version_line(printed)
+        if version is None:
             results.append(
                 ProfileCompatibility(
                     profile.profile_id, True, None, "AVAILABLE", "version_probe_failed"
@@ -92,13 +96,6 @@ def _run_version(argv: tuple[str, ...]) -> str:
         env=environment,
     )
     return completed.stdout
-
-
-def _sanitize_version(value: str) -> str:
-    line = next((part.strip() for part in value.splitlines() if part.strip()), "")
-    if not line:
-        raise OSError("version probe returned no text")
-    return "".join(character for character in line if character.isprintable())[:160]
 
 
 def build_launch_profile(

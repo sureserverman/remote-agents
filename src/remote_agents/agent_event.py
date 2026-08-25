@@ -16,9 +16,10 @@ here, so there is one implementation and not two that must agree.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
+
+from remote_agents.ports.argv_text import NonEchoingArgumentParser
 
 
 def spool_from_stdin(activity_directory: Path | None) -> int:
@@ -49,7 +50,14 @@ def spool_from_stdin(activity_directory: Path | None) -> int:
 
 def run_agent_event(argv: list[str] | None = None) -> int:
     """Parse this subcommand's own arguments, so reaching it needs no other parser."""
-    parser = argparse.ArgumentParser(prog="remote-agents agent-event")
+    # `NonEchoingArgumentParser`, like every other parser in this project. This one is the
+    # reason the architecture test exists: `__main__` routes `agent-event` here *without*
+    # importing `bootstrap` -- deliberately, because the hook fires in every Claude session and
+    # the composition root costs 678 modules -- so the defence `bootstrap` had did not reach the
+    # shipped entry point, and `remote-agents agent-event --bot-token=<token>` printed the
+    # credential through the exact message the leak was first filed for. The test driving it
+    # drove `bootstrap.main`, which is not the path the console script takes.
+    parser = NonEchoingArgumentParser(prog="remote-agents agent-event")
     parser.add_argument("--activity-dir", type=Path)
     arguments = parser.parse_args(argv)
     return spool_from_stdin(arguments.activity_dir)

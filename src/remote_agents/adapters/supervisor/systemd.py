@@ -40,6 +40,52 @@ from remote_agents.ports.service_supervisor import (
 
 UNIT_NAME = "remote-agents.service"
 
+#: The unit filenames this version installs, and the ones it used to. DEC-051's ledger, kept the
+#: way `install-agent-hooks` keeps `INSTALLED_EVENTS` / `RETIRED_EVENTS`.
+#:
+#: **Names, not paths, and that split is the point.** A unit's directory depends on the home it
+#: is rendered for, so a constant holding a whole path would have to be a path expression
+#: somebody gets right twice; a constant holding a filename makes retiring one a single
+#: reviewable line, which is what the rule needs to survive being followed under pressure.
+#:
+#: An entry leaves `INSTALLED_UNIT_NAMES` by *moving* to `RETIRED_UNIT_PATHS`, never by being
+#: deleted. Deleting it strands the file: removal sweeps what the installer knows it owns, so a
+#: name no longer listed is a definition no version of this tool can take away -- and the
+#: operator cannot work around that by uninstalling first, because that means running the *old*
+#: uninstaller before taking the upgrade. An entry stays here until every host has run the
+#: installer at least once since the name was dropped; nothing can know when that is, and the
+#: cost of keeping one is a path join.
+INSTALLED_UNIT_NAMES: tuple[str, ...] = (UNIT_NAME,)
+
+#: The symlink `systemctl --user enable` writes, which nothing here renders and which removal
+#: must still take away.
+#:
+#: `enable --now` -- the verb this installer runs, and the one the README has always documented
+#: -- creates `default.target.wants/<unit>` pointing at the unit file. `disable` removes it, and
+#: on a host where `disable` cannot run (no session bus, which this project's own drill document
+#: warns about) it stays: a dangling symlink in the supervisor's own directory, pointing at a
+#: unit file that has been deleted, which no later `--remove` could ever reach because it was
+#: outside the ledger. Naming it here is what makes the sweep total rather than nearly so.
+_WANTS_LINK = ("default.target.wants", UNIT_NAME)
+
+RETIRED_UNIT_PATHS: tuple[str, ...] = ()
+"""Nothing yet, and empty is the honest answer rather than an unfinished one.
+
+**Paths relative to the operator's home, not bare filenames**, because the obligation this
+ledger carries is that an upgrade which *renames or relocates* an artifact must not strand the
+old one -- and a bare filename joined to today's unit directory can only express the rename. A
+version that once installed to a different directory is exactly the case the master plan named,
+and it was inexpressible until these entries became paths. Relative to home so that a retired
+entry can never name a file outside the operator's own tree, which a sweep must never reach.
+
+The rule has had no occasion to fire on this side: this adapter installs to
+`~/.config/systemd/user/remote-agents.service`, which is the same path the shipped static unit
+was copied to, so upgrading to a generated unit overwrites the file it replaces instead of
+stranding one beside it. Inventing an entry to look complete would be worse than empty --
+`artifact_paths_to_remove` feeds an uninstaller, so a name here is a file something will go and
+delete on the strength of a claim that this project once installed it.
+"""
+
 #: The service definition, with the three host-specific values left to `str.format`.
 #:
 #: Every directive below the paths is the shipped unit's, unchanged and for its original
@@ -205,24 +251,40 @@ class SystemdSupervisor:
         )
         return (SupervisorArtifact(path=self.unit_path, content=content),)
 
-    def retired_artifact_paths(self) -> tuple[Path, ...]:
-        """Nothing yet -- and the empty tuple is the honest answer, not an unfinished one.
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        """The ledger's installed half, joined to this host's unit directory.
 
-        DEC-051's rule is that an artifact leaves `artifacts()` by *moving* here rather than by
-        disappearing, so that a path no current version installs is still a path every current
-        version can take away. That rule has had no occasion to fire on this side: this adapter
-        installs to `~/.config/systemd/user/remote-agents.service`, which is the same path the
-        shipped static unit was copied to, so upgrading to a generated unit overwrites the file
-        it replaces instead of stranding one beside it.
-
-        Inventing an entry to look complete would be worse than empty: `artifact_paths_to_remove`
-        feeds an uninstaller, and a path named here is a path something will try to delete.
+        Derived from `INSTALLED_UNIT_NAMES` rather than from `unit_path` alone, so the two halves
+        of the ledger are read the same way and a second installed name is one entry rather than
+        a second method. Depends on the home and not on the executable, which is why it never
+        refuses -- and why removal, which reads this, works on a host rendering would reject.
         """
-        return ()
+        return (
+            *(self.unit_path.parent / name for name in INSTALLED_UNIT_NAMES),
+            self.unit_path.parent.joinpath(*_WANTS_LINK),
+        )
+
+    def retired_artifact_paths(self) -> tuple[Path, ...]:
+        """The ledger's retired half, joined to this host's unit directory.
+
+        The reasoning lives on `RETIRED_UNIT_PATHS`, where the entries are, rather than here
+        where they are only assembled.
+        """
+        return tuple(self.home / relative for relative in RETIRED_UNIT_PATHS)
 
     def required_directories(self) -> tuple[Path, ...]:
         """The unit directory, which `install(1)` will not create on the way past."""
         return (self.unit_path.parent,)
+
+    def reload_command(self) -> tuple[str, ...]:
+        """`daemon-reload`, which this project's runbook has always put before `enable`.
+
+        systemd caches a loaded unit's fragment, so `enable --now` after a rewritten file can
+        start the definition it already had. `docs/operator-runbook.md:10` has carried this
+        between the install and the enable since the service first shipped; the generated-unit
+        path had dropped it.
+        """
+        return ("systemctl", "--user", "daemon-reload")
 
     def install_command(self) -> tuple[str, ...]:
         """Register the written unit and bring it up, as the runbook already documents."""

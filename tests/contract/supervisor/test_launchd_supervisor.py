@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from remote_agents.adapters.supervisor import registered_supervisors
 from remote_agents.adapters.supervisor.launchd import (
     LABEL,
@@ -283,6 +285,8 @@ def test_launchd_removal_sweeps_every_path_this_adapter_has_ever_owned() -> None
     assert ELSEWHERE.retired_artifact_paths() == ()
     assert artifact_paths_to_remove(ELSEWHERE) == (
         Path(f"/Users/tester/Library/LaunchAgents/{PLIST_NAME}"),
+        Path("/Users/tester/.local/state/remote-agents/remote-agents.log"),
+        Path("/Users/tester/.local/state/remote-agents/remote-agents.err"),
     )
 
 
@@ -291,3 +295,83 @@ def test_launchd_adapter_is_reachable_through_the_registry() -> None:
     kinds = {supervisor.kind for supervisor in registered_supervisors()}
 
     assert SupervisorKind.LAUNCHD in kinds
+
+
+def test_the_retired_plist_ledger_holds_home_relative_paths_not_bare_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same split as the systemd side, and the same reason: relocate, not only rename."""
+    from remote_agents.adapters.supervisor import launchd
+
+    monkeypatch.setattr(launchd, "RETIRED_PLIST_PATHS", ("Library/LaunchAgents/old.plist",))
+    supervisor = launchd.LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=Path("/Users/tester"),
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+
+    assert supervisor.retired_artifact_paths() == (
+        Path("/Users/tester/Library/LaunchAgents/old.plist"),
+    )
+
+
+def test_the_launchd_ledger_covers_the_log_files_launchd_creates_itself(tmp_path: Path) -> None:
+    """The plist is not the only thing an install leaves behind on a Mac.
+
+    launchd opens `StandardOutPath` and `StandardErrorPath` itself, before the job runs, so both
+    exist the moment the agent is bootstrapped -- inside the state directory this installer
+    created. A sweep covering only the plist left daemon output behind after the daemon was
+    removed, which is the gate's own criterion failing on the platform it was written for. Found
+    by driving the real adapter through install-then-remove; the test that claimed the property
+    ran against a fake whose install creates nothing.
+    """
+    from remote_agents.adapters.supervisor.installer import install_daemon, remove_daemon
+    from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
+
+    supervisor = LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=tmp_path,
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+    install_daemon(supervisor, run=lambda argv: 0)
+    # What launchd does on its own behalf once the job is bootstrapped.
+    for name in ("remote-agents.log", "remote-agents.err"):
+        (supervisor.log_directory / name).write_text("job output", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    survivors = sorted(path.name for path in supervisor.log_directory.iterdir())
+    assert survivors == [], f"the state directory still holds daemon output: {survivors}"
+    assert not supervisor.plist_path.exists()
+
+
+def test_every_retired_plist_entry_is_swept_and_is_not_also_installed(tmp_path: Path) -> None:
+    """The launchd counterpart, which was missing.
+
+    The systemd side got a per-entry sweep when the `== ()` assertion was replaced; on this side
+    the old assertion was deleted and nothing took its place, so the commit describing the change
+    described it as applying to both when it applied to one. Vacuous while the ledger is empty,
+    by construction, and real the moment an entry appears -- which is the point of iterating the
+    ledger rather than asserting its length.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+    from remote_agents.adapters.supervisor.launchd import RETIRED_PLIST_PATHS
+
+    supervisor = LaunchdSupervisor(
+        interpreter=tmp_path / "venv" / "bin" / "python3",
+        home=tmp_path,
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+    installed = set(supervisor.installed_artifact_paths())
+    for path in supervisor.retired_artifact_paths():
+        assert path not in installed, f"{path} is in both halves of the ledger"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("a plist an older version installed", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    for relative in RETIRED_PLIST_PATHS:
+        assert not (tmp_path / relative).exists(), f"{relative} was left stranded"

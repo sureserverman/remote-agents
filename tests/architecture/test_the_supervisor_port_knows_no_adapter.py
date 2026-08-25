@@ -90,10 +90,16 @@ class _FakeSupervisor:
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         return (SupervisorArtifact(path=Path("/installed/now.conf"), content="body"),)
 
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        return tuple(artifact.path for artifact in self.artifacts())
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         return (Path("/installed/before.conf"), Path("/installed/now.conf"))
 
     def required_directories(self) -> tuple[Path, ...]:
+        return ()
+
+    def reload_command(self) -> tuple[str, ...]:
         return ()
 
     def install_command(self) -> tuple[str, ...]:
