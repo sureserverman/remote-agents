@@ -103,6 +103,23 @@ say "Installing remote-agents ${REMOTE_AGENTS_VERSION} from ${REMOTE_AGENTS_REPO
 uv tool install --managed-python \
   "remote-agents @ git+${REMOTE_AGENTS_REPOSITORY}@${REMOTE_AGENTS_VERSION}"
 
+# `uv tool install` puts the console script in uv's own bin directory -- ~/.local/bin -- which
+# a fresh login shell need not have on PATH and which is absent from macOS's `_PATH_STDPATH`
+# outright. Asking uv where it landed is the difference between a bootstrap that works on the
+# developer's host and one that works on the clean host it exists for.
+installed_bin="$(uv tool dir --bin)"
+
 if [ "${onboard}" -eq 0 ]; then
-  say "Skipping onboarding (--no-onboard)."
+  say "Skipping onboarding (--no-onboard). Run 'remote-agents onboard' when you are ready."
+else
+  say "Onboarding..."
+  # No arguments beyond the subcommand, deliberately. Every argument of a process is readable
+  # by every other process on the host for as long as it runs, and onboarding is where the bot
+  # token is captured -- so the credential is prompted for, or read from a file named by an
+  # option, never forwarded here.
+  "${installed_bin}/remote-agents" onboard
 fi
+
+say ""
+say "Installed. The executable is ${installed_bin}/remote-agents"
+say "If that directory is not on your PATH, run: uv tool update-shell"

@@ -35,6 +35,20 @@ FAKE_INSTALLER = (
 FAKE_INSTALLER_SHA = hashlib.sha256(FAKE_INSTALLER.encode()).hexdigest()
 
 
+#: The stub `uv`. It answers `tool dir --bin` because the script must ask where the console
+#: script landed: `uv tool install` puts it in ~/.local/bin, which is on neither a fresh login
+#: shell's PATH nor macOS's `_PATH_STDPATH`, so a bare `remote-agents` would not resolve.
+_UV_STUB = (
+    "#!/bin/sh\n"
+    'if [ "$1" = "tool" ] && [ "$2" = "dir" ] && [ "$3" = "--bin" ]; then\n'
+    '  printf \'%s\\n\' "$UV_BIN_DIR"\n'
+    "  exit 0\n"
+    "fi\n"
+    'echo "$@" >> "$UV_LOG"\n'
+    "exit 0\n"
+)
+
+
 def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]:
     """A PATH holding stub `curl` and optionally stub `uv`, plus the env the script sees."""
     bin_dir = tmp_path / "bin"
@@ -57,11 +71,21 @@ def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]
 
     if uv_present:
         uv = bin_dir / "uv"
-        uv.write_text('#!/bin/sh\necho "$@" >> "$UV_LOG"\nexit 0\n', encoding="utf-8")
+        uv.write_text(_UV_STUB, encoding="utf-8")
         uv.chmod(0o755)
+
+    tool_bin = tmp_path / "toolbin"
+    tool_bin.mkdir()
+    installed = tool_bin / "remote-agents"
+    installed.write_text(
+        '#!/bin/sh\necho "$@" >> "$REMOTE_AGENTS_LOG"\nexit 0\n', encoding="utf-8"
+    )
+    installed.chmod(0o755)
 
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "UV_BIN_DIR": str(tool_bin),
+        "REMOTE_AGENTS_LOG": str(tmp_path / "remote-agents.log"),
         "HOME": str(tmp_path / "home"),
         "CURL_LOG": str(tmp_path / "curl.log"),
         "UV_LOG": str(tmp_path / "uv.log"),
@@ -219,3 +243,71 @@ def test_verification_works_on_a_host_with_shasum_but_no_sha256sum(tmp_path: Pat
     assert shutil.which("sha256sum", path=str(macos_like)) is None, "fixture is not macOS-like"
     assert FAKE_INSTALLER_SHA in message, f"did not hash the payload without sha256sum: {message}"
     assert not Path(env["INSTALLER_RAN_MARKER"]).exists()
+
+
+def test_the_default_run_hands_off_to_onboard(tmp_path: Path) -> None:
+    """OpenClaw's shape: bootstrap installs, then onboards, unless told not to."""
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    log = Path(env["REMOTE_AGENTS_LOG"])
+    assert log.exists(), "never invoked the installed executable"
+    assert "onboard" in log.read_text(encoding="utf-8")
+
+
+def test_no_onboard_skips_the_onboard_handoff(tmp_path: Path) -> None:
+    """Written first as "the log is absent", which passed while no onboarding existed at all.
+
+    An opt-out that is indistinguishable from an unimplemented feature tests nothing, so this
+    also requires the install to have happened and the skip to be announced -- the script
+    reaching the decision and taking the other branch, rather than never having one.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 0, result.stderr
+    assert "tool install" in Path(env["UV_LOG"]).read_text(encoding="utf-8")
+    assert "Skipping onboarding" in result.stdout, result.stdout
+    assert not Path(env["REMOTE_AGENTS_LOG"]).exists(), "onboarded despite --no-onboard"
+
+
+def test_onboard_is_reached_through_the_installed_path_not_a_bare_name(tmp_path: Path) -> None:
+    """`uv tool install` puts the console script in a directory PATH need not contain.
+
+    On a fresh login shell ~/.local/bin is commonly absent from PATH, and on macOS it is absent
+    from `_PATH_STDPATH` outright -- so a bootstrap that invokes a bare `remote-agents` works on
+    the developer's host and fails on the clean one it exists for. The script asks uv where the
+    executable is instead of assuming.
+
+    Pinned by putting the stub ONLY in uv's reported bin directory and leaving it off PATH: a
+    bare-name invocation cannot resolve, so this test fails if the script stops asking.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    assert Path(env["REMOTE_AGENTS_LOG"]).exists(), "could not reach the installed executable"
+
+
+def test_the_onboard_handoff_puts_no_credential_on_the_command_line(tmp_path: Path) -> None:
+    """Sub-plan 2 made the token un-passable as argv; this script must not undo that.
+
+    Every argument of the process is readable by every other process on the host for as long as
+    it runs, so a bootstrap that forwarded a token would reintroduce exactly the leak the
+    onboarding CLI was shaped to prevent -- there is no `--bot-token VALUE` option at all.
+    """
+    contents = SCRIPT.read_text(encoding="utf-8")
+
+    assert "--bot-token" not in contents, "names a credential option"
+    for forbidden in ("TELEGRAM_BOT_TOKEN", "OWNER_USER_ID", "OWNER_CHAT_ID"):
+        assert forbidden not in contents, forbidden
+
+    _, env = _sandbox(tmp_path, uv_present=True)
+    _run(env)
+    invocation = Path(env["REMOTE_AGENTS_LOG"]).read_text(encoding="utf-8")
+
+    assert invocation.strip() == "onboard", f"passed more than the subcommand: {invocation!r}"
