@@ -28,7 +28,11 @@ FAKE_INSTALLER = (
     "#!/bin/sh\n"
     'touch "$INSTALLER_RAN_MARKER"\n'
     'mkdir -p "$HOME/.local/bin"\n'
-    'printf \'#!/bin/sh\\necho "$@" >> "%s"\\nexit 0\\n\' "$UV_LOG" > "$HOME/.local/bin/uv"\n'
+    #: Installs the SAME stub the uv-present path uses, rather than a second, thinner one.
+    #: The old inline stub could not answer `tool dir --bin`, so on the fetch path the script
+    #: asked where the executable landed and got nothing back -- invisible while nothing
+    #: checked the answer, and a false success the moment something did.
+    'cp "$UV_STUB_PATH" "$HOME/.local/bin/uv"\n'
     'chmod +x "$HOME/.local/bin/uv"\n'
 )
 FAKE_INSTALLER_SHA = hashlib.sha256(FAKE_INSTALLER.encode()).hexdigest()
@@ -73,11 +77,24 @@ def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]
         uv.write_text(_UV_STUB, encoding="utf-8")
         uv.chmod(0o755)
 
+    uv_stub_path = tmp_path / "uv-stub"
+    uv_stub_path.write_text(_UV_STUB, encoding="utf-8")
+    uv_stub_path.chmod(0o755)
+
     tool_bin = tmp_path / "toolbin"
     tool_bin.mkdir()
     installed = tool_bin / "remote-agents"
+    #: Honours STUB_ONBOARD_EXIT instead of always exiting 0. The old stub could not fail, so
+    #: the one path that defeats the stage's own goal -- onboarding returning non-zero on a
+    #: clean host and `set -e` killing the script before it printed anything -- was the one
+    #: path nothing drove. A fixture that supplies what the product does not is how that hid.
+    #: STUB_STDIN_LOG makes it drain stdin, which is how the piped-script truncation is pinned.
     installed.write_text(
-        '#!/bin/sh\necho "$@" >> "$REMOTE_AGENTS_LOG"\nexit 0\n', encoding="utf-8"
+        "#!/bin/sh\n"
+        'echo "$@" >> "$REMOTE_AGENTS_LOG"\n'
+        'if [ -n "${STUB_STDIN_LOG:-}" ]; then cat > "$STUB_STDIN_LOG"; fi\n'
+        'exit "${STUB_ONBOARD_EXIT:-0}"\n',
+        encoding="utf-8",
     )
     installed.chmod(0o755)
 
@@ -90,6 +107,7 @@ def _sandbox(tmp_path: Path, *, uv_present: bool) -> tuple[Path, dict[str, str]]
         "UV_LOG": str(tmp_path / "uv.log"),
         "INSTALLER_RAN_MARKER": str(tmp_path / "installer-ran"),
         "FAKE_PAYLOAD": FAKE_INSTALLER,
+        "UV_STUB_PATH": str(uv_stub_path),
     }
     (tmp_path / "home").mkdir()
     return bin_dir, env
@@ -229,7 +247,10 @@ def test_verification_works_on_a_host_with_shasum_but_no_sha256sum(tmp_path: Pat
     macos_like = tmp_path / "macos-bin"
     macos_like.mkdir()
     for tool in (
-        "bash", "mktemp", "awk", "rm", "sh", "shasum", "chmod", "mkdir", "touch", "printf"
+        "bash", "mktemp", "awk", "rm", "sh", "shasum", "chmod", "mkdir", "touch", "printf",
+        #: The script now refuses a host with no git before it fetches anything, so a curated
+        #: PATH that omits git no longer reaches the verification this test is about.
+        "git",
     ):
         found = shutil.which(tool)
         if found:
@@ -311,7 +332,9 @@ def test_the_onboard_handoff_puts_no_credential_on_the_command_line(tmp_path: Pa
     _run(env)
     invocation = Path(env["REMOTE_AGENTS_LOG"]).read_text(encoding="utf-8")
 
-    assert invocation.strip() == "onboard", f"passed more than the subcommand: {invocation!r}"
+    assert invocation.strip() == "onboard --install-daemon", (
+        f"passed more than the subcommand and the daemon flag: {invocation!r}"
+    )
 
 
 def test_the_script_tells_the_operator_how_to_upgrade_without_naming_a_command_that_cannot(
@@ -365,3 +388,205 @@ def test_the_script_documents_removal_daemon_first_because_the_other_order_stran
     assert printed.index("onboard --remove") < printed.index("uv tool uninstall remote-agents"), (
         "documents removing the tool before the daemon, which strands the daemon"
     )
+
+
+def test_the_handoff_asks_for_the_daemon_because_a_bootstrap_should_leave_a_service(
+    tmp_path: Path,
+) -> None:
+    """The stage's goal is a *running service* from one command, not a configured host.
+
+    Plain `onboard` writes the config and the credential and registers nothing --
+    `install_daemon` is reached only under `if arguments.install_daemon:`. An operator who ran
+    the one-liner therefore ended with a correctly installed tool, no service, and nothing
+    telling them so; `doctor` would have said `service_inactive` if they had thought to ask.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+
+    result = _run(env)
+
+    assert result.returncode == 0, result.stderr
+    invocation = Path(env["REMOTE_AGENTS_LOG"]).read_text(encoding="utf-8").strip()
+    assert invocation == "onboard --install-daemon"
+
+
+def test_the_closing_contract_prints_even_when_onboarding_fails(tmp_path: Path) -> None:
+    """The operator who most needs the removal order is the one whose onboarding just failed.
+
+    Under `set -euo pipefail` a non-zero `onboard` aborted the script at the handoff, so the
+    executable's location, the upgrade path and the daemon-first removal order -- everything
+    Task 2.3 added -- never printed. This is not hypothetical on a clean host: `tmux` is a
+    required dependency and is commonly absent, and under `curl | bash` stdin is not a tty, so
+    onboarding cannot ask permission to install it and stops.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["STUB_ONBOARD_EXIT"] = "1"
+
+    result = _run(env)
+
+    assert "Installed. The executable is" in result.stdout
+    assert "onboard --remove" in result.stdout
+    assert "uv tool uninstall remote-agents" in result.stdout
+    assert "To upgrade" in result.stdout
+    assert "onboarding exited 1" in result.stdout
+
+
+def test_a_failed_onboarding_still_reaches_the_scripts_own_exit_status(tmp_path: Path) -> None:
+    """Printing the contract must not turn a failed onboarding into a reported success.
+
+    The fix for the abort is to capture the status rather than let `set -e` act on it, and the
+    obvious over-correction is to swallow it -- which would tell an unattended installer that a
+    host with no running service is finished. BL-001 is an open decision about whether a fresh
+    host *should* exit 1; nothing here pre-empts it, and the script reports what it was told.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["STUB_ONBOARD_EXIT"] = "3"
+
+    result = _run(env)
+
+    assert result.returncode == 3
+    assert "Installed. The executable is" in result.stdout
+
+
+def test_a_version_that_is_not_tag_shaped_is_refused_before_anything_is_installed(
+    tmp_path: Path,
+) -> None:
+    """The header's claim is "a PINNED TAG, never a branch"; nothing used to enforce it.
+
+    `REMOTE_AGENTS_VERSION=main` installed from a moving ref and printed the full success
+    banner. What decides the code that becomes a long-running daemon deserves at least the
+    shape check the third-party installer's digest already gets.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["REMOTE_AGENTS_VERSION"] = "main"
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 2
+    assert "not tag-shaped" in result.stderr
+    assert not Path(env["UV_LOG"]).exists(), "installed despite refusing the ref"
+
+
+def test_an_acknowledged_unpinned_ref_is_allowed_and_warned_about(tmp_path: Path) -> None:
+    """The refusal is a guard rail, not a wall: a fork or a test branch is a legitimate need.
+
+    What it costs is silence -- taking the unpinned path now requires saying so, and the script
+    says back what that means.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["REMOTE_AGENTS_VERSION"] = "main"
+    env["REMOTE_AGENTS_ALLOW_UNPINNED_REF"] = "1"
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 0, result.stderr
+    assert "not a pinned tag" in result.stdout
+    assert "main" in Path(env["UV_LOG"]).read_text(encoding="utf-8")
+
+
+def test_a_host_without_git_is_told_so_rather_than_shown_uvs_error(tmp_path: Path) -> None:
+    """uv shells out to git for a `git+https://` source, and a clean host need not have it.
+
+    Onboarding's own dependency probe does check git -- on the far side of the install that
+    needed it, so the failure arrived as uv's "Git executable not found" after a fetch that
+    could not have worked. Checking first costs one `command -v`.
+    """
+    bin_dir, env = _sandbox(tmp_path, uv_present=True)
+    # A PATH that can still run the script -- bash and its helpers -- but has no git on it.
+    # Emptying PATH entirely would fail for a reason that has nothing to do with the check.
+    without_git = tmp_path / "no-git-bin"
+    without_git.mkdir()
+    for tool in ("bash", "sh", "mktemp", "awk", "rm", "printf", "sha256sum", "cat", "chmod"):
+        found = shutil.which(tool)
+        if found:
+            (without_git / tool).symlink_to(found)
+    env["PATH"] = f"{bin_dir}:{without_git}"
+    assert shutil.which("git", path=env["PATH"]) is None, "fixture still has git on PATH"
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 1
+    assert "git is not installed" in result.stderr
+    assert not Path(env["UV_LOG"]).exists(), "tried to install without git"
+
+
+def test_the_verified_line_says_which_pin_was_satisfied(tmp_path: Path) -> None:
+    """"Verified" over an operator-supplied digest claims provenance the script cannot know.
+
+    With both the URL and the digest overridden, the script will happily verify attacker bytes
+    against the attacker's own number and print a line a screenshot-reading reviewer trusts.
+    It is still allowed -- the operator asked -- but it must not read like the committed pin.
+    """
+    _, env = _sandbox(tmp_path, uv_present=False)
+    env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = FAKE_INSTALLER_SHA
+
+    overridden = _run(env, "--no-onboard")
+
+    assert overridden.returncode == 0, overridden.stderr
+    assert "supplied in the environment" in overridden.stdout
+    assert "NOT the digest committed" in overridden.stdout
+
+
+def test_an_install_that_did_not_land_where_uv_says_is_a_refusal_not_a_success(
+    tmp_path: Path,
+) -> None:
+    """A uv answering nothing made the path `/remote-agents`, and the script reported success.
+
+    The banner then told the operator their executable was somewhere it had never been.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    env["UV_BIN_DIR"] = str(tmp_path / "nowhere")
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 1
+    assert "nothing runnable there" in result.stderr
+
+
+def test_the_temporary_file_cleanup_cannot_be_hijacked_through_tmpdir(tmp_path: Path) -> None:
+    """The `trap` used to be built by expanding a path into a string it later evaluated.
+
+    `mktemp` honours TMPDIR, so a directory name carrying a command substitution ended up
+    inside the trap body and ran on exit -- reproduced before the fix. Self-inflicted, since
+    only the operator sets their own TMPDIR; worth closing because the `disable=SC2064` sitting
+    on that line asserted it had been considered.
+    """
+    _, env = _sandbox(tmp_path, uv_present=False)
+    env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = FAKE_INSTALLER_SHA
+    witness = tmp_path / "INJECTED"
+    # The name cannot hold a path separator, so the payload reaches its witness through the
+    # environment -- which is also how it would expand inside a trap body built by string
+    # interpolation, so the test exercises the real mechanism rather than a shaped one.
+    hostile = tmp_path / "zz'$(touch $WITNESS)'q"
+    hostile.mkdir()
+    env["TMPDIR"] = str(hostile)
+    env["WITNESS"] = str(witness)
+
+    _run(env, "--no-onboard")
+
+    assert not witness.exists(), "TMPDIR reached the trap body and was executed"
+
+
+def test_the_handoff_does_not_hand_the_child_the_rest_of_the_installer(tmp_path: Path) -> None:
+    """Under `curl | bash` the script's own unread bytes are stdin.
+
+    A child that reads stdin therefore consumes the installer's remaining lines, silently
+    truncating the run -- demonstrated by replacing the child with `cat`, which printed this
+    file's own closing block. Today's `onboard` does not read stdin when it is not a tty, so
+    the hazard is latent rather than active; a redirect costs nothing and closes it for every
+    future prompt, pager or `read` reachable from onboarding.
+    """
+    _, env = _sandbox(tmp_path, uv_present=True)
+    drained = tmp_path / "child-stdin"
+    env["STUB_STDIN_LOG"] = str(drained)
+
+    result = subprocess.run(
+        ["bash", "-s", "--"],
+        input=SCRIPT.read_text(encoding="utf-8"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert drained.read_text(encoding="utf-8") == "", "the child was handed the installer's tail"

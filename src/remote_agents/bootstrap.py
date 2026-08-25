@@ -1356,7 +1356,11 @@ def _onboard(arguments) -> int:
     supervisor = _supervisor_for_host()
     wants_unit_directory = supervisor.kind is SupervisorKind.SYSTEMD
     if arguments.print_daemon_path:
-        # **Before every other branch, and it changes nothing.** This is what an operator runs
+        # **Before every branch that changes the host, and it changes nothing.** The credential
+        # refusal above still runs first, deliberately: a value already in argv cannot be
+        # un-leaked by anything here, so that check is not one a query may skip past. (This
+        # comment claimed "before every other branch", which the line above it made false.)
+        # This is what an operator runs
         # when they do not yet know what state the host is in, and what the upgrade contract's
         # own check runs to read the definition back -- so it must not create a directory,
         # write a config, or ask for a credential on the way to answering.

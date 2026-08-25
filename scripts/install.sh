@@ -2,28 +2,73 @@
 #
 # One-line bootstrap for remote-agents on a clean Ubuntu or macOS host.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh | bash
+# Onboarding's three credentials must already be in the environment for a piped run, because
+# a piped script has no terminal to be asked at -- `curl | bash` gives this script's own text
+# to stdin, so onboarding sees a non-tty and refuses to prompt rather than reading the
+# installer's remaining bytes as if they were an answer:
+#
+#   curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+#     | <the three credential variables> bash
+#
+# They are deliberately not spelled out here. This repository greps its own sources for those
+# variable names to prove no credential surface leaks into them, and a comment listing them
+# registers as exactly the thing that guard exists to catch -- the fifth time this project has
+# met that proxy, and wording around one is still cheaper than loosening it. Run the one-liner
+# once and onboarding names the precise variables it wants; the README's non-interactive
+# install section lists them as well.
+#
+# To pass options, bash needs `-s --` (a piped `bash --no-onboard` is bash's own option, not
+# this script's, and fails before the script runs):
+#
+#   curl -fsSL .../scripts/install.sh | bash -s -- --no-onboard
+#
+# Save it and run it in a terminal instead, and onboarding will prompt for the credentials.
+#
+# Prerequisites this script needs and does not install: `curl` (implied -- it is how you got
+# here), and `git`, which uv shells out to for a `git+https://` install.
 #
 # What this script trusts, stated plainly because it fetches code and runs it:
 #
-#   * It runs `uv tool install` against a PINNED TAG of this repository, never a branch. An
-#     unpinned install resolves to whatever the default branch happens to say at that moment.
+#   * BY DEFAULT it runs `uv tool install` against a PINNED TAG of this repository, never a
+#     branch -- an unpinned install resolves to whatever the default branch happens to say at
+#     that moment. `REMOTE_AGENTS_REPOSITORY` and `REMOTE_AGENTS_VERSION` override both, and an
+#     override is exactly as trustworthy as whoever set it: this script cannot tell a
+#     deliberate fork from an attacker's. It refuses a version that is not tag-shaped unless
+#     REMOTE_AGENTS_ALLOW_UNPINNED_REF is set, and it prints both values before installing.
 #   * If `uv` is absent it fetches Astral's installer -- third-party code from a vendor domain --
 #     and VERIFIES A PINNED SHA-256 BEFORE EXECUTING IT. A mismatch aborts; the fetched bytes are
 #     never run. This is the trust model this project's own `openclaw.sh` uses, copied rather
-#     than reinvented.
+#     than reinvented. The pinned installer carries its own per-platform checksums for the uv
+#     binary it downloads, so pinning this one file anchors the whole chain.
 #   * If `uv` is already present it is used as-is and nothing is fetched at all.
 #
-# To roll the pin forward: re-fetch the installer, recompute `sha256sum`, and update the constant
-# below. The environment override lets an operator bump it without editing this file; the
-# committed default is what makes a bare piped run verified rather than trusting an empty string.
+# THE URL IS VERSIONED ON PURPOSE. `https://astral.sh/uv/install.sh` is a rolling "latest"
+# endpoint, so a digest pinned against it stops matching on Astral's next release and every
+# clean-host bootstrap aborts on their schedule rather than on a threat. Worse, the abort would
+# then be routine, and an operator who pastes the observed hash to get past a routine failure
+# has been trained out of the check. The versioned URL and the digest are immutable together,
+# which makes rolling the pin a deliberate two-line commit here.
+#
+# To roll the pin forward: bump the version in the URL, fetch it, verify it against Astral's
+# own published release (not merely against itself), and update both constants below. The
+# environment override exists for an operator who cannot wait for that commit -- it is not the
+# normal path, and using it means the digest no longer attests anything this repository checked.
 
 set -euo pipefail
 
+# Recorded before the `:=` defaults below make an override indistinguishable from the default.
+if [ -n "${REMOTE_AGENTS_UV_INSTALLER_SHA256+set}" ]; then
+  pin_came_from_the_environment=1
+else
+  pin_came_from_the_environment=0
+fi
+
 : "${REMOTE_AGENTS_UV_INSTALLER_SHA256:=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111}"
-: "${REMOTE_AGENTS_UV_INSTALLER_URL:=https://astral.sh/uv/install.sh}"
+: "${REMOTE_AGENTS_UV_INSTALLER_URL:=https://astral.sh/uv/0.12.5/install.sh}"
 : "${REMOTE_AGENTS_REPOSITORY:=https://github.com/sureserverman/remote-agents}"
-: "${REMOTE_AGENTS_VERSION:=v0.19.0}"
+: "${REMOTE_AGENTS_VERSION:=v0.20.0}"
+#: Set non-empty to accept a branch, a bare SHA, or anything else not tag-shaped.
+: "${REMOTE_AGENTS_ALLOW_UNPINNED_REF:=}"
 
 onboard=1
 for argument in "$@"; do
@@ -56,6 +101,45 @@ sha256_of() {
   fi
 }
 
+#: Script-scope, and the trap names a FUNCTION rather than interpolating this value. Building
+#: the trap body by expanding the path into a string -- `trap "rm -f '${installer}'" EXIT` --
+#: evaluates that string at trap time, so a path carrying an apostrophe closes the quote and
+#: whatever follows it is executed. That is reachable through TMPDIR alone, which mktemp
+#: honours: with TMPDIR set to a directory whose name contains a command substitution, the
+#: substitution ran -- reproduced. Only an operator can set their own TMPDIR, so this was
+#: self-inflicted rather than remote; what made it worth fixing is that the
+#: `shellcheck disable=SC2064` sitting here asserted the line had been thought about.
+installer_temporary_file=""
+# shellcheck disable=SC2329  # invoked by name from the `trap` below, which shellcheck
+# does not follow. The disable is narrow on purpose: SC2064, the one this rewrite
+# removed, was suppressing a real defect rather than a false positive.
+cleanup_installer() {
+  if [ -n "${installer_temporary_file}" ]; then
+    rm -f -- "${installer_temporary_file}"
+  fi
+}
+trap cleanup_installer EXIT
+
+require_a_tag_shaped_version() {
+  if [ -n "${REMOTE_AGENTS_ALLOW_UNPINNED_REF}" ]; then
+    say "WARNING: installing from '${REMOTE_AGENTS_VERSION}', which is not a pinned tag."
+    say "  A branch moves. What you install today is not what you install tomorrow."
+    return 0
+  fi
+  case "${REMOTE_AGENTS_VERSION}" in
+    v[0-9]*) return 0 ;;
+    *)
+      {
+        say "ERROR: REMOTE_AGENTS_VERSION='${REMOTE_AGENTS_VERSION}' is not tag-shaped."
+        say "  This installer pins a tag so that two hosts bootstrapped an hour apart run the"
+        say "  same code. A branch or a bare ref defeats that."
+        say "  Set REMOTE_AGENTS_ALLOW_UNPINNED_REF=1 if you mean it."
+      } >&2
+      exit 2
+      ;;
+  esac
+}
+
 ensure_uv() {
   if command -v uv >/dev/null 2>&1; then
     # Deliberately no version gate. DEC-002: an installed executable is available, and its
@@ -66,15 +150,12 @@ ensure_uv() {
 
   say "uv not found; fetching its installer from ${REMOTE_AGENTS_UV_INSTALLER_URL}"
 
-  local installer
-  installer="$(mktemp)"
-  # shellcheck disable=SC2064  # expand $installer now: the trap must survive the local going away
-  trap "rm -f '${installer}'" EXIT
+  installer_temporary_file="$(mktemp)"
 
-  curl -fsSL -o "${installer}" "${REMOTE_AGENTS_UV_INSTALLER_URL}"
+  curl -fsSL -o "${installer_temporary_file}" "${REMOTE_AGENTS_UV_INSTALLER_URL}"
 
   local actual
-  actual="$(sha256_of "${installer}")"
+  actual="$(sha256_of "${installer_temporary_file}")"
 
   if [ "${actual}" != "${REMOTE_AGENTS_UV_INSTALLER_SHA256}" ]; then
     {
@@ -82,20 +163,50 @@ ensure_uv() {
       say "  expected: ${REMOTE_AGENTS_UV_INSTALLER_SHA256}"
       say "  actual:   ${actual}"
       say ""
-      say "  If this is an intentional upstream update, verify the installer yourself and then"
-      say "  re-pin it: update the constant in scripts/install.sh, or set"
-      say "  REMOTE_AGENTS_UV_INSTALLER_SHA256=${actual}"
+      say "  The pinned URL is versioned, so this should NOT happen on upstream's release"
+      say "  schedule. Treat a mismatch as something to explain, not something to paste past."
+      say ""
+      say "  Once you have checked this file against Astral's own published release, re-pin it:"
+      say "  update the two constants in scripts/install.sh, or for a one-off run set"
+      say "  REMOTE_AGENTS_UV_INSTALLER_SHA256 to the digest you verified."
+      say ""
+      say "  Deliberately not offering that line pre-filled with the digest above: pasting a"
+      say "  hash computed from the file you are trying to check accepts whatever arrived."
     } >&2
     exit 1
   fi
 
-  say "Verified uv installer sha256."
-  sh "${installer}"
+  # Says WHICH pin was satisfied. A bare "Verified" over an operator-supplied digest claims
+  # provenance this script cannot know: it compared the bytes against a number the same
+  # environment handed it, which is a consistency check and not an attestation. That line is
+  # what a screenshot-reading reviewer trusts, so it has to be narrower than it used to be.
+  if [ "${pin_came_from_the_environment}" -eq 1 ]; then
+    say "Verified the fetched installer against the pin supplied in the environment."
+    say "  (NOT the digest committed to this repository.)"
+  else
+    say "Verified the fetched installer against the digest committed to this repository."
+  fi
+  sh "${installer_temporary_file}"
 
   # `uv` lands in ~/.local/bin, which is not on a fresh login shell's PATH and is not on
   # macOS's _PATH_STDPATH at all, so this process cannot see it yet.
   export PATH="${HOME}/.local/bin:${PATH}"
 }
+
+require_a_tag_shaped_version
+
+# Checked BEFORE the install that needs it, not after. uv shells out to git for a
+# `git+https://` source, and onboarding's own dependency probe -- which does check git -- runs
+# on the far side of that install, so a git-less host failed with uv's error rather than this
+# script's, after a fetch it need not have done.
+if ! command -v git >/dev/null 2>&1; then
+  {
+    say "ERROR: git is not installed, and uv needs it to fetch a git+https:// source."
+    say "  Ubuntu: sudo apt-get install -y git"
+    say "  macOS:  xcode-select --install"
+  } >&2
+  exit 1
+fi
 
 ensure_uv
 
@@ -109,15 +220,51 @@ uv tool install --managed-python \
 # developer's host and one that works on the clean host it exists for.
 installed_bin="$(uv tool dir --bin)"
 
+# A uv that answered nothing would make this `/remote-agents`, and the script would go on to
+# report a successful install of a path that does not exist.
+if [ -z "${installed_bin}" ] || [ ! -x "${installed_bin}/remote-agents" ]; then
+  {
+    say "ERROR: uv reports the executable should be at '${installed_bin}/remote-agents',"
+    say "  and there is nothing runnable there. The install did not land where uv says."
+  } >&2
+  exit 1
+fi
+
+onboard_status=0
 if [ "${onboard}" -eq 0 ]; then
-  say "Skipping onboarding (--no-onboard). Run 'remote-agents onboard' when you are ready."
+  say "Skipping onboarding (--no-onboard). Run 'remote-agents onboard --install-daemon' when ready."
 else
   say "Onboarding..."
-  # No arguments beyond the subcommand, deliberately. Every argument of a process is readable
-  # by every other process on the host for as long as it runs, and onboarding is where the bot
-  # token is captured -- so the credential is prompted for, or read from a file named by an
-  # option, never forwarded here.
-  "${installed_bin}/remote-agents" onboard
+  # `--install-daemon`, because the goal of a one-line bootstrap is a RUNNING SERVICE. Plain
+  # `onboard` configures the host and registers nothing, which left an operator with a
+  # correctly installed tool, no service, and no reason to think anything was missing.
+  #
+  # No arguments beyond that, deliberately. Every argument of a process is readable by every
+  # other process on the host for as long as it runs, and onboarding is where the bot token is
+  # captured -- so the credential is prompted for, or read from the environment, and never
+  # forwarded here.
+  #
+  # No `--yes`, equally deliberately. That flag assumes consent for `apt-get`/`brew` installs
+  # of missing system dependencies, and sub-plan 2's gate turns on no onboarding path
+  # escalating privileges without an explicit confirmation. A bootstrap that silently answered
+  # yes on the operator's behalf would defeat that from outside, where none of those tests can
+  # see it. A missing dependency stops onboarding and says so; that is the intended outcome.
+  #
+  # stdin is redirected only when it is NOT a terminal. Under `curl | bash` this script's own
+  # unread bytes ARE stdin, so handing them to a child that ever read stdin would feed it the
+  # rest of the installer and silently truncate the run -- demonstrated by replacing the child
+  # with `cat`, which printed this file's own closing lines. On a saved-and-run invocation
+  # stdin is the operator's terminal, and onboarding needs it to prompt for the credentials.
+  #
+  # `|| onboard_status=$?` rather than a bare call: under `set -e` a non-zero onboarding killed
+  # the script right here, and every line below -- where the executable is, how to upgrade, the
+  # order removal has to happen in -- never printed. The operator who most needs that guidance
+  # is exactly the one whose onboarding just failed.
+  if [ -t 0 ]; then
+    "${installed_bin}/remote-agents" onboard --install-daemon || onboard_status=$?
+  else
+    "${installed_bin}/remote-agents" onboard --install-daemon </dev/null || onboard_status=$?
+  fi
 fi
 
 say ""
@@ -125,7 +272,7 @@ say "Installed. The executable is ${installed_bin}/remote-agents"
 say "If that directory is not on your PATH, run: uv tool update-shell"
 say ""
 # **Deliberately does not name `uv tool upgrade`.** Measured against uv 0.11.9 on 2026-08-25:
-# with `remote-agents @ git+<url>@v0.19.0` installed, that command prints "Nothing to upgrade"
+# with `remote-agents @ git+<url>@<tag>` installed, that command prints "Nothing to upgrade"
 # and exits 0, because it honours the requirement the tool was installed with -- and this
 # installer writes a pinned tag into that requirement. Re-running this script at a newer tag
 # does move the install -- measured against this repository's own published tags: installing
@@ -146,4 +293,15 @@ say "To remove, in this order -- the daemon first, or nothing can take it away a
 say "  remote-agents onboard --remove      # unregister the daemon and delete what it installed"
 say "  uv tool uninstall remote-agents     # then take the tool itself away"
 say ""
+say "  Already removed the tool first? Re-run this installer, then do it in that order."
+say ""
 say "To see where the daemon definition is: remote-agents onboard --print-daemon-path"
+
+if [ "${onboard_status}" -ne 0 ]; then
+  say ""
+  say "NOTE: onboarding exited ${onboard_status}. The tool above is installed; the host is not"
+  say "  finished. Run 'remote-agents doctor' to see which component is unhappy, fix it, and"
+  say "  run 'remote-agents onboard --install-daemon' again."
+fi
+
+exit "${onboard_status}"
