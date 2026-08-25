@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
@@ -353,6 +353,33 @@ def _resolved_project_path(path: Path) -> Path | None:
         return None
 
 
+class _ParserThatWillNotEchoAValue(argparse.ArgumentParser):
+    """An `ArgumentParser` whose "unrecognized arguments" message cannot print a value.
+
+    **Defending one flag spelling was not enough, and this is the second attempt.** The first
+    fix declared `--bot-token` so it could be refused quietly, and turned off `allow_abbrev` so
+    argparse would stop inventing it -- and a verification pass then typed `--bot-tok <token>`,
+    which argparse rejects with `unrecognized arguments: --bot-tok <token>`, printing the
+    credential exactly as before. The channel had changed; the leak had not. Any mistyped
+    option carries its value into that message, so the defence has to be on the message rather
+    than on a list of spellings.
+
+    Only that one message, and only its non-option words. Every other argparse error stays
+    verbatim, because "expected one argument" and "invalid int value" are diagnostics an
+    operator needs and none of them echo an unparsed word.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        prefix = "unrecognized arguments: "
+        if message.startswith(prefix):
+            redacted = " ".join(
+                word if word.startswith("-") else "<value not shown>"
+                for word in message[len(prefix) :].split()
+            )
+            message = prefix + redacted
+        super().error(message)
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -361,7 +388,7 @@ def main(
     ),
 ) -> int:
     """Run the current composition-root command-line interface."""
-    parser = argparse.ArgumentParser(
+    parser = _ParserThatWillNotEchoAValue(
         prog="remote-agents",
         description="Private Telegram control plane for local agent sessions.",
     )
@@ -1340,7 +1367,14 @@ def _onboard(arguments) -> int:
         print(outcome.summary)
         print(f"left alone: {paths.config_path} and {paths.environment_path}")
         return 0 if outcome.succeeded else 1
-    dev_root = (arguments.dev_root or home / "dev").expanduser()
+    # **Resolved, because a relative one reopened the defect this stage's own gate found.**
+    # `--dev-root relative/tree` was written into the config verbatim, and `load_config` refuses
+    # a `dev_root` that is not absolute -- so onboarding again wrote a config its own loader
+    # rejects and registered a daemon against it, through a different validation rule than the
+    # one that was just closed. Resolving here fixes the flag; `render_config` refusing a
+    # relative path fixes the class, and the config is now proved loadable before any daemon is
+    # registered, which fixes it for whatever rule is broken next.
+    dev_root = (arguments.dev_root or home / "dev").expanduser().resolve()
     interactive = sys.stdin.isatty()
     print("checking system dependencies:")
     if _dependency_preflight(assume_yes=arguments.yes, interactive=interactive):
@@ -1355,6 +1389,16 @@ def _onboard(arguments) -> int:
         # `write_private_environment` names a variable rather than a value, and this is the one
         # place that would undo that by printing whatever it caught.
         print(error, file=sys.stderr)
+        return 1
+    unloadable = describe_schema_drift(paths.config_path)
+    if not unloadable["readable"]:
+        # **Before the daemon, not after it.** A config the loader rejects is a service that
+        # crash-loops under `Restart=on-failure` the moment it is registered, so registering one
+        # against a config already known to be bad turns a diagnosable state into a running
+        # fault. The closing report would have said so a few lines later -- with the daemon
+        # already installed and looping.
+        print(f"the configuration at {paths.config_path} cannot be loaded", file=sys.stderr)
+        print(f"  {unloadable['detail']}", file=sys.stderr)
         return 1
     if arguments.install_daemon:
         try:
@@ -1424,10 +1468,15 @@ def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
     # The report is machine-readable and the exit status is one bit, so an operator who gets a
     # 1 has to read a JSON blob to find out which of seven components said no. Naming them costs
     # a line and is the difference between "onboarding failed" and "install codex, or don't".
+    # `status`/`reason`, which is what `health_report` actually emits. The first version asked
+    # for a `ready` key that exists nowhere in the product -- it was written against a test
+    # double that invented one, so the line never rendered and no test noticed. That is the same
+    # failure as this stage's Blocking defect (a fixture supplying what the product does not),
+    # reproduced inside the commit that diagnosed it, which is worth saying out loud.
     unhealthy = sorted(
-        name
+        f"{name} ({component.get('reason')})"
         for name, component in (report.get("components") or {}).items()
-        if isinstance(component, dict) and not component.get("ready", True)
+        if isinstance(component, dict) and component.get("status") != "healthy"
     )
     if unhealthy:
         print(f"not healthy yet: {', '.join(unhealthy)}", file=sys.stderr)
@@ -1499,13 +1548,19 @@ def _credential_summary(paths: ProductionPaths, arguments, interactive: bool) ->
     """Write the credential file, or report the one that is already private and readable."""
     try:
         return f"kept the existing {paths.require_private_environment()}"
-    except ConfigError:
+    except ConfigError as refusal:
         # `exists()` was the check here, and it follows links and says nothing about type, size
         # or mode -- so a directory left at that path, or the zero-byte file a failed write used
         # to leave, was reported as a credential file being kept. The guard that already knows
-        # what a usable credential file is answers instead, and anything it refuses falls through
-        # to the writer, which has the right refusal for each remaining case.
-        pass
+        # what a usable credential file is answers instead.
+        #
+        # **And its answer is kept**, which the first version of this discarded with a bare
+        # `pass`. A 0644 credential file made the guard say "must have mode 0600" -- precisely
+        # the actionable sentence -- and the operator instead got "something already exists;
+        # remove it first", about a file holding a token they may not be able to get again.
+        # Only a genuinely absent file falls through to the writer.
+        if paths.environment_path.exists() or paths.environment_path.is_symlink():
+            raise ConfigError(f"the credential file cannot be used: {refusal}") from refusal
     secrets = onboarding_secrets(
         token_file=arguments.bot_token_file,
         owner_user_id=arguments.owner_user_id,

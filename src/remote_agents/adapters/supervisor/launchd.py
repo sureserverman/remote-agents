@@ -303,6 +303,10 @@ class LaunchdSupervisor:
         content = plistlib.dumps(definition, fmt=plistlib.FMT_XML).decode("utf-8")
         return (SupervisorArtifact(path=self.plist_path, content=content),)
 
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        """The plist path. Nothing here can refuse, and the symmetry is the point."""
+        return (self.plist_path,)
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """Nothing, and empty is the honest answer rather than an unfinished one.
 

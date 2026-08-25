@@ -205,6 +205,10 @@ class SystemdSupervisor:
         )
         return (SupervisorArtifact(path=self.unit_path, content=content),)
 
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        """The unit path, which does not depend on the executable and so never refuses."""
+        return (self.unit_path,)
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """Nothing yet -- and the empty tuple is the honest answer, not an unfinished one.
 

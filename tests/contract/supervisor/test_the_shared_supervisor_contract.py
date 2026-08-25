@@ -144,3 +144,34 @@ def test_removal_can_never_sweep_the_operators_own_files(supervisor: ServiceSupe
     operator_files = {paths.config_path, paths.environment_path, paths.database_path}
 
     assert not operator_files & set(artifact_paths_to_remove(supervisor))
+
+
+@_PARAMS
+def test_where_the_artifacts_go_agrees_with_where_they_are_rendered(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """Two answers to one question, pinned together wherever both can be given.
+
+    `installed_artifact_paths()` exists so removal never has to render -- the systemd adapter
+    refuses at render time to describe an executable systemd would not start, and reaching that
+    refusal through `artifacts()` made the one host this tool declines to install to the one it
+    could never uninstall from. Splitting the question is what fixed it; this is what stops the
+    two halves drifting into different answers.
+    """
+    assert supervisor.installed_artifact_paths() == tuple(
+        artifact.path for artifact in supervisor.artifacts()
+    )
+
+
+@_PARAMS
+def test_the_reload_verb_is_argv_or_deliberately_nothing(supervisor: ServiceSupervisor) -> None:
+    """The eighth verb is the one `_VERBS` cannot check, because `()` is a legal answer.
+
+    launchd has no cached fragment and so nothing to reload, and saying so with an empty tuple is
+    right. That exemption is why this needs its own assertion: without one, the only verb allowed
+    to be empty is also the only verb whose shape nothing checks.
+    """
+    argv = supervisor.reload_command()
+
+    assert isinstance(argv, tuple)
+    assert all(isinstance(word, str) and word for word in argv)

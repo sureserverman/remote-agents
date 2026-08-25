@@ -96,6 +96,21 @@ def test_config_renders_every_key_the_loader_requires_and_no_other() -> None:
         )
 
 
+def test_config_refuses_a_relative_path_rather_than_rendering_an_unloadable_file() -> None:
+    """The renderer is held to the loader's rules, not to half of them.
+
+    Checking key sets and not values let `--dev-root relative/tree` through, and `load_config`
+    refuses a relative path -- so the generator produced a config its own loader rejects for a
+    second time, one validation rule over from the first.
+    """
+    with pytest.raises(ConfigError):
+        render_config(
+            dev_root=Path("relative/tree"),
+            registry_path=Path("/Users/tester/.claude/projects-registry.yaml"),
+            database_path=Path("/Users/tester/.local/state/remote-agents/sessions.sqlite3"),
+        )
+
+
 def test_config_quotes_a_home_that_would_otherwise_break_the_toml(tmp_path: Path) -> None:
     """A home holding a quote or a backslash is a home, and TOML has an escape for both.
 
@@ -389,6 +404,9 @@ class _FakeSupervisor:
         from remote_agents.ports.service_supervisor import SupervisorArtifact
 
         return (SupervisorArtifact(path=self.artifact_path, content=self.content),)
+
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        return tuple(artifact.path for artifact in self.artifacts())
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         return self._retired
@@ -1001,6 +1019,53 @@ class TestWhatAFreshHostActuallyGets:
         assert not (home / "dev").exists()
         assert load_config(ProductionPaths.for_home(home).config_path).dev_root == elsewhere
 
+    def test_a_relative_projects_tree_never_becomes_an_unloadable_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The flag added to fix the fresh-host defect reopened it through a different rule.
+
+        `--dev-root relative/tree` was written into the config verbatim; `load_config` refuses a
+        relative path, so onboarding again wrote a config its own loader rejects -- and, before
+        the ordering changed, registered a daemon to crash-loop against it.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.config import load_config
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        monkeypatch.chdir(tmp_path)
+
+        main(["onboard", "--install-daemon", "--dev-root", "relative/tree"])
+
+        # Asserted on the artifact rather than on the exit status, because this fixture runs the
+        # real `doctor` and a scratch home is legitimately unhealthy for BL-001's reasons. What
+        # this test is about is that the *config* is one the loader accepts.
+        config = load_config(ProductionPaths.for_home(home).config_path)
+        assert config.dev_root.is_absolute()
+        assert config.dev_root == (tmp_path / "relative" / "tree").resolve()
+
+    def test_a_configuration_that_cannot_load_stops_before_a_daemon_is_registered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Registering against a config known to be bad turns a diagnosis into a crash loop.
+
+        The closing report would have said the config was unreadable -- with the daemon already
+        installed and restarting under `Restart=on-failure`. The check moved ahead of the install
+        so that whatever rule is broken next is caught before anything is registered.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.production import ProductionPaths
+
+        home, supervisor = self._arrange(tmp_path, monkeypatch)
+        paths = ProductionPaths.for_home(home)
+        paths.ensure_directories(include_unit_directory=False)
+        paths.config_path.write_text("[paths]\nnonsense = 1\n", encoding="utf-8")
+
+        assert main(["onboard", "--install-daemon"]) == 1
+
+        assert not supervisor.artifact_path.exists()
+        assert "cannot be loaded" in capsys.readouterr().err
+
     def test_the_bot_token_flag_argparse_would_have_invented_is_refused_without_echoing_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1078,7 +1143,30 @@ class TestWhatAFreshHostActuallyGets:
 
         printed = capsys.readouterr()
         assert "kept the existing" not in printed.out
-        assert "already exists" in printed.err
+        assert "cannot be used" in printed.err
+
+    def test_a_credential_file_with_the_wrong_mode_is_diagnosed_not_merely_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The guard's own sentence reaches the operator, rather than being swallowed.
+
+        A 0644 credential file makes `require_private_environment` say "must have mode 0600" --
+        exactly the actionable line. Catching that refusal with a bare `pass` sent the operator
+        "something already exists; remove it first" instead, about a file holding a token they
+        may have no way to get again.
+        """
+        from remote_agents.bootstrap import main
+        from remote_agents.production import ProductionPaths
+
+        home, _supervisor = self._arrange(tmp_path, monkeypatch)
+        paths = ProductionPaths.for_home(home)
+        paths.ensure_directories(include_unit_directory=False)
+        paths.environment_path.write_text("REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=x\n", encoding="utf-8")
+        paths.environment_path.chmod(0o644)
+
+        assert main(["onboard"]) == 1
+
+        assert "mode 0600" in capsys.readouterr().err
 
     def test_a_token_that_is_not_utf8_is_refused_and_leaves_no_file_behind(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1100,3 +1188,96 @@ class TestWhatAFreshHostActuallyGets:
 
         assert not ProductionPaths.for_home(home).environment_path.exists()
         assert "valid UTF-8" in capsys.readouterr().err
+
+
+class TestTheDefencesNothingElsePins:
+    """Two fixes a verification pass proved were held by no test, and one it proved incomplete.
+
+    Each of these was claimed as mutation-checked and was not: reverting them left the whole
+    suite green. They are here because a defence nothing pins is a defence that leaves the next
+    time somebody tidies the line.
+    """
+
+    def test_an_abbreviated_flag_cannot_carry_a_token_into_argparses_own_error(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Defending one spelling was not enough; the message is what had to change.
+
+        `--bot-token` was declared so it could be refused quietly and `allow_abbrev` was turned
+        off -- and `--bot-tok <token>` then reached argparse's `unrecognized arguments: --bot-tok
+        <token>`, printing the credential exactly as before. Any mistyped option carries its
+        value into that message, so the redaction is on the message rather than on a list of
+        names.
+        """
+        from remote_agents.bootstrap import main
+
+        for spelling in ("--bot-tok", "--bot-token-f", "--bot", "--bot-token-flie"):
+            with pytest.raises(SystemExit):
+                main(["onboard", spelling, "1234567:supersecret"])
+
+            printed = capsys.readouterr()
+            assert "supersecret" not in printed.out + printed.err, spelling
+            assert spelling in printed.err, spelling
+
+    def test_an_ordinary_argparse_error_is_still_readable(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Only the unrecognized-arguments message is redacted; the rest are diagnostics."""
+        from remote_agents.bootstrap import main
+
+        with pytest.raises(SystemExit):
+            main(["onboard", "--owner-user-id", "not-a-number"])
+
+        assert "invalid int value" in capsys.readouterr().err
+
+    def test_the_daemon_temp_file_refuses_a_planted_symlink(self, tmp_path: Path) -> None:
+        """The `.partial` was a fixed, predictable name opened without `O_EXCL` or `O_NOFOLLOW`.
+
+        A symlink planted there was written *through* and then renamed, so the installed unit
+        became a link to a file outside the private directory -- which the next run's byte
+        comparison reads straight through, making the redirection permanent while `doctor` stays
+        green. `mkstemp` is unique per call and refuses an existing entry.
+        """
+        from remote_agents.adapters.supervisor.installer import install_daemon
+
+        supervisor = _FakeSupervisor(tmp_path)
+        supervisor.artifact_path.parent.mkdir(parents=True)
+        supervisor.log_directory.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        supervisor.artifact_path.with_name(f"{supervisor.artifact_path.name}.partial").symlink_to(
+            victim
+        )
+
+        install_daemon(supervisor, run=lambda argv: 0)
+
+        assert not victim.exists()
+        assert not supervisor.artifact_path.is_symlink()
+        assert supervisor.artifact_path.read_text(encoding="utf-8") == "unit-v1"
+
+    def test_a_host_this_tool_will_not_install_to_can_still_be_uninstalled_from(
+        self, tmp_path: Path
+    ) -> None:
+        """DEC-051's stranding, arriving through a render-time refusal.
+
+        systemd will not start an executable whose path holds a quote, so the adapter refuses to
+        render one -- and removal reached that refusal through `artifacts()`, purely to read a
+        path off it. The one host this tool declined to install to was the one it could never
+        uninstall from. Removal asks where, not what.
+        """
+        from remote_agents.adapters.supervisor.installer import remove_daemon
+        from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
+        from remote_agents.ports.service_supervisor import artifact_paths_to_remove
+
+        home = tmp_path / "o'brien"
+        supervisor = SystemdSupervisor(interpreter=home / "venv" / "bin" / "python3", home=home)
+        supervisor.unit_path.parent.mkdir(parents=True)
+        supervisor.unit_path.write_text("a unit an older version installed", encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            supervisor.artifacts()
+        assert artifact_paths_to_remove(supervisor) == (supervisor.unit_path,)
+
+        outcome = remove_daemon(supervisor, run=lambda argv: 0)
+
+        assert outcome.changed
+        assert not supervisor.unit_path.exists()

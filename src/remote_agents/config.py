@@ -314,6 +314,16 @@ def render_config(
     values = DEFAULT_LIMITS if limits is None else limits
     _require_exact_keys(paths, _PATH_KEYS, "generated paths")
     _require_exact_keys(values, _LIMIT_KEYS, "generated limits")
+    for key, value in paths.items():
+        # **Values, not only key sets**, and the difference cost a second gate round. The first
+        # version checked that every required key was present and nothing more, so
+        # `--dev-root relative/tree` was written straight through -- and `load_config` refuses a
+        # relative path, so the generator produced a config its own loader rejects for a second
+        # time, through a different rule than the one just closed. A renderer whose whole purpose
+        # is "the file this writes will load" has to be held to the loader's rules, not to half
+        # of them.
+        if not value.is_absolute():
+            raise ConfigError(f"generated paths.{key} must be an absolute path: {value}")
     rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
     rendered_limits = "\n".join(f"{key} = {values[key]:d}" for key in sorted(values))
     return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"

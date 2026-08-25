@@ -106,6 +106,23 @@ class ServiceSupervisor(Protocol):
         """Every file this version installs, rendered and ready to write."""
         ...
 
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        """Where this version's artifacts go, answerable without rendering any of them.
+
+        The ninth member, and it exists because removal must not depend on rendering. The
+        systemd adapter refuses at *render* time to describe an executable whose path holds a
+        quote or a backslash -- a real refusal, since systemd will not start such a unit -- and
+        `artifact_paths_to_remove` used to reach that refusal through `artifacts()`, purely to
+        read `.path` off the result. So the one host this tool declined to install to was also
+        the one it could never uninstall from, which is precisely the stranding DEC-051 exists to
+        prevent, arriving through a different door.
+
+        Removal needs *where*, not *what*. Splitting the two makes that true structurally rather
+        than by luck, and a contract test pins the two answers together on every host where both
+        can be given.
+        """
+        ...
+
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """Every path an *older* version installed, which this one must still remove.
 
@@ -202,7 +219,9 @@ def artifact_paths_to_remove(supervisor: ServiceSupervisor) -> tuple[Path, ...]:
     (an adapter mid-migration naming the same file twice) is removed once.
     """
     seen: dict[Path, None] = {}
-    installed = (artifact.path for artifact in supervisor.artifacts())
+    # `installed_artifact_paths()`, not `artifacts()`. Rendering can refuse -- and on the one
+    # host where it does, this function is what an operator needs most.
+    installed = supervisor.installed_artifact_paths()
     for path in (*installed, *supervisor.retired_artifact_paths()):
         seen.setdefault(path, None)
     return tuple(seen)
