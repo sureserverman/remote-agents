@@ -1281,3 +1281,53 @@ class TestTheDefencesNothingElsePins:
 
         assert outcome.changed
         assert not supervisor.unit_path.exists()
+
+
+def test_an_install_followed_by_a_remove_leaves_the_private_tree_as_it_was_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gate's own check, written down so it keeps being true rather than being true once.
+
+    The claim is narrow and worth stating exactly: after `--remove`, the state and unit
+    directories hold no artifact this tool installed. It is deliberately *not* "the tree is
+    byte-identical" -- onboarding creates the private directories, writes a config and a
+    credential file, and `--remove` leaves all three alone on purpose, because a config the
+    operator edited and a token they pasted are theirs. What must not survive is the daemon.
+    """
+    from remote_agents import bootstrap
+    from remote_agents.bootstrap import main
+    from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+    from remote_agents.production import ProductionPaths
+
+    home = tmp_path / "Users" / "tester"
+    (home / "dev").mkdir(parents=True)
+    supervisor = _FakeSupervisor(home)
+    monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+    monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+    monkeypatch.setattr(bootstrap, "_doctor_report", lambda *_a, **_k: {"healthy": True})
+    monkeypatch.setattr(
+        bootstrap,
+        "_dependency_probe",
+        lambda: bootstrap.probe_dependencies(
+            ("tmux", "git"),
+            resolve=lambda name: Path("/usr/bin") / name,
+            run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
+        ),
+    )
+    for name, value in zip(TELEGRAM_SECRET_VARIABLES, ("1234567:abcdefGH", "7", "11"), strict=True):
+        monkeypatch.setenv(name, value)
+    paths = ProductionPaths.for_home(home)
+
+    assert main(["onboard", "--install-daemon"]) == 0
+    assert supervisor.artifact_path.exists()
+    assert main(["onboard", "--remove"]) == 0
+
+    surviving = sorted(
+        path.name
+        for directory in (paths.state_directory, supervisor.artifact_path.parent)
+        for path in directory.rglob("*")
+        if path.is_file()
+    )
+    assert surviving == [], f"a daemon artifact survived removal: {surviving}"
+    assert paths.config_path.exists() and paths.environment_path.exists()

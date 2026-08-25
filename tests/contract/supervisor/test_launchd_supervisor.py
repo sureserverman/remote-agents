@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from remote_agents.adapters.supervisor import registered_supervisors
 from remote_agents.adapters.supervisor.launchd import (
     LABEL,
