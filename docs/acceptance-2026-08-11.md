@@ -1,5 +1,14 @@
 # Acceptance: a stop lands on the list, one press launches, and the pickers are ranked
 
+> **Redacted before publication (2026-08-25).** This transcript records a real run against the
+> author's live installation. Before this repository was made public, identifiers belonging to
+> the author's other private projects were replaced with synthetic placeholders from the
+> `opaque-*` family used throughout the test suite, and one Telegram chat identifier was replaced
+> with `<redacted>`. Session counts, timestamps, PIDs, message ids and every observation are
+> unaltered. The substitution is consistent across the whole history, so a placeholder always
+> denotes the same project it did in the original run — what is lost is only which real project
+> that was, not the structure of the evidence.
+
 Date: 2026-08-11
 Release: 0.8.0
 Plan: `2026-08-10-bot-live-view-and-activity-notifications-sub-02-flow-and-ordering-plan.md`
