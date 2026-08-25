@@ -1,12 +1,10 @@
 # Acceptance: a stop lands on the list, one press launches, and the pickers are ranked
 
 > **Redacted before publication (2026-08-25).** This transcript records a real run against the
-> author's live installation. Before this repository was made public, identifiers belonging to
-> the author's other private projects were replaced with synthetic placeholders from the
-> `opaque-*` family used throughout the test suite — here `opaque-editor`, `opaque-relay`,
-> `opaque-skills` and `opaque-town`. Project names left unsubstituted (`remote-agents`,
-> `opaque-forge`, `opaque-bench`, `opaque-kit`, `opaque-wiki`) are public
-> repositories and were deliberately kept. No Telegram identifier appears in this file.
+> author's live installation. Before this repository was made public, every project identifier
+> in it except this project's own was replaced with a synthetic placeholder from the `opaque-*`
+> family used throughout the test suite. `remote-agents` is the only real name that remains.
+> No Telegram identifier appears in this file.
 > Session counts, timestamps, PIDs, message ids and every observation are unaltered, and the
 > substitution is consistent across the whole history, so a placeholder always denotes the same
 > project it did in the original run. What is lost is which real project that was, not the
