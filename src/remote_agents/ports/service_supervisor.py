@@ -92,10 +92,16 @@ class SupervisorArtifact:
 class ServiceSupervisor(Protocol):
     """The four verbs and the two ownership questions, in one vocabulary.
 
-    Deliberately eight members. Each traces to something a caller needs: the goal names
-    installing, removing, starting and observing; DEC-051 makes an installer name what it
-    owns *and* what it used to own; `doctor` has to say which supervisor answered; and a
-    supervisor that caches what it read has to be told to read again.
+    Every member traces to something a caller needs: the goal names installing, removing,
+    starting and observing; DEC-051 makes an installer name what it owns *and* what it used to
+    own; `doctor` has to say which supervisor answered; a supervisor that caches what it read has
+    to be told to read again; and removal has to be able to ask *where* without asking *what*,
+    because rendering can refuse on a host removal still has to work on.
+
+    The count is deliberately not written down. It was ("deliberately seven members", then
+    eight), and it went stale twice inside one plan while the sentences explaining each member
+    stayed correct -- a number is the one part of a docstring that a reader can check and an
+    author will forget.
     """
 
     kind: SupervisorKind
@@ -107,9 +113,18 @@ class ServiceSupervisor(Protocol):
         ...
 
     def installed_artifact_paths(self) -> tuple[Path, ...]:
-        """Where this version's artifacts go, answerable without rendering any of them.
+        """Every path this version **causes to exist**, answerable without rendering any of them.
 
-        The ninth member, and it exists because removal must not depend on rendering. The
+        Wider than `artifacts()` on purpose, and the widening was a gate finding. launchd opens a
+        job's `StandardOutPath` and `StandardErrorPath` itself before the job runs, and
+        `systemctl --user enable` writes a `default.target.wants` symlink -- neither is rendered
+        by this project, both exist because this project's definition asked for them, and an
+        uninstaller that swept only what it wrote left daemon output in the state directory and a
+        dangling enable-link in the supervisor's own directory. So `artifacts()` answers "what do
+        I write" and this answers "what do I leave behind", and only the second is what removal
+        needs.
+
+        It exists because removal must not depend on rendering. The
         systemd adapter refuses at *render* time to describe an executable whose path holds a
         quote or a backslash -- a real refusal, since systemd will not start such a unit -- and
         `artifact_paths_to_remove` used to reach that refusal through `artifacts()`, purely to
@@ -157,8 +172,8 @@ class ServiceSupervisor(Protocol):
     def reload_command(self) -> tuple[str, ...]:
         """Make the supervisor re-read a definition that changed on disk, or `()` if it need not.
 
-        The eighth member, added at Stage 2's gate because the vocabulary could not express a
-        real defect. systemd caches a loaded unit's fragment, and this project's own runbook has
+        Added at Stage 2's gate, because the vocabulary could not express a real defect.
+        systemd caches a loaded unit's fragment, and this project's own runbook has
         always put `systemctl --user daemon-reload` between writing a unit file and enabling it
         (`docs/operator-runbook.md:10`) -- while the installer wrote a changed unit and went
         straight to `enable --now`, which can start the cached definition and report success. On

@@ -158,8 +158,8 @@ def test_where_the_artifacts_go_agrees_with_where_they_are_rendered(
     could never uninstall from. Splitting the question is what fixed it; this is what stops the
     two halves drifting into different answers.
     """
-    assert supervisor.installed_artifact_paths() == tuple(
-        artifact.path for artifact in supervisor.artifacts()
+    assert set(artifact.path for artifact in supervisor.artifacts()) <= set(
+        supervisor.installed_artifact_paths()
     )
 
 
@@ -189,6 +189,7 @@ class _SupervisorWithHistory:
     liveness_meaning = LivenessMeaning.RUNNING
 
     def __init__(self, directory: Path) -> None:
+        self.home = directory
         self.current = directory / "remote-agents.service"
         self.abandoned = directory / "remote-agents-old.service"
 
@@ -289,7 +290,7 @@ def test_the_ledger_covers_all_artifacts(supervisor: ServiceSupervisor) -> None:
     swept = set(artifact_paths_to_remove(supervisor))
 
     assert written <= swept
-    assert set(supervisor.installed_artifact_paths()) == written
+    assert set(supervisor.installed_artifact_paths()) <= swept
 
 
 def test_removal_leaves_a_foreign_file_in_the_same_directory_alone(tmp_path: Path) -> None:
@@ -355,6 +356,45 @@ def test_removal_is_safe_to_repeat_and_still_spares_a_foreign_file(tmp_path: Pat
     assert someone_elses.exists()
 
 
+def test_a_removal_whose_unregister_failed_does_not_report_the_service_as_gone(
+    tmp_path: Path,
+) -> None:
+    """Files deleted and the supervisor still holding the service is not a completed removal.
+
+    `install_daemon` already refuses to call a failed register a success. The mirror case read as
+    success: on a host with no session bus `disable` fails, the unit is deleted anyway, and the
+    operator is told the daemon was removed while the supervisor still has it enabled.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+    supervisor.current.write_text("a unit", encoding="utf-8")
+
+    outcome = remove_daemon(supervisor, run=lambda argv: 1 if argv[-1] == "remove" else 0)
+
+    assert not supervisor.current.exists()
+    assert not outcome.succeeded
+    assert "would not unregister" in outcome.summary
+
+
+def test_a_removal_that_had_nothing_to_do_is_not_a_failure_when_unregister_refuses(
+    tmp_path: Path,
+) -> None:
+    """`systemctl --user disable` on a unit that was never enabled exits non-zero.
+
+    That is the ordinary answer on a host that was never installed to, so the no-op path must not
+    read it as a failure -- which is why the status is consulted only where files were removed.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+
+    outcome = remove_daemon(supervisor, run=lambda argv: 1)
+
+    assert not outcome.changed
+    assert outcome.succeeded
+
+
 @_PARAMS
 def test_no_registered_adapter_would_sweep_a_foreign_directory(
     supervisor: ServiceSupervisor,
@@ -366,11 +406,25 @@ def test_no_registered_adapter_would_sweep_a_foreign_directory(
     the shape rather than the sample: nothing in the ledger is a directory any other tool writes
     into, and every entry is a leaf.
     """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
     swept = artifact_paths_to_remove(supervisor)
     directories = set(supervisor.required_directories())
 
+    # Driven through `remove_daemon` as well as read off the ledger, because reading the ledger
+    # alone cannot catch a regression in the *remover*: a `remove_daemon` rewritten to scan
+    # `required_directories()` itself would leave this assertion green. A reviewer was right that
+    # the first version of this test claimed a role it did not have.
+    recorded: list[tuple[str, ...]] = []
+    remove_daemon(supervisor, run=lambda argv: recorded.append(tuple(argv)) or 0)
+
+    assert recorded, "removal ran no supervisor command at all"
     assert swept
     assert not directories & set(swept), "a directory is in the removal set"
-    assert all(path.parent in directories for path in swept), (
-        "a swept path escapes the declared directories"
+    # Under the operator's own home, which is the boundary that actually matters, rather than
+    # "inside a required directory" -- which was the first version of this assertion and was too
+    # narrow twice over: it forbade the `default.target.wants` symlink `enable` creates, and it
+    # forbade a *relocated* retired entry, which is half of the obligation this ledger carries.
+    assert all(path.is_relative_to(supervisor.home) for path in swept), (
+        "a swept path escapes the operator's home"
     )

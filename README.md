@@ -57,8 +57,10 @@ REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=… REMOTE_AGENTS_OWNER_USER_ID=… \
   REMOTE_AGENTS_OWNER_CHAT_ID=… remote-agents onboard --install-daemon --yes
 ```
 
-`remote-agents onboard --remove` unregisters the daemon and deletes the files it
-installed. Your config and your credential file are left alone.
+`remote-agents onboard --remove` unregisters the daemon and deletes everything the
+install caused to exist — the unit or the LaunchAgent, the `default.target.wants`
+symlink `systemctl enable` writes, and on macOS the two log files launchd opens on
+the job's behalf. Your config and your credential file are left alone.
 
 **On macOS the service runs only while you are logged in at the screen.** The
 LaunchAgent targets `gui/<uid>`, whose domain exists only after a console login — so a

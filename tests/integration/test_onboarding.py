@@ -13,6 +13,7 @@ with no drift, with nothing of this developer's own home in it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -405,8 +406,21 @@ class _FakeSupervisor:
 
         return (SupervisorArtifact(path=self.artifact_path, content=self.content),)
 
+    @property
+    def log_path(self) -> Path:
+        """A file the supervisor creates on the job's behalf, not one this installer writes.
+
+        launchd really does this -- it opens `StandardOutPath` before the job runs -- and the
+        fake carries it because without one the criterion-3 assertion below ("the state directory
+        holds no daemon artifact after a remove") was **vacuous**: nothing in the test ever put a
+        file there, so it passed whether or not removal swept anything at all. A gate evaluator
+        found the real macOS leak by driving the real adapter; this is what stops the fake
+        hiding it a second time.
+        """
+        return self.log_directory / "remote-agents.log"
+
     def installed_artifact_paths(self) -> tuple[Path, ...]:
-        return tuple(artifact.path for artifact in self.artifacts())
+        return (*(artifact.path for artifact in self.artifacts()), self.log_path)
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         return self._retired
@@ -882,7 +896,21 @@ class TestOnboardingEndsWithTheDoctor:
         home = tmp_path / "Users" / "tester"
         (home / "dev").mkdir(parents=True)
         supervisor = _FakeSupervisor(home)
-        report = {"healthy": healthy, "components": {"service": {"ready": healthy}}}
+        # **The real shape `health_report` emits**, not an invented one. This fixture used to
+        # write `{"service": {"ready": …}}`, a key the product produces nowhere -- and the code
+        # reading it was written against the fixture, so the line naming degraded components
+        # never rendered and no test noticed. That is the same defect as this stage's Blocking
+        # one, a fixture supplying what the product does not, and repairing the fixture is the
+        # half that was missed the first time it was diagnosed.
+        report = {
+            "healthy": healthy,
+            "components": {
+                "service": {
+                    "status": "healthy" if healthy else "degraded",
+                    "reason": None if healthy else "service_inactive",
+                }
+            },
+        }
 
         monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
         monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
@@ -928,7 +956,29 @@ class TestOnboardingEndsWithTheDoctor:
         self._arrange(tmp_path, monkeypatch, healthy=False)
 
         assert main(["onboard", "--install-daemon"]) == 1
-        assert '"healthy": false' in capsys.readouterr().out
+        printed = capsys.readouterr()
+        assert '"healthy": false' in printed.out
+        # The exit status is one bit and the report is JSON, so an operator who gets a 1 needs
+        # to be told which component said no. Pinned here because the first attempt at this line
+        # read a key that does not exist and shipped as dead code.
+        assert "not healthy yet: service (service_inactive)" in printed.err
+
+    def test_a_healthy_onboard_says_nothing_about_degraded_components(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The other direction, which the phantom-key version got wrong in its own way.
+
+        Reading a key the report does not carry made `component.get("status")` `None`, so a
+        *healthy* run printed `not healthy yet: service (None)` beside `"healthy": true` -- a
+        line contradicting the report it accompanies. The test asserted only stdout, so it passed.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, healthy=True)
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        assert "not healthy yet" not in capsys.readouterr().err
 
     def test_the_doctor_command_and_onboarding_emit_the_same_report(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1198,37 +1248,73 @@ class TestTheDefencesNothingElsePins:
     time somebody tidies the line.
     """
 
-    def test_an_abbreviated_flag_cannot_carry_a_token_into_argparses_own_error(
-        self, capsys: pytest.CaptureFixture[str]
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            pytest.param(["onboard", "--bot-tok", "TOKEN"], id="space-separated"),
+            pytest.param(["onboard", "--bot-tok=TOKEN"], id="equals-joined"),
+            pytest.param(["onboard", "--bot=TOKEN"], id="short-abbreviation-equals"),
+            pytest.param(["onboard", "-bTOKEN"], id="clustered-short"),
+            pytest.param(["onboard", "--bot-tok", "-TOKEN"], id="value-begins-with-a-dash"),
+            pytest.param(["onboard", "--bot-token-flie", "TOKEN"], id="typo"),
+            pytest.param(["onboard", "--owner-user-id=TOKEN"], id="wrong-option-int-converter"),
+            pytest.param(["onboard", "--owner-chat-id", "TOKEN"], id="wrong-option-separated"),
+            pytest.param(["onboard", "TOKEN"], id="bare-positional"),
+            pytest.param(["doctor", "--conf=TOKEN"], id="another-subcommand"),
+            # `pane` validates against `choices`, and argparse renders that failure as
+            # `invalid choice: '<what you typed>'` -- the second of the two shapes in which
+            # argparse re-emits input, and the one the quoted-text redaction exists for. Without
+            # a case that reaches it, that half of the defence was pinned by nothing.
+            pytest.param(["pane", "TOKEN"], id="invalid-choice-quotes-the-value"),
+        ],
+    )
+    def test_no_argv_shape_can_carry_a_token_into_an_argparse_message(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Defending one spelling was not enough; the message is what had to change.
+        """Two attempts defended the example they had been shown; this one is parametrised.
 
-        `--bot-token` was declared so it could be refused quietly and `allow_abbrev` was turned
-        off -- and `--bot-tok <token>` then reached argparse's `unrecognized arguments: --bot-tok
-        <token>`, printing the credential exactly as before. Any mistyped option carries its
-        value into that message, so the redaction is on the message rather than on a list of
-        names.
+        The first defended a flag *spelling* (`--bot-token`), and `--bot-tok <token>` leaked. The
+        second defended a word *shape* (redact words not starting with `-`), and
+        `--bot-tok=<token>` leaked -- one word starting with `-` that carries the value -- as did
+        `-b<token>`, a value starting with `-`, and `--owner-user-id=<token>` through a
+        completely different message, `invalid int value: '<token>'`.
+
+        The mechanism is that argparse re-emits operator input, in two shapes: the tail of
+        `unrecognized arguments:`, and anything it quotes. Both are redacted without inspecting
+        what they hold. This list is every shape a reviewer got a credential out of, plus the
+        ones adjacent to them.
         """
         from remote_agents.bootstrap import main
 
-        for spelling in ("--bot-tok", "--bot-token-f", "--bot", "--bot-token-flie"):
-            with pytest.raises(SystemExit):
-                main(["onboard", spelling, "1234567:supersecret"])
+        secret = "1234567:supersecretTOKENvalue"
+        # Either shape of refusal is fine and which one happens is the command's business:
+        # argparse exits, and a command that got as far as its own validation returns non-zero.
+        # What is asserted is the same for both.
+        with contextlib.suppress(SystemExit):
+            main([word.replace("TOKEN", secret) for word in argv])
 
-            printed = capsys.readouterr()
-            assert "supersecret" not in printed.out + printed.err, spelling
-            assert spelling in printed.err, spelling
+        printed = capsys.readouterr()
+        assert "supersecret" not in printed.out + printed.err
 
-    def test_an_ordinary_argparse_error_is_still_readable(
+    def test_an_argparse_error_still_says_what_kind_of_thing_was_wrong(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Only the unrecognized-arguments message is redacted; the rest are diagnostics."""
+        """The redaction takes the value, not the diagnosis.
+
+        This replaces a test that asserted `invalid int value: '<what you typed>'` reached stderr
+        verbatim -- which pinned the leak *open*, on the option most likely to receive a
+        mistyped token. What an operator needs is which option and what kind of value; what they
+        do not need is their own credential read back.
+        """
         from remote_agents.bootstrap import main
 
         with pytest.raises(SystemExit):
             main(["onboard", "--owner-user-id", "not-a-number"])
 
-        assert "invalid int value" in capsys.readouterr().err
+        message = capsys.readouterr().err
+        assert "--owner-user-id" in message
+        assert "must be an integer" in message
+        assert "not-a-number" not in message
 
     def test_the_daemon_temp_file_refuses_a_planted_symlink(self, tmp_path: Path) -> None:
         """The `.partial` was a fixed, predictable name opened without `O_EXCL` or `O_NOFOLLOW`.
@@ -1275,7 +1361,7 @@ class TestTheDefencesNothingElsePins:
 
         with pytest.raises(ValueError):
             supervisor.artifacts()
-        assert artifact_paths_to_remove(supervisor) == (supervisor.unit_path,)
+        assert supervisor.unit_path in artifact_paths_to_remove(supervisor)
 
         outcome = remove_daemon(supervisor, run=lambda argv: 0)
 
@@ -1321,6 +1407,11 @@ def test_an_install_followed_by_a_remove_leaves_the_private_tree_as_it_was_found
 
     assert main(["onboard", "--install-daemon"]) == 0
     assert supervisor.artifact_path.exists()
+    # What the supervisor does on the job's behalf once it is registered. Written here rather
+    # than by the installer because that is where it happens in life, and because an assertion
+    # about what survives a removal is worth nothing if nothing was there to survive.
+    supervisor.log_path.write_text("job output", encoding="utf-8")
+
     assert main(["onboard", "--remove"]) == 0
 
     surviving = sorted(

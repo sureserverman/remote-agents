@@ -48,7 +48,7 @@ UNIT_NAME = "remote-agents.service"
 #: somebody gets right twice; a constant holding a filename makes retiring one a single
 #: reviewable line, which is what the rule needs to survive being followed under pressure.
 #:
-#: An entry leaves `INSTALLED_UNIT_NAMES` by *moving* to `RETIRED_UNIT_NAMES`, never by being
+#: An entry leaves `INSTALLED_UNIT_NAMES` by *moving* to `RETIRED_UNIT_PATHS`, never by being
 #: deleted. Deleting it strands the file: removal sweeps what the installer knows it owns, so a
 #: name no longer listed is a definition no version of this tool can take away -- and the
 #: operator cannot work around that by uninstalling first, because that means running the *old*
@@ -57,8 +57,26 @@ UNIT_NAME = "remote-agents.service"
 #: cost of keeping one is a path join.
 INSTALLED_UNIT_NAMES: tuple[str, ...] = (UNIT_NAME,)
 
-RETIRED_UNIT_NAMES: tuple[str, ...] = ()
+#: The symlink `systemctl --user enable` writes, which nothing here renders and which removal
+#: must still take away.
+#:
+#: `enable --now` -- the verb this installer runs, and the one the README has always documented
+#: -- creates `default.target.wants/<unit>` pointing at the unit file. `disable` removes it, and
+#: on a host where `disable` cannot run (no session bus, which this project's own drill document
+#: warns about) it stays: a dangling symlink in the supervisor's own directory, pointing at a
+#: unit file that has been deleted, which no later `--remove` could ever reach because it was
+#: outside the ledger. Naming it here is what makes the sweep total rather than nearly so.
+_WANTS_LINK = ("default.target.wants", UNIT_NAME)
+
+RETIRED_UNIT_PATHS: tuple[str, ...] = ()
 """Nothing yet, and empty is the honest answer rather than an unfinished one.
+
+**Paths relative to the operator's home, not bare filenames**, because the obligation this
+ledger carries is that an upgrade which *renames or relocates* an artifact must not strand the
+old one -- and a bare filename joined to today's unit directory can only express the rename. A
+version that once installed to a different directory is exactly the case the master plan named,
+and it was inexpressible until these entries became paths. Relative to home so that a retired
+entry can never name a file outside the operator's own tree, which a sweep must never reach.
 
 The rule has had no occasion to fire on this side: this adapter installs to
 `~/.config/systemd/user/remote-agents.service`, which is the same path the shipped static unit
@@ -241,7 +259,10 @@ class SystemdSupervisor:
         a second method. Depends on the home and not on the executable, which is why it never
         refuses -- and why removal, which reads this, works on a host rendering would reject.
         """
-        return tuple(self.unit_path.parent / name for name in INSTALLED_UNIT_NAMES)
+        return (
+            *(self.unit_path.parent / name for name in INSTALLED_UNIT_NAMES),
+            self.unit_path.parent.joinpath(*_WANTS_LINK),
+        )
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
         """The ledger's retired half, joined to this host's unit directory.
@@ -249,7 +270,7 @@ class SystemdSupervisor:
         The reasoning lives on `RETIRED_UNIT_NAMES`, where the entries are, rather than here
         where they are only assembled.
         """
-        return tuple(self.unit_path.parent / name for name in RETIRED_UNIT_NAMES)
+        return tuple(self.home / relative for relative in RETIRED_UNIT_PATHS)
 
     def required_directories(self) -> tuple[Path, ...]:
         """The unit directory, which `install(1)` will not create on the way past."""

@@ -166,7 +166,7 @@ def remove_daemon(
     The unregister command's exit status is ignored for the reason it is ignored on install: a
     host that was never installed to is not a failure, it is the answer.
     """
-    run(supervisor.remove_command())
+    unregistered = run(supervisor.remove_command())
     # `is_file()` alone follows the link and answers False for a broken one, so a dangling
     # symlink at an artifact path -- left by a partial failure, or by someone else -- was neither
     # removed nor reported by a sweep that claims to take away everything this tool ever
@@ -176,6 +176,9 @@ def remove_daemon(
         path for path in artifact_paths_to_remove(supervisor) if path.is_file() or path.is_symlink()
     ]
     if not removed:
+        # The unregister's status is *not* consulted here, and that is deliberate rather than an
+        # oversight repeated: `systemctl --user disable` on a unit that was never enabled exits
+        # non-zero, which is the ordinary answer on a host that was never installed to.
         return DaemonOutcome(False, f"no daemon installed for {supervisor.kind.value}")
     swept = ", ".join(str(path) for path in removed)
     try:
@@ -187,6 +190,20 @@ def remove_daemon(
         # the check just above it -- came out as a traceback from the one command an operator
         # runs when a host is already in a state they do not understand.
         return DaemonOutcome(True, f"could not remove every daemon file: {error}", False)
+    if unregistered != 0:
+        # **It is consulted here, where files were actually removed**, and the asymmetry is the
+        # whole point. `install_daemon` already refuses to call a failed register a success,
+        # because a definition on disk with nothing running must not read as one -- and the
+        # mirror case read as success until a gate evaluator drove it: on a host with no session
+        # bus, `disable` fails, the unit file is deleted anyway, and the `default.target.wants`
+        # symlink `enable` wrote is left dangling with the operator told the daemon was removed.
+        # The symlink is in the ledger now, so the sweep takes it; this is what stops the *other*
+        # half -- a service the supervisor still believes in -- being reported as gone.
+        return DaemonOutcome(
+            True,
+            f"removed {swept}, but {supervisor.kind.value} would not unregister the service",
+            False,
+        )
     return DaemonOutcome(True, f"removed the {supervisor.kind.value} daemon from {swept}")
 
 

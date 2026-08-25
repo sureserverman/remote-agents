@@ -8,6 +8,7 @@ import getpass
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -353,31 +354,48 @@ def _resolved_project_path(path: Path) -> Path | None:
         return None
 
 
+#: Anything argparse quoted back at the operator. Its messages that echo input all render the
+#: offending text `'like this'` -- `invalid int value: '…'` is the one that matters, because the
+#: `--owner-*` options sit in the same command as `--bot-token-file` and a token typed into one
+#: of them is an ordinary slip.
+_QUOTED_IN_AN_ARGPARSE_MESSAGE = re.compile(r"'[^']*'")
+
+
 class _ParserThatWillNotEchoAValue(argparse.ArgumentParser):
-    """An `ArgumentParser` whose "unrecognized arguments" message cannot print a value.
+    """An `ArgumentParser` whose errors cannot print something the operator typed.
 
-    **Defending one flag spelling was not enough, and this is the second attempt.** The first
-    fix declared `--bot-token` so it could be refused quietly, and turned off `allow_abbrev` so
-    argparse would stop inventing it -- and a verification pass then typed `--bot-tok <token>`,
-    which argparse rejects with `unrecognized arguments: --bot-tok <token>`, printing the
-    credential exactly as before. The channel had changed; the leak had not. Any mistyped
-    option carries its value into that message, so the defence has to be on the message rather
-    than on a list of spellings.
+    **Third attempt, and the first two are why this one is unconditional.** The first defended a
+    flag *spelling*: `--bot-token` was declared so it could be refused quietly, and
+    `allow_abbrev` was turned off so argparse would stop inventing it. A reviewer then typed
+    `--bot-tok <token>`, and argparse printed the credential itself through
+    `unrecognized arguments:`. The second defended a word *shape*: redact any word in that
+    message not beginning with `-`. A second reviewer typed `--bot-tok=<token>` -- the most
+    ordinary way anyone passes a value to a long option -- which is one word beginning with `-`
+    that *contains* the value, and it printed in full. So did `-b<token>`, and so did
+    `--owner-user-id=<token>` through an entirely different message, `invalid int value:
+    '<token>'`, which the second version's docstring asserted was safe and a test asserted must
+    stay verbatim.
 
-    Only that one message, and only its non-option words. Every other argparse error stays
-    verbatim, because "expected one argument" and "invalid int value" are diagnostics an
-    operator needs and none of them echo an unparsed word.
+    Each attempt defended the example it had been shown. The mechanism is that **argparse
+    re-emits operator input**, and it does so in exactly two shapes: everything after
+    `unrecognized arguments:`, and anything it quotes. Both are redacted here without looking at
+    what they contain, because looking at what they contain is what failed twice.
+
+    The cost, taken knowingly: a legitimate diagnostic loses the word it was complaining about --
+    `doctor --config a.toml b.toml` reports `unrecognized arguments: <not shown>` rather than
+    naming the file. The option name is gone with it, which is a real loss; erring toward saying
+    less is still the right direction for a command that handles a credential, and the operator
+    can see their own command line.
     """
 
     def error(self, message: str) -> NoReturn:
         prefix = "unrecognized arguments: "
         if message.startswith(prefix):
-            redacted = " ".join(
-                word if word.startswith("-") else "<value not shown>"
-                for word in message[len(prefix) :].split()
-            )
-            message = prefix + redacted
-        super().error(message)
+            # The whole tail, unconditionally. Not word by word: `--flag=VALUE` is a single word
+            # beginning with `-` that *carries* a value, and no rule about how a word begins can
+            # tell the two apart. That rule was the previous version, and it printed a token.
+            message = f"{prefix}<not shown>"
+        super().error(_QUOTED_IN_AN_ARGPARSE_MESSAGE.sub("<not shown>", message))
 
 
 def main(
@@ -458,9 +476,9 @@ def main(
     onboard_parser.add_argument(
         "--bot-token", dest="rejected_token", default=None, help=argparse.SUPPRESS
     )
-    onboard_parser.add_argument("--owner-user-id", type=int)
+    onboard_parser.add_argument("--owner-user-id", type=_owner_id)
     onboard_parser.add_argument("--dev-root", type=Path)
-    onboard_parser.add_argument("--owner-chat-id", type=int)
+    onboard_parser.add_argument("--owner-chat-id", type=_owner_id)
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
@@ -1353,12 +1371,15 @@ def _onboard(arguments) -> int:
             outcome = remove_daemon(supervisor, run=_run_command)
         except ValueError as error:
             # `SystemdSupervisor` refuses at *render* time to describe an executable whose path
-            # holds a quote or a backslash, and that refusal is deliberate. But it fires inside
-            # `remove_daemon` -- after `_supervisor_for_host`'s ValueError-to-ConfigError wrapper
-            # has already returned -- so a home containing an apostrophe got a traceback here and,
-            # worse, could never be swept: `artifact_paths_to_remove` calls `artifacts()`, so the
-            # one host this tool refuses to install to was also the one it refused to uninstall
-            # from. That is a DEC-051 hole, and it is closed by reporting rather than raising.
+            # holds a quote or a backslash, and that refusal is deliberate. It once fired here,
+            # so a home containing an apostrophe got a traceback out of the uninstaller.
+            #
+            # It no longer fires on this path at all: `artifact_paths_to_remove` reads
+            # `installed_artifact_paths()`, which does not render, so the host this tool declines
+            # to install to is no longer the host it cannot uninstall from. That was the DEC-051
+            # hole and it is closed structurally rather than by reporting. This handler stays
+            # because a future adapter could refuse for a reason removal does have to ask about,
+            # and a traceback is the wrong way to learn that.
             print(
                 f"this host cannot be described to its service supervisor: {error}",
                 file=sys.stderr,
@@ -1578,6 +1599,25 @@ def _credential_summary(paths: ProductionPaths, arguments, interactive: bool) ->
 #: command open.
 _SERVICE_START_ATTEMPTS = 8
 _SERVICE_START_INTERVAL_SECONDS = 0.25
+
+
+def _owner_id(value: str) -> int:
+    """Parse an owner id without argparse echoing it back when it is not one.
+
+    `type=int` looks harmless and is not: argparse renders a converter's failure as
+    `invalid int value: '<what you typed>'`, and these two options sit in the same command as
+    `--bot-token-file`. An operator who puts the token in the wrong one gets it printed back.
+    Raising `ArgumentTypeError` makes the message this function's own, and this one names no
+    value.
+
+    Belt and braces with the parser's quoted-text redaction, deliberately: that redaction is a
+    net under every message argparse can produce, and this is the one place the message can
+    simply be right.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer (the value is not shown)") from None
 
 
 def _run_command(argv: tuple[str, ...]) -> int:

@@ -285,6 +285,8 @@ def test_launchd_removal_sweeps_every_path_this_adapter_has_ever_owned() -> None
     assert ELSEWHERE.retired_artifact_paths() == ()
     assert artifact_paths_to_remove(ELSEWHERE) == (
         Path(f"/Users/tester/Library/LaunchAgents/{PLIST_NAME}"),
+        Path("/Users/tester/.local/state/remote-agents/remote-agents.log"),
+        Path("/Users/tester/.local/state/remote-agents/remote-agents.err"),
     )
 
 
@@ -295,13 +297,13 @@ def test_launchd_adapter_is_reachable_through_the_registry() -> None:
     assert SupervisorKind.LAUNCHD in kinds
 
 
-def test_the_retired_plist_names_are_a_ledger_the_adapter_derives_paths_from(
+def test_the_retired_plist_ledger_holds_home_relative_paths_not_bare_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same split as the systemd side: the name is the constant, the directory is the host's."""
+    """The same split as the systemd side, and the same reason: relocate, not only rename."""
     from remote_agents.adapters.supervisor import launchd
 
-    monkeypatch.setattr(launchd, "RETIRED_PLIST_NAMES", ("com.example.old.plist",))
+    monkeypatch.setattr(launchd, "RETIRED_PLIST_PATHS", ("Library/LaunchAgents/old.plist",))
     supervisor = launchd.LaunchdSupervisor(
         interpreter=Path("/opt/ra/bin/python3"),
         home=Path("/Users/tester"),
@@ -310,12 +312,36 @@ def test_the_retired_plist_names_are_a_ledger_the_adapter_derives_paths_from(
     )
 
     assert supervisor.retired_artifact_paths() == (
-        Path("/Users/tester/Library/LaunchAgents/com.example.old.plist"),
+        Path("/Users/tester/Library/LaunchAgents/old.plist"),
     )
 
 
-def test_the_retired_plist_names_are_empty_because_no_version_ever_shipped_one() -> None:
-    """`git log --all --diff-filter=A --name-only -- '*.plist'` finds none: no history to strand."""
-    from remote_agents.adapters.supervisor.launchd import RETIRED_PLIST_NAMES
+def test_the_launchd_ledger_covers_the_log_files_launchd_creates_itself(tmp_path: Path) -> None:
+    """The plist is not the only thing an install leaves behind on a Mac.
 
-    assert RETIRED_PLIST_NAMES == ()
+    launchd opens `StandardOutPath` and `StandardErrorPath` itself, before the job runs, so both
+    exist the moment the agent is bootstrapped -- inside the state directory this installer
+    created. A sweep covering only the plist left daemon output behind after the daemon was
+    removed, which is the gate's own criterion failing on the platform it was written for. Found
+    by driving the real adapter through install-then-remove; the test that claimed the property
+    ran against a fake whose install creates nothing.
+    """
+    from remote_agents.adapters.supervisor.installer import install_daemon, remove_daemon
+    from remote_agents.adapters.supervisor.launchd import LaunchdSupervisor
+
+    supervisor = LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=tmp_path,
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+    install_daemon(supervisor, run=lambda argv: 0)
+    # What launchd does on its own behalf once the job is bootstrapped.
+    for name in ("remote-agents.log", "remote-agents.err"):
+        (supervisor.log_directory / name).write_text("job output", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    survivors = sorted(path.name for path in supervisor.log_directory.iterdir())
+    assert survivors == [], f"the state directory still holds daemon output: {survivors}"
+    assert not supervisor.plist_path.exists()

@@ -13,6 +13,24 @@ class ConfigError(ValueError):
     """Raised when configuration is unsafe, incomplete, or not in the closed schema."""
 
 
+def _unreadable(path: Path, error: Exception) -> str:
+    """Say why a configuration could not be read, naming the path only when there is one.
+
+    **A path that does not exist is quite likely not a path.** `--config` and `--bot-token-file`
+    sit in the same tool, an operator who puts a bot token in the wrong one gets it read back --
+    and this message goes to stdout in `doctor`'s report and to stderr from `serve`, `tui` and
+    `add-project`. Found by a parametrised sweep looking for exactly this shape somewhere else;
+    the same rule already governs `bootstrap._token_from_file`, and it belongs wherever an
+    operator-supplied path reaches a message.
+
+    When the file *does* exist, the path is a real path and naming it is what makes the error
+    actionable -- a permission problem or a bad encoding needs to say which file.
+    """
+    if path.exists():
+        return f"cannot read configuration: {error}"
+    return "cannot read configuration: no such file (the path is not shown)"
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramSecrets:
     """The three credentials, with the one that is a secret kept out of the default repr.
@@ -92,7 +110,7 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         # decode traceback rather than a diagnosis, from the command whose whole job is to
         # diagnose an unusable config. Reported by the Stage 2 gate evaluator, reproduced
         # against a file of raw bytes.
-        report["detail"] = f"cannot read configuration: {error}"
+        report["detail"] = _unreadable(path, error)
         return report
 
     unknown: set[str] = set()
@@ -129,7 +147,7 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         # property of `pathlib`'s error handling, not of anything stated here, and it has
         # changed between releases before. A guarantee that holds only because of an
         # unrelated module's current behaviour is worth one line to make it hold outright.
-        report["detail"] = f"cannot read configuration: {error}"
+        report["detail"] = _unreadable(path, error)
         return report
     report["readable"] = True
     return report
@@ -156,7 +174,7 @@ def load_config(path: Path) -> AppConfig:
         # one matters independently: `serve`, `tui` and `add-project` all reach here, and a
         # non-UTF-8 config crashed each of them with a decode traceback instead of the
         # `ConfigError` every other malformed-config path produces.
-        raise ConfigError(f"cannot read configuration: {error}") from error
+        raise ConfigError(_unreadable(path, error)) from error
     _require_exact_keys(raw, _TOP_LEVEL_KEYS, "root")
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")

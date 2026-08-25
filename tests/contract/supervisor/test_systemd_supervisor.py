@@ -202,9 +202,16 @@ def test_systemd_verbs_are_argv_the_caller_runs() -> None:
 
 
 def test_systemd_removal_sweeps_every_path_this_adapter_has_ever_owned() -> None:
-    """`artifact_paths_to_remove` over this adapter is what an uninstall has to delete."""
+    """`artifact_paths_to_remove` over this adapter is what an uninstall has to delete.
+
+    The `default.target.wants` symlink is the second entry, and it is not one this project
+    writes: `systemctl --user enable` creates it, `disable` removes it, and on a host where
+    `disable` cannot run it stays -- dangling, in the supervisor's own directory, pointing at a
+    unit file that has been deleted, and outside any sweep that only knew what this code wrote.
+    """
     assert artifact_paths_to_remove(ELSEWHERE) == (
         Path("/home/tester/.config/systemd/user/remote-agents.service"),
+        Path("/home/tester/.config/systemd/user/default.target.wants/remote-agents.service"),
     )
 
 
@@ -306,35 +313,55 @@ def test_systemd_refuses_an_interpreter_path_it_could_never_start(refused: str) 
         supervisor.artifacts()
 
 
-def test_the_retired_unit_names_are_a_ledger_the_adapter_derives_paths_from(
+def test_the_retired_unit_ledger_holds_home_relative_paths_not_bare_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The ledger's stable half is a *name*; only the directory depends on the host.
+    """A retired entry can name a directory this version no longer installs to.
 
-    `install-agent-hooks` keeps `INSTALLED_EVENTS` and `RETIRED_EVENTS` as module tuples, and
-    this is the same bookkeeping for daemon definitions -- but a unit's *path* depends on the
-    home it is rendered for, so the constant holds the filename and the method joins it to the
-    directory. Splitting it that way is what lets a retired name be a one-line, reviewable edit
-    rather than a path expression somebody has to get right twice.
+    The obligation is that an upgrade which *renames or relocates* an artifact must not strand
+    the old one, and a bare filename joined to today's unit directory can only express the
+    rename. Relative to home, so a retired entry can never name a file outside the operator's own
+    tree -- a sweep must not be able to reach one.
     """
     from remote_agents.adapters.supervisor import systemd
 
-    monkeypatch.setattr(systemd, "RETIRED_UNIT_NAMES", ("remote-agents-old.service",))
+    monkeypatch.setattr(
+        systemd,
+        "RETIRED_UNIT_PATHS",
+        (".config/systemd/user/remote-agents-old.service", ".local/share/ra/legacy.service"),
+    )
     supervisor = systemd.SystemdSupervisor(
         interpreter=Path("/opt/ra/bin/python3"), home=Path("/home/tester")
     )
 
     assert supervisor.retired_artifact_paths() == (
         Path("/home/tester/.config/systemd/user/remote-agents-old.service"),
+        Path("/home/tester/.local/share/ra/legacy.service"),
     )
 
 
-def test_the_retired_unit_names_are_empty_and_that_is_the_honest_answer() -> None:
-    """Nothing has been retired on this side, and inventing an entry would be worse than none.
+def test_every_retired_unit_entry_is_swept_and_is_not_also_installed(tmp_path: Path) -> None:
+    """The per-entry pin, which activates the day an entry appears rather than needing an edit.
 
-    `artifact_paths_to_remove` feeds an uninstaller, so a name here is a file something will go
-    and delete on the strength of a claim that this project once installed it.
+    The assertion this replaces was `RETIRED_UNIT_PATHS == ()`, and it was backwards: deleting a
+    future retired entry -- the exact stranding DEC-051 exists to prevent -- made it pass again,
+    while *adding* a legitimate entry made it fail. It penalised the right action and rewarded
+    the wrong one. This iterates the ledger instead, so it is vacuous only while the ledger is
+    empty and becomes a real sweep the moment it is not, with no test edit on the day that
+    matters -- which is the day somebody is already editing this file and might delete rather
+    than move.
     """
-    from remote_agents.adapters.supervisor.systemd import RETIRED_UNIT_NAMES
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+    from remote_agents.adapters.supervisor.systemd import RETIRED_UNIT_PATHS, SystemdSupervisor
 
-    assert RETIRED_UNIT_NAMES == ()
+    supervisor = SystemdSupervisor(interpreter=tmp_path / "venv" / "bin" / "python3", home=tmp_path)
+    installed = set(supervisor.installed_artifact_paths())
+    for path in supervisor.retired_artifact_paths():
+        assert path not in installed, f"{path} is in both halves of the ledger"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("an artifact an older version installed", encoding="utf-8")
+
+    remove_daemon(supervisor, run=lambda argv: 0)
+
+    for relative in RETIRED_UNIT_PATHS:
+        assert not (tmp_path / relative).exists(), f"{relative} was left stranded"
