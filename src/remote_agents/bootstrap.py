@@ -493,33 +493,7 @@ def main(
         except ConfigError as error:
             print(error, file=sys.stderr)
             return 1
-        registry = load_registry(config.registry_path)
-        discovered = discover_projects(config.dev_root)
-        catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
-        profiles = probe_profiles(
-            closed_profiles(),
-            resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
-        )
-        supervisor = _supervisor_for_host()
-        result = production_doctor(
-            core_ready=registry.error is None,
-            database_ready=database_is_ready(config.database_path),
-            tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
-            tmux_console_ready=_console_features_available(paths.home),
-            telegram_ready=_telegram_credentials_are_private(paths),
-            service_ready=_command_succeeds(supervisor.liveness_command()),
-            profiles=profiles,
-            registered_projects=len(registry.projects),
-            discovered_projects=len(discovered),
-            catalogue_projects=len(catalogue.catalogue),
-            # Carried on the healthy path too, so a green report says the config *was*
-            # compared rather than leaving the operator to infer it from the absence of a
-            # complaint. Silence and a passed check look identical otherwise.
-            config_drift=drift,
-            credential_file=_credential_file_state(paths),
-            supervisor_kind=supervisor.kind,
-            liveness_meaning=supervisor.liveness_meaning,
-        )
+        result = _doctor_report(paths, config, drift)
         print(json.dumps(result, sort_keys=True) if arguments.json else result)
     if arguments.command == "restore-database":
         restore_database(arguments.database, arguments.backup)
@@ -1359,7 +1333,28 @@ def _onboard(arguments) -> int:
             # and is sitting at the login window is a Mac where this service is legitimately
             # absent. Unless onboarding says it here, that reads as a fault.
             print("note: on macOS this service runs only while you are logged in at the screen")
-    return 0
+    return _report_on_the_onboarded_host(paths)
+
+
+def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
+    """End onboarding with `doctor`'s own report, and let it decide the exit status.
+
+    **A host that onboarded and cannot serve is not a successful onboarding.** The exit status is
+    what a bootstrap script reads, so returning 0 beside a report saying `healthy: false` would
+    leave an unattended install believing it had finished -- which is the one failure a one-line
+    installer must not have, because nobody is watching the output.
+
+    The config is re-read from disk rather than carried from the generation step above, so what
+    is reported on is the file the service will actually load. Onboarding may have kept an
+    existing config rather than writing one, and that file is the one that matters.
+    """
+    drift = describe_schema_drift(paths.config_path)
+    if not drift["readable"]:
+        print(json.dumps({"healthy": False, "config": drift, "checked": False}, sort_keys=True))
+        return 1
+    report = _doctor_report(paths, load_config(paths.config_path), drift)
+    print(json.dumps(report, sort_keys=True))
+    return 0 if report.get("healthy") else 1
 
 
 def _written_or_kept(path: Path, render) -> str:
@@ -1583,6 +1578,44 @@ def _token_from_file(path: Path | None) -> str | None:
         # Named without the path's contents: this file holds a credential, and a decode error
         # from a binary file would otherwise put a fragment of it in the message.
         raise ConfigError(f"cannot read the bot token file {path}") from error
+
+
+def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> dict[str, object]:
+    """Build the installed service's health report -- the one `doctor` prints, for both callers.
+
+    Extracted from `doctor`'s own branch when onboarding needed to end with it. Extracted rather
+    than reimplemented, and that is the whole decision: a bespoke "did that work?" summary at the
+    end of onboarding would be a second report to keep in step with the first, and the second one
+    is the one nobody remembers to update when a component is added. Now there is one function,
+    and `doctor` and `onboard` cannot disagree about what a healthy host is.
+    """
+    registry = load_registry(config.registry_path)
+    discovered = discover_projects(config.dev_root)
+    catalogue = ProjectCatalogueProvider(config.registry_path, config.dev_root).refresh()
+    profiles = probe_profiles(
+        closed_profiles(),
+        resolve=lambda executable: _resolve_profile_executable(executable, paths.home),
+    )
+    supervisor = _supervisor_for_host()
+    return production_doctor(
+        core_ready=registry.error is None,
+        database_ready=database_is_ready(config.database_path),
+        tmux_ready=_command_succeeds(("tmux", "-L", "remote-agents", "-V")),
+        tmux_console_ready=_console_features_available(paths.home),
+        telegram_ready=_telegram_credentials_are_private(paths),
+        service_ready=_command_succeeds(supervisor.liveness_command()),
+        profiles=profiles,
+        registered_projects=len(registry.projects),
+        discovered_projects=len(discovered),
+        catalogue_projects=len(catalogue.catalogue),
+        # Carried on the healthy path too, so a green report says the config *was* compared
+        # rather than leaving the operator to infer it from the absence of a complaint. Silence
+        # and a passed check look identical otherwise.
+        config_drift=drift,
+        credential_file=_credential_file_state(paths),
+        supervisor_kind=supervisor.kind,
+        liveness_meaning=supervisor.liveness_meaning,
+    )
 
 
 def detected_config(home: Path) -> str:

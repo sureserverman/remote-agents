@@ -13,6 +13,7 @@ with no drift, with nothing of this developer's own home in it.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -704,6 +705,10 @@ class TestTheOnboardCommandInstallingTheDaemon:
                 run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
             ),
         )
+        # This class is about the daemon, so the closing report is stubbed healthy: running the
+        # real one here would make every case a test of this host's tmux, registry and profiles.
+        # `TestOnboardingEndsWithTheDoctor` is where the report itself is pinned.
+        monkeypatch.setattr(bootstrap, "_doctor_report", lambda *_a, **_k: {"healthy": True})
         names = TELEGRAM_SECRET_VARIABLES
         for name, value in zip(names, ("1234567:abcdefGH", "7", "11"), strict=True):
             monkeypatch.setenv(name, value)
@@ -819,3 +824,82 @@ class TestTheOnboardCommandInstallingTheDaemon:
         assert ("fake", "remove") in ran
         assert paths.config_path.exists()
         assert paths.environment_path.exists()
+
+
+class TestOnboardingEndsWithTheDoctor:
+    """Onboarding finishes by running the report an operator would have run next anyway.
+
+    `doctor` already answers core, store, tmux, telegram, service, profiles and config drift, so
+    a bespoke "did that work?" summary at the end of onboarding would be a second report to keep
+    in step with the first -- and the second one is the one nobody would remember to update.
+    """
+
+    def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, healthy: bool):
+        from remote_agents import bootstrap
+        from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+
+        home = tmp_path / "Users" / "tester"
+        (home / "dev").mkdir(parents=True)
+        supervisor = _FakeSupervisor(home)
+        report = {"healthy": healthy, "components": {"service": {"ready": healthy}}}
+
+        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(
+            bootstrap,
+            "_dependency_probe",
+            lambda: bootstrap.probe_dependencies(
+                ("tmux", "git"),
+                resolve=lambda name: Path("/usr/bin") / name,
+                run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
+            ),
+        )
+        monkeypatch.setattr(bootstrap, "_doctor_report", lambda *_a, **_k: report)
+        for name, value in zip(
+            TELEGRAM_SECRET_VARIABLES, ("1234567:abcdefGH", "7", "11"), strict=True
+        ):
+            monkeypatch.setenv(name, value)
+        return report
+
+    def test_onboard_ends_by_emitting_the_doctor_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, healthy=True)
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        printed = capsys.readouterr().out
+        assert '"healthy": true' in printed
+
+    def test_onboard_exits_non_zero_when_the_doctor_report_is_not_healthy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A host that onboarded but cannot serve is not a successful onboarding.
+
+        The exit status is what a bootstrap script reads, so reporting 0 beside a report saying
+        `healthy: false` would leave an unattended install believing it had finished.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, healthy=False)
+
+        assert main(["onboard", "--install-daemon"]) == 1
+        assert '"healthy": false' in capsys.readouterr().out
+
+    def test_the_doctor_command_and_onboarding_emit_the_same_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Not "a report like doctor's" -- the same function, so they cannot drift apart."""
+        from remote_agents.bootstrap import main
+
+        report = self._arrange(tmp_path, monkeypatch, healthy=True)
+        assert main(["onboard", "--install-daemon"]) == 0
+        onboarded = capsys.readouterr().out
+
+        assert main(["doctor", "--json"]) == 0
+
+        assert json.dumps(report, sort_keys=True) in capsys.readouterr().out
+        assert json.dumps(report, sort_keys=True) in onboarded
