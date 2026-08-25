@@ -344,7 +344,7 @@ def _record_for(project_id: str, slug: str) -> SessionRecord:
 
 
 def test_a_slug_that_is_a_catalogue_id_renders_the_catalogue_name() -> None:
-    opaque = "034b69be3a8290521db3d76e"
+    opaque = "000000000000000000000000"
     record = _record_for(opaque, opaque)
     (named,) = with_project_names((record,), (_catalogued(opaque),))
     assert named.display.project_slug == "remote-agents"
@@ -353,7 +353,7 @@ def test_a_slug_that_is_a_catalogue_id_renders_the_catalogue_name() -> None:
 
 def test_the_row_key_is_untouched_by_the_naming() -> None:
     """The id is the handle every action screen is reached through; only the *name* moves."""
-    opaque = "034b69be3a8290521db3d76e"
+    opaque = "000000000000000000000000"
     record = _record_for(opaque, opaque)
     (named,) = with_project_names((record,), (_catalogued(opaque),))
     assert named.session_id == record.session_id

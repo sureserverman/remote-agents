@@ -397,9 +397,9 @@ async def test_a_session_that_is_shown_says_nothing_at_all() -> None:
 
 
 async def test_a_row_names_its_project_rather_than_the_catalogue_id() -> None:
-    """The defect this closes, captured from the live surface before the change:
+    """The defect this closes, in the shape the live surface showed it (id synthetic):
 
-        034b69be3a8290521db3d76e · codex · regular · #3 · running · 10d ago
+        000000000000000000000000 · codex · regular · #3 · running · 10d ago
 
     `SessionDisplayIdentity.project_slug` holds the catalogue's `opaque_id`, and the bot has
     always swapped it for the readable name at render time. This surface never did.
