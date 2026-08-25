@@ -40,6 +40,34 @@ from remote_agents.ports.service_supervisor import (
 
 UNIT_NAME = "remote-agents.service"
 
+#: The unit filenames this version installs, and the ones it used to. DEC-051's ledger, kept the
+#: way `install-agent-hooks` keeps `INSTALLED_EVENTS` / `RETIRED_EVENTS`.
+#:
+#: **Names, not paths, and that split is the point.** A unit's directory depends on the home it
+#: is rendered for, so a constant holding a whole path would have to be a path expression
+#: somebody gets right twice; a constant holding a filename makes retiring one a single
+#: reviewable line, which is what the rule needs to survive being followed under pressure.
+#:
+#: An entry leaves `INSTALLED_UNIT_NAMES` by *moving* to `RETIRED_UNIT_NAMES`, never by being
+#: deleted. Deleting it strands the file: removal sweeps what the installer knows it owns, so a
+#: name no longer listed is a definition no version of this tool can take away -- and the
+#: operator cannot work around that by uninstalling first, because that means running the *old*
+#: uninstaller before taking the upgrade. An entry stays here until every host has run the
+#: installer at least once since the name was dropped; nothing can know when that is, and the
+#: cost of keeping one is a path join.
+INSTALLED_UNIT_NAMES: tuple[str, ...] = (UNIT_NAME,)
+
+RETIRED_UNIT_NAMES: tuple[str, ...] = ()
+"""Nothing yet, and empty is the honest answer rather than an unfinished one.
+
+The rule has had no occasion to fire on this side: this adapter installs to
+`~/.config/systemd/user/remote-agents.service`, which is the same path the shipped static unit
+was copied to, so upgrading to a generated unit overwrites the file it replaces instead of
+stranding one beside it. Inventing an entry to look complete would be worse than empty --
+`artifact_paths_to_remove` feeds an uninstaller, so a name here is a file something will go and
+delete on the strength of a claim that this project once installed it.
+"""
+
 #: The service definition, with the three host-specific values left to `str.format`.
 #:
 #: Every directive below the paths is the shipped unit's, unchanged and for its original
@@ -206,23 +234,22 @@ class SystemdSupervisor:
         return (SupervisorArtifact(path=self.unit_path, content=content),)
 
     def installed_artifact_paths(self) -> tuple[Path, ...]:
-        """The unit path, which does not depend on the executable and so never refuses."""
-        return (self.unit_path,)
+        """The ledger's installed half, joined to this host's unit directory.
+
+        Derived from `INSTALLED_UNIT_NAMES` rather than from `unit_path` alone, so the two halves
+        of the ledger are read the same way and a second installed name is one entry rather than
+        a second method. Depends on the home and not on the executable, which is why it never
+        refuses -- and why removal, which reads this, works on a host rendering would reject.
+        """
+        return tuple(self.unit_path.parent / name for name in INSTALLED_UNIT_NAMES)
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
-        """Nothing yet -- and the empty tuple is the honest answer, not an unfinished one.
+        """The ledger's retired half, joined to this host's unit directory.
 
-        DEC-051's rule is that an artifact leaves `artifacts()` by *moving* here rather than by
-        disappearing, so that a path no current version installs is still a path every current
-        version can take away. That rule has had no occasion to fire on this side: this adapter
-        installs to `~/.config/systemd/user/remote-agents.service`, which is the same path the
-        shipped static unit was copied to, so upgrading to a generated unit overwrites the file
-        it replaces instead of stranding one beside it.
-
-        Inventing an entry to look complete would be worse than empty: `artifact_paths_to_remove`
-        feeds an uninstaller, and a path named here is a path something will try to delete.
+        The reasoning lives on `RETIRED_UNIT_NAMES`, where the entries are, rather than here
+        where they are only assembled.
         """
-        return ()
+        return tuple(self.unit_path.parent / name for name in RETIRED_UNIT_NAMES)
 
     def required_directories(self) -> tuple[Path, ...]:
         """The unit directory, which `install(1)` will not create on the way past."""

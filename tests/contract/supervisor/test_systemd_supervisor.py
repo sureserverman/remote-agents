@@ -304,3 +304,37 @@ def test_systemd_refuses_an_interpreter_path_it_could_never_start(refused: str) 
 
     with pytest.raises(ValueError, match="quote or backslash"):
         supervisor.artifacts()
+
+
+def test_the_retired_unit_names_are_a_ledger_the_adapter_derives_paths_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ledger's stable half is a *name*; only the directory depends on the host.
+
+    `install-agent-hooks` keeps `INSTALLED_EVENTS` and `RETIRED_EVENTS` as module tuples, and
+    this is the same bookkeeping for daemon definitions -- but a unit's *path* depends on the
+    home it is rendered for, so the constant holds the filename and the method joins it to the
+    directory. Splitting it that way is what lets a retired name be a one-line, reviewable edit
+    rather than a path expression somebody has to get right twice.
+    """
+    from remote_agents.adapters.supervisor import systemd
+
+    monkeypatch.setattr(systemd, "RETIRED_UNIT_NAMES", ("remote-agents-old.service",))
+    supervisor = systemd.SystemdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"), home=Path("/home/tester")
+    )
+
+    assert supervisor.retired_artifact_paths() == (
+        Path("/home/tester/.config/systemd/user/remote-agents-old.service"),
+    )
+
+
+def test_the_retired_unit_names_are_empty_and_that_is_the_honest_answer() -> None:
+    """Nothing has been retired on this side, and inventing an entry would be worse than none.
+
+    `artifact_paths_to_remove` feeds an uninstaller, so a name here is a file something will go
+    and delete on the strength of a claim that this project once installed it.
+    """
+    from remote_agents.adapters.supervisor.systemd import RETIRED_UNIT_NAMES
+
+    assert RETIRED_UNIT_NAMES == ()

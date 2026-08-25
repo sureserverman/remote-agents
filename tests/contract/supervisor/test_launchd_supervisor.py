@@ -291,3 +291,29 @@ def test_launchd_adapter_is_reachable_through_the_registry() -> None:
     kinds = {supervisor.kind for supervisor in registered_supervisors()}
 
     assert SupervisorKind.LAUNCHD in kinds
+
+
+def test_the_retired_plist_names_are_a_ledger_the_adapter_derives_paths_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same split as the systemd side: the name is the constant, the directory is the host's."""
+    from remote_agents.adapters.supervisor import launchd
+
+    monkeypatch.setattr(launchd, "RETIRED_PLIST_NAMES", ("com.example.old.plist",))
+    supervisor = launchd.LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=Path("/Users/tester"),
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+
+    assert supervisor.retired_artifact_paths() == (
+        Path("/Users/tester/Library/LaunchAgents/com.example.old.plist"),
+    )
+
+
+def test_the_retired_plist_names_are_empty_because_no_version_ever_shipped_one() -> None:
+    """`git log --all --diff-filter=A --name-only -- '*.plist'` finds none: no history to strand."""
+    from remote_agents.adapters.supervisor.launchd import RETIRED_PLIST_NAMES
+
+    assert RETIRED_PLIST_NAMES == ()

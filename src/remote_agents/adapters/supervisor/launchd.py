@@ -70,6 +70,17 @@ reports one service name on both platforms instead of two spellings of the same 
 
 PLIST_NAME = f"{LABEL}.plist"
 
+#: The plist filenames this version installs, and the ones it used to -- DEC-051's ledger, the
+#: same shape the systemd adapter keeps and for the same reasons, which are argued there.
+INSTALLED_PLIST_NAMES: tuple[str, ...] = (PLIST_NAME,)
+
+RETIRED_PLIST_NAMES: tuple[str, ...] = ()
+"""Nothing, for a simpler reason than on the systemd side: no released version of this project
+has ever installed a plist at all. `git log --all --diff-filter=A --name-only -- '*.plist'` finds
+none, and `git log --all -S LaunchAgents` finds only the port. There is no history here to
+strand, and a name invented to look complete is a file an uninstaller would go and delete.
+"""
+
 #: Where a brew binary lives on each architecture's default install, as absolute paths.
 #:
 #: Probed in this order rather than found on PATH, because on the Mac Stage 3 drills PATH does
@@ -304,25 +315,12 @@ class LaunchdSupervisor:
         return (SupervisorArtifact(path=self.plist_path, content=content),)
 
     def installed_artifact_paths(self) -> tuple[Path, ...]:
-        """The plist path. Nothing here can refuse, and the symmetry is the point."""
-        return (self.plist_path,)
+        """The ledger's installed half, joined to `~/Library/LaunchAgents`."""
+        return tuple(self.plist_path.parent / name for name in INSTALLED_PLIST_NAMES)
 
     def retired_artifact_paths(self) -> tuple[Path, ...]:
-        """Nothing, and empty is the honest answer rather than an unfinished one.
-
-        DEC-051's rule is that an artifact leaves `artifacts()` by *moving* here rather than by
-        disappearing, so a path no current version installs is still a path every current
-        version can take away. It has had no occasion to fire on this side, for a simpler
-        reason than on the systemd side: no released version of this project has ever installed
-        a plist at all. `git log --all --diff-filter=A --name-only -- '*.plist'` finds none,
-        and `git log --all -S LaunchAgents` finds only the port added one commit ago. There is
-        no history here to strand.
-
-        Inventing an entry to look complete would be worse than empty. `artifact_paths_to_remove`
-        feeds an uninstaller, so a path named here is a path something will go and delete on the
-        strength of a claim that this project once installed it.
-        """
-        return ()
+        """The ledger's retired half; the reasoning is on `RETIRED_PLIST_NAMES`."""
+        return tuple(self.plist_path.parent / name for name in RETIRED_PLIST_NAMES)
 
     def required_directories(self) -> tuple[Path, ...]:
         """`~/Library/LaunchAgents` and the log directory, both needed before the first load.

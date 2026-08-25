@@ -175,3 +175,118 @@ def test_the_reload_verb_is_argv_or_deliberately_nothing(supervisor: ServiceSupe
 
     assert isinstance(argv, tuple)
     assert all(isinstance(word, str) and word for word in argv)
+
+
+class _SupervisorWithHistory:
+    """A supervisor that installed something under a name it no longer uses.
+
+    The state DEC-051 is about, and one no shipped adapter is in yet: both currently retire
+    nothing, so a sweep proved only against them proves the union is the installed set. This
+    stands in for the version-after-next, which is the only version that can be hurt.
+    """
+
+    kind = SupervisorKind.SYSTEMD
+    liveness_meaning = LivenessMeaning.RUNNING
+
+    def __init__(self, directory: Path) -> None:
+        self.current = directory / "remote-agents.service"
+        self.abandoned = directory / "remote-agents-old.service"
+
+    def artifacts(self) -> tuple[SupervisorArtifact, ...]:
+        return (SupervisorArtifact(path=self.current, content="a unit"),)
+
+    def installed_artifact_paths(self) -> tuple[Path, ...]:
+        return (self.current,)
+
+    def retired_artifact_paths(self) -> tuple[Path, ...]:
+        return (self.abandoned,)
+
+    def required_directories(self) -> tuple[Path, ...]:
+        return (self.current.parent,)
+
+    def reload_command(self) -> tuple[str, ...]:
+        return ()
+
+    def install_command(self) -> tuple[str, ...]:
+        return ("fake", "install")
+
+    def remove_command(self) -> tuple[str, ...]:
+        return ("fake", "remove")
+
+    def start_command(self) -> tuple[str, ...]:
+        return ("fake", "start")
+
+    def liveness_command(self) -> tuple[str, ...]:
+        return ("fake", "liveness")
+
+
+def test_removal_sweeps_a_retired_name_no_current_version_would_install(tmp_path: Path) -> None:
+    """DEC-051's whole point, and the case the shipped adapters cannot exercise.
+
+    An artifact leaves the installed set by *moving* to the retired one rather than by
+    disappearing. Dropping a name outright strands the file: removal sweeps what the installer
+    knows it owns, so a definition no longer named is one no version of this tool can take away
+    -- and the operator cannot work around it by uninstalling first, because that would mean
+    running the *old* uninstaller before taking the upgrade.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+    supervisor.current.write_text("a unit", encoding="utf-8")
+    supervisor.abandoned.write_text("a unit an older version installed", encoding="utf-8")
+
+    outcome = remove_daemon(supervisor, run=lambda argv: 0)
+
+    assert not supervisor.current.exists()
+    assert not supervisor.abandoned.exists(), "a retired name was left stranded"
+    assert outcome.changed
+
+
+def test_a_retired_name_is_swept_even_when_the_current_one_was_never_installed(
+    tmp_path: Path,
+) -> None:
+    """The upgrade case: the old file is there and the new one never was.
+
+    A sweep that reported "no daemon installed" because the *current* name is absent would leave
+    the stranded file behind while telling the operator there was nothing to remove.
+    """
+    from remote_agents.adapters.supervisor.installer import remove_daemon
+
+    supervisor = _SupervisorWithHistory(tmp_path)
+    supervisor.abandoned.write_text("a unit an older version installed", encoding="utf-8")
+
+    outcome = remove_daemon(supervisor, run=lambda argv: 0)
+
+    assert not supervisor.abandoned.exists()
+    assert outcome.changed
+
+
+@_PARAMS
+def test_the_installed_and_retired_names_stay_disjoint(supervisor: ServiceSupervisor) -> None:
+    """A path in both sets is a bookkeeping error, and `artifact_paths_to_remove` would hide it.
+
+    That function dedupes, so an entry in both halves sweeps correctly and reads as fine -- while
+    meaning the adapter believes it both does and does not install that name. The dedupe exists
+    for a mid-migration adapter naming one file twice; this is what stops it becoming the way the
+    ledger is kept.
+    """
+    installed = set(supervisor.installed_artifact_paths())
+    retired = set(supervisor.retired_artifact_paths())
+
+    assert not installed & retired
+
+
+@_PARAMS
+def test_the_ledger_covers_all_artifacts(supervisor: ServiceSupervisor) -> None:
+    """Every path this version can write is a path this version can take away.
+
+    The gate check named for this. It is the half of DEC-051 that is easy to keep true and easy
+    to break silently: an adapter that grows a second artifact -- a drop-in, a wrapper, a
+    timer -- and adds it to `artifacts()` alone leaves a file the uninstaller does not know
+    exists, which is the same stranding as a dropped name arriving from the other direction.
+    """
+    written = {artifact.path for artifact in supervisor.artifacts()}
+    swept = set(artifact_paths_to_remove(supervisor))
+
+    assert written <= swept
+    assert set(supervisor.installed_artifact_paths()) == written
