@@ -119,7 +119,20 @@ def production_doctor(
     what makes the report actionable: the runbook's fix for this incident is four lines of
     TOML, and naming the keys turns that into a copy-paste.
     """
-    profiles_ready = bool(profiles) and all(profile.available for profile in profiles)
+    # **`any`, not `all`, and the reason code says which question this answers (BL-001).**
+    #
+    # It was `all`, so a host missing any one of the five curated agent CLIs was reported
+    # unhealthy -- while `application/dependencies.REQUIRED_DEPENDENCIES` deliberately leaves
+    # those CLIs out, on the stated grounds that "a host with only one of the five installed is a
+    # working host". Two positions in one codebase, and they only collided once onboarding
+    # adopted `healthy` as its exit status: a correct install on an ordinary machine reported
+    # failure, and an unattended installer reading that status concluded it had failed.
+    #
+    # Owner's decision, 2026-08-25: an un-installed *optional* agent is not ill health. Having
+    # nothing to launch at all still is -- that is an inability rather than a preference, and it
+    # is the question this component now asks. Which agents are missing is not lost: it is what
+    # `doctor --profiles` reports, per profile, which is where a reader can act on it.
+    profiles_ready = any(profile.available for profile in profiles)
     report = health_report(
         {
             "core": (core_ready, "registry_unavailable"),
@@ -127,7 +140,7 @@ def production_doctor(
             "tmux": (tmux_ready, "tmux_unavailable"),
             "telegram": (telegram_ready, "credentials_unavailable"),
             "service": (service_ready, "service_inactive"),
-            "profiles": (profiles_ready, "profile_blocked"),
+            "profiles": (profiles_ready, "no_profile_available"),
         }
     )
     report["projects"] = {

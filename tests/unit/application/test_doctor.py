@@ -154,8 +154,62 @@ def test_production_doctor_blocks_a_missing_agent_executable() -> None:
     assert report["healthy"] is False
     assert report["components"]["profiles"] == {
         "status": "degraded",
-        "reason": "profile_blocked",
+        "reason": "no_profile_available",
     }
+
+
+def test_production_doctor_stays_healthy_when_only_some_agents_are_installed() -> None:
+    """One installed agent is a working host, and the report now says so (BL-001).
+
+    `profiles_ready` was `all(...)`, so a host without every one of the five curated CLIs was
+    reported unhealthy -- while `application/dependencies.REQUIRED_DEPENDENCIES` deliberately
+    excludes those CLIs on the stated grounds that "a host with only one of the five installed is
+    a working host". Two positions in one codebase, and onboarding turned the disagreement into
+    its exit status: a correct install on an ordinary machine reported failure, and a bootstrap
+    script reading that status concluded the install had failed.
+
+    Owner's call, taken 2026-08-25: an un-installed *optional* profile does not make a host
+    unhealthy. What still does is having nothing to launch at all, which is a real inability
+    rather than a preference -- so the component narrows from "every agent" to "any agent", and
+    its reason code is renamed to say which question it now answers.
+    """
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("claude"), True, "1.2.3", "AVAILABLE", None),
+            ProfileCompatibility(ProfileId("codex"), False, None, "BLOCKED", "executable_missing"),
+        ),
+        registered_projects=2,
+        discovered_projects=3,
+        catalogue_projects=4,
+    )
+
+    assert report["healthy"] is True
+    assert report["components"]["profiles"] == {"status": "healthy", "reason": None}
+
+
+def test_production_doctor_refuses_health_when_no_agent_can_be_launched() -> None:
+    """Nothing to launch is not a preference, it is an inability, and it still fails the report."""
+    report = production_doctor(
+        core_ready=True,
+        database_ready=True,
+        tmux_ready=True,
+        telegram_ready=True,
+        service_ready=True,
+        profiles=(
+            ProfileCompatibility(ProfileId("codex"), False, None, "BLOCKED", "executable_missing"),
+        ),
+        registered_projects=2,
+        discovered_projects=3,
+        catalogue_projects=4,
+    )
+
+    assert report["healthy"] is False
+    assert report["components"]["profiles"]["reason"] == "no_profile_available"
 
 
 def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() -> None:
