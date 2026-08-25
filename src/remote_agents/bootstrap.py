@@ -1452,7 +1452,7 @@ def _onboard(arguments) -> int:
             # absent. Unless onboarding says it here, that reads as a fault.
             print("note: on macOS this service runs only while you are logged in at the screen")
         _wait_for_the_service(supervisor)
-    return _report_on_the_onboarded_host(paths)
+    return _report_on_the_onboarded_host(paths, installed_daemon=bool(arguments.install_daemon))
 
 
 def _wait_for_the_service(supervisor: ServiceSupervisor, sleep=time.sleep) -> None:
@@ -1481,13 +1481,46 @@ def _wait_for_the_service(supervisor: ServiceSupervisor, sleep=time.sleep) -> No
             sleep(_SERVICE_START_INTERVAL_SECONDS)
 
 
-def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
-    """End onboarding with `doctor`'s own report, and let it decide the exit status.
+#: The `doctor` components onboarding is answerable for. Onboarding verifies the dependencies,
+#: writes the credential file, and (when asked) registers the daemon -- so these are the ones
+#: whose failure means *onboarding did not work*, as opposed to *this host is not finished*.
+_COMPONENTS_ONBOARDING_OWNS = ("tmux", "telegram")
+
+#: Owned only when `--install-daemon` was passed. Plain `onboard` registers nothing, so
+#: `service_inactive` is its correct outcome rather than a fault -- failing on it would mean the
+#: command could never succeed at what it was actually asked to do.
+_COMPONENT_OWNED_ONLY_WITH_A_DAEMON = "service"
+
+#: Named for what they are: real, reported, and nobody's to fix but the operator's. `core` wants
+#: a projects registry that appears when a project is registered; `store` wants a database the
+#: service creates on first run; `profiles` wants an optional third-party agent CLI (DEC-056).
+_COMPONENTS_THE_OPERATOR_FINISHES = ("core", "store", "profiles")
+
+
+def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: bool) -> int:
+    """End onboarding with `doctor`'s own report, and answer for onboarding's own work.
 
     **A host that onboarded and cannot serve is not a successful onboarding.** The exit status is
-    what a bootstrap script reads, so returning 0 beside a report saying `healthy: false` would
-    leave an unattended install believing it had finished -- which is the one failure a one-line
-    installer must not have, because nobody is watching the output.
+    what a bootstrap script reads, so returning 0 beside a broken install would leave an
+    unattended install believing it had finished -- the one failure a one-line installer must
+    not have, because nobody is watching the output.
+
+    **But the exit status answers for onboarding, not for the whole host (BL-001, owner's
+    decision 2026-08-25).** It used to adopt `doctor`'s entire `healthy` bit, which made one bit
+    carry two different statements -- *"the installation failed"* and *"you have not finished
+    setting this up yet"* -- and resolved it as failure. On a genuinely fresh host the projects
+    registry does not exist until a project is registered, so a completely correct install exited
+    1 and an unattended installer concluded it had failed. Three components were implicated when
+    this was raised; two resolved themselves as the installer improved, and `core` was the one
+    left, which is the one onboarding can least claim to own.
+
+    The rejected alternative was having onboarding create an empty registry so the check passes.
+    That fabricates a file representing the operator's own projects in order to satisfy a
+    detector, which is a worse answer than the wrong exit code was.
+
+    **Nothing is hidden to achieve this.** The full report still prints, `doctor` still says the
+    host is not wholly healthy, and what remains outstanding is still named -- as outstanding
+    rather than as a fault. What changed is only which components may fail *this command*.
 
     The config is re-read from disk rather than carried from the generation step above, so what
     is reported on is the file the service will actually load. Onboarding may have kept an
@@ -1501,6 +1534,9 @@ def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
     print(json.dumps(report, sort_keys=True))
     if report.get("healthy"):
         return 0
+    owned = set(_COMPONENTS_ONBOARDING_OWNS)
+    if installed_daemon:
+        owned.add(_COMPONENT_OWNED_ONLY_WITH_A_DAEMON)
     # The report is machine-readable and the exit status is one bit, so an operator who gets a
     # 1 has to read a JSON blob to find out which of seven components said no. Naming them costs
     # a line and is the difference between "onboarding failed" and "install codex, or don't".
@@ -1509,14 +1545,32 @@ def _report_on_the_onboarded_host(paths: ProductionPaths) -> int:
     # double that invented one, so the line never rendered and no test noticed. That is the same
     # failure as this stage's Blocking defect (a fixture supplying what the product does not),
     # reproduced inside the commit that diagnosed it, which is worth saying out loud.
-    unhealthy = sorted(
-        f"{name} ({component.get('reason')})"
+    degraded = {
+        name: component.get("reason")
         for name, component in (report.get("components") or {}).items()
         if isinstance(component, dict) and component.get("status") != "healthy"
-    )
-    if unhealthy:
-        print(f"not healthy yet: {', '.join(unhealthy)}", file=sys.stderr)
-    return 1
+    }
+    mine = sorted(f"{name} ({reason})" for name, reason in degraded.items() if name in owned)
+    theirs = sorted(f"{name} ({reason})" for name, reason in degraded.items() if name not in owned)
+
+    # A config the loader rejects, or a credential file whose names will not resolve, are both
+    # onboarding's own output -- and both can turn `healthy` false without appearing among the
+    # components at all, so neither is reachable through the loop above.
+    for section, key in (("config", "readable"), ("credential_file", "names_resolved")):
+        carried = report.get(section)
+        if isinstance(carried, dict) and not carried.get(key, True):
+            mine.append(f"{section} ({key} is false)")
+
+    if mine:
+        print(f"onboarding did not complete: {', '.join(sorted(mine))}", file=sys.stderr)
+        return 1
+    if theirs:
+        # stdout, not stderr, and worded as work rather than as fault. This is the whole of what
+        # the decision changed: the same facts, in the same report, no longer failing a command
+        # that did everything asked of it.
+        print(f"onboarding complete. Still to do, and not part of onboarding: {', '.join(theirs)}")
+        print("  These are yours to finish; `remote-agents doctor` reports them at any time.")
+    return 0
 
 
 def _prepared_dev_root(dev_root: Path) -> str:

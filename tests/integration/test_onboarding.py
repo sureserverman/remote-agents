@@ -951,8 +951,15 @@ class TestOnboardingEndsWithTheDoctor:
     ) -> None:
         """A host that onboarded but cannot serve is not a successful onboarding.
 
-        The exit status is what a bootstrap script reads, so reporting 0 beside a report saying
-        `healthy: false` would leave an unattended install believing it had finished.
+        The exit status is what a bootstrap script reads, so reporting 0 for a daemon that was
+        asked for and is not running would leave an unattended install believing it had
+        finished.
+
+        **Still exit 1 after BL-001 was decided**, and that is the half of the decision worth
+        pinning: `--install-daemon` was passed, so the service is onboarding's own work and its
+        failure is onboarding's failure. Only the wording moved -- "not healthy yet" became
+        "onboarding did not complete", because the message now names a narrower claim than the
+        whole host's health.
         """
         from remote_agents.bootstrap import main
 
@@ -964,7 +971,7 @@ class TestOnboardingEndsWithTheDoctor:
         # The exit status is one bit and the report is JSON, so an operator who gets a 1 needs
         # to be told which component said no. Pinned here because the first attempt at this line
         # read a key that does not exist and shipped as dead code.
-        assert "not healthy yet: service (service_inactive)" in printed.err
+        assert "onboarding did not complete: service (service_inactive)" in printed.err
 
     def test_a_healthy_onboard_says_nothing_about_degraded_components(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1631,3 +1638,150 @@ class TestAskingWhereTheDaemonDefinitionIs:
             assert raised.value.code == 2
             assert "not allowed with" in complaint, complaint
             assert "unrecognized" not in complaint, complaint
+
+
+class TestOnboardingsExitStatusCoversOnlyWhatOnboardingOwns:
+    """BL-001, decided by the owner on 2026-08-25: the exit code answers for onboarding alone.
+
+    Onboarding used to adopt `doctor`'s whole `healthy` bit as its exit status. That conflated
+    two different statements -- *"the installation failed"* and *"you have not finished setting
+    this up yet"* -- into one bit, and resolved it as failure. On a genuinely fresh host the
+    projects registry does not exist until the operator registers a project, so a completely
+    correct install exited 1, and an unattended installer reading that status concluded it had
+    failed. That is the one failure a one-line installer must not have.
+
+    The report is unchanged and still printed in full: nothing is hidden, and `doctor` still
+    says the host is not wholly healthy, because it is not. What changed is which components
+    are allowed to make *onboarding* a failure.
+    """
+
+    def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: dict):
+        from remote_agents import bootstrap
+        from remote_agents.config import TELEGRAM_SECRET_VARIABLES
+
+        home = tmp_path / "Users" / "tester"
+        (home / "dev").mkdir(parents=True)
+        supervisor = _FakeSupervisor(home)
+        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(
+            bootstrap,
+            "_dependency_probe",
+            lambda: bootstrap.probe_dependencies(
+                ("tmux", "git"),
+                resolve=lambda name: Path("/usr/bin") / name,
+                run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
+            ),
+        )
+        monkeypatch.setattr(bootstrap, "_doctor_report", lambda *_a, **_k: report)
+        for name, value in zip(
+            TELEGRAM_SECRET_VARIABLES, ("1234567:abcdefGH", "7", "11"), strict=True
+        ):
+            monkeypatch.setenv(name, value)
+
+    @staticmethod
+    def _report(**components: str) -> dict:
+        """A report in the shape `health_report` really emits.
+
+        Named components are degraded; every other one is healthy. Built from the real key
+        set rather than an invented one, because a fixture supplying what the product does
+        not is how this suite has already hidden two defects.
+        """
+        every = ("core", "store", "tmux", "telegram", "service", "profiles")
+        return {
+            "healthy": not components,
+            "components": {
+                name: (
+                    {"status": "degraded", "reason": components[name]}
+                    if name in components
+                    else {"status": "healthy", "reason": None}
+                )
+                for name in every
+            },
+        }
+
+    def test_a_fresh_host_missing_only_the_projects_registry_is_a_successful_onboarding(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The BL-001 case exactly: everything onboarding did worked, and the host is new.
+
+        The registry appears when the operator registers their first project. Onboarding neither
+        creates it nor should -- fabricating a file that represents the operator's own projects
+        would be a worse answer than the wrong exit code was.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, self._report(core="registry_unavailable"))
+
+        code = main(["onboard", "--install-daemon"])
+
+        printed = capsys.readouterr()
+        assert code == 0
+        assert '"healthy": false' in printed.out, "the report must still say what it sees"
+        assert "core" in printed.out, "the operator is still told what is outstanding"
+
+    def test_a_component_onboarding_is_answerable_for_still_fails_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The bit that must not be lost: onboarding still fails for its own work.
+
+        Credentials are written by onboarding, so a host that cannot authenticate is an
+        onboarding that did not work, whatever else is green.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, self._report(telegram="credentials_unavailable"))
+
+        code = main(["onboard", "--install-daemon"])
+
+        assert code == 1
+        assert "telegram" in capsys.readouterr().err
+
+    def test_a_dead_service_fails_onboarding_when_a_daemon_was_asked_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`--install-daemon` is a promise to leave a running service, so a dead one is failure."""
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, self._report(service="service_inactive"))
+
+        code = main(["onboard", "--install-daemon"])
+
+        assert code == 1
+        assert "service" in capsys.readouterr().err
+
+    def test_a_dead_service_does_not_fail_an_onboarding_that_was_never_asked_to_install_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Plain `onboard` registers nothing, so `service_inactive` is its expected outcome.
+
+        Failing on it would mean the command could never succeed at what it was asked to do --
+        the same conflation as the registry case, one component along.
+        """
+        from remote_agents.bootstrap import main
+
+        self._arrange(tmp_path, monkeypatch, self._report(service="service_inactive"))
+
+        code = main(["onboard"])
+
+        assert code == 0
+        assert "service" in capsys.readouterr().out
+
+    def test_an_outstanding_item_is_named_as_outstanding_rather_than_as_a_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Exit 0 must not mean silence: what is left undone is still the operator's to see."""
+        from remote_agents.bootstrap import main
+
+        self._arrange(
+            tmp_path,
+            monkeypatch,
+            self._report(core="registry_unavailable", profiles="no_profile_available"),
+        )
+
+        assert main(["onboard", "--install-daemon"]) == 0
+
+        out = capsys.readouterr().out
+        assert "still to do" in out.lower()
+        assert "core" in out and "profiles" in out
