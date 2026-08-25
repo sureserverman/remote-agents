@@ -73,7 +73,7 @@ fi
 : "${REMOTE_AGENTS_UV_INSTALLER_SHA256:=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111}"
 : "${REMOTE_AGENTS_UV_INSTALLER_URL:=https://astral.sh/uv/0.12.5/install.sh}"
 : "${REMOTE_AGENTS_REPOSITORY:=https://github.com/sureserverman/remote-agents}"
-: "${REMOTE_AGENTS_VERSION:=v0.20.0}"
+: "${REMOTE_AGENTS_VERSION:=v0.20.1}"
 #: Set non-empty to accept a branch, a bare SHA, or anything else not tag-shaped.
 : "${REMOTE_AGENTS_ALLOW_UNPINNED_REF:=}"
 
@@ -206,9 +206,39 @@ ensure_uv() {
     sh "${installer_temporary_file}" </dev/null
   fi
 
-  # `uv` lands in ~/.local/bin, which is not on a fresh login shell's PATH and is not on
-  # macOS's _PATH_STDPATH at all, so this process cannot see it yet.
-  export PATH="${HOME}/.local/bin:${PATH}"
+  # `uv` is not on this process's PATH yet, and WHERE it landed is not a constant. Astral's
+  # installer picks its bin directory from $UV_INSTALL_DIR, then $XDG_BIN_HOME, then
+  # $XDG_DATA_HOME/../bin, then ~/.local/bin -- so exporting only the last is right on a
+  # default host and wrong on any host that sets one of the others. Reproduced with the real
+  # installer and XDG_BIN_HOME set: uv installed successfully into $XDG_BIN_HOME and the very
+  # next line died with `uv: command not found`, exit 127 -- on the clean-host branch, which is
+  # the only branch that matters for reaching a running service from one command.
+  for candidate in \
+    "${UV_INSTALL_DIR:+${UV_INSTALL_DIR}/bin}" \
+    "${UV_INSTALL_DIR:-}" \
+    "${XDG_BIN_HOME:-}" \
+    "${XDG_DATA_HOME:+${XDG_DATA_HOME}/../bin}" \
+    "${HOME}/.local/bin"
+  do
+    if [ -n "${candidate}" ] && [ -x "${candidate}/uv" ]; then
+      export PATH="${candidate}:${PATH}"
+      break
+    fi
+  done
+
+  # The postcondition this function never had. Its analogue for the tool install below has
+  # existed since the first remediation round; this one was missing, so a uv that landed
+  # somewhere unanticipated surfaced as a bare `uv: command not found` from the next line
+  # rather than as a diagnosis naming what was looked for.
+  if ! command -v uv >/dev/null 2>&1; then
+    {
+      say "ERROR: the uv installer ran, but uv is not on PATH afterwards."
+      say "  Looked in: \$UV_INSTALL_DIR/bin, \$UV_INSTALL_DIR, \$XDG_BIN_HOME,"
+      say "             \$XDG_DATA_HOME/../bin, and ~/.local/bin"
+      say "  Add uv's directory to PATH and re-run this installer, or install uv yourself."
+    } >&2
+    exit 1
+  fi
 }
 
 require_a_tag_shaped_version
@@ -305,9 +335,10 @@ say ""
 # because the spec itself changed. Sending an operator to a command that exits 0 and does
 # nothing is worse than saying nothing at all.
 say "To upgrade: re-run this installer. It pins a tag, so a newer tag is what moves the"
-say "  install; then run 'remote-agents onboard --install-daemon' again, because the daemon"
-say "  definition names the executable by absolute path and an install that moved leaves it"
-say "  pointing at the old one."
+say "  install; then run 'remote-agents onboard --install-daemon' again, so the daemon picks"
+say "  up the new code. uv reuses the same tool directory across versions, so the definition"
+say "  usually does not change -- re-running is cheap and idempotent either way, and it is"
+say "  what rewrites the definition on the upgrades that DO relocate the executable."
 say ""
 # **Order is the contract here, not a preference.** `uv tool uninstall` deletes the console
 # script (measured: it is gone from uv's bin directory afterwards), so an operator who takes

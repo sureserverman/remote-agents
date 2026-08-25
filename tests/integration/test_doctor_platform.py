@@ -216,7 +216,7 @@ def test_doctor_says_what_a_green_service_component_actually_establishes(
 
     report = json.loads(capsys.readouterr().out)
     assert report["components"]["service"]["status"] == "healthy"
-    assert report["service_liveness"] == meaning.value
+    assert report["service_liveness_meaning"] == meaning.value
 
 
 def test_both_supervisors_now_answer_the_same_liveness_question() -> None:

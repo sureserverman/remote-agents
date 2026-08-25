@@ -191,6 +191,12 @@ def production_doctor(
         # the port -- a supervisor able to confirm only registration would report so here, and
         # the operator would see the difference instead of reading "healthy" for a service that
         # had exited. Reported rather than assumed, which is the whole point of the field.
-        report["service_liveness"] = liveness_meaning.value
+        # Named `..._meaning`, not `service_liveness`. The value is what a GREEN check would
+        # establish, not what the service is doing -- so on an unhealthy host the old key
+        # rendered `'service': {'status': 'degraded', 'reason': 'service_inactive'}` beside
+        # `'service_liveness': 'running'`, in one undelimited dict, and read as the opposite of
+        # the truth. A close-out evaluator hit it on the exact recovery path `install.sh` sends
+        # a failed operator down. The field is right; only its name was doing the damage.
+        report["service_liveness_meaning"] = liveness_meaning.value
     report.update(profile_doctor(profiles))
     return report

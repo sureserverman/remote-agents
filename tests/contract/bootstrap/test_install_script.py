@@ -738,3 +738,60 @@ def test_the_fetched_installer_is_not_handed_the_rest_of_this_script(tmp_path: P
     assert Path(env["INSTALLER_RAN_MARKER"]).exists(), "the installer never ran"
     assert drained.read_text(encoding="utf-8") == "", "the installer ate this script's tail"
     assert "Installed. The executable is" in result.stdout, "the script was truncated"
+
+
+def test_uv_is_found_when_its_installer_chose_a_non_default_bin_directory(
+    tmp_path: Path,
+) -> None:
+    """Astral's installer does not always land in `~/.local/bin`, and the script assumed it did.
+
+    It picks its bin directory from `$UV_INSTALL_DIR`, then `$XDG_BIN_HOME`, then
+    `$XDG_DATA_HOME/../bin`, then `~/.local/bin`. Reproduced against the *real* installer with
+    `XDG_BIN_HOME` set: uv installed successfully into that directory and the next line of this
+    script died with `uv: command not found`, exit 127 -- on the clean-host branch, which is
+    the only branch that matters for reaching a running service from one command.
+    """
+    elsewhere = tmp_path / "xdg-bin"
+    elsewhere.mkdir()
+    payload = (
+        "#!/bin/sh\n"
+        'touch "$INSTALLER_RAN_MARKER"\n'
+        f'cp "$UV_STUB_PATH" "{elsewhere}/uv"\n'
+        f'chmod +x "{elsewhere}/uv"\n'
+    )
+    _, env = _sandbox(tmp_path, uv_present=False)
+    env["FAKE_PAYLOAD"] = payload
+    env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = hashlib.sha256(payload.encode()).hexdigest()
+    env["XDG_BIN_HOME"] = str(elsewhere)
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 0, result.stderr
+    assert "Installed. The executable is" in result.stdout
+    # `... or True` was here for a moment, which asserts nothing at all. What actually proves
+    # the search worked is that the install step ran: it can only run if `command -v uv`
+    # resolved, which it can only do if the loop found uv outside ~/.local/bin.
+    assert Path(env["UV_LOG"]).exists(), "never reached the install step"
+    assert "remote-agents" in Path(env["UV_LOG"]).read_text(encoding="utf-8")
+
+
+def test_a_uv_installer_that_left_nothing_runnable_is_diagnosed_not_a_bare_127(
+    tmp_path: Path,
+) -> None:
+    """The postcondition `ensure_uv` never had.
+
+    Its analogue for the tool install has existed since the first remediation round. Without
+    this one, a uv that landed somewhere unanticipated surfaced as a bare `uv: command not
+    found` from the following line -- a shell error naming nothing an operator can act on.
+    """
+    payload = "#!/bin/sh\ntouch \"$INSTALLER_RAN_MARKER\"\nexit 0\n"
+    _, env = _sandbox(tmp_path, uv_present=False)
+    env["FAKE_PAYLOAD"] = payload
+    env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = hashlib.sha256(payload.encode()).hexdigest()
+
+    result = _run(env, "--no-onboard")
+
+    assert result.returncode == 1
+    assert "uv is not on PATH afterwards" in result.stderr
+    assert "Looked in" in result.stderr
+    assert not Path(env["UV_LOG"]).exists(), "tried to install with no uv"
