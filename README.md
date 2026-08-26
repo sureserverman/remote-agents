@@ -21,9 +21,109 @@ See [the architecture document](docs/architecture.md) for how the code behind bo
 arranged: the layers, the dependency rule `tests/architecture/check_imports.py` enforces, and the
 process model the terminal and the service share.
 
+## Installing
+
+`remote-agents` is distributed as a **pinned tag installed with `uv`** (DEC-057), on Ubuntu and
+on macOS alike. Nothing here is packaged for a system package manager, and nothing runs as root.
+
+The bootstrap needs three things it deliberately does not install: `curl` — implied, it is how
+you fetch the script — `git`, which `uv` shells out to for a `git+https://` source, and `tmux`,
+which onboarding requires. It does not answer `--yes` on your behalf, so a missing system
+dependency stops it with the exact `apt-get` or `brew` command to run rather than escalating
+privileges for you. On a bare image install `tmux` in the provisioning step before this one, or
+an unattended run ends at exit 1 with nothing registered.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash
+```
+
+That fetches `uv` if the host has none — verifying a SHA-256 pinned against a *versioned*
+installer URL before executing a byte of it, and using an already-present `uv` as-is — installs
+this tool from the pinned tag, and then hands off to `remote-agents onboard --install-daemon`.
+The one line therefore ends at a **running service**, not at an installed executable.
+
+To pass the script an option you need bash's `-s --`. A piped `bash --no-onboard` is bash's own
+option, and fails before the script runs at all:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash -s -- --no-onboard
+```
+
+### Installing without piping a fetched script into a shell
+
+The bootstrap's own install step, run yourself. It is the same pinned tag; the script exists to
+find `uv`, verify it, and sequence what follows, not to install anything different:
+
+```bash
+uv tool install --managed-python \
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.21.0"
+remote-agents onboard --install-daemon
+```
+
+`uv tool install` puts the console script in `uv tool dir --bin` — usually `~/.local/bin`, which
+a fresh login shell need not have on `PATH` and which is absent from macOS's default path
+outright. `uv tool update-shell` fixes that. To check the executable resolves, run
+`remote-agents --help`: there is no `--version` flag, and asking for one exits non-zero.
+
+### Installing unattended
+
+A piped run has no terminal to be asked at — `curl | bash` gives the script's own text to
+stdin — so onboarding sees a non-tty and refuses to prompt. Supply the three Telegram values
+through the environment; onboarding names them precisely if you run it once interactively:
+
+```bash
+REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=… REMOTE_AGENTS_OWNER_USER_ID=… \
+  REMOTE_AGENTS_OWNER_CHAT_ID=… remote-agents onboard --install-daemon --yes
+```
+
+**The bot token is never a command-line argument.** On Linux `/proc/<pid>/cmdline` is
+world-readable and argv lands in shell history, so there is no flag that takes the value: it
+comes from the environment, or `--bot-token-file` names a path to read it from. Save the
+installer and run it in a terminal instead, and onboarding prompts for all three.
+
+### Upgrading
+
+Re-run the bootstrap at a newer tag, then re-run onboarding:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash
+remote-agents onboard --install-daemon
+```
+
+Asking `uv` to upgrade the tool is **not** the path: it honours the requirement the tool was
+installed with, and that requirement is a pinned tag — so it reports there is nothing to upgrade
+and exits 0, having done nothing. Changing the tag is what moves the install. The second command
+is what makes the daemon pick up the new code; re-running it is cheap and idempotent, and it is
+what rewrites the daemon definition on the upgrades that relocate the executable.
+
+### Uninstalling
+
+**In this order — the daemon first, or nothing is left that can take it away:**
+
+```bash
+remote-agents onboard --remove      # unregister the daemon and delete what it installed
+uv tool uninstall remote-agents     # then take the tool itself away
+```
+
+`uv tool uninstall` deletes the console script, so an operator who removes the tool first has
+nothing left to run the uninstaller with, while the daemon stays registered naming an ExecStart
+that no longer exists — which under `Restart=on-failure` is a service that keeps trying rather
+than one that is gone. If that has already happened, re-run the bootstrap and then do it in the
+order above.
+
+`remote-agents onboard --remove` unregisters the daemon and deletes everything the install
+caused to exist — the unit or the LaunchAgent, the `default.target.wants` symlink
+`systemctl enable` writes, and on macOS the two log files launchd opens on the job's behalf.
+Your config and your credential file are left alone. To see where the definition lives, ask:
+`remote-agents onboard --print-daemon-path`.
+
 ## Production operation
 
-One command sets the host up, on Ubuntu and on macOS alike:
+Onboarding is where the host is actually configured, and the bootstrap ends by running it. Run
+it again yourself at any time, on Ubuntu and on macOS alike:
 
 ```bash
 remote-agents onboard --install-daemon
@@ -41,26 +141,16 @@ daemon your platform actually uses: a systemd user unit on Linux, a LaunchAgent 
 macOS. Re-running it is safe — it keeps a config or a credential file you already
 have, and rewrites the daemon only if the definition changed.
 
+Its exit status answers for onboarding's own work, not for the whole host: a zero means the
+config, the credentials and the daemon are as it left them, and `doctor` is what asks whether
+everything else on this machine is happy (DEC-058).
+
 One side effect of re-running is worth knowing: `--install-daemon` means "register
 and start", so if the service is down it will be brought up, including when you
 stopped it yourself. There is no way to ask a supervisor "is this registered?"
 without either running the service or parsing output macOS documents as not being an
 interface, so a stopped service and an absent one look the same from here. Stop it
 again after onboarding, or use `--remove`.
-
-**The bot token is never a command-line argument.** On Linux `/proc/<pid>/cmdline` is
-world-readable and argv lands in shell history, so for an unattended run supply the
-three values through the environment, or point `--bot-token-file` at a file:
-
-```bash
-REMOTE_AGENTS_TELEGRAM_BOT_TOKEN=… REMOTE_AGENTS_OWNER_USER_ID=… \
-  REMOTE_AGENTS_OWNER_CHAT_ID=… remote-agents onboard --install-daemon --yes
-```
-
-`remote-agents onboard --remove` unregisters the daemon and deletes everything the
-install caused to exist — the unit or the LaunchAgent, the `default.target.wants`
-symlink `systemctl enable` writes, and on macOS the two log files launchd opens on
-the job's behalf. Your config and your credential file are left alone.
 
 **On macOS the service runs only while you are logged in at the screen.** The
 LaunchAgent targets `gui/<uid>`, whose domain exists only after a console login — so a
