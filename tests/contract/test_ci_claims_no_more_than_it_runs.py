@@ -14,17 +14,34 @@ apply it, and exclude it by that name -- so the exclusion appears in the workflo
 marker registration, and in `--collect-only -m requires_session`, and a reader can enumerate
 precisely what the badge is not covering.
 
-This file pins the second arrangement, because the first is what it decays back into. Each
-half is load-bearing on its own:
+**What the flag does and does not do today, stated exactly, because the obvious reading is
+wrong.** CI's pytest command lists four paths, and `tests/live` -- where the only marked tests
+live -- is not among them. So the marked set is already outside CI's reach by path, and
+removing `-m 'not requires_session'` from the workflow right now would change nothing.
+Measured:
 
-  * If CI stopped excluding the marker, the drill would run on a runner that cannot host it and
-    fail for reasons about the runner.
-  * If the marker were applied to nothing, the exclusion would be theatre -- a flag in a
-    workflow naming an empty set, which reads exactly like a careful exclusion and covers
-    nothing.
+    pytest tests/unit tests/integration tests/contract tests/architecture --collect-only -q
+      with    -m 'not requires_session'  ->  3100 collected
+      without                            ->  3100 collected
 
-Neither failure changes any other artifact, which is why they are asserted here rather than
-left to a reader noticing.
+An earlier draft of this docstring claimed the opposite -- that dropping the flag would set the
+drill loose on a runner that cannot host it. That was false, and a review caught it. It is
+worth recording rather than quietly deleting, because this file exists to stop exactly that
+kind of claim, and it made one.
+
+What the arrangement actually buys, both of which are real:
+
+  * **The excluded set is enumerable.** `pytest --collect-only -m requires_session` answers
+    "what is this badge not covering?" in one command. Under path-only exclusion that question
+    has no mechanical answer at all -- a reader has to know which directories were omitted and
+    infer why, and "why" is the part no path list records.
+  * **Prospective bite.** The flag is what excludes a session-dependent test that lands *inside*
+    one of the four listed trees, which is where such a test would naturally be written. Today
+    that set is empty; the flag is the standing guard, not a currently-active filter.
+
+So the assertions below are scoped to what can actually fail. `test_the_marker_and_the_path_list_
+agree_about_the_same_population` is the one with teeth today: it fails if a marked test appears
+inside CI's paths, which is the moment the flag stops being prospective and starts mattering.
 """
 
 from __future__ import annotations
@@ -72,13 +89,42 @@ def test_ci_runs_the_four_portable_suites() -> None:
         assert suite in step, f"CI does not run {suite}: {step}"
 
 
-def test_ci_excludes_the_session_dependent_set_by_name_rather_than_by_silence() -> None:
-    """The exclusion has to be visible in the command, not implied by what is missing from it."""
+def test_ci_carries_the_standing_exclusion_for_the_session_dependent_set() -> None:
+    """The flag is the guard that catches a marked test written inside CI's own paths.
+
+    Not, today, the thing keeping the launchd drill out of CI -- the path list already does
+    that, and the module docstring measures the difference at zero. This asserts the guard is
+    still installed, which is the whole of its current job.
+    """
     step = _pytest_step()
 
     assert f"not {MARKER}" in step, (
-        f"CI does not exclude the {MARKER} set by name, so its green check silently claims "
-        f"coverage of drills a hosted runner cannot run: {step}"
+        f"CI dropped the standing {MARKER} exclusion, so a session-dependent test written "
+        f"inside one of {EXPECTED_SUITES} would now run on a runner that cannot host it: {step}"
+    )
+
+
+def test_the_marker_and_the_path_list_agree_about_the_same_population() -> None:
+    """Nothing marked `requires_session` sits inside the paths CI hands to pytest.
+
+    The assertion with teeth today, and the one that changes meaning when the codebase does. It
+    holds now because the two mechanisms happen to describe the same set from opposite sides --
+    the path list omits `tests/live`, and everything marked is in `tests/live`. The day someone
+    writes a session-dependent test in `tests/integration`, this fails, and that failure is the
+    signal to check the flag above is doing the work the path list no longer can.
+    """
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", *EXPECTED_SUITES, "--collect-only", "-q", "-m", MARKER],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    inside = [line for line in completed.stdout.splitlines() if "::" in line]
+
+    assert not inside, (
+        f"a {MARKER} test now lives inside the trees CI runs, so the exclusion is no longer "
+        f"redundant with the path list -- confirm the workflow flag still guards it:\n"
+        + "\n".join(inside)
     )
 
 
