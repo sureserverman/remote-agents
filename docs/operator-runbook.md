@@ -106,19 +106,24 @@ still say `healthy: false` for work that is yours rather than onboarding's — a
 host has no projects registry. Those components are named as outstanding rather than as faults,
 on stdout, under `onboarding complete. Still to do, and not part of onboarding:`.
 
-> **On a genuinely fresh host you cannot clear `core` with `add-project`, and this is a known
-> defect — BL-003.** The obvious remedy ("just register a project") is the one thing that does
-> not work there: `add-project` appends a YAML block-sequence item, which is well-formed only
-> after an existing block sequence, so an absent registry fails to resolve, `projects: []` is
-> corrupted by the append, and `projects:` alone does not read. Measured on macOS and reproduced
-> on Linux; the macOS acceptance drill
-> ([`acceptance-2026-08-26-macos-install-drill.md`](acceptance-2026-08-26-macos-install-drill.md))
-> records the full table.
+> **On a genuinely fresh host, create the registry file once; `add-project` does the rest.**
+> `~/.claude/projects-registry.yaml` belongs to the portfolio skill and lists your own projects,
+> so this tool will not invent it for you (DEC-058). Create it with exactly:
 >
-> Until BL-003 is decided, the workaround is to hand-author `~/.claude/projects-registry.yaml`
-> with **one** real entry — after which `add-project` works normally. That file belongs to the
-> portfolio skill and its own header tells you not to hand-edit it, which is exactly why this is
-> a defect awaiting an owner decision rather than a documented procedure.
+> ```yaml
+> version: 1
+> projects: []
+> ```
+>
+> That reads cleanly, so `core` reports healthy the moment it exists, and `add-project` appends
+> to it normally from then on. If you forget, `add-project` refuses and prints those exact bytes.
+>
+> *This used to be a dead end (BL-003, closed 2026-08-26): the writer appends a YAML block
+> sequence item, which is well-formed only after an existing block sequence, so `projects: []`
+> — the one empty spelling that reads cleanly — was the one the append corrupted, and there was
+> no empty state that was both readable and appendable. Found by the macOS acceptance drill
+> ([`acceptance-2026-08-26-macos-install-drill.md`](acceptance-2026-08-26-macos-install-drill.md))
+> and reproducible on Linux.*
 
 ### Upgrading (DEC-057)
 

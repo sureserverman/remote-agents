@@ -59,7 +59,10 @@ class ProjectCreationService:
             recorded = self._registry.register(identity, path)
         except Exception as error:
             self._roll_back(path)
-            raise ProjectCreationError("project could not be catalogued") from error
+            # The cause is carried, not swallowed. It used to be dropped, so an operator on a
+            # fresh host saw `project could not be catalogued` -- true, uninformative, and
+            # concealing a refusal that now names the file to create and its exact contents.
+            raise ProjectCreationError(f"project could not be catalogued: {error}") from error
         return CreatedProject(identity, recorded)
 
     def _roll_back(self, path: Path) -> None:

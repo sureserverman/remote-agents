@@ -89,6 +89,15 @@ itself when the console session came up — not that someone re-registered it af
 
 ## Defect found: a fresh host cannot reach `healthy: true` by any documented command
 
+> **Closed 2026-08-26, after this drill.** `append_project` now normalises both empty spellings
+> before appending, so a registry created as `projects: []` (or a bare `projects:`) takes its
+> first entry. The absent case still refuses — DEC-058 stands, this tool does not invent the
+> file — but the refusal now names the file and prints the exact bytes to create. Nothing was
+> superseded: DEC-058 objected to *creating* the registry, and DEC-005's append-only bound is
+> untouched. **The findings below are left exactly as the drill recorded them**, because this
+> document is the record of what a fresh Mac did on 2026-08-26, not a description of current
+> behaviour.
+
 This is the drill's most substantive result, and it is **not macOS-specific** — it reproduces on
 Linux.
 

@@ -355,7 +355,6 @@ def test_append_project_refuses_when_the_reader_would_reject_the_result(
 @pytest.mark.parametrize(
     "body",
     [
-        "version: 1\nprojects: []\n",
         "version: 1\nprojects: [{path: /tmp/a, name: a, area: infra, enabled: true, added: x}]\n",
         "projects:\n  - path: /tmp/a\n    name: a\n    area: infra\n"
         "    enabled: true\n    added: 2026-07-30\nversion: 1\n",
@@ -364,7 +363,20 @@ def test_append_project_refuses_when_the_reader_would_reject_the_result(
 def test_append_project_refuses_a_shape_the_appended_block_would_corrupt(
     tmp_path: Path, body: str
 ) -> None:
-    """These read cleanly but are not block-style extensible, so the append must not publish."""
+    """These read cleanly but are not block-style extensible, so the append must not publish.
+
+    **`version: 1\nprojects: []` used to be the first case here and is no longer refused.** It
+    was the same YAML fact -- a block item cannot follow a closed flow sequence -- but applied to
+    a registry holding *no entries*, where the honest answer is to rewrite the line rather than
+    refuse the operator their first project. That was BL-003: it made a fresh host unable to
+    reach `healthy: true` by any documented command. It now lives in
+    `test_an_empty_registry_accepts_its_first_entry`.
+
+    The two cases left are the ones where refusing is still right, and they are not the same
+    thing: a flow sequence that already **holds** an entry would lose it, and a document whose
+    `projects` block is followed by `version` would take the appended item outside the sequence
+    entirely. Neither is empty, so neither is normalised.
+    """
     registry = _registry(tmp_path, body)
     project = _project_directory(tmp_path)
     unchanged = registry.read_bytes()
@@ -490,3 +502,145 @@ def test_append_project_locks_beside_the_real_file_for_a_symlinked_registry(
 
     assert (target.parent / (target.name + ".lock")).exists()
     assert not (link.parent / (link.name + ".lock")).exists()
+
+
+# --- BL-003: an empty registry must be appendable ------------------------------------------
+#
+# A host with no projects reported `core: registry_unavailable`, `doctor` said `healthy: false`,
+# and `add-project` -- the ONLY approved registry mutation (DEC-005) -- could not create the
+# first entry. So a fresh host could not reach `healthy: true` by any documented command. Found
+# by the macOS acceptance drill (2026-08-26) and reproduced on Linux; it is not platform-specific.
+#
+# The trap is narrow and worth stating exactly: this writer appends a YAML **block sequence
+# item**, which is well-formed only after an existing block sequence. `projects: []` is a
+# *closed flow* sequence, so it is the one empty spelling the reader accepts and the append
+# corrupts. `projects:` alone parses as null, which the reader rejects outright.
+#
+# Both are now normalised before the append. What is deliberately NOT done here is CREATING an
+# absent registry -- DEC-058 rejected that, on the grounds that a file fabricated to satisfy a
+# detector is indistinguishable from one the operator emptied on purpose. That case still
+# refuses, and the refusal is what carries the instruction.
+
+
+def _empty_dir_entry(tmp_path: Path) -> tuple[Path, Path]:
+    root = _dev_root(tmp_path)
+    (root / "infra").mkdir(exist_ok=True)
+    project = root / "infra" / "fresh"
+    project.mkdir(exist_ok=True)
+    return root, project
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("closed flow sequence", "version: 1\nprojects: []\n"),
+        ("null projects", "version: 1\nprojects:\n"),
+        ("flow sequence with header", _HEADER + "version: 1\nprojects: []\n"),
+    ],
+)
+def test_an_empty_registry_accepts_its_first_entry(tmp_path: Path, label: str, body: str) -> None:
+    """Both empty spellings take a first entry and read back cleanly afterwards."""
+    registry = _registry(tmp_path, body)
+    root, project = _empty_dir_entry(tmp_path)
+
+    recorded = append_project(
+        registry,
+        dev_root=root,
+        project_path=project,
+        name="fresh",
+        area="infra",
+        added=date(2026, 8, 26),
+    )
+
+    result = load_registry(registry)
+    assert result.error is None, f"{label}: registry did not read back cleanly"
+    assert [p.path for p in result.projects] == [recorded]
+    assert recorded == project.resolve()
+
+
+def test_a_second_entry_still_appends_after_the_first_seeded_one(tmp_path: Path) -> None:
+    """Normalising the empty form must not break the ordinary append that follows it."""
+    registry = _registry(tmp_path, "version: 1\nprojects: []\n")
+    root, first = _empty_dir_entry(tmp_path)
+    second = root / "infra" / "second"
+    second.mkdir()
+
+    append_project(
+        registry,
+        dev_root=root,
+        project_path=first,
+        name="fresh",
+        area="infra",
+        added=date(2026, 8, 26),
+    )
+    append_project(
+        registry,
+        dev_root=root,
+        project_path=second,
+        name="second",
+        area="infra",
+        added=date(2026, 8, 26),
+    )
+
+    result = load_registry(registry)
+    assert result.error is None
+    assert [p.name for p in result.projects] == ["fresh", "second"]
+
+
+def test_an_absent_registry_still_refuses_and_says_what_to_create(tmp_path: Path) -> None:
+    """DEC-058 stands: this writer never fabricates the file. But the refusal is actionable.
+
+    The old message was `registry file cannot be resolved`, which names a `Path.resolve` failure
+    rather than anything an operator can act on -- and `ProjectCreationService` then replaced it
+    with `project could not be catalogued`, so the reachable message described neither the cause
+    nor the remedy. An operator on a fresh host saw a failure with no next step.
+    """
+    registry = tmp_path / "does-not-exist.yaml"
+    root, project = _empty_dir_entry(tmp_path)
+
+    with pytest.raises(RegistryWriteError) as refusal:
+        append_project(
+            registry,
+            dev_root=root,
+            project_path=project,
+            name="fresh",
+            area="infra",
+            added=date(2026, 8, 26),
+        )
+
+    message = str(refusal.value)
+    assert str(registry) in message, "the refusal must name the file it wants"
+    assert "version: 1" in message and "projects:" in message, (
+        "the refusal must show the exact content to create, or it is not actionable"
+    )
+    assert not registry.exists(), "the writer must not create the registry (DEC-058)"
+
+
+@pytest.mark.parametrize(
+    ("label", "body"),
+    [
+        ("unsupported version", "version: 2\nprojects: []\n"),
+        ("unknown top-level key", "version: 1\nprojects: []\nextra: 1\n"),
+        ("projects is a mapping", "version: 1\nprojects: {}\n"),
+        ("not a document at all", "just a string\n"),
+    ],
+)
+def test_a_registry_that_is_broken_rather_than_empty_is_still_refused(
+    tmp_path: Path, label: str, body: str
+) -> None:
+    """Empty is not the same as corrupt, and only empty gets normalised."""
+    registry = _registry(tmp_path, body)
+    root, project = _empty_dir_entry(tmp_path)
+    before = registry.read_bytes()
+
+    with pytest.raises(RegistryWriteError):
+        append_project(
+            registry,
+            dev_root=root,
+            project_path=project,
+            name="fresh",
+            area="infra",
+            added=date(2026, 8, 26),
+        )
+
+    assert registry.read_bytes() == before, f"{label}: a refused append must change nothing"

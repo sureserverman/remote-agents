@@ -117,12 +117,36 @@ def _canonical_project_path(dev_root: Path, project_path: Path, name: str, area:
     return canonical
 
 
+#: What an operator must create when the registry is absent. `projects: []` rather than a bare
+#: `projects:`, deliberately: both are appendable since BL-003, but only this one *reads* cleanly,
+#: so `doctor` reports `core` healthy the moment the file exists rather than after the first entry.
+_EMPTY_REGISTRY_TEMPLATE = "version: 1\nprojects: []\n"
+
+
 def _writable_registry_target(registry_path: Path) -> Path:
-    """Resolve to the real file so a symlinked registry is written through, never replaced."""
+    """Resolve to the real file so a symlinked registry is written through, never replaced.
+
+    **An absent registry refuses, and does not get created here (BL-003, DEC-058).** That is a
+    decision, not an oversight: DEC-058 rejected having onboarding create this file, because a
+    registry fabricated to satisfy a health check is indistinguishable from one the operator
+    emptied on purpose -- and this file is the portfolio skill's, listing the operator's own
+    projects, not ours to invent.
+
+    What *was* an oversight is that the refusal said `registry file cannot be resolved`, which
+    names a `Path.resolve` failure rather than anything anyone can act on, and
+    `ProjectCreationService` then replaced it with `project could not be catalogued`. An operator
+    on a fresh host got a failure describing neither the cause nor the remedy. It now carries the
+    exact file and the exact bytes.
+    """
     try:
         return registry_path.resolve(strict=True)
     except OSError as error:
-        raise RegistryWriteError("registry file cannot be resolved") from error
+        raise RegistryWriteError(
+            f"the projects registry does not exist at {registry_path}, and this command does not "
+            f"create it -- it lists your own projects, so seeding it is yours to do. Create it "
+            f"with exactly:\n\n{_EMPTY_REGISTRY_TEMPLATE}\n"
+            f"then re-run this command."
+        ) from error
 
 
 @contextmanager
@@ -137,10 +161,46 @@ def _exclusive_lock(target: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
+def _is_empty_registry(existing: bytes) -> bool:
+    """Whether this is a well-formed version-one registry that simply holds no entries yet.
+
+    Deliberately stricter than "the reader rejected it". Empty and broken both fail to append
+    today, and only empty may be normalised -- so this checks the whole closed schema (exactly
+    `version` and `projects`, version 1) and then accepts the two spellings of *no entries*.
+    """
+    try:
+        document = yaml.safe_load(existing)
+    except yaml.YAMLError:
+        return False
+    if not isinstance(document, dict) or set(document) != {"version", "projects"}:
+        return False
+    if document["version"] != 1:
+        return False
+    entries = document["projects"]
+    return entries is None or (isinstance(entries, list) and not entries)
+
+
+def _normalised_for_append(existing: bytes) -> bytes:
+    """Turn an empty registry's `projects:` line into a block-sequence header.
+
+    This is the whole of BL-003's fix, and the bug it closes is narrow enough to state exactly:
+    `append_project` emits a YAML **block sequence item**, which is well-formed only after an
+    existing block sequence. `projects: []` is a *closed flow* sequence, so appending a block item
+    to it produced a document the reader then rejected -- meaning the one empty spelling that read
+    cleanly was precisely the one the append corrupted. Rewriting the line to a bare `projects:`
+    first makes the append valid, and changes nothing a reader can observe: both forms denote no
+    projects.
+    """
+    return re.sub(rb"(?m)^projects:[ \t]*(?:\[[ \t]*\])?[ \t]*$", b"projects:", existing)
+
+
 def _verified_bytes(target: Path) -> bytes:
+    raw = target.read_bytes()
+    if _is_empty_registry(raw):
+        return _normalised_for_append(raw)
     if load_registry(target).error is not None:
         raise RegistryWriteError("refusing to extend a registry that does not read cleanly")
-    return target.read_bytes()
+    return raw
 
 
 def _require_readable(candidate: Path, expected: Path) -> None:
@@ -163,6 +223,11 @@ def _registered_paths(existing: bytes) -> frozenset[Path]:
     """Collect every canonical path already claimed, including disabled entries."""
     document = yaml.safe_load(existing)
     entries = document["projects"] if isinstance(document, dict) else None
+    if entries is None:
+        # A normalised empty registry: `projects:` with nothing under it yet. Nothing is claimed,
+        # which is the honest answer -- and the alternative, refusing, would reinstate BL-003 one
+        # function further along.
+        return frozenset()
     if not isinstance(entries, list):
         raise RegistryWriteError("registry projects must be a list")
     claimed: set[Path] = set()
