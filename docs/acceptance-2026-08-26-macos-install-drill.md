@@ -54,9 +54,18 @@ itself when the console session came up — not that someone re-registered it af
 
 - **Launching and driving a managed agent session from Telegram.** The service is provably
   polling Telegram (the 409 above) and its command menu is correct, but no `/launch` was
-  completed, so no managed tmux session was created and none was driven. The session-survival
-  property across `bootout` is therefore inherited from **sub-plan 1's** launchd drill on this
-  same hardware rather than re-proven here.
+  completed, so no managed tmux session was created and none was driven.
+
+  **Nor is agent-session survival across `bootout` established here, and it is worth being exact
+  about what sub-plan 1 did and did not settle.** That drill proved `AbandonProcessGroup`
+  behaves as the `KillMode=process` analogue for a *transient* label bootstrapping a tmux server
+  the test harness created for itself. What is genuinely shared with the production path is the
+  **plist directive**: this drill confirmed `AbandonProcessGroup = true` in the installed plist,
+  by `plutil -extract`, so the same key is present on the job an operator actually runs. What is
+  **assumed** rather than shown is that a session launched through Telegram, under the
+  onboarded daemon, is abandoned the same way — nothing in either drill has exercised that
+  combination. An earlier draft of this section called the property "inherited from sub-plan 1",
+  which read as continuity where there is only a shared directive; a review caught it.
 - **A logout/login cycle.** A reboot was substituted, by owner decision. On this Mac the two are
   close, because it auto-logs in to a desktop — `gui/501` existed immediately after boot. On a
   Mac that stops at the login window they are **not** equivalent: the domain would be absent and
