@@ -2121,8 +2121,11 @@ def _resolve_serve_secrets(
     `EnvironmentFile` equivalent, and its only mechanism -- `EnvironmentVariables` -- puts the
     value inside the plist, where `launchctl print` reads it back. So on macOS nothing injects
     the variables and the file is the only source; `require_private_environment` has always
-    enforced 0600, owner and regular-file-ness on it, by the same POSIX calls on both platforms
-    (no test runs on Darwin yet, so that is a claim about the code, not a measured one).
+    enforced 0600, owner and regular-file-ness on it, by the same POSIX calls on both platforms.
+    That used to end "no test runs on Darwin yet, so that is a claim about the code, not a
+    measured one". It is measured now: the two-OS CI matrix runs `tests/integration` -- which
+    holds `test_secret_sources.py` -- on `macos-latest` on every push, and the macOS acceptance
+    drill onboarded a real Mac whose credential file `require_private_environment` accepted.
 
     **A partial environment refuses rather than falling back**, and that distinction is the
     reason this is a function rather than an `or`. Absent means nothing injected the variables,

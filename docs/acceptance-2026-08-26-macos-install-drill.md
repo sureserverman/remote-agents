@@ -15,6 +15,14 @@ because a hosted runner has no console login session and that domain does not ex
 all. **No sweep can tell a run from a claim**, so the properties below are recorded with the
 command that produced them and the output it returned.
 
+**Which bot.** The owner supplied a separate test bot (`@makytrabot`) rather than the production
+one, and that separation was **verified rather than assumed**: the drill token's SHA-256 was
+compared against the token in the workstation's live `~/.config/remote-agents/telegram.env` and
+the digests differ. This matters for reading the 409 evidence below — Telegram permits one
+`getUpdates` poller per token, so had the two been the same bot, the drill would have been
+fighting the owner's running service for its update stream and the 409 would have meant the
+opposite of what it means here.
+
 ## The host, before
 
 Genuinely clean: `uv tool list` → *No tools installed*; no `remote-agents` on `PATH`; no
@@ -45,6 +53,7 @@ it") exists to handle, so this drill exercises it for real rather than hypotheti
 | The reboot was real | `sysctl -n kern.boottime` / `uptime` | booted `Wed Aug 26 22:24:08 2026`, up 2 minutes |
 | A console GUI session exists | `stat -f '%Su' /dev/console`; `launchctl print gui/501` | `user`; domain **exists** (the Mac auto-logs in) |
 | The service is genuinely connected to Telegram | second `getUpdates` against the same token | **409 Conflict — "terminated by other getUpdates request"**, twice of three probes |
+| The drill used a **separate** bot from the live one | `sha256` of the drill token vs the workstation's `telegram.env` token | different digests — so the 409 above is the *Mac* contending with a second poller, never the live Linux service |
 | The bot's owner menu is registered | `remote-agents telegram-ui-audit --json` | `healthy: true`, `owner_commands: [launch, resume, sessions, help]`, no default/global commands |
 
 **`runs = 1` is the load-bearing number in the reboot row.** It means launchd started the job
@@ -66,6 +75,13 @@ itself when the console session came up — not that someone re-registered it af
   onboarded daemon, is abandoned the same way — nothing in either drill has exercised that
   combination. An earlier draft of this section called the property "inherited from sub-plan 1",
   which read as continuity where there is only a shared directive; a review caught it.
+- **`doctor`'s new `platform` field, on macOS.** It is absent from every report captured here,
+  and correctly so: the Mac ran the **published `v0.21.0`**, while that field is added on this
+  plan's own branch and is not in any tag yet. So the drill proves the *published* install path
+  and cannot exercise this branch's one substantive code change. Worth naming because `machine`
+  exists partly to cross-check a `brew --prefix`-derived `PATH`, and this drill verified the
+  derived PATH (`/opt/homebrew`) without the field that would corroborate it.
+
 - **A logout/login cycle.** A reboot was substituted, by owner decision. On this Mac the two are
   close, because it auto-logs in to a desktop — `gui/501` existed immediately after boot. On a
   Mac that stops at the login window they are **not** equivalent: the domain would be absent and

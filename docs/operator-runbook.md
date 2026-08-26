@@ -103,9 +103,22 @@ bring up a service you had deliberately stopped. Stop it again afterwards, or us
 means the parts onboarding owns are in place: the system dependencies, the credential file, and
 the daemon when `--install-daemon` was passed. The full `doctor` report still prints, and it can
 still say `healthy: false` for work that is yours rather than onboarding's — a genuinely fresh
-host has no projects registry until you register a project. Those components are named as
-outstanding rather than as faults, on stdout, under `onboarding complete. Still to do, and not
-part of onboarding:`.
+host has no projects registry. Those components are named as outstanding rather than as faults,
+on stdout, under `onboarding complete. Still to do, and not part of onboarding:`.
+
+> **On a genuinely fresh host you cannot clear `core` with `add-project`, and this is a known
+> defect — BL-003.** The obvious remedy ("just register a project") is the one thing that does
+> not work there: `add-project` appends a YAML block-sequence item, which is well-formed only
+> after an existing block sequence, so an absent registry fails to resolve, `projects: []` is
+> corrupted by the append, and `projects:` alone does not read. Measured on macOS and reproduced
+> on Linux; the macOS acceptance drill
+> ([`acceptance-2026-08-26-macos-install-drill.md`](acceptance-2026-08-26-macos-install-drill.md))
+> records the full table.
+>
+> Until BL-003 is decided, the workaround is to hand-author `~/.claude/projects-registry.yaml`
+> with **one** real entry — after which `add-project` works normally. That file belongs to the
+> portfolio skill and its own header tells you not to hand-edit it, which is exactly why this is
+> a defect awaiting an owner decision rather than a documented procedure.
 
 ### Upgrading (DEC-057)
 

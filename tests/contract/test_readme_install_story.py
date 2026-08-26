@@ -203,3 +203,33 @@ def test_the_readme_never_uses_a_version_flag_as_a_liveness_check() -> None:
         "There is no --version flag; it exits non-zero. `remote-agents --help` is the check "
         "that the executable resolves."
     )
+
+
+RUNBOOK = Path("docs/operator-runbook.md")
+
+
+def test_the_runbook_pins_the_same_tag_the_installer_does() -> None:
+    """The runbook's pin is guarded too, not just the README's.
+
+    `test_the_readme_pins_what_the_installer_pins` reads the tag out of `scripts/install.sh` so
+    the README and the installer cannot drift to two versions. The runbook quotes the same pin
+    twice and had no such guard, so the next tag bump would have moved the script and the README
+    together and left the runbook behind -- silently, since nothing reads it.
+
+    That is the same defect the README guard exists to prevent, in the second of the two
+    documents that carry the pin. A gate evaluator found it; the asymmetry was not deliberate.
+    """
+    _, version = _pinned_defaults()
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+
+    stale = re.findall(r"@(v\d+\.\d+\.\d+)", runbook) + re.findall(
+        r"REMOTE_AGENTS_VERSION=(v\d+\.\d+\.\d+)", runbook
+    )
+    wrong = sorted({tag for tag in stale if tag != version})
+
+    assert not wrong, (
+        f"docs/operator-runbook.md pins {wrong} but scripts/install.sh installs {version!r}. "
+        "An operator following the runbook would install a different version from the one the "
+        "bootstrap actually fetches."
+    )
+    assert stale, "the runbook no longer quotes a pinned tag in the form this test reads"
