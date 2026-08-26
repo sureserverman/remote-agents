@@ -1,21 +1,242 @@
 # Operator runbook
 
-## Health and installation
+## Install, upgrade, and uninstall
 
-Run these from the repository after installing the unit and private configuration described in
-the README:
+**This supersedes the hand-installed unit.** Earlier revisions of this runbook opened by telling
+you to put `systemd/remote-agents.service` in place yourself and run `systemctl --user
+daemon-reload` and `enable --now` after it. That is no longer the install, and it was never a
+whole one: there has never been a macOS file to copy, so a copy-the-unit procedure could only
+ever describe one of the two platforms this tool supports. `remote-agents onboard
+--install-daemon` renders and registers the daemon the platform it runs on actually uses. The
+file under `systemd/` remains a reviewable reference for what the Linux renderer emits — do not
+install it by hand.
+
+Distribution is a **pinned tag installed with `uv`** (DEC-057), the same on Ubuntu and on macOS.
+Nothing here is packaged for a system package manager and nothing runs as root.
+
+Three prerequisites the bootstrap needs and deliberately does not install: `curl` — implied, it
+is how you fetch the script — `git`, which `uv` shells out to for a `git+https://` source, and
+`tmux`, which onboarding requires. The script does not pass `--yes` on your behalf, so on a bare
+image a missing dependency stops onboarding with the exact `apt-get` or `brew` command printed
+rather than escalating privileges for you. Install `tmux` in the provisioning step before this
+one, or save the script and run it in a terminal and answer the prompt.
+
+### Installing
 
 ```bash
-systemd-analyze --user verify systemd/remote-agents.service
-systemctl --user daemon-reload
-systemctl --user enable --now remote-agents.service
-systemctl --user is-active remote-agents.service
-systemctl --user is-enabled remote-agents.service
-uv run --locked remote-agents doctor --json | python -m json.tool
-uv run --locked remote-agents doctor --profiles --json | python -m json.tool
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash
 ```
 
-`active` and `enabled` are required. Profile entries are `AVAILABLE` when their executable is
+The line ends at a **running service**, not at an installed executable: after `uv tool install`
+it hands off to `remote-agents onboard --install-daemon`. It fetches Astral's `uv` installer
+only when `uv` is absent, from a *versioned* URL, and verifies a committed SHA-256 before
+executing a byte of it; a mismatch aborts and the fetched bytes never run. An already-present
+`uv` is used as-is and nothing is fetched at all.
+
+**A piped run cannot prompt.** `curl | bash` makes this script's own remaining text the process's
+stdin, so onboarding sees a non-tty and refuses to prompt rather than reading the installer's
+bytes as if they were an answer. Supply the three Telegram values through the environment for a
+piped run — run onboarding once in a terminal and it names those three variables precisely. To
+pass the script an option you need bash's `-s --`, because a piped `bash --no-onboard` is bash's
+own option and fails before the script runs:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash -s -- --no-onboard
+```
+
+`--no-onboard` is the installer script's only option, and it belongs to the script rather than to
+`onboard`, which has no such flag. It stops once the tool is installed; run `remote-agents
+onboard --install-daemon` when you are ready.
+
+The same two steps without the fetched script:
+
+```bash
+uv tool install --managed-python \
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.21.0"
+remote-agents onboard --install-daemon
+```
+
+`uv tool install` puts the console script in `uv tool dir --bin` — `~/.local/bin` here — which a
+fresh login shell need not have on `PATH` and which is absent from macOS's default path
+outright. `uv tool update-shell` is what the installer's own closing output points you at when
+it is missing. Confirm the executable resolves at all with the three read-only commands:
+
+```bash
+command -v remote-agents
+uv tool dir --bin
+uv tool list
+```
+
+**The bot token is never a command-line argument, and no flag would take one.** Every process's
+argv is readable by every other process on the host and lands in shell history. `--bot-token-file
+<path>` names a *file*. `--bot-token` is declared only so that passing it can be refused without
+argparse echoing the value back in its own "unrecognized arguments" line, and it is hidden from
+`--help` so that advertising it does not invite the mistake. If you have already passed one, the
+refusal tells you to rotate that token; nothing can un-leak it.
+
+There is likewise **no `--version` flag**. It exits 2, and the parser redacts what it did not
+recognise rather than printing it back:
+
+```text
+remote-agents: error: unrecognized arguments: <not shown>
+```
+
+Ask `--help` instead, at the top level or on `onboard`, which is the authority on the flag set:
+
+```bash
+remote-agents --help
+remote-agents onboard --help
+```
+
+`--install-daemon`, `--remove` and `--print-daemon-path` are mutually exclusive. Asking for two
+is refused by argparse before anything is composed, rather than one of them silently winning.
+
+**Re-running onboarding is safe, and re-running it is what an upgrade does.** It never clobbers
+what it did not write: a config you have edited and a credential you pasted are both kept, with a
+line saying so, and the daemon is rewritten only when the rendered definition actually changed.
+One side effect is worth knowing — `--install-daemon` means "register *and* start", so it will
+bring up a service you had deliberately stopped. Stop it again afterwards, or use `--remove`.
+
+**Its exit status answers for onboarding's own work, not for the whole host (DEC-058).** Zero
+means the parts onboarding owns are in place: the system dependencies, the credential file, and
+the daemon when `--install-daemon` was passed. The full `doctor` report still prints, and it can
+still say `healthy: false` for work that is yours rather than onboarding's — a genuinely fresh
+host has no projects registry until you register a project. Those components are named as
+outstanding rather than as faults, on stdout, under `onboarding complete. Still to do, and not
+part of onboarding:`.
+
+### Upgrading (DEC-057)
+
+Re-run the bootstrap at a newer tag, then re-run onboarding so the daemon picks up the new code:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | bash
+remote-agents onboard --install-daemon
+```
+
+The script pins the tag it was fetched from — the copy on `main` carries the current release —
+so fetching it again is what moves you forward. To name a tag yourself, in either direction,
+set `REMOTE_AGENTS_VERSION`. It is refused unless it is tag-shaped, and the script prints both
+the repository and the version before installing anything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
+  | REMOTE_AGENTS_VERSION=v0.21.0 bash
+remote-agents onboard --install-daemon
+```
+
+**Do not reach for `uv tool upgrade`.** It honours the requirement the tool was installed with,
+and that requirement is a pinned tag — so it prints "Nothing to upgrade" and exits 0 having done
+nothing, which is worse than no advice at all. Changing the tag is what moves the install. uv
+reuses one tool directory across versions, so the daemon definition usually does not change;
+re-running onboarding is cheap and idempotent either way, and it is what rewrites the definition
+on the upgrades that *do* relocate the executable.
+
+### Uninstalling (DEC-051)
+
+**The order is the contract here, not a preference.**
+
+```bash
+remote-agents onboard --remove      # unregister the daemon and delete what it installed
+uv tool uninstall remote-agents     # then take the tool itself away
+```
+
+`uv tool uninstall` deletes the console script, so taking the tool away first leaves you nothing
+to run the uninstaller with — while the daemon stays registered naming an executable that no
+longer exists. Under `Restart=on-failure` on Linux, or `KeepAlive` with `SuccessfulExit` false on
+macOS, that is a service which keeps retrying rather than one that is gone. Already done it the
+wrong way round? Re-run the installer, then do it in this order.
+
+`--remove` takes away the daemon and nothing else. Your config and your credential file are left
+exactly where they are and it prints `left alone:` naming both; an uninstaller that deleted a bot
+token would be unrecoverable in the one way that matters.
+
+The sweep is every path any version of this tool ever *caused to exist*, not only the ones this
+version writes:
+
+| | Linux (systemd) | macOS (launchd) |
+|---|---|---|
+| Definition | `~/.config/systemd/user/remote-agents.service` | `~/Library/LaunchAgents/remote-agents.plist` |
+| Also swept | `~/.config/systemd/user/default.target.wants/remote-agents.service` | `~/.local/state/remote-agents/remote-agents.log` and `remote-agents.err` |
+| Unregistered with | `systemctl --user disable --now remote-agents.service` | `launchctl bootout gui/<uid>/remote-agents` |
+
+The `default.target.wants` symlink is what `enable` writes and `disable` removes. It is in the
+ledger because on a host with no session bus `disable` fails, the definition is deleted anyway,
+and a dangling link in the supervisor's own directory would then be beyond the reach of any later
+`--remove`. The two macOS log files are not rendered by this tool at all — launchd opens them
+itself, before the job runs, because the plist names them — and leaving them would leave daemon
+output sitting in the state directory after the daemon was gone.
+
+Removal reports honestly in both directions. A host that was never installed to gets `no daemon
+installed for <supervisor>` and exit 0, because that is the answer rather than a failure. A host
+where the files were swept but the supervisor refused to unregister gets `removed <paths>, but
+<supervisor> would not unregister the service` and exit 1 — deleted files plus a supervisor that
+still holds the service is not a completed removal.
+
+### Where is the daemon?
+
+```bash
+remote-agents onboard --print-daemon-path
+```
+
+Real output on this host:
+
+```text
+/home/user/.config/systemd/user/remote-agents.service
+```
+
+One line and no prose around it, and it changes nothing on the way to answering — it runs ahead
+of every branch that would create a directory, write a config, or ask for a credential. This is
+what to run when you do not yet know what state a host is in, and it is what the upgrade
+contract's own check reads the definition back with. It names the *definition*: on macOS that is
+deliberately narrower than what removal sweeps, because the two log files exist on account of the
+plist rather than being part of it.
+
+## Health checks
+
+`doctor` is the read-only report, and it is the same report onboarding ends with — one function
+builds both, so the two cannot disagree about what a healthy host is.
+
+```bash
+remote-agents doctor --json | python3 -m json.tool
+remote-agents doctor --profiles --json | python3 -m json.tool
+```
+
+From a repository checkout, `uv run --locked remote-agents …` reaches the same subcommands
+against the same deployed config; the installed console script is what a host that was onboarded
+rather than developed on will have.
+
+**`doctor` exits 0 whether or not the host is healthy.** Its status answers "was this report
+producible", not "is this host well": it is non-zero only when the deployed config cannot be read
+or loaded, in which case the report carries `checked: false` and an empty `components`, because
+the registry and database paths are read out of the very file that would not load. Anything
+scripted against `doctor` must read the `healthy` key, never `$?`. Measured on this host,
+`healthy: false` with a degraded `service` still exited 0.
+
+Three fields name the host the report is about, which matters the moment a report is read by
+someone who is not sitting at it:
+
+```json
+"platform": {"machine": "x86_64", "release": "7.0.0-28-generic", "system": "Linux"},
+"service_supervisor": "systemd",
+"service_liveness_meaning": "running"
+```
+
+`release` is the kernel version on both platforms — the Darwin kernel version on a Mac rather
+than the marketing one — so a bug report can act on it instead of on a field meaning two
+different things. `machine` is there so a derived value can be checked against the host that
+derived it: the LaunchAgent's `PATH` comes from `brew --prefix`, which is `/opt/homebrew` on
+Apple Silicon and `/usr/local` on Intel. `service_supervisor` is a **label, and nothing may
+branch on it** (DEC-054) — it says which adapter answered, not which one to ask.
+`service_liveness_meaning` is `running` on both platforms, so a healthy `service` component means
+a live process on either, never merely a registered one.
+
+### What the report says
+
+Profile entries are `AVAILABLE` when their executable is
 present; version reporting is informative and local updates remain launchable. A missing
 executable is `BLOCKED` and must not be launched from Telegram. Each launch still has to reach
 its agent-specific readiness state.
@@ -50,6 +271,76 @@ The report must be healthy, with no default/global commands and exactly `/launch
 deliberately absent from that list: it stays registered as a handler because Telegram
 requires it, and is not advertised because it lands where `/sessions` lands. The owner chat's menu opens
 commands; the bot description and short description are checked against the reviewed values.
+
+### Health checks — Linux
+
+```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user is-active remote-agents.service
+systemd-analyze --user verify "$(remote-agents onboard --print-daemon-path)"
+journalctl --user -u remote-agents.service -n 100 --no-pager
+```
+
+**`systemctl --user` needs a session bus, and so does `doctor`.** Without `XDG_RUNTIME_DIR` set,
+`systemctl` answers `Failed to connect to bus: No medium found` — and `doctor`, which probes
+liveness through `systemctl --user is-active --quiet`, then reports `service: degraded
+(service_inactive)` for a service that is running perfectly well. Measured on this host: the same
+`doctor --json` returned `healthy: false` with `service_inactive` from a shell with no
+`XDG_RUNTIME_DIR`, and `healthy: true` with it exported, seconds apart. A non-login SSH session
+or a cron shell is exactly where this bites, and the report gives no hint that the bus was the
+problem.
+
+`systemd-analyze --user verify` is read-only and exits 0 for a well-formed unit. It reads the
+*file*, so it exits 1 with `Unit remote-agents.service not found.` when the definition has been
+removed while the service still runs from the fragment systemd loaded earlier. That is a real
+state, observed on this host: `is-active` said `active`, `is-enabled` said `not-found`, and
+`systemctl --user status` called it `Loaded: loaded (…; bad; preset: enabled)` at the same
+moment. It means the running code is not the code on disk. Re-run `remote-agents onboard
+--install-daemon` to put the definition back and restart onto it.
+
+### Health checks — macOS
+
+```bash
+plutil -lint "$(remote-agents onboard --print-daemon-path)"
+launchctl print "gui/$(id -u)/remote-agents"
+tail -n 100 ~/.local/state/remote-agents/remote-agents.err
+```
+
+**A Mac sitting at the login window has no service, and that is correct rather than broken
+(DEC-054).** The LaunchAgent is bootstrapped into `gui/<uid>`, the user-*login* domain, which
+`launchctl(1)` distinguishes from `user/<uid>` precisely on this point: it is created when the
+owner logs in at the GUI. After a reboot with nobody at the screen there is no domain to
+bootstrap into and the plist is never read, so `launchctl print` on that target fails and
+`doctor` reports `service_inactive`. Neither is a fault. Log in at the screen and look again
+before treating it as one. Onboarding prints this note itself the moment it installs a
+LaunchAgent, for the same reason: unless it is said out loud, the absence reads as a failure.
+
+The trade was chosen deliberately — the service is available only while the owner is logged in,
+in exchange for keeping the job in the same session as the GUI applications the agent CLIs
+expect to live beside, and keeping the whole thing unprivileged and reading a 0600 file out of
+the owner's own home.
+
+**Do not read `launchctl print`'s exit status as liveness.** It exits 0 for a job whose `state =
+not running` exactly as for a running one, because zero means *bootstrapped* — and the cases you
+actually run `doctor` for, a moved binary or a permanent spawn failure, all leave a job
+bootstrapped and dead. That is why `doctor` asks `pgrep -U <uid> -f 'remote-agents serve'`
+instead, which answers by exit status alone. `launchctl print` is for your eyes, not for a
+script: its own man page says not to rely on the structure of that output.
+
+The accepted cost of the `pgrep` probe, recorded in DEC-054: `-f` is an unanchored substring
+match, so a `remote-agents serve` you started by hand in a terminal satisfies it even with the
+launchd job dead. The service *is* running; the supervisor is not the one running it.
+
+To bring the service back on either platform, re-run onboarding rather than driving the
+supervisor by hand:
+
+```bash
+remote-agents onboard --install-daemon
+```
+
+It tries the supervisor's own start verb on an already-current definition before falling back to
+a full unregister-and-re-register, so a service you merely stopped is not answered with a
+rebuild.
 
 ## Telegram acceptance checklist
 
@@ -158,15 +449,82 @@ uv run --locked pytest -m live_telegram tests/live/test_telegram_owner.py -q
 ```
 
 Rotate a production credential only when required by an incident. A revoked or replaced
-credential must cause polling failure and a systemd restart attempt; it must not mutate tmux
-sessions. Restore service only after the replacement token is present in
-`~/.config/remote-agents/telegram.env` with mode `0600`:
+credential must cause polling failure and a supervisor restart attempt — `Restart=on-failure` in
+the systemd unit, `KeepAlive` with `SuccessfulExit` false in the LaunchAgent, which is the same
+promise in launchd's spelling — and it must not mutate tmux sessions. Restore service only after
+the replacement token is present in `~/.config/remote-agents/telegram.env` with mode `0600`.
+
+On Linux:
 
 ```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user restart remote-agents.service
 systemctl --user is-active remote-agents.service
 journalctl --user -u remote-agents.service -n 100 --no-pager
 ```
+
+On macOS the job has no restart verb of its own that also re-reads the definition, so re-run
+onboarding and read the log files the plist names:
+
+```bash
+remote-agents onboard --install-daemon
+tail -n 100 ~/.local/state/remote-agents/remote-agents.err
+```
+
+## Drill: does the macOS daemon behave like the Linux one?
+
+[`docs/drill-service-restart-session-survival.md`](drill-service-restart-session-survival.md)
+asks whether restarting the service takes running agent panes with it, and answers no on Linux
+because of `KillMode=process`. **launchd has no such directive.** The analogue is
+`AbandonProcessGroup`, and it is a *consequence* of what `bootout` signals rather than a setting
+whose name says what it does — so it is worth less on trust and more on evidence. If it were
+wrong, or a later edit dropped it, stopping the service would silently take every in-flight
+agent session and the work inside it.
+
+`tests/contract/supervisor/test_launchd_supervisor.py` pins that the key is written into the
+plist. That is a claim about a file. The automated half of the behavioural claim is
+`tests/live/test_launchd_lifecycle_drill.py`, and it must run **on the Mac, in a terminal on a
+machine you are logged in at**:
+
+```bash
+uv run --locked pytest tests/live/test_launchd_lifecycle_drill.py -q
+```
+
+Two markers guard it, and they are two different reasons rather than one stated twice.
+`skipif sys.platform != "darwin"` is about the **host** — a Linux machine has no launchd, and the
+command above skips there rather than failing, which is why it is safe to leave in a script that
+runs on both. `requires_session` is about the **session**, and it is the reason a hosted macOS
+runner cannot host this either: `bootstrap gui/<uid>` needs a domain that only a console login
+creates. Enumerate everything CI therefore never runs with:
+
+```bash
+uv run --locked pytest --collect-only -m requires_session -q
+```
+
+What the drill asserts, in order: that no probe session exists beforehand — so its presence
+afterwards proves the job created it — then that `bootstrap` succeeds, `kickstart` succeeds, the
+probe's tmux session appears, `bootout` succeeds, and the job is really gone. Only then does it
+assert the tmux session is **still there**. Every step before the last exists so that the
+survival is evidence rather than a coincidence of the session never having been owned.
+
+It is disposable by design (ARCH-11). It writes a throwaway label,
+`remote-agents-test-launchd-drill`, never the production one — a `bootout` on the wrong target
+would stop the owner's real service on the very machine this runs on — and it uses its own tmux
+socket, `remote-agents-test-service`, which the production gateway refuses to mistake for the
+real one. The teardown is a fixture rather than the end of the test body, so it deregisters the
+job and deletes the plist whether or not the assertions pass, and a second test asserts that
+nothing was left registered. **Do not run two of these concurrently:** the label and the socket
+are fixed constants, so each run would observe the other's state.
+
+The owner-run half is the Linux drill's procedure with the macOS commands substituted — launch a
+real session, take the service down under it, and confirm the *same pane pid* afterwards, which
+is the negative half and the one that matters. `launchctl kickstart "gui/$(id -u)/remote-agents"`
+is the supervisor's own start verb, and `remote-agents onboard --install-daemon` is the supported
+way to re-register a changed definition; neither `launchctl load` nor `launchctl print` belongs
+in that procedure, for the reasons under [health checks](#health-checks--macos). Record the
+result as `docs/acceptance-<ISO date>-launchd-lifecycle.md` to the standard the Linux drill sets:
+a real reading per step, the actual pids, and a step you did not perform marked unperformed
+rather than folded into a blanket confirmation.
 
 ## Agent activity notifications
 
@@ -1017,15 +1375,39 @@ be done only after inspecting the contents.
 
 ## Rollback and local recovery
 
-To halt the control plane while preserving managed tmux panes for local recovery:
+To halt the control plane while preserving managed tmux panes for local recovery, on Linux:
 
 ```bash
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user disable --now remote-agents.service
 tmux -L remote-agents list-panes -a
 ```
 
-Restore the last reviewed unit, run `systemctl --user daemon-reload`, then enable the service
-again. Do not remove a managed tmux session until its ownership and output have been inspected.
+On macOS, boot the job out of its login domain instead. That leaves the plist on disk, so this
+halts the service without uninstalling it — `remote-agents onboard --remove` is the one that
+takes the definition away:
+
+```bash
+launchctl bootout "gui/$(id -u)/remote-agents"
+tmux -L remote-agents list-panes -a
+```
+
+The panes survive either one. `KillMode=process` is what promises that on Linux and
+`AbandonProcessGroup` is its launchd analogue, which is the property the [macOS
+drill](#drill-does-the-macos-daemon-behave-like-the-linux-one) exists to check on real hardware.
+
+To bring the control plane back on either platform, re-run onboarding rather than restoring a
+unit by hand — it re-renders the definition for the code that is now installed, reloads it where
+the supervisor needs reloading, and registers it:
+
+```bash
+remote-agents onboard --install-daemon
+remote-agents doctor --json | python3 -m json.tool
+```
+
+Rolling the *code* back is the upgrade path run at the earlier tag: re-run the installer with
+`REMOTE_AGENTS_VERSION` set to the tag you are returning to, then onboard again. Do not remove a
+managed tmux session until its ownership and output have been inspected.
 
 `remote-agents tui` keeps working while the service is disabled, because it needs neither the unit
 nor the Telegram credentials, so a curated launch and the local control plane described under
