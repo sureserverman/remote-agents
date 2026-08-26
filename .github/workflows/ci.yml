@@ -1,0 +1,82 @@
+# The two-OS matrix, and the first CI this repository has had.
+#
+# What it proves: the portable suites pass on both supported operating systems from one commit.
+# That is the gap it exists to close -- until sub-plan 1 the codebase had four Linux-coupled
+# sites and no way to notice a fifth, because every test run happened on the same Ubuntu
+# workstation.
+#
+# WHAT IT DELIBERATELY DOES NOT PROVE, because a hosted runner cannot: that a launchd agent
+# bootstraps into a `gui/<uid>` domain and survives a logout. A GitHub runner has no console
+# login session, so the domain a LaunchAgent targets does not exist there at all. That property
+# is checked by the manual macOS drill recorded under `docs/`, never here.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes a first: the question this workflow answers is about the commit, and
+# an answer about a commit that has been replaced is not worth a runner.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Both jobs run to completion. The whole point is the comparison, and a matrix that
+      # cancels the Mac when Linux fails answers the question this workflow was created to ask
+      # with "we did not look".
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the system dependencies the suites probe for
+        # tmux is what `doctor`'s dependency probe looks for, and `tests/conftest.py` shells out
+        # to it at session end to reap any socket a test created. shellcheck gates
+        # `test_the_script_is_shellcheck_clean`, which SKIPS rather than fails when the tool is
+        # absent -- a skip is a hole, and installing the tool is cheaper than arguing about it.
+        # Both are pre-installed on the Ubuntu image, so this step is really the macOS one; it
+        # is written for both so a future image change cannot silently drop either.
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install tmux shellcheck
+          else
+            sudo apt-get update
+            sudo apt-get install -y tmux shellcheck
+          fi
+          tmux -V
+          shellcheck --version | head -2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Sync the locked environment
+        # `--locked`, not `--frozen`: the lockfile is committed and a resolution that no longer
+        # matches `pyproject.toml` is a real failure worth surfacing here rather than on the
+        # next developer's machine.
+        run: uv sync --locked
+
+      - name: The portable suites
+        # The four trees a hosted runner can genuinely prove. `tests/e2e` and `tests/live` are
+        # excluded here by path alone, which is an exclusion nobody reading this file can see
+        # the shape of -- naming the excluded set is the next task's subject, not this one's.
+        #
+        # `-ra` (from `pyproject.toml`) prints the skip reasons, so a test that quietly stops
+        # running on one OS shows up in the log instead of hiding inside a green check.
+        run: >
+          uv run --locked pytest
+          tests/unit tests/integration tests/contract tests/architecture -q
