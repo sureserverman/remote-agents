@@ -280,3 +280,177 @@ def test_a_host_that_cannot_be_described_is_a_config_error_not_a_traceback(monke
 
     with pytest.raises(ConfigError, match="cannot be described"):
         bootstrap._supervisor_for_host()
+
+
+@pytest.mark.parametrize(("supervisor", "kind"), _SUPERVISORS)
+def test_doctor_reports_the_platform_it_is_on_beside_the_supervisor_that_answered(
+    tmp_path, monkeypatch, capsys, supervisor, kind
+) -> None:
+    """The report names the host, not just the tool that was asked about it.
+
+    `service_supervisor` already says which supervisor answered. On its own that is half a
+    diagnosis: it distinguishes the two adapters but says nothing about the machine, so a bug
+    report reading `"service_supervisor": "launchd"` still cannot tell an Apple Silicon Mac from
+    an Intel one -- and the launchd adapter's `PATH` is *derived* from `brew --prefix`, which is
+    `/opt/homebrew` on the first and `/usr/local` on the second. `machine` is the field that
+    makes the derived value checkable against the host it was derived on.
+
+    Injected rather than read, so the assertion is about what `doctor` renders rather than about
+    whichever machine happens to run the suite -- and so the macOS claim below can be made from
+    Linux CI, which is the only place it will ever be exercised.
+    """
+    _arrange(tmp_path, monkeypatch, supervisor, liveness_exit_zero=True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["platform"] == {"system": "Darwin", "release": "25.6.0", "machine": "arm64"}
+    assert report["service_supervisor"] == kind.value
+
+
+def test_doctor_reports_a_mac_as_a_platform_and_never_as_a_fault(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """DEC-002's rule, applied to the platform: reported for diagnosis, never a health gate.
+
+    The failure this forbids is cheap to write and hard to see afterwards -- a `components`
+    entry keyed on the platform, or a `healthy` term that reads `system == "Linux"`, either of
+    which makes a correctly installed Mac report itself broken for being a Mac. `onboard` now
+    takes its exit status from a health report (DEC-058), so a platform that could move
+    `healthy` would be a platform that could fail an unattended install on the supported OS the
+    whole plan exists to support.
+
+    Asserting `"platform" not in components` is the part with teeth. Asserting only
+    `healthy is True` would pass just as well on a host whose every other component happened to
+    be green, which is exactly the arrangement here.
+    """
+    launchd = LaunchdSupervisor(
+        interpreter=Path("/opt/ra/bin/python3"),
+        home=Path("/Users/tester"),
+        uid=501,
+        homebrew_prefix=lambda: None,
+    )
+    _arrange(tmp_path, monkeypatch, launchd, liveness_exit_zero=True)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+
+    assert main(["doctor", "--json"]) == 0
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["platform"]["system"] == "Darwin"
+    assert report["healthy"] is True
+    assert "platform" not in report["components"]
+
+
+def test_the_reported_platform_identity_describes_this_actual_host() -> None:
+    """The one test that reads the real host, because every other one injects the answer.
+
+    Without it `_host_platform` is covered by nothing: the injected `lambda` above satisfies the
+    render assertions whatever the function does, so a body returning three empty strings -- or
+    reading `platform.system()` into the `machine` key -- would leave the suite green. The same
+    gap `test_the_host_is_matched_to_its_own_supervisor` exists to close, one function along.
+
+    The key set is asserted exactly rather than as a subset. This dict is a report field an
+    operator and a bug report both read, so a key silently appearing or vanishing is a change
+    to a published shape, not an implementation detail.
+    """
+    import platform as platform_module
+
+    from remote_agents import bootstrap
+
+    identity = bootstrap._host_platform()
+
+    assert set(identity) == {"system", "release", "machine"}
+    assert identity["system"] == platform_module.system()
+    assert identity["release"] == platform_module.release()
+    assert identity["machine"] == platform_module.machine()
+    assert all(isinstance(value, str) and value for value in identity.values())
+
+
+#: The config text `describe_schema_drift` refuses: `[limits]` is missing two keys this build
+#: requires, which is the real incident `test_live_service.py` records rather than a synthetic
+#: parse error. What matters here is only that the file does not load.
+def _unloadable_config(directory: Path) -> Path:
+    config = directory / "config.toml"
+    config.write_text(
+        "[paths]\n"
+        f'dev_root = "{directory}"\n'
+        f'registry_path = "{directory / "registry.yaml"}"\n'
+        f'database_path = "{directory / "sessions.sqlite3"}"\n\n'
+        "[limits]\nmax_label_length = 40\nproject_page_size = 10\n",
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_doctor_reports_the_platform_even_when_the_config_will_not_load(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The second render path, and the one where the answer is worth most.
+
+    `doctor` has two report shapes, not one: the full report, and this minimal one for a config
+    that would not load -- which deliberately claims nothing it did not probe, because the
+    registry and database paths are read *out of* the file that failed. The platform is the
+    exception that belongs here, because it is the one fact still knowable when the config is
+    not: it comes from the running process, never from the file.
+
+    It is also the path a fresh Mac actually takes. `config/remote-agents.example.toml`
+    hardcodes `/home/...`, so an operator who copied it onto a Mac lands exactly here -- and
+    "you are on Darwin" is the sentence that explains why. Adding the field to the full report
+    alone would have left this branch, on the platform this whole plan exists to support, still
+    unable to say which platform it was.
+    """
+    config = _unloadable_config(tmp_path)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap.ProductionPaths.for_home", lambda _home: _DoctorPaths(config)
+    )
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+
+    assert main(["doctor", "--json"]) == 1
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["config"]["readable"] is False
+    assert report["checked"] is False
+    assert report["platform"] == {"system": "Darwin", "release": "25.6.0", "machine": "arm64"}
+
+
+def test_onboarding_reports_the_platform_even_when_the_config_will_not_load(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The same branch, in the other function that has it -- the sibling instance.
+
+    `_report_on_the_onboarded_host` carries its own copy of the unreadable-config early return,
+    so a fix applied to the `doctor` command alone leaves onboarding's verification step still
+    silent about the platform. That is this repository's recorded failure mode, not a
+    hypothetical: `985a37c` is a remediation round whose whole subject was a fix that closed on
+    only one of two paths.
+
+    Onboarding is also where it matters most, because DEC-058 makes this function's return value
+    an unattended installer's exit status -- so this is the report a script's operator reads
+    after a failed one-line install on a machine they may not be sitting at.
+    """
+    config = _unloadable_config(tmp_path)
+    monkeypatch.setattr(
+        "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+
+    from remote_agents import bootstrap
+
+    assert (
+        bootstrap._report_on_the_onboarded_host(_DoctorPaths(config), installed_daemon=False) == 1
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["config"]["readable"] is False
+    assert report["checked"] is False
+    assert report["platform"] == {"system": "Darwin", "release": "25.6.0", "machine": "arm64"}

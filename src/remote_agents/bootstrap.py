@@ -8,6 +8,7 @@ import getpass
 import json
 import logging
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -510,6 +511,10 @@ def main(
                 "config": drift,
                 "components": {},
                 "checked": False,
+                # The one thing still knowable when the config is not: it is read from the
+                # running process, never from the file that failed. Every other field here is
+                # withheld precisely because it would have to come out of that file.
+                "platform": _host_platform(),
             }
             print(json.dumps(report, sort_keys=True) if arguments.json else report)
             return 1
@@ -1528,7 +1533,17 @@ def _report_on_the_onboarded_host(paths: ProductionPaths, *, installed_daemon: b
     """
     drift = describe_schema_drift(paths.config_path)
     if not drift["readable"]:
-        print(json.dumps({"healthy": False, "config": drift, "checked": False}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "healthy": False,
+                    "config": drift,
+                    "checked": False,
+                    "platform": _host_platform(),
+                },
+                sort_keys=True,
+            )
+        )
         return 1
     report = _doctor_report(paths, load_config(paths.config_path), drift)
     print(json.dumps(report, sort_keys=True))
@@ -1951,6 +1966,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         # and a passed check look identical otherwise.
         config_drift=drift,
         credential_file=_credential_file_state(paths),
+        platform=_host_platform(),
         supervisor_kind=supervisor.kind,
         liveness_meaning=supervisor.liveness_meaning,
     )
@@ -1983,6 +1999,31 @@ def detected_config(home: Path, dev_root: Path | None = None) -> str:
         registry_path=home / ".claude" / "projects-registry.yaml",
         database_path=paths.database_path,
     )
+
+
+def _host_platform() -> dict[str, object]:
+    """Which machine this is, for a report someone else has to read.
+
+    `_supervisor_for_host` below answers a *decision* -- which supervisor owns this host's user
+    services -- and answers it from `sys.platform`, deliberately, because a Mac with neither
+    tool installed is still a launchd host. This answers a different question: what to write
+    down. The two are kept apart on purpose. Collapsing them would tempt a later reader to
+    branch on this dict, and DEC-054 makes the supervisor a label nothing may branch on for
+    exactly that reason.
+
+    `machine` earns its place rather than padding the dict. The launchd adapter derives its
+    plist `PATH` from `brew --prefix`, which is `/opt/homebrew` on Apple Silicon and
+    `/usr/local` on Intel; without the architecture in the report, a derived value that came
+    out wrong cannot be checked against the host that derived it. `release` is the Darwin
+    kernel version on a Mac rather than the marketing version -- the honest thing
+    `platform.release()` returns on both platforms, and uniform across them, which a bug report
+    can act on where a field meaning two different things could not.
+    """
+    return {
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+    }
 
 
 def _supervisor_for_host() -> ServiceSupervisor:

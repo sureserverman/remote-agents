@@ -103,6 +103,7 @@ def production_doctor(
     config_drift: dict[str, object] | None = None,
     tmux_console_ready: bool | None = None,
     credential_file: dict[str, object] | None = None,
+    platform: dict[str, object] | None = None,
     supervisor_kind: SupervisorKind | None = None,
     liveness_meaning: LivenessMeaning | None = None,
 ) -> dict[str, object]:
@@ -171,6 +172,21 @@ def production_doctor(
         # report that stayed green would agree with the failure it just diagnosed.
         if not credential_file.get("names_resolved", True):
             report["healthy"] = False
+    if platform is not None:
+        # Reported, never aggregated -- DEC-002's rule about versions, applied to the host.
+        # An installed thing's identity is diagnostic; it is not a component that can be
+        # unwell, and a `components` entry keyed on the platform would make a correctly
+        # installed Mac report itself broken for being a Mac. That matters more than it did
+        # before DEC-058, which made an unattended `onboard` take its exit status from a
+        # health report: a platform able to move `healthy` would be a platform able to fail
+        # the install on the supported OS this exists to support.
+        #
+        # Arrives as plain data for the reason `config_drift` and `credential_file` do. DEC-015
+        # confines this layer to `application`, `domain` and `ports`, and reading the host is
+        # the composition root's job -- the same root that already decides, once, which
+        # supervisor owns the host. Two readings of the platform in two layers is how they
+        # drift apart.
+        report["platform"] = platform
     if supervisor_kind is not None:
         # Which supervisor answered, not a component of its own -- the `service` component
         # already carries whether it is up. Named because a false negative is otherwise
