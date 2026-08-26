@@ -8,7 +8,9 @@
 # WHAT IT DELIBERATELY DOES NOT PROVE, because a hosted runner cannot: that a launchd agent
 # bootstraps into a `gui/<uid>` domain and survives a logout. A GitHub runner has no console
 # login session, so the domain a LaunchAgent targets does not exist there at all. That property
-# is checked by the manual macOS drill recorded under `docs/`, never here.
+# is checked by the manual macOS drill recorded under `docs/`, never here -- and the
+# `requires_session` marker names the excluded tests, so what this badge is not covering can be
+# listed with `pytest --collect-only -m requires_session` instead of inferred from an absence.
 name: CI
 
 on:
@@ -71,12 +73,19 @@ jobs:
         run: uv sync --locked
 
       - name: The portable suites
-        # The four trees a hosted runner can genuinely prove. `tests/e2e` and `tests/live` are
-        # excluded here by path alone, which is an exclusion nobody reading this file can see
-        # the shape of -- naming the excluded set is the next task's subject, not this one's.
+        # The four trees a hosted runner can genuinely prove, minus the one set it provably
+        # cannot: `-m 'not requires_session'` excludes tests whose blocker is a real login
+        # session, which is the launchd survival drill and, deliberately, nothing else.
+        #
+        # Excluded BY NAME rather than by leaving a path out of the list. Both spellings
+        # produce the same green tick, and only one of them lets a reader ask what was skipped
+        # -- `pytest --collect-only -m requires_session` answers it, and
+        # `tests/contract/test_ci_claims_no_more_than_it_runs.py` fails if this flag or the
+        # marker goes away.
         #
         # `-ra` (from `pyproject.toml`) prints the skip reasons, so a test that quietly stops
         # running on one OS shows up in the log instead of hiding inside a green check.
         run: >
           uv run --locked pytest
-          tests/unit tests/integration tests/contract tests/architecture -q
+          tests/unit tests/integration tests/contract tests/architecture
+          -m 'not requires_session' -q

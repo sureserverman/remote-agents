@@ -67,3 +67,21 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "live_acceptance: opt-in audit of owner-driven Telegram lifecycle traces"
     )
+    # **What a hosted CI runner cannot do, as a named set rather than an absence.**
+    #
+    # The meaning is narrow and deliberate: this marks a test whose blocker is a real
+    # **login session**. A GitHub runner has no console login, so the `gui/<uid>` domain a
+    # LaunchAgent bootstraps into does not exist there -- not "is empty", does not exist -- and
+    # no amount of runner configuration creates one. That is the whole population.
+    #
+    # It is NOT the tree of `REMOTE_AGENTS_LIVE_ACCEPTANCE` tests. Those are held back by
+    # credentials and by real agent CLIs, which a runner could in principle be given; they
+    # already announce themselves with `BLOCKED:` skips, and folding them in here would make
+    # this marker mean "does not run in CI", which is a description of a symptom rather than a
+    # reason. A marker that means two things is a marker that can absorb a third, and the third
+    # is always a test that started failing.
+    config.addinivalue_line(
+        "markers",
+        "requires_session: needs a real login session (launchd's gui/<uid>), which no hosted "
+        "CI runner has; excluded by name from the CI matrix so a green badge does not claim it",
+    )

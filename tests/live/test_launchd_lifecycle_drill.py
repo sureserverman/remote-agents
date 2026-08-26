@@ -37,10 +37,19 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin",
-    reason="BLOCKED: the launchd drill can only run on macOS",
-)
+#: Two markers because there are two different reasons this cannot run, and collapsing them
+#: would lose the one that matters. `skipif darwin` is about the HOST -- a Linux machine has no
+#: launchd. `requires_session` is about the SESSION, and it is the reason a **macOS** CI runner
+#: cannot host this either: `bootstrap gui/<uid>` needs a domain that only a console login
+#: creates. Without the second marker the macos-latest job would look like the place this drill
+#: finally runs, and it is not.
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform != "darwin",
+        reason="BLOCKED: the launchd drill can only run on macOS",
+    ),
+    pytest.mark.requires_session,
+]
 
 #: Deliberately not the production label. `bootout` on the wrong one would stop the owner's
 #: real service, and this file runs on a machine where that service is meant to be running.
