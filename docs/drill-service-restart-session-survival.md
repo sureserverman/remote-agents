@@ -19,7 +19,8 @@ Telegram credential. That half was dropped by owner decision on 2026-08-16: it b
 credential to add only "does a bad token trigger the restart", which
 `tests/live/test_telegram_owner.py`'s known-invalid-token probe largely covers already. The
 session-survival property — the part that can lose work — needs no credential at all. If you
-later want the rotation half, `docs/operator-runbook.md:104-125` is the written procedure.
+later want the rotation half, `docs/operator-runbook.md` § *Telegram credential denial and recovery drill* is the
+written procedure.
 
 ## Before you start
 

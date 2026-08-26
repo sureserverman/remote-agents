@@ -4,7 +4,8 @@ This is the automatable half of BL-002. The other half needs the owner: a lifecy
 be checked *after the fact* even where the tap cannot be driven, and that asymmetry is what
 this file exists to exploit.
 
-**What it covers, and what it cannot.** `docs/operator-runbook.md:35-102` numbers thirteen
+**What it covers, and what it cannot.** `docs/operator-runbook.md` § *Telegram acceptance
+checklist* numbers thirteen
 steps of the mobile owner journey. Only some of them leave a durable trace, and the honest
 reading is that this file audits those and is silent about the rest:
 

@@ -198,7 +198,8 @@ class ServiceSupervisor(Protocol):
         Added at Stage 2's gate, because the vocabulary could not express a real defect.
         systemd caches a loaded unit's fragment, and this project's own runbook has
         always put `systemctl --user daemon-reload` between writing a unit file and enabling it
-        (`docs/operator-runbook.md:10`) -- while the installer wrote a changed unit and went
+        (`docs/operator-runbook.md` § *Install, upgrade, and uninstall*) -- while the
+        installer wrote a changed unit and went
         straight to `enable --now`, which can start the cached definition and report success. On
         the upgrade path, where the whole point is that `ExecStart` moved, that is a silently
         wrong success with `doctor` reporting green against the *old* process.

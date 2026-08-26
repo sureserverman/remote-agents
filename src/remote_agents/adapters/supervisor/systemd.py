@@ -288,7 +288,8 @@ class SystemdSupervisor:
         """`daemon-reload`, which this project's runbook has always put before `enable`.
 
         systemd caches a loaded unit's fragment, so `enable --now` after a rewritten file can
-        start the definition it already had. `docs/operator-runbook.md:10` has carried this
+        start the definition it already had. `docs/operator-runbook.md` § *Install, upgrade,
+        and uninstall* has carried this
         between the install and the enable since the service first shipped; the generated-unit
         path had dropped it.
         """

@@ -182,7 +182,8 @@ table and column the file names was verified against the live schema before this
   driven, so what the agents were doing across the restart is unknown. Survival of the *process*
   is proven; continuity of the *work* is not.
 - **That a revoked credential behaves correctly.** Not performed, by decision. The rotation
-  procedure at `docs/operator-runbook.md:104-125` remains unexercised, and BL-001's original
+  procedure at `docs/operator-runbook.md` § *Telegram credential denial and recovery drill*
+  remains unexercised, and BL-001's original
   wording asked for it.
 - **That the cross-process race is fixed.** It is not, and Stage 4 does not claim it: the local
   TUI drives its own `SessionService` in a separate process with its own `SessionLocks`, and no
