@@ -73,19 +73,35 @@ jobs:
         run: uv sync --locked
 
       - name: The portable suites
-        # The four trees a hosted runner can genuinely prove, minus the one set it provably
-        # cannot: `-m 'not requires_session'` excludes tests whose blocker is a real login
-        # session, which is the launchd survival drill and, deliberately, nothing else.
+        # WHAT THIS BADGE COVERS, and -- below -- exactly what it does not. Five trees, every
+        # one of which a hosted runner can genuinely prove.
         #
-        # Excluded BY NAME rather than by leaving a path out of the list. Both spellings
-        # produce the same green tick, and only one of them lets a reader ask what was skipped
-        # -- `pytest --collect-only -m requires_session` answers it, and
-        # `tests/contract/test_ci_claims_no_more_than_it_runs.py` fails if this flag or the
-        # marker goes away.
+        # `tests/security` is here because leaving it out was the same defect this workflow
+        # spends its comments warning about: 31 portable tests running in 0.3s, omitted by
+        # path, with nothing anywhere recording that a green badge covered no security test.
+        # A gate evaluator found it. `test_generated_artifacts.py` lives in that tree and is
+        # about the daemon artifacts this whole plan generates, so its absence was not academic.
+        #
+        # NOT RUN HERE, and named rather than merely absent:
+        #   * `tests/live`   -- needs real credentials, real agent CLIs, and for the launchd
+        #                       drill a console login session. See the marker note below.
+        #   * `tests/e2e`    -- 105 tests driving fake agents. A runner COULD host these; the
+        #                       plan that created this matrix scoped it to the portable suites,
+        #                       and widening the claim silently is the failure being avoided.
+        #                       A deliberate scoping decision, recorded so it stays one.
+        #
+        # `-m 'not requires_session'` is a STANDING GUARD, not an active filter. Measured: it
+        # deselects 0 of 3100 from this command, because everything marked lives in
+        # `tests/live`, which is not in the path list. What it buys is the day a
+        # session-dependent test gets written inside one of these trees -- which is where such
+        # a test would naturally be written. What the MARKER buys, separately and today, is that
+        # `pytest --collect-only -m requires_session` answers "what is this badge not covering?"
+        # mechanically; a path list records which directories were omitted and never why.
+        # `tests/contract/test_ci_claims_no_more_than_it_runs.py` pins both.
         #
         # `-ra` (from `pyproject.toml`) prints the skip reasons, so a test that quietly stops
         # running on one OS shows up in the log instead of hiding inside a green check.
         run: >
           uv run --locked pytest
-          tests/unit tests/integration tests/contract tests/architecture
+          tests/unit tests/integration tests/contract tests/architecture tests/security
           -m 'not requires_session' -q

@@ -54,10 +54,24 @@ import yaml
 
 WORKFLOW = Path(".github/workflows/ci.yml")
 
-#: The suites a hosted runner can genuinely prove. `tests/e2e` is absent deliberately -- it
-#: drives fake agents and a runner could host it, but the plan that created this matrix scoped
-#: it to these four, and widening the claim silently is the failure this file exists to stop.
-EXPECTED_SUITES = ("tests/unit", "tests/integration", "tests/contract", "tests/architecture")
+#: The suites a hosted runner can genuinely prove, asserted so one cannot quietly leave.
+#:
+#: `tests/security` joined after a gate evaluator noticed it was omitted by path with nothing
+#: anywhere recording the omission -- 31 portable tests, 0.3s, and a green badge that covered no
+#: security test at all. That is the exact failure this file's docstring describes, found in
+#: this file's own blind spot: it asserted the suites it already listed and never asked what was
+#: missing from the list.
+#:
+#: `tests/e2e` stays out deliberately -- a runner could host it, but the plan that created this
+#: matrix scoped the claim to the portable suites, and widening it silently is the other half of
+#: the same failure. Named in `ci.yml` so it reads as a decision rather than an oversight.
+EXPECTED_SUITES = (
+    "tests/unit",
+    "tests/integration",
+    "tests/contract",
+    "tests/architecture",
+    "tests/security",
+)
 
 MARKER = "requires_session"
 
