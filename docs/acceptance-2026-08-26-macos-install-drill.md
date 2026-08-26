@@ -89,12 +89,15 @@ itself when the console session came up — not that someone re-registered it af
 
 ## Defect found: a fresh host cannot reach `healthy: true` by any documented command
 
-> **Closed 2026-08-26, after this drill.** `append_project` now normalises both empty spellings
-> before appending, so a registry created as `projects: []` (or a bare `projects:`) takes its
-> first entry. The absent case still refuses — DEC-058 stands, this tool does not invent the
-> file — but the refusal now names the file and prints the exact bytes to create. Nothing was
-> superseded: DEC-058 objected to *creating* the registry, and DEC-005's append-only bound is
-> untouched. **The findings below are left exactly as the drill recorded them**, because this
+> **Closed 2026-08-26, after this drill, in two steps.** First (`v0.22.1`) `append_project`
+> learned to normalise both *empty* spellings, so a registry created as `projects: []` or a bare
+> `projects:` takes its first entry — leaving the absent case refusing, but actionably. Then, by
+> owner decision, the absent case too: `add-project` now **creates** the registry and its parent
+> when neither exists, and records the project in the same call. That overturns one of the two
+> alternatives DEC-058 rejected and is recorded as **DEC-060**; DEC-058's own position, on
+> onboarding's exit status, is unchanged, and `onboard` still does not create this file. A
+> registry that exists and does not parse is still refused — creation covers *absent*, never
+> *corrupt*. **The findings below are left exactly as the drill recorded them**, because this
 > document is the record of what a fresh Mac did on 2026-08-26, not a description of current
 > behaviour.
 

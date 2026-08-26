@@ -73,7 +73,7 @@ fi
 : "${REMOTE_AGENTS_UV_INSTALLER_SHA256:=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111}"
 : "${REMOTE_AGENTS_UV_INSTALLER_URL:=https://astral.sh/uv/0.12.5/install.sh}"
 : "${REMOTE_AGENTS_REPOSITORY:=https://github.com/sureserverman/remote-agents}"
-: "${REMOTE_AGENTS_VERSION:=v0.22.1}"
+: "${REMOTE_AGENTS_VERSION:=v0.23.0}"
 #: Set non-empty to accept a branch, a bare SHA, or anything else not tag-shaped.
 : "${REMOTE_AGENTS_ALLOW_UNPINNED_REF:=}"
 

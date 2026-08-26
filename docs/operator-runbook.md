@@ -54,7 +54,7 @@ The same two steps without the fetched script:
 
 ```bash
 uv tool install --managed-python \
-  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.22.1"
+  "remote-agents @ git+https://github.com/sureserverman/remote-agents@v0.23.0"
 remote-agents onboard --install-daemon
 ```
 
@@ -106,22 +106,30 @@ still say `healthy: false` for work that is yours rather than onboarding's — a
 host has no projects registry. Those components are named as outstanding rather than as faults,
 on stdout, under `onboarding complete. Still to do, and not part of onboarding:`.
 
-> **On a genuinely fresh host, create the registry file once; `add-project` does the rest.**
-> `~/.claude/projects-registry.yaml` belongs to the portfolio skill and lists your own projects,
-> so this tool will not invent it for you (DEC-058). Create it with exactly:
+> **On a genuinely fresh host, `add-project` just works — there is nothing to create first.**
+> If `~/.claude/projects-registry.yaml` does not exist, `add-project` creates it (and its parent
+> directory), then records your project in it, in one step. `doctor`'s `core` component goes
+> healthy as soon as that file exists.
 >
-> ```yaml
-> version: 1
-> projects: []
-> ```
+> A registry that exists but does **not** parse is a different matter and is still refused — this
+> creates an absent registry, it never repairs a corrupt one. Fix the file, or move it aside.
 >
-> That reads cleanly, so `core` reports healthy the moment it exists, and `add-project` appends
-> to it normally from then on. If you forget, `add-project` refuses and prints those exact bytes.
+> **When it creates one, it says so on stderr — read that line.** It names the file it made and
+> points at `registry_path`. That notice exists for one failure it would otherwise hide: if
+> `registry_path` is wrong — a typo, an unmounted volume, a home baked in on another machine —
+> `add-project` will happily create an empty registry *there*, exit zero, and leave `doctor`
+> green, while your real registry goes untouched and unused. If you see that notice and you did
+> not expect a new registry, check the setting before adding anything else.
 >
-> *This used to be a dead end (BL-003, closed 2026-08-26): the writer appends a YAML block
-> sequence item, which is well-formed only after an existing block sequence, so `projects: []`
-> — the one empty spelling that reads cleanly — was the one the append corrupted, and there was
-> no empty state that was both readable and appendable. Found by the macOS acceptance drill
+> *Two decisions sit behind that. DEC-058 refused to let **onboarding** create this file, because
+> doing so silently, to make a health check pass, fabricates a record of your projects that
+> nobody asked for — and that still holds. DEC-060 allows **`add-project`** to create it, because
+> there the operator has asked, in as many words, for a project to be recorded. The accepted cost
+> is that an absent registry and a deliberately-emptied one are no longer distinguishable.*
+>
+> *This was a dead end until 2026-08-26 (BL-003): the writer appends a YAML block sequence item,
+> well-formed only after an existing block sequence, so `projects: []` — the one empty spelling
+> that read cleanly — was the one the append corrupted. Found by the macOS acceptance drill
 > ([`acceptance-2026-08-26-macos-install-drill.md`](acceptance-2026-08-26-macos-install-drill.md))
 > and reproducible on Linux.*
 
@@ -142,7 +150,7 @@ the repository and the version before installing anything:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/scripts/install.sh \
-  | REMOTE_AGENTS_VERSION=v0.22.1 bash
+  | REMOTE_AGENTS_VERSION=v0.23.0 bash
 remote-agents onboard --install-daemon
 ```
 

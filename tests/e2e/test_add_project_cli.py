@@ -119,3 +119,64 @@ def test_add_project_cli_reports_an_unreadable_configuration_without_a_traceback
     assert status == 1
     assert "cannot read configuration" in captured.err
     assert captured.out == ""
+
+
+def _workspace_without_a_registry(tmp_path: Path) -> tuple[Path, Path]:
+    """The fresh-host arrangement: a dev root, a config, and no registry file at all."""
+    dev_root = tmp_path / "dev"
+    (dev_root / "infra").mkdir(parents=True)
+    registry_path = tmp_path / "never-created" / "projects-registry.yaml"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'''[paths]
+dev_root = "{dev_root}"
+registry_path = "{registry_path}"
+database_path = "{tmp_path}/sessions.sqlite3"
+
+[limits]
+max_label_length = 40
+project_page_size = 10
+activity_poll_seconds = 30
+activity_quiet_polls = 3
+''',
+        encoding="utf-8",
+    )
+    return config_path, registry_path
+
+
+def test_add_project_creates_an_absent_registry_and_says_so(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """DEC-060: creating is allowed. Creating *silently* is the part that is not.
+
+    Auto-creation turns one specific misconfiguration into a silent success: a `registry_path`
+    that is typo'd, on an unmounted volume, or carrying a home baked in on another machine used
+    to surface as `core: registry_unavailable` and get investigated. Without this notice it now
+    produces a new empty registry at the wrong place, a zero exit, and a green `doctor`, while
+    the operator's real registry sits untouched and unused.
+
+    stdout stays exactly the created path, because things parse it. The notice is stderr's.
+    """
+    config_path, registry_path = _workspace_without_a_registry(tmp_path)
+    created = tmp_path / "dev" / "infra" / "widget"
+    argv = ["add-project", "--config", str(config_path), "--area", "infra", "--name", "widget"]
+
+    assert main(argv) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.strip() == str(created), "stdout must stay the machine-readable path"
+    assert str(registry_path) in captured.err, "the notice must name the file it created"
+    assert "registry_path" in captured.err, "and point at the setting that would be wrong"
+    assert load_registry(registry_path).projects, "the created registry must hold the project"
+
+
+def test_add_project_stays_quiet_when_the_registry_already_existed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The notice is for the case that changed. An ordinary append must not grow noise."""
+    config_path, _ = workspace(tmp_path)
+    argv = ["add-project", "--config", str(config_path), "--area", "infra", "--name", "widget"]
+
+    assert main(argv) == 0
+
+    assert capsys.readouterr().err == ""

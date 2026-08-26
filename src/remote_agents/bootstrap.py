@@ -543,12 +543,35 @@ def main(
         paths = ProductionPaths.for_home(Path.home())
         try:
             config = load_config(arguments.config or paths.config_path)
+            # Observed BEFORE the create, because the create is what brings it into existence.
+            registry_was_absent = not Path(config.registry_path).exists()
             created = _project_creator(config).create(
                 CreateProjectCommand(arguments.area.strip(), arguments.name.strip())
             )
         except (ConfigError, ProjectCreationError) as error:
             print(error, file=sys.stderr)
             return 1
+        if registry_was_absent:
+            # **Creating the registry is allowed (DEC-060); creating it SILENTLY is not.**
+            #
+            # Auto-creation turns one specific misconfiguration into a silent success. A
+            # `registry_path` that is typo'd, points at an unmounted volume, or carries a home
+            # baked in on another machine -- which `config/remote-agents.example.toml` did, with
+            # a `/home/...` path that exists on no Mac -- used to surface as
+            # `core: registry_unavailable` and get investigated. Now it produces a brand-new
+            # empty registry at the wrong place, a success, and a green `doctor`, while the real
+            # registry sits untouched and unused.
+            #
+            # The dead end this replaced at least complained. Saying so restores the signal that
+            # auto-creation removes, at the cost of one line, and it goes to stderr so stdout
+            # stays exactly the created path for anything parsing it.
+            print(
+                f"note: created a new projects registry at {config.registry_path}\n"
+                f"      if your projects are registered somewhere else, check `registry_path` in "
+                f"your config --\n"
+                f"      a wrong path creates an empty registry here instead of using yours.",
+                file=sys.stderr,
+            )
         print(created.path)
         return 0
     if arguments.command == "tui":

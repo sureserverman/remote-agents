@@ -587,33 +587,95 @@ def test_a_second_entry_still_appends_after_the_first_seeded_one(tmp_path: Path)
     assert [p.name for p in result.projects] == ["fresh", "second"]
 
 
-def test_an_absent_registry_still_refuses_and_says_what_to_create(tmp_path: Path) -> None:
-    """DEC-058 stands: this writer never fabricates the file. But the refusal is actionable.
+def test_an_absent_registry_is_created_and_takes_the_first_entry(tmp_path: Path) -> None:
+    """DEC-060 (owner, 2026-08-26) supersedes DEC-058's refusal to create this file.
 
-    The old message was `registry file cannot be resolved`, which names a `Path.resolve` failure
-    rather than anything an operator can act on -- and `ProjectCreationService` then replaced it
-    with `project could not be catalogued`, so the reachable message described neither the cause
-    nor the remedy. An operator on a fresh host saw a failure with no next step.
+    DEC-058 rejected creation on two grounds. The first -- that it fabricates a record of the
+    operator's projects to satisfy a detector -- does not survive the move from `onboard` to
+    here: `add-project` creates the file because someone ran a command whose whole purpose is to
+    put a project in it, not to quiet a health report. The second -- that absent and
+    deliberately-emptied stop being distinguishable -- does survive, and is the accepted cost.
+
+    The mitigation is asserted below rather than described: this path never *leaves* an empty
+    registry. Creation and the append happen in one call, so the observable end state has the
+    caller's entry in it.
     """
-    registry = tmp_path / "does-not-exist.yaml"
+    registry = tmp_path / "nested" / "projects-registry.yaml"
     root, project = _empty_dir_entry(tmp_path)
 
-    with pytest.raises(RegistryWriteError) as refusal:
-        append_project(
-            registry,
-            dev_root=root,
-            project_path=project,
-            name="fresh",
-            area="infra",
-            added=date(2026, 8, 26),
-        )
-
-    message = str(refusal.value)
-    assert str(registry) in message, "the refusal must name the file it wants"
-    assert "version: 1" in message and "projects:" in message, (
-        "the refusal must show the exact content to create, or it is not actionable"
+    recorded = append_project(
+        registry,
+        dev_root=root,
+        project_path=project,
+        name="fresh",
+        area="infra",
+        added=date(2026, 8, 26),
     )
-    assert not registry.exists(), "the writer must not create the registry (DEC-058)"
+
+    assert registry.exists(), "the registry was not created"
+    result = load_registry(registry)
+    assert result.error is None
+    assert [p.path for p in result.projects] == [recorded]
+    # Never left empty: the whole cost DEC-058 named is bounded by this.
+    assert result.projects, "creation must be followed by the append, not left empty"
+
+
+def test_creating_the_registry_also_creates_its_parent_directory(tmp_path: Path) -> None:
+    """A genuinely fresh host may have no `~/.claude` at all.
+
+    Refusing on a missing parent would reinstate the dead end this change removes, one directory
+    up -- the operator would be told to run a command that cannot work until they guess which
+    directory to make.
+    """
+    registry = tmp_path / "does" / "not" / "exist" / "projects-registry.yaml"
+    root, project = _empty_dir_entry(tmp_path)
+
+    append_project(
+        registry,
+        dev_root=root,
+        project_path=project,
+        name="fresh",
+        area="infra",
+        added=date(2026, 8, 26),
+    )
+
+    assert registry.parent.is_dir()
+    assert load_registry(registry).error is None
+
+
+def test_creation_never_clobbers_a_registry_that_appeared_first(tmp_path: Path) -> None:
+    """`O_CREAT | O_EXCL`, so a racing creator's file wins rather than being truncated.
+
+    Two `add-project` runs on a fresh host both see no registry. Without the exclusive create the
+    second would truncate whatever the first had just written, and the first operator's project
+    would vanish with it. Simulated by planting the file between the resolve and the create.
+    """
+    registry = tmp_path / "projects-registry.yaml"
+    root, project = _empty_dir_entry(tmp_path)
+    other = root / "infra" / "already-there"
+    other.mkdir()
+    planted = (
+        "version: 1\nprojects:\n"
+        f"  - path: {other}\n    name: already-there\n    area: infra\n"
+        "    enabled: true\n    added: 2026-08-01\n"
+    )
+    registry.write_text(planted, encoding="utf-8")
+
+    registry_writer._create_empty_registry(registry)
+
+    assert registry.read_text(encoding="utf-8") == planted, (
+        "a racing creator's registry was overwritten"
+    )
+
+
+def test_a_created_registry_is_world_readable_like_the_skill_writes_it(tmp_path: Path) -> None:
+    """0644, not 0600. This file is not a secret and the portfolio skill writes it readable;
+    creating it tighter would silently change the permissions of a file another tool owns."""
+    registry = tmp_path / "projects-registry.yaml"
+
+    registry_writer._create_empty_registry(registry)
+
+    assert stat.S_IMODE(registry.stat().st_mode) == 0o644
 
 
 @pytest.mark.parametrize(

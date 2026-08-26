@@ -123,29 +123,61 @@ def _canonical_project_path(dev_root: Path, project_path: Path, name: str, area:
 _EMPTY_REGISTRY_TEMPLATE = "version: 1\nprojects: []\n"
 
 
+def _create_empty_registry(registry_path: Path) -> None:
+    """Create a well-formed empty registry, once, without clobbering a concurrent creator.
+
+    `O_CREAT | O_EXCL` rather than a `write_text`: two `add-project` runs racing on a fresh host
+    would otherwise both see no file and the second would truncate the first's. `FileExistsError`
+    is therefore a **success** here -- somebody won, the file exists, and the caller's append will
+    serialise behind the same lock every other append uses.
+
+    The parent is created too. On a genuinely fresh host `~/.claude` may not exist at all, and
+    refusing there would reinstate the dead end this whole change removes, one directory up.
+    """
+    try:
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(registry_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return
+    except OSError as error:
+        raise RegistryWriteError(
+            f"the projects registry does not exist at {registry_path} and could not be "
+            f"created: {error}"
+        ) from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(_EMPTY_REGISTRY_TEMPLATE)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _writable_registry_target(registry_path: Path) -> Path:
     """Resolve to the real file so a symlinked registry is written through, never replaced.
 
-    **An absent registry refuses, and does not get created here (BL-003, DEC-058).** That is a
-    decision, not an oversight: DEC-058 rejected having onboarding create this file, because a
-    registry fabricated to satisfy a health check is indistinguishable from one the operator
-    emptied on purpose -- and this file is the portfolio skill's, listing the operator's own
-    projects, not ours to invent.
+    **An absent registry is created here, and that supersedes DEC-058's rejected alternative
+    (DEC-060, owner decision 2026-08-26).** DEC-058 refused to create this file, on two grounds:
+    that doing so fabricates a record of the operator's projects merely to satisfy a detector,
+    and that an auto-created empty registry is indistinguishable from one the operator emptied
+    deliberately.
 
-    What *was* an oversight is that the refusal said `registry file cannot be resolved`, which
-    names a `Path.resolve` failure rather than anything anyone can act on, and
-    `ProjectCreationService` then replaced it with `project could not be catalogued`. An operator
-    on a fresh host got a failure describing neither the cause nor the remedy. It now carries the
-    exact file and the exact bytes.
+    The first ground does not survive the move from `onboard` to here. `onboard` would have
+    created it silently, as a side effect of a health check nobody asked to pass; `add-project`
+    creates it because the operator ran a command whose entire purpose is to put a project in it.
+    The file is a consequence of the request, not a workaround for a report.
+
+    The second ground survives, and is the accepted cost: after this, absent and
+    deliberately-emptied are no longer distinguishable states. The mitigation is that the
+    registry is never left empty by this path -- creation is immediately followed by the append
+    the caller asked for, under the same lock, so the observable end state has one entry in it.
     """
+    try:
+        return registry_path.resolve(strict=True)
+    except OSError:
+        _create_empty_registry(registry_path)
     try:
         return registry_path.resolve(strict=True)
     except OSError as error:
         raise RegistryWriteError(
-            f"the projects registry does not exist at {registry_path}, and this command does not "
-            f"create it -- it lists your own projects, so seeding it is yours to do. Create it "
-            f"with exactly:\n\n{_EMPTY_REGISTRY_TEMPLATE}\n"
-            f"then re-run this command."
+            f"the projects registry at {registry_path} could not be resolved after creating it"
         ) from error
 
 
