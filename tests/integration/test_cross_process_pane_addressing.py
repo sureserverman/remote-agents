@@ -24,6 +24,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from process_state import reaped
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
@@ -141,7 +142,11 @@ async def test_either_terminal_can_stop_a_session_whose_pane_the_other_displaced
             agent_pane
             not in (await runner.run(*base, "list-panes", "-a", "-F", "#{pane_id}")).split()
         ), "the stop did not reach the displaced pane"
-        assert not Path(f"/proc/{agent_pid}").exists(), "the agent outlived a cross-process stop"
+        # `reaped`, not a bare absence check. This assertion was `not Path(f"/proc/{pid}")
+        # .exists()`, which on a Mac is true of every pid that has ever existed -- so the one
+        # thing it claims to rule out could not have failed it there. It also raced the reap
+        # on Linux, which is the same defect `_reaped` was written for one file over.
+        assert reaped(agent_pid), "the agent outlived a cross-process stop"
 
         # The launching process, reading the same store, agrees the session is over.
         final = await launching.list_sessions()

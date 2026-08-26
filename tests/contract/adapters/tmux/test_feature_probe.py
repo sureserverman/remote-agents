@@ -15,6 +15,8 @@ import time
 import uuid
 from pathlib import Path
 
+from process_state import is_running, reaped
+
 from remote_agents.adapters.tmux.feature_probe import probe_features
 
 
@@ -51,22 +53,15 @@ def test_feature_probe_uses_a_disposable_socket_and_exact_target(tmp_path: Path)
 def _reaped(pid: str, *, within: float = 10.0) -> bool:
     """Whether a pid has stopped running, polled — and a zombie counts as stopped.
 
-    A bare `/proc/<pid>` check races: tmux noticing the exit and the parent reaping the child
-    are not the same instant, and in between the directory still exists. `tests/support/
+    A bare existence check races: tmux noticing the exit and the parent reaping the child are
+    not the same instant, and in between the process is still listed. `tests/support/
     live_probe.py` documents that race and exists to replace the naive check; this is its
     synchronous twin, because a contract test has no event loop to await one in.
+
+    The `/proc/<pid>/stat` read this used to do worked on Linux and on no Mac, which is what
+    `tests/support/process_state.py` now exists for.
     """
-    deadline = time.monotonic() + within
-    status = Path(f"/proc/{pid}/stat")
-    while time.monotonic() < deadline:
-        try:
-            state = status.read_text().rsplit(")", 1)[1].split()[0]
-        except (OSError, IndexError):
-            return True
-        if state == "Z":
-            return True
-        time.sleep(0.05)
-    return False
+    return reaped(pid, within=within)
 
 
 def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path) -> None:
@@ -227,7 +222,7 @@ def test_the_codecs_verified_tmux_claims_hold_on_this_hosts_tmux(tmp_path: Path)
         assert agent in run("list-panes", "-a", "-F", "#{pane_id}").split(), (
             "kill-session left the linked pane alive — the reason destroy names a pane"
         )
-        assert Path(f"/proc/{agent_pid}").exists(), "and left its process running"
+        assert is_running(agent_pid), "and left its process running"
         # ...where kill-pane reaches it through the same link.
         run("kill-pane", "-t", agent)
         assert agent not in run("list-panes", "-a", "-F", "#{pane_id}").split()

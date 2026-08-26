@@ -613,7 +613,16 @@ def test_a_spool_under_an_ancestor_others_can_write_is_refused_at_install_time(
     silent and fast; an installer runs once and has an operator reading its output.
     """
     loose = tmp_path / "loose"
-    loose.mkdir(mode=0o777)
+    # `mkdir()` then `chmod()`, never `mkdir(mode=0o777)`. The mode argument is filtered
+    # through the process umask and `chmod` is not, so the one-liner establishes whatever the
+    # host's umask permits rather than the precondition this test needs. Measured: under the
+    # 0o002 umask of the workstation this suite grew up on, `mkdir(mode=0o777)` yields 0o775 --
+    # group-writable, so the refusal fires and the test passes. Under CI's 0o022 it yields
+    # 0o755, nothing is group- or world-writable, and there is nothing left to refuse. The
+    # test then failed on BOTH runners, which is what makes it a Linux-workstation assumption
+    # rather than a macOS one.
+    loose.mkdir()
+    loose.chmod(0o777)
     path = _settings_file(tmp_path)
     before = path.read_bytes()
 
@@ -628,7 +637,13 @@ def test_a_spool_under_an_ancestor_others_can_write_is_refused_at_install_time(
 def test_a_spool_under_a_sticky_shared_ancestor_is_accepted(tmp_path: Path) -> None:
     """The sticky bit is what makes a shared directory safe, and /tmp is the ordinary case."""
     shared = tmp_path / "sticky"
-    shared.mkdir(mode=0o1777)
+    # Same umask defect as its sibling above, and it was hiding rather than failing. Under a
+    # 0o022 umask this yielded 0o1755: still sticky, so the install is still accepted and the
+    # test still passes -- but on a directory that is not shared-writable at all, which is the
+    # condition the sticky bit is being tested *against*. A green assertion about the wrong
+    # arrangement is the harder half of this class to notice.
+    shared.mkdir()
+    shared.chmod(0o1777)
     path = _settings_file(tmp_path)
 
     assert install_agent_hooks(path, activity_directory=shared / "activity").changed

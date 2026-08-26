@@ -117,9 +117,16 @@ sha256_of() {
 #: self-inflicted rather than remote; what made it worth fixing is that the
 #: `shellcheck disable=SC2064` sitting here asserted the line had been thought about.
 installer_temporary_file=""
-# shellcheck disable=SC2329  # invoked by name from the `trap` below, which shellcheck
-# does not follow. The disable is narrow on purpose: SC2064, the one this rewrite
-# removed, was suppressing a real defect rather than a false positive.
+# shellcheck disable=SC2329,SC2317  # invoked by name from the `trap` below, which shellcheck
+# does not follow. Two codes because shellcheck changed which one it emits: 0.11.0 reports
+# SC2329 against the function, while 0.10 and earlier report SC2317 against each line of its
+# body. The CI matrix installs whatever its runner's package manager has -- apt gave the older
+# one and Homebrew the newer -- so a single code left this script clean on one runner and
+# failing on the other, for a difference in the linter rather than in the script. Naming both
+# is what makes the check answer the same question on every host; pinning a shellcheck version
+# would have hidden the divergence instead of surviving it. The disable is still narrow on
+# purpose: SC2064, the one this rewrite removed, was suppressing a real defect rather than a
+# false positive.
 cleanup_installer() {
   if [ -n "${installer_temporary_file}" ]; then
     rm -f -- "${installer_temporary_file}"

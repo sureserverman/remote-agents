@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
+
+from process_state import process_state
 
 from remote_agents.adapters.tmux.runtime import LaunchProfile
 
@@ -44,18 +45,17 @@ async def process_gone(pid: str, *, within: float = 10.0) -> bool:
     """Whether a pid has stopped running, polled — and a zombie counts as stopped.
 
     The pane reporting `pane_dead` is tmux noticing the exit; the process leaving the table
-    is its parent reaping it, and those are not the same instant. A bare `/proc/<pid>` check
+    is its parent reaping it, and those are not the same instant. A bare existence check
     raced the second one. A zombie is an exited process by every meaning these tests care
-    about, so it is read from the status rather than from the directory's existence.
+    about, so it is read from the status rather than from the process merely being listed.
+
+    The status came from `/proc/<pid>/stat` until the two-OS matrix pointed out that macOS has
+    no `/proc`; `process_state` asks `ps` instead, which answers on both.
     """
     deadline = asyncio.get_running_loop().time() + within
-    status = Path(f"/proc/{pid}/stat")
     while asyncio.get_running_loop().time() < deadline:
-        try:
-            state = status.read_text().rsplit(")", 1)[1].split()[0]
-        except (OSError, IndexError):
-            return True
-        if state == "Z":
+        state = process_state(pid)
+        if state is None or state == "Z":
             return True
         await asyncio.sleep(0.1)
     return False

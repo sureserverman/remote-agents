@@ -147,6 +147,7 @@ def test_the_probe_note_survives_all_the_way_to_the_surface(
     the only field left to hold `version_probe_failed`, which the available-profile invariant
     then refuses, and `local_context` raises before it can return.
     """
+    from remote_agents import bootstrap as bootstrap_module
     from remote_agents.adapters.tmux import profiles as profiles_module
     from remote_agents.config import load_config
 
@@ -158,10 +159,25 @@ def test_the_probe_note_survives_all_the_way_to_the_surface(
     # this measures: on a machine missing an agent binary that profile comes back
     # `executable_missing` and the assertions below fail on it -- not vacuously, loudly, and
     # for a reason with nothing to do with the regression, which makes the test flip with
-    # whatever happens to be installed. `local_context` offers no injection seam, so this is
-    # the module private rather than `probe_profiles`'s public keyword.
+    # whatever happens to be installed.
+    #
+    # **It is patched on `bootstrap`, not on `profiles`, and the difference is the whole bug.**
+    # `probe_profiles` takes `resolve` as a keyword and falls back to the `profiles` module
+    # private only when the caller passes nothing. `_local_runtime` -- which is what
+    # `local_context` composes -- passes its own, built from `_resolve_profile_executable`.
+    # So patching the module default replaced a function this code path never calls, and the
+    # pin it claimed to be doing was not happening.
+    #
+    # The test passed anyway, on one machine, for a reason that had nothing to do with it: the
+    # real resolver fell through to `shutil.which("claude")` and found the developer's own
+    # install. On both CI runners, which have no agent CLIs, it resolved to `None`, the profile
+    # came back `executable_missing`, and the assertions below failed exactly as this comment
+    # used to promise they could not. Failing on Ubuntu as well as macOS is what proves it was
+    # never about the platform.
     monkeypatch.setattr(
-        profiles_module, "_resolve_executable", lambda executable: Path("/usr/bin") / executable
+        bootstrap_module,
+        "_resolve_profile_executable",
+        lambda executable, _home: Path("/usr/bin") / executable,
     )
 
     config = load_config(_config_file(home, paths))
