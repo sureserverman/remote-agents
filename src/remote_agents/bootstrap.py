@@ -657,6 +657,51 @@ class LocalRuntime:
     gateway: TmuxGateway
 
 
+#: The variables a managed pane inherits from whatever composed the runtime.
+#:
+#: Deliberately tiny: the agent is launched through `os.execvpe`, which *replaces* the
+#: environment rather than adding to it, so this tuple is the whole world the process gets.
+_INHERITED_ENVIRONMENT = ("HOME", "LANG", "LC_ALL", "PATH", "TERM", "COLORTERM")
+
+#: What `TERM` becomes when the composing process has none, and the values that count as none.
+#:
+#: `execvpe` replacing the environment is also why tmux's own `default-terminal` never reaches
+#: the agent: tmux sets `TERM` for the shell it spawns, the fixed runner then execs over it
+#: with exactly the mapping above, and whatever tmux set is gone. So the value here is the
+#: only `TERM` an agent ever sees.
+#:
+#: The bot is a **systemd user service**, and a systemd service has no controlling terminal
+#: and therefore no `TERM`. The local surface is a TUI and always has one. That single
+#: difference is why a session launched from the bot rendered in white while the identical
+#: session launched from the TUI rendered in colour: with `TERM` absent, every agent CLI's
+#: colour detection (`supports-color`, and the equivalents in the Rust and Go CLIs) reports no
+#: capability and falls back to monochrome. Verified against the stored launch intents on this
+#: host — bot-launched intents carried no `TERM` key at all, TUI-launched ones carried
+#: `xterm-256color` — rather than inferred from the symptom.
+#:
+#: `xterm-256color` because it is the entry the TUI-launched panes were already proving works,
+#: and because it is present in the base terminfo database of every platform this project
+#: supports. `dumb` is treated as absent for the same reason it exists: it is the value a
+#: process announces when it knows nothing about its terminal, and a pane on this socket
+#: always has one.
+_DEFAULT_TERM = "xterm-256color"
+_COLOURLESS_TERMS = frozenset({"", "dumb", "unknown"})
+
+
+def _curated_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Return the launch environment every managed pane gets, with a usable `TERM` guaranteed.
+
+    `COLORTERM` is inherited but never invented: it is the terminal's own claim about truecolour
+    support, and a composing process that has one is passing on something it was told. Asserting
+    it on behalf of a service that has no terminal would be this function guessing at a
+    capability instead of supplying a missing default.
+    """
+    environment = {name: source[name] for name in _INHERITED_ENVIRONMENT if name in source}
+    if environment.get("TERM", "").strip().lower() in _COLOURLESS_TERMS:
+        environment["TERM"] = _DEFAULT_TERM
+    return environment
+
+
 def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
     """Compose the one tmux terminal and profile probe that every surface shares."""
     definitions = closed_profiles()
@@ -673,11 +718,7 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
     }
     profile_factories = {}
     resume_profile_factories = {}
-    allowed_environment = {
-        name: os.environ[name]
-        for name in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
-        if name in os.environ
-    }
+    allowed_environment = _curated_environment(os.environ)
     profile_directories = sorted(
         {str(executable.parent) for executable in executables.values() if executable is not None}
     )
