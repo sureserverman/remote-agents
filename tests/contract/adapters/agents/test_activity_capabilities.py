@@ -15,4 +15,3 @@ def test_codex_is_hybrid_until_its_hook_reports() -> None:
 def test_other_curated_profiles_remain_quiet_only() -> None:
     assert activity_source_for("opencode") is ActivitySource.QUIET_ONLY
     assert activity_source_for("cursor-agent") is ActivitySource.QUIET_ONLY
-
