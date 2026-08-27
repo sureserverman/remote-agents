@@ -208,6 +208,22 @@ from. An action that makes you wait, such as a launch or a stop that polls a pan
 replaces the screen with what it is waiting for and drops the keyboard until it finishes, so a
 press cannot be repeated into a second launch.
 
+A session's detail also reports what its agent has spent: the context window it is currently
+carrying, and how much of the plan's rate-limit windows has gone. Both are read from the working
+files the provider itself writes — nothing is asked of the agent, and nothing leaves the host.
+The providers publish very different amounts, and the screen says which case it is in rather
+than filling a gap: codex reports its context against a stated window and both its rate limits;
+claude reports its context as a bare count, since a transcript records what a turn used and
+never the ceiling it used it out of; cursor-agent reports neither and the row says so. Claude's
+rate limits are the one figure that is not the session's own — Claude Code hands them to a
+status-line command and never writes them down, so they are read from the status-line cache when
+one is fresh, and the line says where they came from. A rate-limit window whose reset has already
+passed is dropped rather than shown, because the window it counted against has since reopened.
+
+Every keyboard is widened to one floor, so screens do not alternate between a narrow box and a
+full-width one as you move between them. The padding sits on the navigation bar and is invisible;
+no button label changes.
+
 Inspect shows safely escaped terminal text inline when it fits, over a `Back` to the session it
 came from. Oversized output is sent as an unforwardable UTF-8 `session-output.txt` attachment; it
 is read-only captured output, never an input channel.
@@ -521,5 +537,14 @@ state. A missing executable is `BLOCKED`; one blocked profile does not affect th
 The full doctor command reads only the private credential-file boundary, not its values. It
 reports the core registry, SQLite store, fixed tmux command, active user service, Telegram
 credential-file boundary, and every profile together; `healthy` is true only when all are ready.
+
+A launched pane gets a small, fixed environment — `HOME`, `LANG`, `LC_ALL`, `PATH`, `TERM`,
+`COLORTERM` and nothing else — because the fixed runner `exec`s the agent with exactly that
+mapping rather than adding to what it inherited. `TERM` is guaranteed rather than merely passed
+through: the daemon has no controlling terminal and so no `TERM` of its own, and an agent handed
+no `TERM` renders monochrome, which is why a session launched from Telegram used to look
+different from the identical session launched from the local surface. Absent or `dumb`, it
+becomes `xterm-256color`. `COLORTERM` is passed on when the launching process has one and never
+invented, since a truecolour claim is the terminal's to make.
 
 See [the compatibility matrix and dedicated-socket recovery commands](docs/profile-compatibility.md).
