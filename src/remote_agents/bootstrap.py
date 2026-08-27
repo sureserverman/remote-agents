@@ -20,6 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from remote_agents import __version__
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
 from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
@@ -104,6 +105,12 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand, ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
+from remote_agents.application.releases import (
+    is_release_tag,
+    newest_release,
+    release_status,
+    upgrade_available,
+)
 from remote_agents.application.services import SessionService
 from remote_agents.config import (
     TELEGRAM_SECRET_VARIABLES,
@@ -445,6 +452,14 @@ def main(
     onboard_parser.add_argument("--owner-user-id", type=_owner_id)
     onboard_parser.add_argument("--dev-root", type=Path)
     onboard_parser.add_argument("--owner-chat-id", type=_owner_id)
+    # `upgrade`, because `uv tool upgrade` cannot do it: the install pins an exact git rev, so
+    # uv re-resolves it to itself and reports `Nothing to upgrade` while doing nothing. The pin
+    # stays -- a daemon that moved whenever the default branch moved is worse -- so the verb it
+    # took away is supplied here instead.
+    upgrade_parser = subcommands.add_parser("upgrade")
+    upgrade_parser.add_argument("--version", type=str, default=None)
+    upgrade_parser.add_argument("--repository", type=str, default=DEFAULT_REPOSITORY)
+    upgrade_parser.add_argument("--check", action="store_true")
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
@@ -455,6 +470,8 @@ def main(
         # straight to that module without importing this one, and two copies of a path that
         # promises never to raise would eventually stop agreeing about how it does that.
         return spool_from_stdin(arguments.activity_dir)
+    if arguments.command == "upgrade":
+        return _run_upgrade(arguments)
     if arguments.command == "install-agent-hooks":
         # Wrapped below rather than at each call: `refuse_a_credential_shaped_value` raises
         # `ValueError`, and this branch already turns a `HookInstallError` into a printed line.
@@ -2033,6 +2050,158 @@ def _token_from_file(path: Path | None) -> str | None:
         raise ConfigError("--bot-token-file names no such file (the value is not shown)") from error
 
 
+#: Where an upgrade looks for releases, matching `scripts/install.sh`'s own default.
+#:
+#: Stated here as well as in the script because the two must agree and nothing else makes them:
+#: the script is not packaged into the wheel, so an installed copy cannot read it. A test pins
+#: that they match rather than trusting the comment.
+DEFAULT_REPOSITORY = "https://github.com/sureserverman/remote-agents"
+
+#: How long the release check may take before it is abandoned.
+#:
+#: `doctor` runs at the end of every `onboard`, including unattended ones on hosts with no route
+#: out, so this call must be incapable of hanging the one command an operator runs to find out
+#: whether their install worked. Three seconds is long enough for a `ls-remote` on a working
+#: connection and short enough that a dead one is a pause rather than a stall. Failure is always
+#: "unknown", never an error.
+_RELEASE_CHECK_TIMEOUT = 3
+
+
+def _remote_release_tags(repository: str, timeout: int = _RELEASE_CHECK_TIMEOUT) -> tuple[str, ...]:
+    """Ask a remote which release tags it carries, answering empty on any failure.
+
+    `git ls-remote --tags` rather than a GitHub API call: it needs no token, no JSON parsing and
+    no vendor-specific endpoint, and it works against any mirror an operator points
+    `REMOTE_AGENTS_REPOSITORY` at. The `^{}` peeled refs annotated tags produce are left in --
+    `newest_release` drops everything it cannot parse, so filtering twice would be two places to
+    keep in step.
+    """
+    if shutil.which("git") is None:
+        return ()
+    try:
+        completed = subprocess.run(
+            ("git", "ls-remote", "--tags", repository),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if completed.returncode != 0:
+        return ()
+    return tuple(
+        line.rsplit("/", 1)[-1] for line in completed.stdout.splitlines() if "refs/tags/" in line
+    )
+
+
+def _release_state(repository: str = DEFAULT_REPOSITORY) -> dict[str, object]:
+    """What `doctor` prints about this install's version against the newest published one."""
+    tags = _remote_release_tags(repository)
+    latest = newest_release(tags)
+    return release_status(
+        __version__, latest, None if latest is not None else "release_list_unavailable"
+    )
+
+
+def _run_upgrade(arguments) -> int:
+    """Re-install this tool at a newer pinned tag, then let the daemon pick it up.
+
+    **This is the verb the pin took away.** `uv tool upgrade` re-resolves the requirement the
+    install recorded, and that requirement is an exact git rev, so it resolves to itself and
+    reports `Nothing to upgrade` having done nothing -- correct behaviour, exit 0, and
+    indistinguishable to a reader from being up to date. The pin is worth keeping: an install
+    that moved whenever the default branch moved would be a credential-holding daemon changing
+    under a host with live agent sessions on it. What was not worth keeping was having no
+    command that does the obvious thing.
+
+    The safety properties of `scripts/install.sh` are preserved rather than re-derived: the
+    target must be tag-shaped (`is_release_tag`, which is that script's `v[0-9]*` rule stated
+    exactly), the repository and version are printed before anything is installed, and the
+    install itself is the same `uv tool install` invocation. What is deliberately *not* carried
+    over is the script's uv bootstrap, because reaching this command means uv already installed
+    this tool.
+
+    `--check` reports and changes nothing, which is what makes this safe to run from a habit.
+    """
+    repository = arguments.repository
+    if arguments.version is not None:
+        target = arguments.version
+        if not is_release_tag(target):
+            print(
+                f"'{target}' is not a release tag. This tool installs from pinned tags "
+                "so that two hosts bootstrapped an hour apart run the same code.",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        latest = newest_release(_remote_release_tags(repository, timeout=15))
+        if latest is None:
+            print(
+                f"could not read the release tags of {repository}. "
+                "Pass --version to name one explicitly.",
+                file=sys.stderr,
+            )
+            return 1
+        target = latest
+
+    print(f"installed: {__version__}")
+    print(f"newest:    {target}")
+    if not upgrade_available(__version__, target) and arguments.version is None:
+        print("already up to date.")
+        return 0
+    if arguments.check:
+        print("an upgrade is available; re-run without --check to take it.")
+        return 0
+
+    print(f"Installing remote-agents {target} from {repository}")
+    installed = _run_command(
+        (
+            "uv",
+            "tool",
+            "install",
+            "--managed-python",
+            "--force",
+            f"remote-agents @ git+{repository}@{target}",
+        )
+    )
+    if installed != 0:
+        print("the install failed; the daemon has not been touched.", file=sys.stderr)
+        return 1
+    # The daemon is registered against a path, and an upgrade that relocates the executable
+    # leaves the old one named in the unit. Re-running onboarding is what rewrites it, and it is
+    # idempotent when nothing moved -- the same reason `scripts/install.sh` ends this way.
+    print("Re-registering the daemon so it picks up the new code...")
+    return _run_command((_installed_executable(), "onboard", "--install-daemon"))
+
+
+def _installed_executable() -> str:
+    """The console script uv just installed, asked of uv rather than assumed.
+
+    `sys.executable` is *this* process's interpreter, which is the copy being replaced. Asking uv
+    where the entry point landed is the same question `scripts/install.sh` answers with
+    `uv tool dir --bin`, and for the same reason: `~/.local/bin` is not on every login shell's
+    PATH and is absent from macOS's `_PATH_STDPATH` outright.
+    """
+    try:
+        completed = subprocess.run(
+            ("uv", "tool", "dir", "--bin"),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "remote-agents"
+    directory = completed.stdout.strip()
+    candidate = Path(directory) / "remote-agents" if directory else None
+    return str(candidate) if candidate is not None and candidate.is_file() else "remote-agents"
+
+
 def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> dict[str, object]:
     """Build the installed service's health report -- the one `doctor` prints, for both callers.
 
@@ -2069,6 +2238,7 @@ def _doctor_report(paths: ProductionPaths, config, drift: dict[str, object]) -> 
         platform=_host_platform(),
         supervisor_kind=supervisor.kind,
         liveness_meaning=supervisor.liveness_meaning,
+        release=_release_state(),
     )
 
 

@@ -93,11 +93,28 @@ curl -fsSL https://raw.githubusercontent.com/sureserverman/remote-agents/main/sc
 remote-agents onboard --install-daemon
 ```
 
-Asking `uv` to upgrade the tool is **not** the path: it honours the requirement the tool was
-installed with, and that requirement is a pinned tag — so it reports there is nothing to upgrade
-and exits 0, having done nothing. Changing the tag is what moves the install. The second command
-is what makes the daemon pick up the new code; re-running it is cheap and idempotent, and it is
-what rewrites the daemon definition on the upgrades that relocate the executable.
+Or, from an install that already exists, in one command:
+
+```bash
+remote-agents upgrade            # --check to look without taking it
+```
+
+It finds the newest release tag, installs it, and re-registers the daemon so the running service
+picks up the new code. `--version vX.Y.Z` names a tag explicitly, which is also how you roll back
+off a bad release.
+
+Asking `uv` to upgrade the tool is **not** the path, and this is the reason `remote-agents
+upgrade` exists. `uv tool upgrade` re-resolves the requirement the tool was installed with; that
+requirement is an exact git rev, so it resolves to itself and reports `Nothing to upgrade` having
+done nothing — correct behaviour, exit 0, and indistinguishable from being up to date. The pin is
+deliberate and stays: an install that moved whenever the default branch moved would be a
+credential-holding daemon changing under a host with live agent sessions on it. What the pin cost
+was a working upgrade verb, and that is supplied rather than the pin being given up.
+
+`doctor` reports the same comparison passively, under `release`, so falling behind is something
+you learn from the command you already run rather than by accident. It never affects `healthy`:
+being a release behind is a diagnostic, not ill health — the rule DEC-002 already sets for the
+agent CLIs' own versions.
 
 ### Uninstalling
 

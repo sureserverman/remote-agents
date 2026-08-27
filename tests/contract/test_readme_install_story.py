@@ -148,10 +148,20 @@ def test_the_install_section_carries_an_upgrade_path_that_does_something() -> No
     assert re.search(r"(?i)^###\s+Upgrad", section, re.MULTILINE), (
         "The install section has no upgrade heading."
     )
-    assert "uv tool upgrade" not in section, (
-        "The section points at `uv tool upgrade`, which prints 'Nothing to upgrade' and exits 0 "
-        "against a pinned git requirement. Upgrading means re-running the bootstrap at a newer "
-        "tag (DEC-057)."
+    # **In the commands, not in the prose.** The property is that the section never *instructs*
+    # an operator to run `uv tool upgrade`; explaining why it does not work is the opposite of
+    # pointing at it, and is worth saying out loud -- the command exits 0 having done nothing, so
+    # a reader who tries it concludes they are up to date. Asserting over the whole section
+    # forbade the explanation along with the instruction.
+    assert "uv tool upgrade" not in _code_blocks(section), (
+        "The section tells an operator to run `uv tool upgrade`, which prints 'Nothing to "
+        "upgrade' and exits 0 against a pinned git requirement. Upgrading means re-running the "
+        "bootstrap at a newer tag, or `remote-agents upgrade` (DEC-057)."
+    )
+    assert "remote-agents upgrade" in _code_blocks(section), (
+        "The section offers no in-place upgrade command, so the only documented path is piping "
+        "a fetched script to a shell -- which is exactly what an operator who has already "
+        "installed should not have to do again."
     )
     assert "onboard --install-daemon" in _code_blocks(section), (
         "The upgrade path does not re-run onboarding, so the daemon keeps executing the old "

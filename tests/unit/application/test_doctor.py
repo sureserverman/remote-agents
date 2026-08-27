@@ -240,3 +240,56 @@ def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() ->
     assert all(component["status"] == "healthy" for component in report["components"].values())
     assert report["healthy"] is False
     assert report["config"]["missing"] == ["activity_quiet_polls"]
+
+
+def _healthy_production(**overrides):
+    """A production report with every component green, so a test can vary exactly one thing."""
+    arguments = {
+        "core_ready": True,
+        "database_ready": True,
+        "tmux_ready": True,
+        "telegram_ready": True,
+        "service_ready": True,
+        "profiles": (ProfileCompatibility(ProfileId("claude"), True, "1.0", "AVAILABLE", None),),
+        "registered_projects": 1,
+        "discovered_projects": 1,
+        "catalogue_projects": 1,
+    }
+    return production_doctor(**(arguments | overrides))
+
+
+def test_being_a_release_behind_is_reported_and_is_not_ill_health() -> None:
+    """DEC-002's rule about agent CLI versions, applied to this tool's own.
+
+    The report is what an operator runs to decide whether to trust a deploy. An out-of-date
+    install is worth *saying* -- this host ran three versions behind for weeks and found out by
+    accident -- and it is not a reason to call a working service unhealthy.
+    """
+    report = _healthy_production(
+        release={"installed": "0.23.0", "latest": "v0.24.0", "newer_available": True}
+    )
+
+    assert report["healthy"] is True
+    assert report["release"]["newer_available"] is True
+
+
+def test_the_release_block_sits_outside_components_so_it_cannot_reach_the_verdict() -> None:
+    """`healthy` is computed from `components` alone, so where this lands *is* the guarantee."""
+    report = _healthy_production(release={"installed": "0.23.0", "latest": "v0.24.0"})
+
+    assert "release" not in report["components"]
+    assert "release" in report
+
+
+def test_a_host_that_could_not_check_for_releases_still_reports_healthy() -> None:
+    """An unattended install on a host with no route out must not fail its own closing report."""
+    report = _healthy_production(
+        release={"installed": "0.24.0", "latest": None, "reason": "release_list_unavailable"}
+    )
+
+    assert report["healthy"] is True
+
+
+def test_a_report_built_without_a_release_block_omits_it_entirely() -> None:
+    """Absent rather than null: every existing caller keeps the report it had."""
+    assert "release" not in _healthy_production()

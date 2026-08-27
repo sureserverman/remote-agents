@@ -106,6 +106,7 @@ def production_doctor(
     platform: dict[str, object] | None = None,
     supervisor_kind: SupervisorKind | None = None,
     liveness_meaning: LivenessMeaning | None = None,
+    release: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Render the installed service's non-secret dependency health report.
 
@@ -149,6 +150,17 @@ def production_doctor(
         "discovered": discovered_projects,
         "catalogue": catalogue_projects,
     }
+    # Reported beside `projects` and outside `components`, which is what keeps it out of the
+    # `healthy` verdict. Being a release behind is not ill health -- DEC-002 settled that for the
+    # agent CLIs' versions and the same answer holds for this tool's own. It is here so that
+    # falling behind is something an operator *passively* learns from the command they already
+    # run, rather than discovering by accident weeks later, which is how this host came to be
+    # running three versions behind its own checkout.
+    #
+    # Arrives as plain data for the reason `config_drift` does: finding out what the newest tag
+    # is means a network call, and ARCH-02 keeps this layer free of adapters. The caller gathers.
+    if release is not None:
+        report["release"] = release
     # Reported, deliberately not aggregated: nothing live depends on the console until the
     # console-surface plan's Stage 3 composes it, so an incapable tmux is worth naming to
     # the operator and not worth failing an otherwise healthy deploy over. The stage that
