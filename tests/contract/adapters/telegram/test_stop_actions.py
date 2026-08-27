@@ -14,6 +14,7 @@ from stop_results import (
 )
 
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
+from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.project_catalog import CatalogProject
@@ -382,7 +383,11 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     assert reply["text"].startswith("That session moved on before this could run")
     assert "Open the list again" not in reply["text"]
     assert "Sessions 1/1" in reply["text"]
-    labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+    labels = [
+        unpadded(button.text)
+        for row in reply["reply_markup"].inline_keyboard
+        for button in row
+    ]
     assert "Back" not in labels
 
 
@@ -407,7 +412,10 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
 
     assert "Force stop" in reply["text"]
     assert "cannot be undone" in reply["text"]
-    rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
+    rows = [
+        [unpadded(button.text) for button in row]
+        for row in reply["reply_markup"].inline_keyboard
+    ]
     assert rows[0] == ["Force stop"]
     assert rows[1] == ["Cancel"]
 
@@ -441,7 +449,11 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     assert launcher.stopped == ["graceful"], "the repeat was dropped, not serviced twice"
     assert first["text"].startswith("Stopped ")
     assert second["text"].startswith("That action has already run.")
-    labels = [button.text for row in second["reply_markup"].inline_keyboard for button in row]
+    labels = [
+        unpadded(button.text)
+        for row in second["reply_markup"].inline_keyboard
+        for button in row
+    ]
     # The list's own keyboard, not a lone dead end. Asserted by the empty list's own Launch
     # row rather than by the footer, which since the navigation bar reads the same three
     # destinations on every screen alike -- a signature that cannot distinguish the list

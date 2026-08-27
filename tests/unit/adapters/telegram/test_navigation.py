@@ -18,6 +18,7 @@ from backends import SessionUseCaseDouble, backend_for
 from fake_telegram import FakeChat
 
 from remote_agents.adapters.telegram.notifications import render_activity
+from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.notification_policy import SessionGroup
@@ -141,7 +142,9 @@ def _boundary(*, with_resume: bool = True) -> PrivateBotBoundary:
 
 
 def _rows(message) -> list[list[str]]:
-    return [[button.text for button in row] for row in message.reply_markup.inline_keyboard]
+    return [
+        [unpadded(button.text) for button in row] for row in message.reply_markup.inline_keyboard
+    ]
 
 
 def _button(message, label: str) -> str:
@@ -156,10 +159,10 @@ def _button(message, label: str) -> str:
     # and the bar's "Launch" would otherwise answer "Launch" with the body button, and the
     # test would pass having pressed the wrong thing.
     for button in buttons:
-        if button.text.removeprefix("• ") == label:
+        if unpadded(button.text).removeprefix("• ") == label:
             return button.callback_data
     for button in buttons:
-        if button.text.removeprefix("• ").startswith(label):
+        if unpadded(button.text).removeprefix("• ").startswith(label):
             return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 

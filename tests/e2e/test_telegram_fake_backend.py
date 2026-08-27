@@ -21,6 +21,7 @@ from remote_agents.adapters.sqlite.chat_view_store import SQLiteChatViewStore
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.telegram.callbacks import CallbackStateStore
 from remote_agents.adapters.telegram.inspection import inspect_capture
+from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.adapters.telegram.stops import StopController
 from remote_agents.application.errors import SessionNotFoundError
@@ -262,7 +263,9 @@ async def test_rename_applies_the_new_name_and_redraws_the_detail() -> None:
     assert launcher.renames == ["release review"], "collapsed whitespace, one call"
     assert "release review" in chat.messages[anchor].text
     assert "Rename" in [
-        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
     ], "it lands back on the session's own menu"
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == [], "the answer is consumed, not kept"
@@ -295,7 +298,9 @@ async def test_rename_skipped_leaves_the_session_exactly_as_it_was() -> None:
 
     assert launcher.renames == [], "Skip must not reach the store at all"
     assert "Rename" in [
-        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
     ]
     assert len(chat.bot_messages) == 1, chat.transcript()
     assert chat.owner_messages == []
@@ -348,10 +353,10 @@ def _button(message, label: str) -> str:
     # precisely the case it is being pressed from.
     buttons = [button for row in message.reply_markup.inline_keyboard for button in row]
     for button in buttons:
-        if button.text.removeprefix("• ") == label:
+        if unpadded(button.text).removeprefix("• ") == label:
             return button.callback_data
     for button in buttons:
-        if button.text.removeprefix("• ").startswith(label):
+        if unpadded(button.text).removeprefix("• ").startswith(label):
             return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
@@ -660,7 +665,9 @@ async def test_a_session_waiting_on_folder_trust_is_offered_the_answer() -> None
     anchor = await _open_detail(chat, boundary)
 
     labels = [
-        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
     ]
     assert "Trust this project" in labels, labels
 
@@ -692,7 +699,9 @@ async def test_a_session_not_waiting_on_trust_is_offered_no_such_row() -> None:
     anchor = await _open_detail(chat, boundary)
 
     labels = [
-        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
     ]
     assert "Trust this project" not in labels, labels
 
@@ -774,7 +783,9 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
     screen = chat.messages[anchor]
     assert screen.text.startswith("That action did not complete")
     assert "Sessions 1/1" in screen.text, "it landed on the list, not on a dead end"
-    labels = [button.text for row in screen.reply_markup.inline_keyboard for button in row]
+    labels = [
+        unpadded(button.text) for row in screen.reply_markup.inline_keyboard for button in row
+    ]
     assert "Back" not in labels
     assert len(chat.bot_messages) == 1, chat.transcript()
 
@@ -815,7 +826,9 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
     assert screen.text.startswith("That action did not complete")
     assert "Open it again" not in screen.text
     assert "Sessions 1/1" in screen.text, "it landed on the list, which still holds the session"
-    labels = [button.text for row in screen.reply_markup.inline_keyboard for button in row]
+    labels = [
+        unpadded(button.text) for row in screen.reply_markup.inline_keyboard for button in row
+    ]
     assert "Back" not in labels
     assert len(chat.bot_messages) == 1, chat.transcript()
 
@@ -1249,7 +1262,9 @@ async def test_the_notification_button_opens_the_session_and_consumes_the_notifi
     anchor = boundary.view.anchor()
     assert "Demo · Claude · regular · #1" in chat.messages[anchor].text
     assert "Rename" in [
-        button.text for row in chat.messages[anchor].reply_markup.inline_keyboard for button in row
+        unpadded(button.text)
+        for row in chat.messages[anchor].reply_markup.inline_keyboard
+        for button in row
     ], "the press opened the session detail, not some other screen"
     assert notification not in chat.messages, chat.transcript()
     assert len(chat.bot_messages) == 1, chat.transcript()
@@ -1331,7 +1346,7 @@ async def test_the_menu_stays_at_the_bottom_as_one_session_keeps_reporting() -> 
         "one sentence, however many turns said it"
     )
     assert any(
-        button.text == "Open session"
+        unpadded(button.text) == "Open session"
         for row in notification.reply_markup.inline_keyboard
         for button in row
     ), "an amendment that drops the keyboard leaves nothing to press"

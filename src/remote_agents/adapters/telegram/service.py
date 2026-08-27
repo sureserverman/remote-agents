@@ -46,6 +46,7 @@ from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
     render_message,
+    uniform_keyboard,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.application.backend import Backend
@@ -2476,13 +2477,16 @@ def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
     return {
         "text": message.text,
         "parse_mode": ParseMode.HTML,
+        # `uniform_keyboard` and not `message.keyboard`: the floor is presentation, applied at
+        # the boundary where a typed screen becomes Telegram's own types, so no screen builder
+        # has to remember it and no test of a screen's *content* is reading padding.
         "reply_markup": InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(button.text, callback_data=button.callback_data)
                     for button in row
                 ]
-                for row in message.keyboard
+                for row in uniform_keyboard(message.keyboard)
             ]
         ),
     }
