@@ -1656,6 +1656,9 @@ async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> Non
         def __init__(self) -> None:
             self.passes = 0
 
+        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
+            assert session_ids == ()
+
         async def poll(self):
             self.passes += 1
             return (
@@ -1764,6 +1767,9 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
     boundary, bot = _notified(record)
 
     class _QuietWatcher:
+        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
+            assert session_ids == ()
+
         async def poll(self):
             return (
                 AgentActivity(
