@@ -41,7 +41,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Collection, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -51,10 +51,11 @@ from uuid import uuid4
 
 from remote_agents.domain.models import SessionId, SessionState
 from remote_agents.ports.agent_activity import (
-    HOOK_SOURCED_PROFILES,
     ActivityConfidence,
     ActivityKind,
+    ActivitySource,
     AgentActivity,
+    activity_source_for,
     bounded_detail_line,
 )
 from remote_agents.ports.session_identity import safe_session_id
@@ -423,11 +424,30 @@ class PaneQuietWatcher:
         self._now = now
         self._watches: dict[str, QuietWatch] = {}
 
+    def mark_reported(self, session_ids: Collection[str]) -> None:
+        """Suppress quiet inference for the current spell of each reported hybrid session.
+
+        This state is intentionally in-memory and only applies to watches that already have a
+        baseline. A restart therefore starts with a baseline rather than inventing a quiet
+        report, while a later pane change re-arms inference through `observe_quiet`.
+        """
+        for session_id in session_ids:
+            watch = self._watches.get(session_id)
+            if watch is not None:
+                self._watches[session_id] = QuietWatch(
+                    watch.digest,
+                    watch.unchanged_polls,
+                    seen_a_change=watch.seen_a_change,
+                    already_reported=True,
+                )
+
     async def poll(self) -> tuple[AgentActivity, ...]:
-        """Take one look at every running session that has no hook to speak for it."""
+        """Take one look at every running session with quiet fallback evidence."""
         records = await self._store.list((SessionState.RUNNING,))
         watched = [
-            record for record in records if str(record.profile_id) not in HOOK_SOURCED_PROFILES
+            record
+            for record in records
+            if activity_source_for(str(record.profile_id)) is not ActivitySource.HOOK_EXCLUSIVE
         ]
         # Sessions that have gone away keep no state. Without this the map grows for the life
         # of the service, one entry per session ever launched.
