@@ -88,6 +88,33 @@ class ActivityConfidence(Enum):
     INFERRED = "inferred"
 
 
+class ActivitySource(Enum):
+    """How a provider contributes activity observations.
+
+    This is deliberately provider capability rather than installer state. Codex hooks can be
+    disabled or awaiting trust, so a hybrid source retains pane quiet as a fallback until the
+    provider actually reports. A hook-exclusive source has a stable, already-qualified hook path
+    and is never pane-watched, preventing a fact and a guess about the same quiet spell.
+    """
+
+    HOOK_EXCLUSIVE = "hook_exclusive"
+    HYBRID = "hybrid"
+    QUIET_ONLY = "quiet_only"
+
+
+_HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote"})
+_HYBRID_PROFILES = frozenset({"codex"})
+
+
+def activity_source_for(profile_id: str) -> ActivitySource:
+    """Return the evidence policy for one curated provider profile."""
+    if profile_id in _HOOK_EXCLUSIVE_PROFILES:
+        return ActivitySource.HOOK_EXCLUSIVE
+    if profile_id in _HYBRID_PROFILES:
+        return ActivitySource.HYBRID
+    return ActivitySource.QUIET_ONLY
+
+
 @dataclass(frozen=True, slots=True)
 class AgentActivity:
     """One observation about one session, bounded and ready to render."""
@@ -99,13 +126,13 @@ class AgentActivity:
     confidence: ActivityConfidence = ActivityConfidence.REPORTED
 
 
-HOOK_SOURCED_PROFILES = frozenset({"claude", "claude-remote"})
+HOOK_SOURCED_PROFILES = _HOOK_EXCLUSIVE_PROFILES
 """The profiles whose own hooks report what they are doing.
 
-Everything else -- codex, opencode, cursor-agent -- has no hook system, so the only evidence
-available about it is its pane. The distinction lives here rather than in `domain/profiles.py`
-because it is a fact about where *activity* comes from, not about how a profile launches, and
-a profile gaining a hook system upstream changes this line and nothing else.
+Codex is intentionally not in this compatibility constant yet: it is a hybrid source, whose
+hook may be absent, disabled, or awaiting the owner's trust review. `activity_source_for` is the
+complete provider contract; the application layer uses its hybrid branch to keep pane quiet as a
+fallback while suppressing it after a reported event.
 
 It is a subtraction, not an optimization: a session that reports its own Stop and is *also*
 watched for pane quiet tells the owner the same thing twice, in two different wordings, one of
