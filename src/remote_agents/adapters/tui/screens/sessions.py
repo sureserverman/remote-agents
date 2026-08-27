@@ -35,7 +35,9 @@ from remote_agents.adapters.tui.screens.validation import LabelWithinBound
 from remote_agents.application.captures import render_capture
 from remote_agents.application.session_actions import (
     ACTION_LABELS,
+    CLEANUP,
     FORCE,
+    GRACEFUL,
     REMOTE_CONTROL_LABELS,
     available_actions,
     explain_state,
@@ -119,44 +121,66 @@ class OpeningAction(Message):
 #: That chain asks before `force` and before either Remote Control direction, and does **not**
 #: ask before Stop and close or Clean up. Stated precisely rather than as "the same
 #: confirmations a row gets", which was the first version of this comment and was the sentence
-#: a later reader would have used to conclude this path was already safe for all six. It is the
-#: reason `UNCONFIRMED_MUTATING_ACTIONS` below exists.
+#: a later reader would have used to conclude this path was already safe for all six.
+#:
+#: **`s` and `c` carry those two unconfirmed actions, and that is DEC-052 amended rather than
+#: ignored.** The original decision banned them at import, on two premises. The first still
+#: holds and is untouched: DEC-018 says graceful stop and cleanup are not confirmed on either
+#: surface, so these keys do not ask and the bot is not changed. The second was the load-
+#: bearing one — this list restores its cursor *by key* every ten seconds and fell back to row
+#: 0 when the key had gone, so a session ending between ticks moved the cursor onto a
+#: different session in silence, and one keypress there would have stopped an agent the owner
+#: never selected. That fallback is gone: `_draw_listing` now rests the cursor on *nothing*
+#: when the row it was holding disappears, which was DEC-052's own rejected alternative 3 and
+#: which it called "a genuine improvement". A key cannot act on a row the owner did not put
+#: the cursor on, because after such a refresh there is no row under the cursor at all.
+#:
+#: What is left is the residual DEC-052 named and DEC-018 already accepted: one keypress, on a
+#: row the owner *is* looking at, irreversible and unasked. That is the owner's standing trade
+#: for graceful stop everywhere else on both surfaces, not a new one taken here.
+#:
+#: The fourth field is the word the status line has room for, and it is not the action id.
+#: `graceful` is the lifecycle's name for the action; "Stop and close" is the owner's, and
+#: `session_actions.ACTION_LABELS` is emphatic that the second is what a surface shows. A
+#: status reading "s graceful" would put the mechanism back on screen in the one place the
+#: label was written to keep it off. `stop` and `clean` are those labels at status-line width.
 #:
 #: No trust key, deliberately (DEC-047): this surface answers the trust question in the pane
 #: the console exchanges in, so it has no trust row and must not grow a trust key either.
-SESSION_ACTION_KEYS: tuple[tuple[str, str, str], ...] = (
-    ("a", "attach", "Copy attach"),
-    ("i", "inspect", "Inspect output"),
-    ("r", "rename", "Rename"),
-    ("f", FORCE, ACTION_LABELS[FORCE]),
+SESSION_ACTION_KEYS: tuple[tuple[str, str, str, str], ...] = (
+    ("a", "attach", "Copy attach", "attach"),
+    ("i", "inspect", "Inspect output", "inspect"),
+    ("r", "rename", "Rename", "rename"),
+    ("s", GRACEFUL, ACTION_LABELS[GRACEFUL], "stop"),
+    ("c", CLEANUP, ACTION_LABELS[CLEANUP], "clean"),
+    ("f", FORCE, ACTION_LABELS[FORCE], "force"),
 )
 
-#: The actions a key must never carry: exactly the branch of `SessionDetailScreen.choose` that
-#: reaches `tui.stop` **without asking** -- `key in ACTION_LABELS and key != FORCE`, which today
-#: is Stop and close, and Clean up. Derived from that condition rather than listing the two, so
-#: a third unconfirmed action added to the policy is excluded here the day it appears.
+#: The actions a key carries **without asking**: exactly the branch of
+#: `SessionDetailScreen.choose` that reaches `tui.stop` with no modal in between --
+#: `key in ACTION_LABELS and key != FORCE`, which today is Stop and close, and Clean up.
+#: Derived from that condition rather than listing the two, so a third unconfirmed action added
+#: to the policy is described here the day it appears.
 #:
-#: **The plan proposed `s` and `c` for these, and they are deliberately not bound.** Recorded
-#: as DEC-052, because this is now the standing rule for every future key on this surface and
-#: the inference it rests on is not written in DEC-018 itself. Two decisions close off every
-#: way to do it safely:
-#:
-#: - DEC-018 -- "neither surface gains a confirmation for graceful stop or for cleanup",
-#:   applied "to both surfaces or neither". So the key cannot ask.
-#: - DEC-007 -- every screen rests its cursor on a non-mutating entry. So the key cannot open
-#:   the detail with the stop row under the cursor either.
-#:
-#: What made DEC-018's accepted cost -- "an owner who stops the wrong session loses that output
-#: with no second chance" -- tolerable was that reaching those rows took two deliberate,
-#: human-paced keypresses: Enter to open the detail, then Enter on a row the owner could see.
-#: A key collapses that to one, and this list auto-refreshes every ten seconds restoring the
-#: cursor *by key* -- so a session that ends between ticks drops its row and the cursor falls
-#: to row 0, a different session, silently. Pressed at that moment, an auto-dispatched `s`
-#: would gracefully stop a live agent the owner never selected, with nothing asked and nothing
-#: recoverable. Found by this task's Tier-1 review.
-#:
-#: `d` still reaches them in two keypresses, which is what it did before this task.
+#: This set used to be a *ban list*, enforced by a `raise` a few lines below: DEC-052 held that
+#: no key could carry an unconfirmed mutating action at all. The ban is lifted and the set
+#: kept, because what it names is still the thing that needs guarding -- it is now the reason
+#: `_draw_listing` may not fall back to row 0, rather than the reason `s` and `c` may not
+#: exist. See `SESSION_ACTION_KEYS` for the amendment and the premise that changed, and
+#: `_draw_listing` for the mitigation that replaced the ban.
 UNCONFIRMED_MUTATING_ACTIONS = frozenset(ACTION_LABELS) - {FORCE}
+
+#: Whether `_draw_listing` leaves the cursor on nothing when the row it was holding has gone,
+#: instead of falling back to row 0.
+#:
+#: A constant rather than something inferred, because the thing it describes is a branch in a
+#: method and no import-time check can read one. It is set beside that branch's own module and
+#: asserted against the real behaviour by
+#: `test_a_vanished_row_leaves_the_cursor_on_nothing`, so a reader who edits `_draw_listing`
+#: and forgets this flag is caught by a test, and a reader who flips this flag without editing
+#: `_draw_listing` is caught by the same one. What the flag buys that the test cannot is the
+#: import-time refusal below, which fires before a surface with live stop keys can start.
+_CLEARS_VANISHED_CURSOR = True
 
 #: The Remote Control key, kept out of the table above because it is the one key whose action
 #: is not known until the record is read -- see `action_row_remote_control`.
@@ -167,18 +191,27 @@ _REMOTE_CONTROL_KEY = "m"
 #: first, so a literal in each would be two strings to keep agreeing -- the shape
 #: `remote_control_entries` above already exists to avoid.
 #:
-#: Short words on purpose. The full labels ran the pane's status past what `#status` can show
-#: at 60 columns, where it clips with no ellipsis at all rather than eliding -- worse than the
-#: truncation this region was hardened against once already.
+#: Short words on purpose, and from the table's fourth field rather than from its action ids:
+#: the full labels ran the pane's status past what `#status` can show at 60 columns, where it
+#: clips with no ellipsis at all rather than eliding -- worse than the truncation this region
+#: was hardened against once already.
 #:
-#: **A sixth key would have to earn its columns, and a test says so rather than this comment.**
-#: `test_the_status_line_names_the_keys_and_is_not_truncated` renders the real status at 100,
-#: 80 and 60 and asserts every key survives -- 60 being the floor `app.py`'s own budget comment
-#: commits to. Measured today: 100 characters on the full position and 112 on the pane, against
-#: a two-row 60-column budget of 120. Grow this table and that test fails at 60 first.
+#: **A further key would have to earn its columns, and a test says so rather than this
+#: comment.** `test_the_status_line_names_the_keys_and_is_not_truncated` renders the real
+#: status at 100, 80 and 60 and asserts every key survives -- 60 being the floor `app.py`'s own
+#: budget comment commits to.
+#:
+#: Adding `s` and `c` is what exhausted the old budget, and the row this line is drawn in grew
+#: rather than the sentence being trimmed to fit. Measured at 60 columns: two rows hold about
+#: 114 characters and drop the rest **silently**, which is how the previous 112-character pane
+#: status was one key away from losing "m remote" with nothing on screen to say so. The
+#: sessions positions now take a three-row `#status` (`app.py`'s CSS, scoped by type selector
+#: to `SessionsScreen` and so to its pane subclass), which holds about 171. Seven row keys plus
+#: the two navigation keys plus the count do not fit in two rows at 60 in any wording; that was
+#: measured before the CSS was touched, not assumed.
 _ROW_KEY_SUMMARY = " · ".join(
     [
-        *(f"{key} {action}" for key, action, _label in SESSION_ACTION_KEYS),
+        *(f"{key} {word}" for key, _action, _label, word in SESSION_ACTION_KEYS),
         f"{_REMOTE_CONTROL_KEY} remote",
     ]
 )
@@ -197,30 +230,38 @@ SESSION_ACTION_BINDINGS = [
     # for. Task 4.3 is what keeps the hidden ones honest.
     *(
         Binding(key, f"row_action('{action}')", label, show=False)
-        for key, action, label in SESSION_ACTION_KEYS
+        for key, action, label, _word in SESSION_ACTION_KEYS
     ),
     Binding(_REMOTE_CONTROL_KEY, "row_remote_control", "Claude Remote Control", show=False),
 ]
 
-# The invariant, enforced where it cannot be skipped. It was previously asserted only by a
-# test, and this codebase already has the better pattern for exactly this shape --
-# `ChoiceScreen.__init_subclass__` raises at class-definition time rather than trusting a test
-# to be run. The failure this guards is not hypothetical and not small: re-adding `s` here to
-# "finish the job the plan proposed" would put an unconfirmed graceful stop one keypress from
-# a list whose cursor moves under a 10-second refresh, and it would ship the moment someone
-# did not notice one red test.
-_bindable = {action for _key, action, _label in SESSION_ACTION_KEYS}
-if _bindable & UNCONFIRMED_MUTATING_ACTIONS:  # pragma: no cover - import-time invariant
-    raise RuntimeError(
-        "these keys would auto-perform an action the detail never asks about: "
+# The invariant that replaced DEC-052's ban, enforced where it cannot be skipped -- the same
+# `raise`-at-import pattern, now guarding the mitigation instead of the prohibition.
+#
+# An unconfirmed mutating key is safe only while a vanished cursor row rests on *nothing*: that
+# is the whole of the argument for lifting the ban, and it lives in `_draw_listing`, four
+# hundred lines away and in a method whose name says nothing about stop keys. Someone
+# "restoring DEC-007's resting cursor" there would silently re-open the hazard -- one keypress
+# stopping an agent the owner never selected -- and every test of the keys themselves would
+# still pass. So the two are tied together here: bind an unconfirmed mutating action and the
+# module refuses to import unless the fallback is gone.
+_bindable = {action for _key, action, _label, _word in SESSION_ACTION_KEYS}
+if _bindable & UNCONFIRMED_MUTATING_ACTIONS and not _CLEARS_VANISHED_CURSOR:
+    raise RuntimeError(  # pragma: no cover - import-time invariant
+        "these keys perform an action the detail never asks about: "
         f"{sorted(_bindable & UNCONFIRMED_MUTATING_ACTIONS)}. "
-        "DEC-018 forbids confirming them and DEC-007 forbids resting the cursor on them, so a "
-        "key cannot carry one safely; `d` reaches them in two keypresses."
+        "DEC-018 forbids confirming them, so the only thing making them safe is that "
+        "`_draw_listing` rests the cursor on nothing when the row it held has gone. "
+        "Restore that flag with the row-0 fallback, or drop these keys."
     )
 del _bindable
 
 #: The console key, kept off `SESSION_ACTION_BINDINGS` deliberately -- see
 #: `SessionsPaneScreen.BINDINGS`, which is the only position that offers it.
+#:
+#: `F12` is named beside it in the status line rather than here: the root key is tmux's and
+#: reaches the console from *inside a displayed agent*, which is the one place this screen's
+#: own bindings cannot be pressed at all.
 _SHOW_PROJECTS_BINDING = Binding("p", "show_projects_pane", "Projects", show=False)
 
 
@@ -327,7 +368,7 @@ class _SessionActionKeys:
             # `capture`), which is why it is a consistency fix rather than a defect repair.
             if parameters and parameters[0] == "inspect":
                 return self.services.backend.capture is not None
-            if parameters and parameters[0] == FORCE:
+            if parameters and parameters[0] in ACTION_LABELS:
                 # Mirrors the policy for the row under the cursor, which is what every other
                 # rule here does. `available_actions` returns nothing for STARTING and for an
                 # ORPHANED session whose provenance is not adopted, and both are *drawn* --
@@ -335,7 +376,14 @@ class _SessionActionKeys:
                 # offering, on a row the owner is looking at. Found by this plan's close-out
                 # evaluator. Attach and rename are deliberately not gated: they are not stop
                 # actions and the policy says nothing about them.
-                return self._policy_offers(highlighted, FORCE)
+                #
+                # Widened from `== FORCE` to the whole of `ACTION_LABELS` when `s` and `c`
+                # gained keys, and the widening is load-bearing rather than tidy. Those two
+                # are offered from exactly one state each -- graceful from RUNNING, cleanup
+                # from PRESERVED -- so an ungated key would be inert on most rows in the list,
+                # and inert is the one thing worse than absent here: it looks identical to a
+                # key that acted. Gated, `s` is simply not offered on a preserved row.
+                return self._policy_offers(highlighted, str(parameters[0]))
             return True
         if action == "row_remote_control":
             highlighted = self.highlighted_session()
@@ -462,7 +510,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     #: Class attributes rather than literals at the call site because the console's sessions
     #: *pane* means something different by Enter and has nowhere to escape to — and a status
     #: describing the other surface's keys is a false sentence, not a cosmetic one.
-    listing_status = "{count} managed session(s). Select one for detail, or " + _ROW_KEY_SUMMARY
+    listing_status = "{count} session(s). Enter opens the detail. " + _ROW_KEY_SUMMARY
     empty_status = "No managed sessions. Press escape to go back."
     # "…to return to the project list" until the console's panes existed. This screen is
     # pushed, so escape is always real here — but the position it returns to is the
@@ -685,12 +733,27 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # Restore by row *key*, not by index. A session that ended between two ticks shortens
         # the list above the cursor, so the index the owner was on now names a different
         # session — and this list's rows are the handles on the stop actions one screen
-        # deeper. A key that has gone falls back to row 0, which is the same non-mutating
-        # resting position every other fill uses (DEC-007).
+        # deeper, and since DEC-052 was amended they are the handles on two of those actions
+        # one *keypress* deeper.
+        #
+        # **A key that has gone rests the cursor on nothing, and that is what makes `s` and
+        # `c` safe to bind at all** (`_CLEARS_VANISHED_CURSOR`, which the import-time guard
+        # above reads). It used to fall back to row 0, on the argument that the cursor must
+        # always rest somewhere non-mutating (DEC-007) — but row 0 of a list that just lost a
+        # row is a *different session*, silently, on a ten-second timer nobody pressed. DEC-052
+        # named this as its central hazard and listed clearing the highlight as its rejected
+        # alternative 3, calling it "a genuine improvement" that did not on its own justify the
+        # keys; with the keys now bound it is the mitigation rather than an improvement.
+        #
+        # DEC-007 is honoured rather than traded away. Its rule is that a *resting* cursor is
+        # never on something that mutates, and no cursor at all satisfies that strictly: every
+        # row key returns early on `highlighted_session() is None`, and Enter reaches no row.
+        # One arrow press brings the cursor back, deliberately — the owner choosing a row again
+        # is exactly the deliberate act the vanished one can no longer stand in for.
         choices = self.query_one("#choices", OptionList)
         current = held_option_id(choices)
         keys = [key for key, _text in rows]
-        highlight = keys.index(current) if current in keys else 0
+        highlight = keys.index(current) if current in keys else None
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     async def choose(self, key: str) -> None:
@@ -737,9 +800,12 @@ class SessionsPaneScreen(SessionsScreen):
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
     listing_status = (
-        "{count} managed session(s). Enter opens one, d for its detail, or " + _ROW_KEY_SUMMARY
+        "{count} session(s). Enter opens, d detail, p projects (or F12). " + _ROW_KEY_SUMMARY
     )
-    empty_status = "No managed sessions on this host. Launching one starts it here."
+    empty_status = (
+        "No managed sessions on this host. Launching one starts it here. "
+        "p returns the projects pane (or F12 from inside an agent)."
+    )
     read_failure_route = "Ctrl+R re-reads this screen."
 
     BINDINGS = [

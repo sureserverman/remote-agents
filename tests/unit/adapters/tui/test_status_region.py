@@ -220,6 +220,12 @@ async def test_a_long_status_does_not_move_the_rows_beneath_it() -> None:
     # second row is there so one long logical line wraps instead of being cut; it is not a
     # licence for a second sentence, which `test_no_call_site_writes_a_multi_line_status` and
     # `set_status`'s own guard still refuse.
+    #
+    # Two is this app's general figure, not a universal one: the sessions positions take three,
+    # because they carry a whole keymap in this region and seven row keys do not fit in two rows
+    # at 60 columns. Fixed-height is what both have in common and is what this asserts; the
+    # exception is pinned by `test_the_sessions_status_is_three_fixed_rows`. This screen is the
+    # projects position, so the figure here is the general one.
     assert height == 2, f"the status region is {height} rows high, not 2"
 
 

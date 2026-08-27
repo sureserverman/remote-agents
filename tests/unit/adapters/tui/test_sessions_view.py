@@ -471,8 +471,24 @@ async def test_a_session_ending_above_the_cursor_does_not_shift_the_selection() 
     assert resting_id == chosen, "the cursor followed the index instead of the session"
 
 
-async def test_a_selection_that_ended_falls_back_to_the_first_row() -> None:
-    """DEC-007's resting rule: a fill always lands on a non-mutating entry, never nowhere."""
+async def test_a_vanished_row_leaves_the_cursor_on_nothing() -> None:
+    """The mitigation the whole of DEC-052's amendment rests on.
+
+    This used to assert the opposite -- `resting == 0`, on DEC-007's rule that a fill always
+    lands on a non-mutating entry and never nowhere. That was defensible while every mutating
+    action was two keypresses away behind `d`. It stopped being defensible when `s` and `c`
+    were bound: row 0 of a list that has just lost a row is a *different session*, chosen by a
+    ten-second timer rather than by the owner, and one keypress there gracefully stops a live
+    agent with nothing asked and nothing recoverable. DEC-052 named that as the hazard that
+    barred the keys, and listed this exact repair as its rejected alternative 3.
+
+    DEC-007 is honoured rather than traded: its rule is about where a *resting* cursor may
+    rest, and no cursor at all satisfies it strictly. The keys check `highlighted_session()`
+    and return early on None, which the assertions below drive rather than assume.
+
+    One arrow press brings the cursor back. That is the point -- the owner choosing a row
+    again is the deliberate act the vanished row can no longer stand in for.
+    """
     first, second = _record(), _record()
     launcher = _Listing((first, second))
     app = RemoteAgentsTui(_context(launcher))
@@ -487,9 +503,72 @@ async def test_a_selection_that_ended_falls_back_to_the_first_row() -> None:
         await app.screen._auto_reload()
         await pilot.pause()
         after = app.screen.query_one("#choices", OptionList)
-        resting = after.highlighted
+        assert after.highlighted is None, (
+            "the cursor was moved onto a session the owner never selected"
+        )
+        # Not merely undrawn: the keys ask this, and this is what refuses them.
+        assert app.screen.highlighted_session() is None
+        assert app.screen.check_action("row_action", ("graceful",)) is False
 
-    assert resting == 0
+        # Still focused, or the arrow press that restores the cursor would go nowhere.
+        assert after.has_focus, "the list stopped answering the keyboard"
+        await pilot.press("down")
+        await pilot.pause()
+        assert app.screen.highlighted_session() is not None, "the owner cannot get a cursor back"
+
+
+async def test_a_vanished_row_clears_the_cursor_even_on_an_unfocused_list() -> None:
+    """The mitigation may not depend on where the keyboard is.
+
+    `_draw_listing` passes `focus=choices.has_focus`, so an unfocused list takes the branch
+    that does not re-place the cursor -- and `clear_options` leaves `highlighted` set while
+    `validate_highlighted` clamps rather than rejects. A fill that skipped the clear because
+    the keyboard was elsewhere would therefore leave the old index pointing at whatever row now
+    sits there: the silent move, arrived at by the other road. Found by re-reading the branch
+    rather than by a failing test, which is why it is pinned here.
+    """
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 1
+        choices.blur()
+        await pilot.pause()
+        assert not choices.has_focus, "the list kept the keyboard, so this drives the wrong branch"
+
+        launcher.records = (first,)
+        await app.screen._auto_reload()
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+
+    assert after.highlighted is None, "an unfocused list kept a cursor on a vanished row"
+
+
+async def test_a_surviving_row_still_keeps_the_cursor_after_a_background_read() -> None:
+    """The other half, because a rule that only ever cleared would be indistinguishable from
+    a list that had simply stopped restoring anything -- and the restore is what
+    `test_a_session_ending_above_the_cursor_does_not_shift_the_selection` is about."""
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 1
+        chosen = choices.get_option_at_index(1).id
+
+        await app.screen._auto_reload()
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+
+    assert after.highlighted is not None, "a surviving row lost its cursor"
+    assert after.get_option_at_index(after.highlighted).id == chosen
 
 
 async def test_the_background_read_is_silent_about_a_failure_the_owner_did_not_ask_for() -> None:

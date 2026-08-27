@@ -325,9 +325,14 @@ tmux it prints the attach command instead.
 
 Opening a session **exchanges** it into the left pane: the agent's own pane moves there and
 the projects surface goes to live in that agent's window until it is swapped back, so the
-sessions list and the feed stay on screen beside the agent you are working in. Every stop,
-inspect, rename and Remote Control affordance is one `d` away on the sessions pane, which
-stays visible the whole time.
+sessions list and the feed stay on screen beside the agent you are working in. The whole
+detail is one `d` away on the sessions pane, which stays visible the whole time, and each of
+its actions also has a key of its own on the row — see *Keys on the sessions list* below.
+
+`p` on the sessions pane swaps the projects surface back into the left slot, which is the
+same exchange run backwards. It is a key inside our own process, so it works only while you
+are focused on that pane; `F12` below does the same thing from anywhere, including from
+inside a displayed agent.
 
 **Killing the console while an agent is displayed destroys that agent's process**, because
 its pane is physically in the console's window (DEC-040). With nothing displayed, killing the
@@ -417,7 +422,9 @@ The surface has three places to say something and each one says a different kind
 header carries a breadcrumb — `Projects › infra/existing › claude` — which is where
 you are and what you chose to get there. Below it is a single line of status: what to do here,
 or the result you still need, such as the attach command for a session that did not come up.
-It is exactly one line high, so the list beneath it never moves as a message changes. Anything
+It is exactly one *sentence*, and its region is a fixed height — two rows, or three on the
+sessions positions, which carry a whole keymap there — so the list beneath it never moves as a
+message changes. Anything
 that did not happen — a stop that raised, an agent that cannot be launched, a project the
 catalogue no longer has — is a notification in the corner instead, because it is about the
 action you just took rather than about the position you are standing on, which outlives it.
@@ -473,6 +480,28 @@ Enable and Disable a session offers is one answer both surfaces read rather than
 to agree. The stops share a single row under the read-only actions, which each get a row
 of their own: Telegram has no separator, so shape is the only thing distinguishing an action that
 ends a session from one that reads it.
+
+#### Keys on the sessions list
+
+Every action the detail offers also has a single key on the highlighted row, on both the full
+sessions screen and the console's sessions pane: `a` Copy attach, `i` Inspect output, `r`
+Rename, `s` Stop and close, `c` Clean up, `f` Force stop, `m` Claude Remote Control. `d` opens
+the detail itself, and on the console pane `p` returns the projects surface. They are bare
+letters because these two positions have no filter to type into.
+
+A key is only a faster way to reach a row that already exists. It names an action and the
+detail performs it through the same chain a pressed row uses, so the confirmations are
+unchanged: Force stop and both Remote Control directions still ask, and Stop and close and
+Clean up still do not — on this surface and in Telegram alike. A key is offered only where the
+policy offers the action, so `s` is absent on a preserved row and `c` on a running one, rather
+than being present and inert.
+
+Because two of those keys end a session without asking, **a background refresh that drops the
+row you were on leaves the cursor on nothing at all** rather than falling back to the first
+row. This list re-reads itself every ten seconds and restores your place by session rather
+than by position; when the session you were on has gone there is no honest place to put the
+cursor, and moving it silently onto a neighbour would put a live agent one keypress from an
+unasked stop. One arrow press picks a row again.
 
 Copy attach is always offered and answers when it is chosen: a pane that is not live, or one whose
 project or agent does not match, is explained rather than left out, so a dead pane cannot be

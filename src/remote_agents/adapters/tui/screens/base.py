@@ -812,7 +812,7 @@ class ChoiceScreen(Screen[None]):
         entries: tuple[tuple[str, str], ...],
         *,
         focus: bool = True,
-        highlight: int = 0,
+        highlight: int | None = 0,
         trailing: tuple[tuple[str, str], ...] = (),
     ) -> None:
         """Render the choices, and take the keyboard only when the list is the next decision.
@@ -825,6 +825,17 @@ class ChoiceScreen(Screen[None]):
         about the data, and a list holding nothing but a Back button is empty in every sense
         the owner cares about while being a non-empty tuple. Passing the Back row through
         `entries` is how a screen silently opts out of its own empty state.
+
+        `highlight=None` means **rest the cursor on nothing** — draw no selection and leave the
+        next arrow press to choose. It composes with `focus` rather than overriding it: the
+        keyboard still goes where `focus` says, and only the cursor is withheld. Exactly one
+        caller asks for it
+        (`SessionsScreen._draw_listing`, when the row the cursor was holding has left the
+        list), and the sessions positions are the only ones where it would be correct: they
+        carry per-row keys that mutate a session without asking, so a cursor moved by a
+        background refresh rather than by the owner is a hazard rather than a convenience.
+        Every other position keeps `0`, because a list advertising "enter opens" with nothing
+        highlighted makes its own keys silent no-ops for no benefit.
         """
         if not self.showing:
             return
@@ -833,6 +844,12 @@ class ChoiceScreen(Screen[None]):
             # Rest on the first row that does something. The substituted row is disabled, so a
             # cursor left on it would answer enter with nothing at all — and where there *is*
             # a Back row, that is the one action still available here.
+            #
+            # Overrides a `None` too, and must: "rest on nothing" is a statement about a list
+            # whose rows the owner was choosing between, and this branch has replaced them all
+            # with a placeholder. The one caller that passes `None` cannot reach here anyway —
+            # `_draw_listing` returns on an empty listing before its keep-cursor path — so this
+            # is the assignment agreeing with that rather than a second policy.
             highlight = 1 if trailing else 0
         entries = entries + trailing
         # Restoring here rather than in each exit route: the inspect screen swaps the list
@@ -848,7 +865,29 @@ class ChoiceScreen(Screen[None]):
         # row: `OptionList` mounts no widget per row, so there is nothing to attach to, and
         # row identity is first-class rather than monkey-patched.
         choices.add_options(Option(text, id=key, disabled=key == _EMPTY) for key, text in entries)
-        if entries and focus:
+        if entries and highlight is None:
+            # Resting on nothing, and **cleared whether or not this fill takes the keyboard**.
+            # The `focus` flag says where the *keyboard* goes; the cursor is a different
+            # question, and on a list carrying unconfirmed stop keys it is the safety-relevant
+            # one. `clear_options` does not reset `highlighted`, and `validate_highlighted`
+            # clamps rather than rejects — so a fill that skipped this because `focus` was
+            # False would leave the old index pointing at whatever row now sits there, which is
+            # precisely the silent move this branch exists to prevent. Guarding it on `focus`
+            # would make the mitigation depend on where the keyboard happened to be.
+            #
+            # The focus call keeps its guard, because that half really is about the keyboard:
+            # taking it from a filter the owner is typing into is the defect `focus` exists for.
+            # Where this fill does take it, focus is what makes the arrow press that brings the
+            # cursor back possible at all.
+            #
+            # No `_rest_cursor` callback is scheduled: it exists to re-run
+            # `scroll_to_highlight` once the widget has a laid-out region, and there is nothing
+            # to scroll to. The generation counter was already bumped above, so any callback
+            # still in flight from an earlier fill is refused rather than putting a cursor back.
+            choices.highlighted = None
+            if focus:
+                choices.focus()
+        elif entries and focus:
             resting = min(highlight, len(entries) - 1)
             # Set twice, deliberately. Here, so the cursor is correct the instant this
             # returns — a keypress arriving before the next refresh must still land on the

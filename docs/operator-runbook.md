@@ -1044,24 +1044,33 @@ uv run --locked remote-agents
    that the sessions list and the feed are still on screen beside it.
 4. With the agent in front, confirm the sessions pane lists it. Press `d` on its row and confirm
    the detail opens **in the sessions pane** — every stop, inspect, rename and Remote Control
-   affordance is here, and the agent stays displayed.
-5. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
+   affordance is here, and the agent stays displayed. Escape back to the list and confirm the
+   status line names the row keys: `a i r s c f m`, plus `d` and `p`. On a running row, confirm
+   `c` is *absent* from the keys panel (Clean up is offered only from PRESERVED) while `s` is
+   present — a key must not be offered where the policy would refuse the action.
+5. **The cursor drill, which is what makes `s` safe to have at all.** With two or more sessions
+   listed, highlight the second one and end that session from Telegram. Within ten seconds the
+   list re-reads itself; confirm the cursor is left on **no row at all** rather than jumping to
+   the first one, and that pressing `s` at that moment does nothing. Press the down arrow and
+   confirm a row is selected again. A cursor that lands on a neighbour here would put a live
+   agent one unasked keypress from being stopped.
+6. Let the agent finish a turn, or stop one from Telegram, and confirm a line arrives in the feed
    while the agent is still in front. This is the whole point of the layout: news reaches you
    without leaving the agent.
-6. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
+7. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
    returns to its own window. This is the console's only root key.
-7. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
+8. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
    confirm it shows the same three panes rather than building a fourth.
-8. **The dangerous one.** With an agent displayed, run
+9. **The dangerous one.** With an agent displayed, run
    `tmux -L remote-agents kill-session -t ra-console` and confirm the agent's process is gone
-   and its session name is not — this is DEC-040's accepted cost, and it is why step 6 comes
+   and its session name is not — this is DEC-040's accepted cost, and it is why step 7 comes
    first in normal use. Then run `remote-agents` again and confirm a fresh console comes up, and
    that it names any defunct `ra-<uuid>` still holding an old projects surface so you can kill
    it by hand.
-9. Kill one pane's process (`tmux -L remote-agents kill-pane -t <the feed pane>`), run
-   `remote-agents` again, and confirm exactly that pane comes back, beside the one it belongs
-   to, with the window back in its proportions.
-10. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
+10. Kill one pane's process (`tmux -L remote-agents kill-pane -t <the feed pane>`), run
+    `remote-agents` again, and confirm exactly that pane comes back, beside the one it belongs
+    to, with the window back in its proportions.
+11. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
     `console.window_linkable` until the console stopped linking windows; if you have scripts
     reading that field, they need the new name.
 
@@ -1246,7 +1255,11 @@ uv run --locked remote-agents tui
 2. Select a row for its detail: the session's identity, its state, and one line explaining what
    that state means. The record is re-read from the store every time detail opens, because the
    store has a second writer and the session may have been stopped elsewhere while the list was
-   on screen.
+   on screen. Each of the detail's actions also has a key on the highlighted row — `a` attach,
+   `i` inspect, `r` rename, `s` stop and close, `c` clean up, `f` force, `m` Remote Control —
+   which names the action and hands it to that same detail chain rather than performing a
+   second version of it. The confirmations below are therefore identical either way, and a key
+   is offered only where the policy offers the action.
 3. Copy attach prints the command that reaches the pane, or states that there is none because the
    pane is not live or the pane found for that session belongs to a different project or agent.
    Inspect output renders the session's captured output, sanitized and bounded, in a scrollable
@@ -1266,6 +1279,12 @@ uv run --locked remote-agents tui
    direction a session is offered. The record is read again and the policy re-checked at the
    moment the action is issued, so an action that has become illegal since the list was drawn is
    explained rather than attempted.
+   Two of those actions — Stop and close, and Clean up — are not confirmed, on either surface
+   (DEC-018), so their keys are one keypress from ending a session. What keeps that safe is the
+   list's cursor: it re-reads itself every ten seconds, restores your place by session rather
+   than by position, and when the session you were on has gone it leaves the cursor on **no row
+   at all**. It never slides onto a neighbour. If a key seems inert after a session ended
+   elsewhere, that is why — press an arrow to pick a row again.
 5. Force stop is confirmed a second time, on a screen of its own that names the session and
    states that the kill is immediate, cannot be undone, and loses whatever the agent has not
    saved. Cancel is the first entry and the highlighted one, so a stray or repeated enter aborts;

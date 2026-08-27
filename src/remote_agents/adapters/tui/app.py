@@ -123,6 +123,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     Screen { layout: vertical; }
     #body { height: 1fr; }
     ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; color: $foreground; }
+    /* Three rows on the sessions positions alone, because they are the only ones carrying a
+       whole keymap in this region: seven row keys, two navigation keys and the count. Measured
+       at 60 columns before the rule was written — two rows hold about 114 characters and drop
+       the remainder with no ellipsis at all, so the previous 112-character pane status was one
+       key away from losing "m remote" with nothing on screen to say it had. Three rows hold
+       about 171. The type selector matches `SessionsPaneScreen` too, Textual's type names
+       including base classes; the pane pays one row of its list for it. */
+    SessionsScreen #status { height: 3; }
     /* Severity from the design system, so it resolves per theme rather than assuming a dark
        one — and always as the *second* signal: every caller that sets a severity has already
        said what went wrong in words, because a reader under NO_COLOR gets the words only. */

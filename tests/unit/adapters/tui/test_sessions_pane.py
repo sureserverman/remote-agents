@@ -15,6 +15,7 @@ already opened the detail; this is that pair, on a screen of its own.
 from __future__ import annotations
 
 import pathlib
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -276,9 +277,15 @@ async def test_the_status_names_what_enter_actually_does_here() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         status = str(app.screen.query_one("#status", Static).content)
-        assert "Enter opens one" in status
-        assert "d for its detail" in status
-        assert "Select one for detail" not in status
+        assert "Enter opens" in status
+        assert "d detail" in status
+        assert "Enter opens the detail" not in status, "this is the other position's sentence"
+        # The way back out of the console, which is the pane's alone and is `show=False`, so
+        # this line is the only place it is discoverable. F12 is named beside it because the
+        # root key is the one that works from *inside* a displayed agent, where none of this
+        # screen's own bindings can be pressed.
+        assert "p projects" in status
+        assert "F12" in status
 
 
 async def test_an_empty_pane_does_not_offer_an_escape_it_does_not_have() -> None:
@@ -439,10 +446,16 @@ async def test_a_session_whose_project_left_the_catalogue_still_renders() -> Non
 
 # A key per action, each routed into the detail's own chain ------------------------------------
 
+#: `s` and `c` are here since DEC-052 was amended. They are the two the detail performs
+#: **without asking**, so what this parametrisation pins for them is narrower than for the
+#: others and worth saying: that the key is an entry to the detail's own chain, not a second
+#: implementation of a stop. The safety argument for binding them at all is elsewhere --
+#: `test_a_vanished_row_leaves_the_cursor_on_nothing`.
 _ACTION_KEYS = (
     ("a", "attach"),
     ("i", "inspect"),
     ("r", "rename"),
+    ("s", "graceful"),
     ("f", "force"),
 )
 
@@ -563,37 +576,49 @@ async def test_m_opens_the_detail_unmodified_when_the_direction_is_unknown() -> 
     assert opened == [(str(_SESSION), None)], opened
 
 
-async def test_no_key_auto_performs_an_action_the_detail_would_not_ask_about() -> None:
-    """The rule this task's Tier-1 review produced, pinned as a rule rather than as a list.
+async def test_every_stop_action_the_policy_names_has_a_key() -> None:
+    """DEC-052 amended: the detail's whole action set is reachable in one keypress.
 
-    `SessionDetailScreen.choose` asks before `force` and before either Remote Control
-    direction, and does not ask before Stop and close or Clean up -- the branch
-    `key in ACTION_LABELS and key != FORCE`. A key that auto-performed one of those would
-    remove the only thing standing in front of it, which was two deliberate keypresses rather
-    than a confirmation (DEC-018 declined confirmations for both, on both surfaces).
+    The original decision banned `s` and `c` outright, and its own accepted cost 1 predicted
+    exactly the report that lifted it -- "two of the detail's six actions are slower than the
+    other four ... the asymmetry is real and will look like an oversight to anyone who does not
+    read this entry". It did.
 
-    That matters here specifically because this list restores its cursor *by key* every ten
-    seconds and falls back to row 0 when a key has gone -- so a session ending between ticks
-    moves the cursor to a different session with nothing said.
-
-    Derived from the policy rather than hardcoded: an unconfirmed action added to
-    `ACTION_LABELS` tomorrow is excluded the day it appears, instead of quietly becoming
-    bindable.
+    Derived from `ACTION_LABELS` rather than listing the three, so a fourth stop action added
+    to the policy fails here until it is given a key or deliberately excluded -- the same
+    direction the old ban test faced, pointed the other way.
     """
-    from remote_agents.adapters.tui.screens.sessions import (
-        SESSION_ACTION_KEYS,
-        UNCONFIRMED_MUTATING_ACTIONS,
-    )
-    from remote_agents.application.session_actions import ACTION_LABELS, FORCE
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+    from remote_agents.application.session_actions import ACTION_LABELS
 
-    assert UNCONFIRMED_MUTATING_ACTIONS == frozenset(ACTION_LABELS) - {FORCE}
-    assert UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
+    bound = {action for _key, action, _label, _word in SESSION_ACTION_KEYS}
+    missing = set(ACTION_LABELS) - bound
+    assert not missing, f"these stop actions are reachable only through `d`: {sorted(missing)}"
 
-    bound = {action for _key, action, _label in SESSION_ACTION_KEYS}
-    offenders = bound & UNCONFIRMED_MUTATING_ACTIONS
-    assert not offenders, (
-        f"these keys auto-perform an action the detail never asks about: {sorted(offenders)}"
-    )
+
+async def test_the_status_word_for_a_key_is_never_the_lifecycle_action_id() -> None:
+    """`graceful` is the lifecycle's name and "Stop and close" is the owner's.
+
+    `session_actions.ACTION_LABELS` is emphatic that a surface shows the second -- the label
+    "is part of the policy for the same reason its availability is: the owner learns one
+    vocabulary and meets it everywhere", and `graceful` was renamed precisely because it named
+    the mechanism. A status line reading "s graceful" would put it back in the one region
+    written to keep it out, so the table carries a short word and this pins that it is not the
+    id in disguise.
+    """
+    from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+    from remote_agents.application.session_actions import ACTION_LABELS, GRACEFUL
+
+    for key, action, label, word in SESSION_ACTION_KEYS:
+        assert word, f"{key!r} has no status word"
+        if action in ACTION_LABELS:
+            # Against the *label*, not against the id. `force` happens to be both, which is
+            # why the check is "the word comes from what the owner is shown" rather than "the
+            # word differs from the id" -- the latter passes `graceful` -> `stopping` and
+            # fails `force` -> `force`, getting both cases exactly the wrong way round.
+            assert word in label.lower(), f"{key!r} says {word!r}, which is not part of {label!r}"
+    words = dict((action, word) for _k, action, _l, word in SESSION_ACTION_KEYS)
+    assert words[GRACEFUL] != GRACEFUL, "the status line names the mechanism, not the effect"
 
 
 async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
@@ -606,7 +631,7 @@ async def test_both_sessions_positions_offer_the_same_action_keys() -> None:
     """
     from remote_agents.adapters.tui.screens.sessions import SessionsScreen
 
-    action_keys = {key for key, _a, _l in _module_action_keys()} | {"m"}
+    action_keys = {key for key, _a, _l, _w in _module_action_keys()} | {"m"}
     full = {str(b.key) for b in SessionsScreen.BINDINGS}
     pane = {str(b.key) for b in SessionsPaneScreen.BINDINGS}
     assert action_keys <= full, sorted(action_keys - full)
@@ -636,19 +661,33 @@ async def test_the_merged_keymap_is_what_carries_the_action_keys() -> None:
     -- it is. Reading the declared list would then silently stop checking the inherited keys
     and still pass, so this reads what the mounted screen actually offers.
     """
-    app = SessionsPane(_context((_record(),)))
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        offered = set(app.screen.active_bindings)
-
     from remote_agents.adapters.tui.screens.sessions import SESSION_ACTION_KEYS
+    from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 
-    for key, _action, _label in SESSION_ACTION_KEYS:
-        assert key in offered, f"{key!r} is not in the screen's effective keymap: {sorted(offered)}"
-    assert "m" in offered
-    assert "d" in offered, "the detail key was lost"
+    # One record per state, because the stop keys are gated on the policy for the row under
+    # the cursor and no single state offers all three: graceful comes from RUNNING and cleanup
+    # from PRESERVED. Reading one RUNNING row would report `c` "lost" when it is correctly
+    # withheld -- which is what the first version of this assertion did once `c` was bound.
+    for state in (SessionState.RUNNING, SessionState.PRESERVED):
+        app = SessionsPane(_context((replace(_record(), state=state),)))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            offered = set(app.screen.active_bindings)
+
+        allowed = available_actions(state, None)
+        for key, action, _label, _word in SESSION_ACTION_KEYS:
+            if action in ACTION_LABELS and action not in allowed:
+                assert key not in offered, (
+                    f"{key!r} names {action!r}, which {state.value} does not offer"
+                )
+                continue
+            assert key in offered, f"{key!r} is not in the {state.value} keymap: {sorted(offered)}"
+        # Remote Control needs a *live* Claude pane, so it follows the same rule the stop
+        # keys just did rather than being asserted unconditionally beside them.
+        assert ("m" in offered) is (state is SessionState.RUNNING)
+        assert "d" in offered, "the detail key was lost"
     assert {"escape", "ctrl+r", "ctrl+n", "ctrl+s", "ctrl+o", "ctrl+q"}.isdisjoint(
-        {key for key, _a, _l in SESSION_ACTION_KEYS} | {"m"}
+        {key for key, _a, _l, _w in SESSION_ACTION_KEYS} | {"m"}
     )
 
 
@@ -715,10 +754,47 @@ async def test_the_status_line_names_the_keys_and_is_not_truncated(width: int) -
         # for a test whose whole job is to notice loss.
         drawn = " ".join(status.render_line(row).text.strip() for row in range(status.size.height))
 
-    for key, action, _label in _module_action_keys():
-        assert f"{key} {action}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
+    for key, _action, _label, word in _module_action_keys():
+        assert f"{key} {word}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
     assert "m remote" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
     assert "…" not in drawn, f"the status line was elided at {width} columns: {drawn!r}"
+
+
+async def test_the_sessions_status_is_three_fixed_rows() -> None:
+    """The keymap's room, and the property that room may not cost.
+
+    `test_status_region.py` pins two rows for the app in general and the reason: the region is
+    *fixed*, so the list beneath it never moves as a message changes. The sessions positions
+    take a third row rather than an elastic one, so that property is untouched -- which is the
+    half worth testing, because `height: auto` is the obvious way to have made room and is the
+    exact defect the region split was introduced to fix.
+
+    Three because seven row keys plus two navigation keys plus the count do not fit in two rows
+    at 60 columns in any wording. That is measured by
+    `test_the_status_line_names_the_keys_and_is_not_truncated`, which is where a table grown
+    past the room fails first; this test only pins the room.
+    """
+    from textual.widgets import Static
+
+    app = SessionsPane(_context((_record(),)))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        rows = app.screen.query_one("#choices", OptionList)
+        before = rows.region
+
+        app.screen.set_status("short")
+        await pilot.pause()
+        after_short = rows.region
+
+        app.screen.set_status("a much longer status line " * 6)
+        await pilot.pause()
+        after_long = rows.region
+        height = app.screen.query_one("#status", Static).region.height
+
+    assert height == 3, f"the sessions status region is {height} rows high, not 3"
+    assert before == after_short == after_long, (
+        "the list moved when the status grew, so the region is not fixed"
+    )
 
 
 # One key returns the projects surface to the console's left slot -------------------------------
@@ -802,30 +878,30 @@ async def test_the_full_sessions_position_does_not_offer_the_console_key() -> No
     assert calls == [], "the full sessions position rearranged the console"
 
 
-def test_a_key_for_an_unconfirmed_action_fails_at_import_not_only_in_ci() -> None:
-    """The invariant is enforced where it cannot be skipped.
+def test_the_unconfirmed_keys_are_tied_to_the_mitigation_that_makes_them_safe() -> None:
+    """The import-time guard survived DEC-052's amendment; what it guards changed.
 
-    It was asserted only by a test, and this codebase already has the better pattern for the
-    shape -- `ChoiceScreen.__init_subclass__` raises at class-definition time. Re-adding `s`
-    to "finish the job the plan proposed" would otherwise ship the moment someone did not
-    notice one red test, putting an unconfirmed graceful stop one keypress from a list whose
-    cursor moves under a 10-second refresh.
+    It used to refuse `s` and `c` outright. It now refuses them only while
+    `_CLEARS_VANISHED_CURSOR` is false -- because the argument for binding them is entirely
+    that a vanished cursor row rests on nothing, and that lives in `_draw_listing`, hundreds of
+    lines away in a method whose name says nothing about stop keys. Someone "restoring DEC-007's
+    resting cursor" there re-opens the hazard, and every test of the keys themselves still
+    passes. This pins the tie, so the module refuses to import instead.
     """
-    import importlib
-
     import remote_agents.adapters.tui.screens.sessions as module
 
-    original = module.SESSION_ACTION_KEYS
     source = pathlib.Path(module.__file__).read_text("utf-8")
     assert "raise RuntimeError(" in source, "the import-time guard is gone"
-    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS" in source, "the guard no longer checks it"
-    # The guard reads the module-level table, so the check is exactly the one that runs at
-    # import; reproduced here rather than re-importing a mutated module, which pytest's own
-    # module cache makes unreliable.
-    bindable = {action for _key, action, _label in original}
-    assert not bindable & module.UNCONFIRMED_MUTATING_ACTIONS
+    assert "_bindable & UNCONFIRMED_MUTATING_ACTIONS and not _CLEARS_VANISHED_CURSOR" in source, (
+        "the guard no longer ties the unconfirmed keys to the cursor mitigation"
+    )
     assert module.UNCONFIRMED_MUTATING_ACTIONS, "the rule must not be vacuous"
-    importlib.reload  # noqa: B018 - referenced so the import is not flagged unused
+    assert module._CLEARS_VANISHED_CURSOR, "the mitigation the bound keys rest on is off"
+    # The keys really are the ones the guard is about, so the tie is not vacuous either.
+    bindable = {action for _key, action, _label, _word in module.SESSION_ACTION_KEYS}
+    assert bindable & module.UNCONFIRMED_MUTATING_ACTIONS, (
+        "no unconfirmed key is bound, so this guard is no longer load-bearing"
+    )
 
 
 async def test_i_is_absent_on_a_host_that_cannot_inspect() -> None:
