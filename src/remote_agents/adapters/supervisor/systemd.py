@@ -57,6 +57,15 @@ UNIT_NAME = "remote-agents.service"
 #: cost of keeping one is a path join.
 INSTALLED_UNIT_NAMES: tuple[str, ...] = (UNIT_NAME,)
 
+#: Every user-home-relative systemd path this release causes to exist.  The historical ledger
+#: needs paths rather than only names: the enabled-unit symlink lives in a second directory and
+#: a future relocation cannot be represented by a filename joined to today's unit directory.
+_UNIT_DIRECTORY = Path(".config/systemd/user")
+INSTALLED_UNIT_PATHS: tuple[str, ...] = (
+    *(str(_UNIT_DIRECTORY / name) for name in INSTALLED_UNIT_NAMES),
+    str(_UNIT_DIRECTORY / "default.target.wants" / UNIT_NAME),
+)
+
 #: The symlink `systemctl --user enable` writes, which nothing here renders and which removal
 #: must still take away.
 #:
@@ -268,15 +277,12 @@ class SystemdSupervisor:
     def installed_artifact_paths(self) -> tuple[Path, ...]:
         """The ledger's installed half, joined to this host's unit directory.
 
-        Derived from `INSTALLED_UNIT_NAMES` rather than from `unit_path` alone, so the two halves
-        of the ledger are read the same way and a second installed name is one entry rather than
-        a second method. Depends on the home and not on the executable, which is why it never
-        refuses -- and why removal, which reads this, works on a host rendering would reject.
+        Derived from `INSTALLED_UNIT_PATHS` rather than from `unit_path` alone, so the unit and
+        its enabled-unit symlink stay in one reviewable ledger. Depends on the home and not on
+        the executable, which is why it never refuses -- and why removal, which reads this,
+        works on a host rendering would reject.
         """
-        return (
-            *(self.unit_path.parent / name for name in INSTALLED_UNIT_NAMES),
-            self.unit_path.parent.joinpath(*_WANTS_LINK),
-        )
+        return tuple(self.home / relative for relative in INSTALLED_UNIT_PATHS)
 
     def definition_path(self) -> Path:
         """The unit file, named without rendering it.

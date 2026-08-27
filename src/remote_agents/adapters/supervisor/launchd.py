@@ -74,6 +74,13 @@ PLIST_NAME = f"{LABEL}.plist"
 #: same shape the systemd adapter keeps and for the same reasons, which are argued there.
 INSTALLED_PLIST_NAMES: tuple[str, ...] = (PLIST_NAME,)
 
+#: The home-relative plist paths this release owns.  Keep this distinct from the output files:
+#: this is the identity launchd loads, whose rename or relocation must be swept on upgrade.
+_PLIST_DIRECTORY = Path("Library/LaunchAgents")
+INSTALLED_PLIST_PATHS: tuple[str, ...] = tuple(
+    str(_PLIST_DIRECTORY / name) for name in INSTALLED_PLIST_NAMES
+)
+
 #: What launchd is told to write the job's output to, named once because two places need it: the
 #: plist that asks for them and the ledger that must take them away. Spelled out twice, they
 #: would drift the moment either changed -- and the drift would be silent, because a stale name
@@ -343,7 +350,7 @@ class LaunchdSupervisor:
         for the same reason.
         """
         return (
-            *(self.plist_path.parent / name for name in INSTALLED_PLIST_NAMES),
+            *(self.home / relative for relative in INSTALLED_PLIST_PATHS),
             *(self.log_directory / name for name in _LOG_NAMES),
         )
 

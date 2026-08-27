@@ -1,0 +1,8 @@
+{
+  "agent_hook_events": ["Stop", "StopFailure", "Notification", "SessionEnd"],
+  "systemd_unit_paths": [
+    ".config/systemd/user/remote-agents.service",
+    ".config/systemd/user/default.target.wants/remote-agents.service"
+  ],
+  "launchd_plist_paths": ["Library/LaunchAgents/remote-agents.plist"]
+}
