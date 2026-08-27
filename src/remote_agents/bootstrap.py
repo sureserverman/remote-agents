@@ -34,6 +34,7 @@ from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
 )
+from remote_agents.adapters.agents.usage import ProfileUsageReaders
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
@@ -116,6 +117,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
     refuse_a_credential_shaped_value,
@@ -778,6 +780,37 @@ def _narrow_profiles(
     )
 
 
+def _usage_reader(
+    store: SQLiteSessionStore, project_paths: Mapping[ProjectId, Path]
+) -> Callable[[SessionId], Awaitable[AgentUsage | None]]:
+    """Bind the provider usage readers to the two things only the root knows.
+
+    A session is a row; a provider conversation is a file in a directory named after a
+    workspace. Turning the first into the second needs the store *and* the project paths, and
+    neither belongs on a screen builder — which is why `Backend.usage` is a bound callable in
+    the shape of `capture` rather than a service the frontends resolve themselves.
+
+    The provider read runs on a worker thread. It is a `stat` sweep of a directory and a tail
+    read of one file — small, but a filesystem walk all the same, and the same rule
+    `refresh_catalogue` states applies here: neither frontend may block its event loop on the
+    disk during a render. The store lookup ahead of it is already `async` and stays on the
+    loop, because that is how every other caller drives it and it is a single indexed row.
+    """
+    readers = ProfileUsageReaders()
+
+    async def read(session_id: SessionId) -> AgentUsage | None:
+        record = await store.get(session_id)
+        if record is None:
+            return None
+        workspace = project_paths.get(record.project_id)
+        if workspace is None:
+            return None
+        query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
+        return await asyncio.to_thread(readers.read, query)
+
+    return read
+
+
 def compose_backend(
     config,
     connection,
@@ -847,6 +880,9 @@ def compose_backend(
         profiles=_narrow_profiles(runtime.compatibility),
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
+        usage=_usage_reader(
+            store if store is not None else SQLiteSessionStore(connection), projects.paths
+        ),
         max_label_length=config.max_label_length,
     )
 
