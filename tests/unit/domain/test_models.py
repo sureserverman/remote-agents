@@ -28,7 +28,9 @@ def make_record(
         session_id=SessionId.new(),
         project_id=project,
         profile_id=profile,
-        display=SessionDisplayIdentity("opaque-editor", "claude", "regular", sequence, custom_label),
+        display=SessionDisplayIdentity(
+            "opaque-editor", "claude", "regular", sequence, custom_label
+        ),
         state=SessionState.STARTING,
         created_at=datetime(2026, 7, 30, tzinfo=UTC),
     )

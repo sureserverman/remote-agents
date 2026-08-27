@@ -9,7 +9,9 @@ async def test_force_stop_removes_only_a_currently_owned_exact_session(tmp_path)
     terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     session_id = SessionId.new()
     try:
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
 
         stopped = await terminal.force_stop(session_id)
 

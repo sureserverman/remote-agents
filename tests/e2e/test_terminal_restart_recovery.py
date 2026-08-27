@@ -43,7 +43,9 @@ async def test_restart_reconciliation_recovers_preserves_and_ends_a_session(tmp_
     session_id = SessionId.new()
     try:
         await store.save(starting_record(session_id))
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
 
         first = await reconciler.reconcile(await terminal.managed_observations())
         assert first[0].state is SessionState.RUNNING
@@ -75,7 +77,9 @@ async def test_reconciliation_quarantines_a_trusted_live_session_without_a_datab
     reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
     try:
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
 
         result = await reconciler.reconcile(await terminal.managed_observations())
 
@@ -118,7 +122,9 @@ async def test_an_adopted_session_can_actually_be_force_stopped_through_the_real
     reconciler = ReconciliationService(store, settle_after=timedelta(0))
     session_id = SessionId.new()
     try:
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
         await reconciler.reconcile(await terminal.managed_observations())
         adopted = await store.get(session_id)
         assert adopted is not None
@@ -186,7 +192,9 @@ async def test_trusted_tmux_inspection_is_available_without_a_database(tmp_path)
     terminal, gateway = make_terminal(tmp_path, timeout=STARTUP_BUDGET)
     session_id = SessionId.new()
     try:
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
 
         observations = await terminal.managed_observations()
 

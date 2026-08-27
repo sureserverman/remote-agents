@@ -30,7 +30,18 @@ _PROFILE = ProfileId("claude")
 
 def pane(*, dead: str) -> str:
     return "|".join(
-        (f"ra-{_SESSION}", "$1", "%3", "100", dead, "", "2", str(_SESSION), "opaque-editor", "claude")
+        (
+            f"ra-{_SESSION}",
+            "$1",
+            "%3",
+            "100",
+            dead,
+            "",
+            "2",
+            str(_SESSION),
+            "opaque-editor",
+            "claude",
+        )
     )
 
 

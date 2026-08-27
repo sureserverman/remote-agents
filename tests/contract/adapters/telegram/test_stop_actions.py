@@ -384,9 +384,7 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     assert "Open the list again" not in reply["text"]
     assert "Sessions 1/1" in reply["text"]
     labels = [
-        unpadded(button.text)
-        for row in reply["reply_markup"].inline_keyboard
-        for button in row
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]
     assert "Back" not in labels
 
@@ -413,8 +411,7 @@ async def test_force_confirms_before_anything_lands_on_list() -> None:
     assert "Force stop" in reply["text"]
     assert "cannot be undone" in reply["text"]
     rows = [
-        [unpadded(button.text) for button in row]
-        for row in reply["reply_markup"].inline_keyboard
+        [unpadded(button.text) for button in row] for row in reply["reply_markup"].inline_keyboard
     ]
     assert rows[0] == ["Force stop"]
     assert rows[1] == ["Cancel"]
@@ -450,9 +447,7 @@ async def test_a_repeated_stop_press_lands_on_list_rather_than_a_home_only_scree
     assert first["text"].startswith("Stopped ")
     assert second["text"].startswith("That action has already run.")
     labels = [
-        unpadded(button.text)
-        for row in second["reply_markup"].inline_keyboard
-        for button in row
+        unpadded(button.text) for row in second["reply_markup"].inline_keyboard for button in row
     ]
     # The list's own keyboard, not a lone dead end. Asserted by the empty list's own Launch
     # row rather than by the footer, which since the navigation bar reads the same three

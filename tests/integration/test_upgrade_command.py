@@ -32,7 +32,7 @@ def test_the_install_script_and_the_upgrade_command_name_the_same_repository() -
     """
     script = Path(__file__).resolve().parents[2] / "scripts" / "install.sh"
 
-    assert f'REMOTE_AGENTS_REPOSITORY:={DEFAULT_REPOSITORY}' in script.read_text(encoding="utf-8")
+    assert f"REMOTE_AGENTS_REPOSITORY:={DEFAULT_REPOSITORY}" in script.read_text(encoding="utf-8")
 
 
 def test_an_upgrade_installs_the_newest_tag_and_then_re_registers_the_daemon(

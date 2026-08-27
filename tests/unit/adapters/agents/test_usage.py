@@ -72,9 +72,9 @@ def _iso_in(**offset: int) -> str:
     had by then correctly dropped the very windows the assertion wanted. A fixture whose
     outcome depends on the wall clock tests the clock.
     """
-    return (
-        (datetime.now(UTC) + timedelta(**offset)).replace(microsecond=0).isoformat()
-    ).replace("+00:00", "Z")
+    return ((datetime.now(UTC) + timedelta(**offset)).replace(microsecond=0).isoformat()).replace(
+        "+00:00", "Z"
+    )
 
 
 def _codex_token_count(*, last: int, window: int, primary: float, secondary: float) -> dict:
@@ -347,9 +347,7 @@ def test_codex_windows_are_named_by_the_duration_the_provider_states(
     assert all(window.resets_at is not None for window in usage.windows)
 
 
-def test_a_rollout_from_another_workspace_is_never_matched(
-    tmp_path: Path, workspace: Path
-) -> None:
+def test_a_rollout_from_another_workspace_is_never_matched(tmp_path: Path, workspace: Path) -> None:
     """The workspace is matched exactly, so one project's usage cannot land on another's."""
     other = tmp_path / "dev" / "elsewhere"
     other.mkdir(parents=True)
@@ -361,9 +359,7 @@ def test_a_rollout_from_another_workspace_is_never_matched(
     )
 
     assert (
-        CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(
-            _query("codex", workspace)
-        )
+        CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(_query("codex", workspace))
         is None
     )
 
@@ -498,9 +494,7 @@ def test_opencode_context_is_the_total_its_own_accounting_gives(
     assert usage.context.used_tokens == 12_952
 
 
-def test_opencode_publishes_no_rate_limits_and_claims_none(
-    tmp_path: Path, workspace: Path
-) -> None:
+def test_opencode_publishes_no_rate_limits_and_claims_none(tmp_path: Path, workspace: Path) -> None:
     database = _opencode_database(tmp_path, workspace, {"total": 100})
 
     usage = OpenCodeUsageReader(database=database).read(_query("opencode", workspace))

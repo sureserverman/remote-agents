@@ -261,7 +261,9 @@ async def test_launch_stamps_identity_on_the_pane_and_leaves_the_session_bare(
     `tests/contract/adapters/tmux/test_feature_probe.py`.
     """
     runner = RecordingRunner()
-    await gateway(runner).launch(_SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
+    await gateway(runner).launch(
+        _SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path
+    )
 
     identity = (
         "@remote_agents_schema",
@@ -293,6 +295,8 @@ async def test_launch_still_makes_the_pane_survive_its_agent(tmp_path: Path) -> 
     it, which was true and beside the point: the question is not what can be inherited but
     what travels. Pinned live as Claim 9."""
     runner = RecordingRunner()
-    await gateway(runner).launch(_SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path)
+    await gateway(runner).launch(
+        _SESSION, ProjectId("opaque-editor"), ProfileId("claude"), tmp_path
+    )
 
     assert (*_BASE, "set-option", "-p", "-t", _EXACT, "remain-on-exit", "on") in runner.calls

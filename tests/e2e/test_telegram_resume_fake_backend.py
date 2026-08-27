@@ -52,7 +52,9 @@ class FakeLauncher(SessionUseCaseDouble):
             {
                 "state": SessionState.RUNNING,
                 "session_id": "00000000-0000-0000-0000-000000000001",
-                "display": type("Display", (), {"rendered": "opaque-editor · Claude · resumed #1"})(),
+                "display": type(
+                    "Display", (), {"rendered": "opaque-editor · Claude · resumed #1"}
+                )(),
             },
         )()
         # `created=True`: this double stands for a resume that really started a session, which

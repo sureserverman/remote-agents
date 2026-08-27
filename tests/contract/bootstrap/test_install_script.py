@@ -47,7 +47,7 @@ FAKE_INSTALLER_SHA = hashlib.sha256(FAKE_INSTALLER.encode()).hexdigest()
 _UV_STUB = (
     "#!/bin/sh\n"
     'if [ "$1" = "tool" ] && [ "$2" = "dir" ] && [ "$3" = "--bin" ]; then\n'
-    '  printf \'%s\\n\' "$UV_BIN_DIR"\n'
+    "  printf '%s\\n' \"$UV_BIN_DIR\"\n"
     "  exit 0\n"
     "fi\n"
     'echo "$@" >> "$UV_LOG"\n'
@@ -255,7 +255,16 @@ def test_verification_works_on_a_host_with_shasum_but_no_sha256sum(tmp_path: Pat
     macos_like = tmp_path / "macos-bin"
     macos_like.mkdir()
     for tool in (
-        "bash", "mktemp", "awk", "rm", "sh", "shasum", "chmod", "mkdir", "touch", "printf",
+        "bash",
+        "mktemp",
+        "awk",
+        "rm",
+        "sh",
+        "shasum",
+        "chmod",
+        "mkdir",
+        "touch",
+        "printf",
         #: The script now refuses a host with no git before it fetches anything, so a curated
         #: PATH that omits git no longer reaches the verification this test is about.
         "git",
@@ -518,7 +527,7 @@ def test_a_host_without_git_is_told_so_rather_than_shown_uvs_error(tmp_path: Pat
 
 
 def test_the_verified_line_says_which_pin_was_satisfied(tmp_path: Path) -> None:
-    """"Verified" over an operator-supplied digest claims provenance the script cannot know.
+    """ "Verified" over an operator-supplied digest claims provenance the script cannot know.
 
     With both the URL and the digest overridden, the script will happily verify attacker bytes
     against the attacker's own number and print a line a screenshot-reading reviewer trusts.
@@ -784,7 +793,7 @@ def test_a_uv_installer_that_left_nothing_runnable_is_diagnosed_not_a_bare_127(
     this one, a uv that landed somewhere unanticipated surfaced as a bare `uv: command not
     found` from the following line -- a shell error naming nothing an operator can act on.
     """
-    payload = "#!/bin/sh\ntouch \"$INSTALLER_RAN_MARKER\"\nexit 0\n"
+    payload = '#!/bin/sh\ntouch "$INSTALLER_RAN_MARKER"\nexit 0\n'
     _, env = _sandbox(tmp_path, uv_present=False)
     env["FAKE_PAYLOAD"] = payload
     env["REMOTE_AGENTS_UV_INSTALLER_SHA256"] = hashlib.sha256(payload.encode()).hexdigest()

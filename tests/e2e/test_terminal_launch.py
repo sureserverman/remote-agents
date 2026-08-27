@@ -86,7 +86,9 @@ async def test_terminal_launch_reports_real_readiness(
         if mode == "invalid_intent":
             terminal.invalidate_next_intent = True
 
-        observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
 
         assert observation.live is expected_live
     finally:
@@ -100,7 +102,9 @@ async def test_terminal_launch_times_out_without_claiming_readiness(tmp_path: Pa
     terminal, gateway = make_terminal(tmp_path, timeout=TIMEOUT_FIRES, mode="delayed")
     session_id = SessionId.new()
     try:
-        observation = await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        observation = await terminal.launch(
+            session_id, ProjectId("opaque-editor"), ProfileId("fake")
+        )
 
         assert observation.live is False
         assert observation.detail == "startup_timeout"

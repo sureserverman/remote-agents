@@ -149,7 +149,9 @@ async def test_refresh_readiness_recovers_only_a_failed_launch_with_readiness_ev
 async def test_graceful_stop_timeout_restores_running_state_for_explicit_force_stop() -> None:
     store = FakeStore()
     service = SessionService(store, FakeTerminal(graceful_preserved=False))
-    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
+    )
 
     observation = await service.graceful_stop(
         GracefulStopCommand(record.session_id, record.profile_id)
@@ -180,7 +182,9 @@ async def test_a_stop_that_was_never_sent_is_not_recorded_as_a_timeout() -> None
     store = FakeStore()
     terminal = FakeTerminal(graceful_preserved=False, graceful_detail="unknown_session")
     service = SessionService(store, terminal)
-    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
+    )
 
     observation = await service.graceful_stop(
         GracefulStopCommand(record.session_id, record.profile_id)
@@ -212,7 +216,9 @@ async def test_a_stop_reporting_an_unknown_cause_says_so_rather_than_defaulting_
     store = FakeStore()
     terminal = FakeTerminal(graceful_preserved=False, graceful_detail="something_nobody_added_yet")
     service = SessionService(store, terminal)
-    record = await service.launch(LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key"))
+    record = await service.launch(
+        LaunchCommand(ProjectId("opaque-editor"), ProfileId("codex"), "key")
+    )
 
     with caplog.at_level(logging.WARNING):
         await service.graceful_stop(GracefulStopCommand(record.session_id, record.profile_id))

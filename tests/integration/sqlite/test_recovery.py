@@ -128,7 +128,9 @@ async def test_terminal_inspection_remains_read_only_when_store_is_unavailable(
     mutation_terminal = CountingTerminal()
     service = SessionService(UnavailableStore(), mutation_terminal)
     try:
-        assert (await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))).live
+        assert (
+            await terminal.launch(session_id, ProjectId("opaque-editor"), ProfileId("fake"))
+        ).live
 
         observation = await terminal.inspect(session_id)
         with pytest.raises(sqlite3.OperationalError, match="unavailable"):
