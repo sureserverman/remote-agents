@@ -1678,6 +1678,45 @@ async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> Non
     assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
 
 
+async def test_a_reported_activity_suppresses_its_quiet_spell_before_polling(
+    tmp_path, monkeypatch
+) -> None:
+    record = _running()
+    boundary, _bot = _notified(record)
+    reported = AgentActivity(
+        session_id=str(record.session_id),
+        kind=ActivityKind.COMPLETED,
+        detail=None,
+        observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
+    )
+
+    class _QuietWatcher:
+        def __init__(self) -> None:
+            self.marked: tuple[str, ...] = ()
+
+        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
+            self.marked = session_ids
+
+        async def poll(self) -> tuple[AgentActivity, ...]:
+            assert self.marked == (str(record.session_id),)
+            return ()
+
+    monkeypatch.setattr("remote_agents.bootstrap.drain_activity", lambda _directory: (reported,))
+    watcher = _QuietWatcher()
+
+    await _watch_quiet_once(
+        ServiceComposition(
+            boundary,
+            _SilentTerminal(),
+            _SilentReconciler(),
+            watcher,  # type: ignore[arg-type]
+            activity_directory=tmp_path / "activity",
+        )
+    )
+
+    assert watcher.marked == (str(record.session_id),)
+
+
 async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tmp_path) -> None:
     """Its button is bound to the message the send answered with, never to the anchor.
 

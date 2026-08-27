@@ -104,6 +104,27 @@ class ActivitySource(Enum):
 
 _HOOK_EXCLUSIVE_PROFILES = frozenset({"claude", "claude-remote"})
 _HYBRID_PROFILES = frozenset({"codex"})
+_REPORTED_KINDS_BY_PROFILE: dict[str, frozenset[ActivityKind]] = {
+    "claude": frozenset(
+        {
+            ActivityKind.COMPLETED,
+            ActivityKind.LIMIT_REACHED,
+            ActivityKind.OUTPUT_LIMIT,
+            ActivityKind.NEEDS_ANSWER,
+        }
+    ),
+    "claude-remote": frozenset(
+        {
+            ActivityKind.COMPLETED,
+            ActivityKind.LIMIT_REACHED,
+            ActivityKind.OUTPUT_LIMIT,
+            ActivityKind.NEEDS_ANSWER,
+        }
+    ),
+    # Codex exposes Stop and PermissionRequest hooks. It does not expose a StopFailure
+    # equivalent, so limit/output kinds stay absent rather than being guessed from pane text.
+    "codex": frozenset({ActivityKind.COMPLETED, ActivityKind.NEEDS_ANSWER}),
+}
 
 
 def activity_source_for(profile_id: str) -> ActivitySource:
@@ -113,6 +134,17 @@ def activity_source_for(profile_id: str) -> ActivitySource:
     if profile_id in _HYBRID_PROFILES:
         return ActivitySource.HYBRID
     return ActivitySource.QUIET_ONLY
+
+
+def reported_activity_kinds_for(profile_id: str) -> frozenset[ActivityKind]:
+    """Return the activity kinds a provider can report without inference.
+
+    This capability boundary deliberately says nothing about spool payload parsing. The parser
+    is shared by the existing Claude hooks; the provider installer decides which upstream event
+    names can reach it. Keeping the two facts separate prevents Codex from inheriting a Claude
+    StopFailure claim merely because both use the same private spool.
+    """
+    return _REPORTED_KINDS_BY_PROFILE.get(profile_id, frozenset())
 
 
 @dataclass(frozen=True, slots=True)

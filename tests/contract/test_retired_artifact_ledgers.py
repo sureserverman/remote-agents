@@ -29,11 +29,11 @@ def _historical_ledger() -> dict[str, list[str]]:
 def test_every_historical_artifact_remains_installed_or_retired() -> None:
     historical = _historical_ledger()
 
-    assert set(historical["agent_hook_events"]) <= set(INSTALLED_EVENTS) | set(RETIRED_EVENTS)
-    assert set(historical["systemd_unit_paths"]) <= set(INSTALLED_UNIT_PATHS) | set(
+    assert set(historical["agent_hook_events"]) == set(INSTALLED_EVENTS) | set(RETIRED_EVENTS)
+    assert set(historical["systemd_unit_paths"]) == set(INSTALLED_UNIT_PATHS) | set(
         RETIRED_UNIT_PATHS
     )
-    assert set(historical["launchd_plist_paths"]) <= set(INSTALLED_PLIST_PATHS) | set(
+    assert set(historical["launchd_plist_paths"]) == set(INSTALLED_PLIST_PATHS) | set(
         RETIRED_PLIST_PATHS
     )
 

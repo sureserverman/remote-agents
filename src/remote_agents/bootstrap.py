@@ -123,7 +123,7 @@ from remote_agents.config import (
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
-from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.agent_activity import ActivityConfidence, AgentActivity
 from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
@@ -298,12 +298,11 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
     same question about different profiles, and an observation is owed the same weight
     regardless of which of them noticed.
 
-    Gathering them is also what lets the notifier group by session across both, which it could
-    not do if each source delivered its own batch. In practice the two never meet in one group
-    -- `HOOK_SOURCED_PROFILES` is subtracted from the pane watch precisely so a session is
-    watched or hooked and never both -- so this is a property of the seam rather than a case
-    anyone will see. It is worth stating because the alternative shape, one `deliver` call per
-    source, looks equivalent and quietly reintroduces two messages per session per pass.
+    Gathering them is also what lets the notifier group by session across both. Codex is a
+    hybrid source: a reported hook event suppresses only the matching current quiet spell, so
+    the sources can meet in a pass without producing a fact and a guess about the same stop.
+    One `deliver` call per source looks equivalent but quietly reintroduces two messages per
+    session per pass.
 
     **Each source is guarded separately, and that is not tidiness.** `poll()` commits its own
     dedup state as a side effect of deciding a pane has gone quiet -- it marks the spell
@@ -322,11 +321,6 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
     and a spool with a backlog would otherwise stall both.
     """
     activities: list[AgentActivity] = []
-    if composition.quiet_watcher is not None:
-        try:
-            activities.extend(await composition.quiet_watcher.poll())
-        except Exception:
-            _LOG.exception("pane quiet watch failed")
     if composition.activity_directory is not None:
         try:
             activities.extend(
@@ -334,6 +328,19 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
+    if composition.quiet_watcher is not None:
+        try:
+            reported_session_ids = tuple(
+                dict.fromkeys(
+                    activity.session_id
+                    for activity in activities
+                    if activity.confidence is ActivityConfidence.REPORTED
+                )
+            )
+            composition.quiet_watcher.mark_reported(reported_session_ids)
+            activities.extend(await composition.quiet_watcher.poll())
+        except Exception:
+            _LOG.exception("pane quiet watch failed")
     if composition.activity_store is not None:
         for activity in activities:
             try:
