@@ -46,6 +46,15 @@ SENTINEL_SECRETS = {
 }
 
 
+#: The fake home the autouse fixture below builds, so the module-level sweeps can name it.
+#:
+#: A module global rather than a fixture argument because `_every_rendered_artifact` and
+#: `_every_verb_argv` are plain helpers called from a dozen assertions; threading a parameter
+#: through all of them would be a larger edit than the property is worth. It is rebound on every
+#: test by the autouse fixture, so it can never be a stale path from an earlier one.
+_FAKE_HOME = Path("/home/tester")
+
+
 @pytest.fixture(autouse=True)
 def _a_host_where_the_credential_is_reachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -60,9 +69,15 @@ def _a_host_where_the_credential_is_reachable(
     2.0 the environment is no longer where this project reads its credential from -- the 0600
     file is -- so a renderer that opened that file and emitted the value would have been
     invisible to a sweep whose sentinels only ever existed in `os.environ`. `HOME` is
-    redirected too, so `registered_supervisors()` builds adapters rooted at the fake home and
-    anything reaching for the real file finds the fake one first.
+    redirected too, so anything reaching for the real credential file finds the fake one first.
+
+    The supervisors are no longer rooted by that redirection: `home` is a required argument now
+    (it used to default to `Path.home()`, which is how a contract test came to delete a real
+    installed daemon), so the sweeps below are handed `_FAKE_HOME` explicitly. Same host, said
+    out loud instead of arranged through an environment variable.
     """
+    global _FAKE_HOME
+    _FAKE_HOME = tmp_path
     for name, value in SENTINEL_SECRETS.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -158,7 +173,7 @@ def _leaks_in(text: str) -> list[str]:
 def _every_rendered_artifact() -> list[tuple[SupervisorKind, SupervisorArtifact]]:
     return [
         (supervisor.kind, artifact)
-        for supervisor in registered_supervisors()
+        for supervisor in registered_supervisors(_FAKE_HOME)
         for artifact in supervisor.artifacts()
     ]
 
@@ -174,7 +189,7 @@ def _every_verb_argv() -> list[tuple[SupervisorKind, str, tuple[str, ...]]]:
     """
     return [
         (supervisor.kind, name, tuple(getattr(supervisor, name)()))
-        for supervisor in registered_supervisors()
+        for supervisor in registered_supervisors(_FAKE_HOME)
         for name in ("install_command", "remove_command", "start_command", "liveness_command")
     ]
 
@@ -193,7 +208,7 @@ def test_the_registry_is_not_empty_so_the_sweep_below_cannot_pass_vacuously() ->
 
 def test_every_registered_adapter_renders_at_least_one_artifact() -> None:
     """The second half of the vacuity guard: a registered adapter that renders nothing."""
-    for supervisor in registered_supervisors():
+    for supervisor in registered_supervisors(_FAKE_HOME):
         assert supervisor.artifacts(), f"{supervisor.kind.value} renders no artifact to sweep"
 
 
@@ -268,6 +283,17 @@ class _PoisonedSupervisor:
 
     kind = SupervisorKind.LAUNCHD
     leaked_token = SENTINEL_SECRETS["REMOTE_AGENTS_TELEGRAM_BOT_TOKEN"]
+
+    def __init__(self, *, home: Path) -> None:
+        """Accept the home the registry now hands every factory, and ignore it.
+
+        A double registered in `SUPERVISOR_FACTORIES` has to satisfy the same construction
+        contract as a real adapter, and that contract gained a required `home` when the
+        adapters stopped defaulting it to `Path.home()`. Ignored rather than used because this
+        adapter's whole job is to emit a fixed poisoned artifact -- but taking the argument is
+        what keeps the double honest about the interface it is standing in for.
+        """
+        self.home = home
 
     def artifacts(self) -> tuple[SupervisorArtifact, ...]:
         content = plistlib.dumps(

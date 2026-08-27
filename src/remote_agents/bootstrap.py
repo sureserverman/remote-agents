@@ -2140,9 +2140,14 @@ def _supervisor_for_host() -> ServiceSupervisor:
     `systemctl` on their PATH.
     """
     try:
+        # `Path.home()` is written here, once, and nowhere else. It used to be the adapters'
+        # own default, which meant every construction anywhere -- including a contract test's --
+        # silently described this machine, and those adapters name the files removal deletes.
+        # Naming it at the one composition point that is entitled to it is the point of the
+        # argument being required.
         if sys.platform == "darwin":
-            return LaunchdSupervisor()
-        return SystemdSupervisor()
+            return LaunchdSupervisor(home=Path.home())
+        return SystemdSupervisor(home=Path.home())
     except ValueError as error:
         # The adapters refuse a home or interpreter they cannot render faithfully -- a colon
         # that would split the plist PATH, a control character that would inject a unit

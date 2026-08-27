@@ -38,6 +38,15 @@ from remote_agents.ports.service_supervisor import (
 #: A rendering that depends on nothing about the host: fixed interpreter, home and uid, and a
 #: probe that answers without looking at a disk. The claims about the real host are made
 #: separately, by the two tests that need them.
+#: A home that exists on no machine, for the tests below that are about something else.
+#:
+#: `home` used to default to `Path.home()`, so a construction that cared only about the
+#: *interpreter* default, or only about the registry being enumerable, silently described the
+#: machine running the suite. That is how a sibling contract test came to delete this project's
+#: own installed daemon. Naming a synthetic home keeps each assertion exactly as meaningful and
+#: takes the operator's tree out of reach.
+_SYNTHETIC_HOME = Path("/home/tester")
+
 ELSEWHERE = LaunchdSupervisor(
     interpreter=Path("/opt/ra/bin/python3"),
     home=Path("/Users/tester"),
@@ -102,8 +111,11 @@ def test_launchd_plist_starts_the_console_script_with_the_same_arguments_as_the_
 
 
 def test_launchd_plist_names_the_running_interpreters_install_prefix() -> None:
-    """Rendered with no arguments, the plist starts the console script beside *this* python."""
-    parsed = _plist(LaunchdSupervisor())
+    """Given only a home, the plist starts the console script beside *this* python.
+
+    The interpreter default is what is under test; the home is supplied and synthetic.
+    """
+    parsed = _plist(LaunchdSupervisor(home=_SYNTHETIC_HOME))
 
     assert parsed["ProgramArguments"][0] == str(Path(sys.executable).parent / "remote-agents")
 
@@ -265,7 +277,7 @@ def test_launchd_domain_target_uses_the_uid_it_was_given() -> None:
     )
 
     assert pinned.remove_command() == ("launchctl", "bootout", f"gui/1000/{LABEL}")
-    assert LaunchdSupervisor().install_command()[2] == f"gui/{os.getuid()}"
+    assert LaunchdSupervisor(home=_SYNTHETIC_HOME).install_command()[2] == f"gui/{os.getuid()}"
 
 
 def test_launchd_supervisor_satisfies_the_service_supervisor_port() -> None:
@@ -292,7 +304,7 @@ def test_launchd_removal_sweeps_every_path_this_adapter_has_ever_owned() -> None
 
 def test_launchd_adapter_is_reachable_through_the_registry() -> None:
     """Task 2.5 sweeps every registered adapter's artifacts; the set has to be enumerable."""
-    kinds = {supervisor.kind for supervisor in registered_supervisors()}
+    kinds = {supervisor.kind for supervisor in registered_supervisors(_SYNTHETIC_HOME)}
 
     assert SupervisorKind.LAUNCHD in kinds
 

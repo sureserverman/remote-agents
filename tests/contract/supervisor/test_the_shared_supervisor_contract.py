@@ -28,8 +28,18 @@ from remote_agents.ports.service_supervisor import (
 _VERBS = ("install_command", "remove_command", "start_command", "liveness_command")
 
 
+#: A home that exists on no machine, so an adapter built here cannot name a real file.
+#:
+#: The parametrization is built at import time, before any `tmp_path` exists, and it used to get
+#: the real home for free from the adapters' own default -- which is how a test in this file came
+#: to delete the developer's installed daemon. A synthetic absolute path keeps every path-shape
+#: assertion below exactly as meaningful while making the operator's tree unreachable from here;
+#: the one test that actually touches disk rebuilds its adapter under `tmp_path`.
+_ELSEWHERE = Path("/home/tester")
+
+
 def _registered() -> list[ServiceSupervisor]:
-    return list(registered_supervisors())
+    return list(registered_supervisors(_ELSEWHERE))
 
 
 def _ids(supervisors: list[ServiceSupervisor]) -> list[str]:
@@ -465,6 +475,43 @@ def test_no_registered_adapter_would_sweep_a_foreign_directory(
     assert not any(path.exists() for path in swept), "removal left one of its own artifacts"
     assert all(path.exists() for path in foreign), "removal deleted a file that was not its own"
     assert all(directory.is_dir() for directory in directories), "removal deleted a directory"
+
+
+@_PARAMS
+def test_no_adapter_can_be_built_without_being_told_whose_home_it_describes(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """The structural half of the repair: `home` has no default on any registered adapter.
+
+    Fixing the one test that swept a real home fixed an instance. This pins the property that
+    makes the instance unreachable -- `SystemdSupervisor()` and `LaunchdSupervisor()` used to be
+    legal and to mean "this machine", so any construction anywhere, in any future test, silently
+    named the operator's files. Those files are what `remove_daemon` unlinks.
+
+    Asserted on the *registered* adapters rather than on the two classes by name, so an adapter
+    added tomorrow is held to it on the day it is registered.
+    """
+    with pytest.raises(TypeError, match="home"):
+        type(supervisor)()
+
+
+@_PARAMS
+def test_the_home_an_adapter_was_given_is_the_home_it_describes(
+    supervisor: ServiceSupervisor, tmp_path: Path
+) -> None:
+    """Required is not sufficient: an argument that were ignored would be worse than no argument.
+
+    Every path either adapter can render or delete has to sit under the home it was handed, or
+    the guarantee above buys nothing -- a supervisor could take a `tmp_path` and still name
+    `~/.config`.
+    """
+    local = type(supervisor)(interpreter=supervisor.interpreter, home=tmp_path)
+
+    named = (*artifact_paths_to_remove(local), *local.required_directories())
+    assert named
+    assert all(path.is_relative_to(tmp_path) for path in named), (
+        f"{local.kind.value} names a path outside the home it was given: {named}"
+    )
 
 
 @pytest.mark.parametrize(
