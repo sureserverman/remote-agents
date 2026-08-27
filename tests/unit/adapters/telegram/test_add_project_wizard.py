@@ -9,6 +9,7 @@ import pytest
 from backends import backend_for
 from fake_telegram import LoneMessageBot
 
+from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import (
     PrivateBotBoundary,
     _TextEntry,
@@ -93,7 +94,7 @@ def _buttons(rendered: dict[str, object]) -> list[str]:
     markup = rendered.get("reply_markup")
     if markup is None:
         return []
-    return [button.text for row in markup.inline_keyboard for button in row]
+    return [unpadded(button.text) for row in markup.inline_keyboard for button in row]
 
 
 async def _send(boundary: PrivateBotBoundary, text: str) -> dict[str, object]:

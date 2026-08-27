@@ -25,10 +25,11 @@ from dataclasses import replace
 from typing import Protocol
 
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.relative_time import age
+from remote_agents.application.relative_time import age, until
 from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
+from remote_agents.ports.agent_usage import AgentUsage, ContextWindow, UsageWindow
 
 
 def session_row(record: SessionRecord) -> str:
@@ -193,3 +194,80 @@ async def listed_sessions(sessions: _ListReadableSessions) -> tuple[SessionRecor
     """
     await sessions.refresh_readiness()
     return only_listed(await sessions.list_sessions())
+
+
+def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
+    """Render what a session has spent, or say plainly why there is nothing to render.
+
+    Three outcomes, and keeping them distinct is the whole reason this returns a tuple rather
+    than a string:
+
+    - **`None`** — the reader could not match this session to a provider conversation. Usually
+      temporary: an agent that has not written its first turn yet has no file to find, so the
+      line says *yet* and the owner can reopen the screen.
+    - **empty** — the provider matched and publishes nothing. Permanent, and said so, because
+      an owner told "not yet" about cursor-agent would wait for a number that is never coming.
+    - **anything else** — the figures, one line for the context window and one for the plan's
+      limit windows, either of which may be absent on its own.
+
+    A percentage is shown only where the provider stated the ceiling. Claude records what each
+    turn used and never the window it used it out of, so its line is a bare count; deriving the
+    ceiling from the model name would be this function guessing, and it would guess wrong the
+    first time the owner switched models mid-session — which is a thing Claude Code lets them
+    do.
+    """
+    if usage is None:
+        return ("Usage: no conversation matched yet.",)
+    if usage.is_empty:
+        return ("Usage: not reported by this agent.",)
+    lines = []
+    if usage.context is not None:
+        lines.append(f"Context: {_context_phrase(usage.context)}")
+    elif usage.windows:
+        # Reached by Claude and only Claude: its limits are account-wide and come from
+        # somewhere else entirely, so they answer while this session's own transcript has not
+        # been found — a fresh pane that has not taken a turn yet, or an old session whose
+        # conversation has since been cleaned up. Saying so beats a screen that shows `Limits`
+        # with no `Context` above it and leaves the reader to work out which half is missing.
+        lines.append("Context: no conversation matched yet.")
+    if usage.windows:
+        rendered = " · ".join(_window_phrase(window) for window in usage.windows)
+        borrowed = "" if usage.stale_source is None else f" — via {usage.stale_source}"
+        lines.append(f"Limits: {rendered}{borrowed}")
+    return tuple(lines)
+
+
+def _context_phrase(context: ContextWindow) -> str:
+    used = _tokens(context.used_tokens)
+    fraction = context.used_fraction
+    if context.limit_tokens is None or fraction is None:
+        return used
+    return f"{used} of {_tokens(context.limit_tokens)} · {round(fraction * 100)}%"
+
+
+def _window_phrase(window: UsageWindow) -> str:
+    spent = f"{window.label} {_percent(window.used_percent)}"
+    if window.resets_at is None:
+        return spent
+    return f"{spent} (resets in {until(window.resets_at)})"
+
+
+def _percent(value: float) -> str:
+    """Whole percent, because no decision a reader makes here turns on a tenth of one."""
+    return f"{round(value)}%"
+
+
+def _tokens(count: int) -> str:
+    """Abbreviate a token count to the precision a reader can actually use.
+
+    One decimal below a hundred thousand and none above it, so `24.3k` keeps the digit that
+    distinguishes it from `24.9k` while `185k` does not carry a `.3` nobody reads. Millions get
+    one decimal for the same reason `1.0M` and `1.9M` are different answers.
+    """
+    if count < 1_000:
+        return str(count)
+    if count < 100_000:
+        return f"{count / 1_000:.1f}k"
+    if count < 1_000_000:
+        return f"{round(count / 1_000)}k"
+    return f"{count / 1_000_000:.1f}M"

@@ -27,7 +27,16 @@ from remote_agents.ports.service_supervisor import (
 
 #: A rendering that depends on nothing about the host, for the assertions about path *shape*.
 #: The claims about the real interpreter are made separately, by the tests that need it.
-ELSEWHERE = SystemdSupervisor(interpreter=Path("/opt/ra/bin/python3"), home=Path("/home/tester"))
+#: A home that exists on no machine, for the tests below that are about something else.
+#:
+#: `home` used to default to `Path.home()`, so a construction that cared only about the
+#: *interpreter* default, or only about the registry being enumerable, silently described the
+#: machine running the suite. That is how a sibling contract test came to delete this project's
+#: own installed daemon. Naming a synthetic home keeps each assertion exactly as meaningful and
+#: takes the operator's tree out of reach.
+_SYNTHETIC_HOME = Path("/home/tester")
+
+ELSEWHERE = SystemdSupervisor(interpreter=Path("/opt/ra/bin/python3"), home=_SYNTHETIC_HOME)
 
 
 def _unit_contents(supervisor: SystemdSupervisor) -> str:
@@ -54,8 +63,12 @@ def _user_manager_environment() -> dict[str, str] | None:
 
 
 def test_systemd_unit_names_the_running_interpreters_install_prefix() -> None:
-    """Rendered with no arguments, the unit starts the console script beside *this* python."""
-    contents = _unit_contents(SystemdSupervisor())
+    """Given only a home, the unit starts the console script beside *this* python.
+
+    The interpreter default is what is under test, so the home is supplied and synthetic --
+    which is the point of it no longer being defaulted alongside.
+    """
+    contents = _unit_contents(SystemdSupervisor(home=_SYNTHETIC_HOME))
 
     prefix = Path(sys.executable).parent
     assert f"ExecStart={prefix}/remote-agents serve --config " in contents
@@ -163,7 +176,10 @@ def test_systemd_unit_passes_systemd_analyze_verify(tmp_path: Path) -> None:
     if environment is None:
         pytest.skip("BLOCKED: no XDG_RUNTIME_DIR for a --user manager to initialise against")
 
-    (artifact,) = SystemdSupervisor().artifacts()
+    # `tmp_path` rather than the synthetic home: `verify` reads the unit's directives against
+    # the filesystem, so `WorkingDirectory` naming a path that does not exist would fail for a
+    # reason unrelated to what this test is about.
+    (artifact,) = SystemdSupervisor(home=tmp_path).artifacts()
     # Verify keys off the filename's suffix, so the temporary copy has to keep the unit's name.
     written = tmp_path / artifact.path.name
     written.write_text(artifact.content, encoding="utf-8")
@@ -217,7 +233,7 @@ def test_systemd_removal_sweeps_every_path_this_adapter_has_ever_owned() -> None
 
 def test_systemd_adapter_is_reachable_through_the_registry() -> None:
     """Task 2.5 sweeps every registered adapter's artifacts; the set has to be enumerable."""
-    kinds = {supervisor.kind for supervisor in registered_supervisors()}
+    kinds = {supervisor.kind for supervisor in registered_supervisors(_SYNTHETIC_HOME)}
 
     assert SupervisorKind.SYSTEMD in kinds
 

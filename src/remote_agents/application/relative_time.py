@@ -38,3 +38,23 @@ def age(created_at: datetime) -> str:
     if elapsed < _DAY:
         return f"{elapsed // _HOUR}h ago"
     return f"{elapsed // _DAY}d ago"
+
+
+def until(moment: datetime) -> str:
+    """Render the time remaining before `moment` in the same units, and the same way, as `age`.
+
+    The mirror of `age`, and deliberately its exact mirror: same thresholds, same refusal to
+    compound units, same clamp at zero. A rate-limit window that has already reset reads
+    `0m` rather than a negative remainder, for the reason the clamp above exists — a clock the
+    reader cannot see disagreeing by a second should not look like a broken session.
+
+    Separate from `age` rather than a signed variant of it, because the two are read in
+    opposite directions and the caller should not have to know which sign means which. The
+    shared thresholds are the point of them living side by side.
+    """
+    remaining = max(0, int((moment - datetime.now(UTC)).total_seconds()))
+    if remaining < _HOUR:
+        return f"{remaining // _MINUTE}m"
+    if remaining < _DAY:
+        return f"{remaining // _HOUR}h"
+    return f"{remaining // _DAY}d"

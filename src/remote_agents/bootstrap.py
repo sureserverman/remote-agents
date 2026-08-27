@@ -34,6 +34,7 @@ from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
 )
+from remote_agents.adapters.agents.usage import ProfileUsageReaders
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder
@@ -116,6 +117,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
     refuse_a_credential_shaped_value,
@@ -657,6 +659,51 @@ class LocalRuntime:
     gateway: TmuxGateway
 
 
+#: The variables a managed pane inherits from whatever composed the runtime.
+#:
+#: Deliberately tiny: the agent is launched through `os.execvpe`, which *replaces* the
+#: environment rather than adding to it, so this tuple is the whole world the process gets.
+_INHERITED_ENVIRONMENT = ("HOME", "LANG", "LC_ALL", "PATH", "TERM", "COLORTERM")
+
+#: What `TERM` becomes when the composing process has none, and the values that count as none.
+#:
+#: `execvpe` replacing the environment is also why tmux's own `default-terminal` never reaches
+#: the agent: tmux sets `TERM` for the shell it spawns, the fixed runner then execs over it
+#: with exactly the mapping above, and whatever tmux set is gone. So the value here is the
+#: only `TERM` an agent ever sees.
+#:
+#: The bot is a **systemd user service**, and a systemd service has no controlling terminal
+#: and therefore no `TERM`. The local surface is a TUI and always has one. That single
+#: difference is why a session launched from the bot rendered in white while the identical
+#: session launched from the TUI rendered in colour: with `TERM` absent, every agent CLI's
+#: colour detection (`supports-color`, and the equivalents in the Rust and Go CLIs) reports no
+#: capability and falls back to monochrome. Verified against the stored launch intents on this
+#: host — bot-launched intents carried no `TERM` key at all, TUI-launched ones carried
+#: `xterm-256color` — rather than inferred from the symptom.
+#:
+#: `xterm-256color` because it is the entry the TUI-launched panes were already proving works,
+#: and because it is present in the base terminfo database of every platform this project
+#: supports. `dumb` is treated as absent for the same reason it exists: it is the value a
+#: process announces when it knows nothing about its terminal, and a pane on this socket
+#: always has one.
+_DEFAULT_TERM = "xterm-256color"
+_COLOURLESS_TERMS = frozenset({"", "dumb", "unknown"})
+
+
+def _curated_environment(source: Mapping[str, str]) -> dict[str, str]:
+    """Return the launch environment every managed pane gets, with a usable `TERM` guaranteed.
+
+    `COLORTERM` is inherited but never invented: it is the terminal's own claim about truecolour
+    support, and a composing process that has one is passing on something it was told. Asserting
+    it on behalf of a service that has no terminal would be this function guessing at a
+    capability instead of supplying a missing default.
+    """
+    environment = {name: source[name] for name in _INHERITED_ENVIRONMENT if name in source}
+    if environment.get("TERM", "").strip().lower() in _COLOURLESS_TERMS:
+        environment["TERM"] = _DEFAULT_TERM
+    return environment
+
+
 def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntime:
     """Compose the one tmux terminal and profile probe that every surface shares."""
     definitions = closed_profiles()
@@ -673,11 +720,7 @@ def _local_runtime(config, paths: ProductionPaths, project_paths) -> LocalRuntim
     }
     profile_factories = {}
     resume_profile_factories = {}
-    allowed_environment = {
-        name: os.environ[name]
-        for name in ("HOME", "LANG", "LC_ALL", "PATH", "TERM")
-        if name in os.environ
-    }
+    allowed_environment = _curated_environment(os.environ)
     profile_directories = sorted(
         {str(executable.parent) for executable in executables.values() if executable is not None}
     )
@@ -735,6 +778,37 @@ def _narrow_profiles(
         )
         for profile in compatibility
     )
+
+
+def _usage_reader(
+    store: SQLiteSessionStore, project_paths: Mapping[ProjectId, Path]
+) -> Callable[[SessionId], Awaitable[AgentUsage | None]]:
+    """Bind the provider usage readers to the two things only the root knows.
+
+    A session is a row; a provider conversation is a file in a directory named after a
+    workspace. Turning the first into the second needs the store *and* the project paths, and
+    neither belongs on a screen builder — which is why `Backend.usage` is a bound callable in
+    the shape of `capture` rather than a service the frontends resolve themselves.
+
+    The provider read runs on a worker thread. It is a `stat` sweep of a directory and a tail
+    read of one file — small, but a filesystem walk all the same, and the same rule
+    `refresh_catalogue` states applies here: neither frontend may block its event loop on the
+    disk during a render. The store lookup ahead of it is already `async` and stays on the
+    loop, because that is how every other caller drives it and it is a single indexed row.
+    """
+    readers = ProfileUsageReaders()
+
+    async def read(session_id: SessionId) -> AgentUsage | None:
+        record = await store.get(session_id)
+        if record is None:
+            return None
+        workspace = project_paths.get(record.project_id)
+        if workspace is None:
+            return None
+        query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
+        return await asyncio.to_thread(readers.read, query)
+
+    return read
 
 
 def compose_backend(
@@ -806,6 +880,9 @@ def compose_backend(
         profiles=_narrow_profiles(runtime.compatibility),
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
+        usage=_usage_reader(
+            store if store is not None else SQLiteSessionStore(connection), projects.paths
+        ),
         max_label_length=config.max_label_length,
     )
 
@@ -2063,9 +2140,14 @@ def _supervisor_for_host() -> ServiceSupervisor:
     `systemctl` on their PATH.
     """
     try:
+        # `Path.home()` is written here, once, and nowhere else. It used to be the adapters'
+        # own default, which meant every construction anywhere -- including a contract test's --
+        # silently described this machine, and those adapters name the files removal deletes.
+        # Naming it at the one composition point that is entitled to it is the point of the
+        # argument being required.
         if sys.platform == "darwin":
-            return LaunchdSupervisor()
-        return SystemdSupervisor()
+            return LaunchdSupervisor(home=Path.home())
+        return SystemdSupervisor(home=Path.home())
     except ValueError as error:
         # The adapters refuse a home or interpreter they cannot render faithfully -- a colon
         # that would split the plist PATH, a control character that would inject a unit

@@ -28,8 +28,18 @@ from remote_agents.ports.service_supervisor import (
 _VERBS = ("install_command", "remove_command", "start_command", "liveness_command")
 
 
+#: A home that exists on no machine, so an adapter built here cannot name a real file.
+#:
+#: The parametrization is built at import time, before any `tmp_path` exists, and it used to get
+#: the real home for free from the adapters' own default -- which is how a test in this file came
+#: to delete the developer's installed daemon. A synthetic absolute path keeps every path-shape
+#: assertion below exactly as meaningful while making the operator's tree unreachable from here;
+#: the one test that actually touches disk rebuilds its adapter under `tmp_path`.
+_ELSEWHERE = Path("/home/tester")
+
+
 def _registered() -> list[ServiceSupervisor]:
-    return list(registered_supervisors())
+    return list(registered_supervisors(_ELSEWHERE))
 
 
 def _ids(supervisors: list[ServiceSupervisor]) -> list[str]:
@@ -404,7 +414,7 @@ def test_a_removal_that_had_nothing_to_do_is_not_a_failure_when_unregister_refus
 
 @_PARAMS
 def test_no_registered_adapter_would_sweep_a_foreign_directory(
-    supervisor: ServiceSupervisor,
+    supervisor: ServiceSupervisor, tmp_path: Path
 ) -> None:
     """Every path either adapter can delete is a file it names, never a directory it lives in.
 
@@ -412,18 +422,45 @@ def test_no_registered_adapter_would_sweep_a_foreign_directory(
     one foreign file -- while taking out an arbitrary number of them on a real host. This asserts
     the shape rather than the sample: nothing in the ledger is a directory any other tool writes
     into, and every entry is a leaf.
+
+    **The adapter is rebuilt under `tmp_path`, and that is not tidiness.** `_SUPERVISORS` holds
+    the *registered* adapters, whose `home` defaults to `Path.home()`, and `remove_daemon`'s last
+    act is `path.unlink()` on everything the sweep names. Driving it against those supervisors
+    ran the real uninstaller against the developer's own machine: on 2026-08-26 this test deleted
+    `~/.config/systemd/user/remote-agents.service` and the `enable` symlink beside it, leaving a
+    service systemd went on running from a unit that no longer existed on disk -- and which no
+    reboot could ever have brought back. It was silent because `run` is stubbed here, so no
+    `systemctl disable` ever ran: the service was never stopped, and nothing reached the journal.
+
+    The parametrisation is what makes this cover an adapter registered tomorrow, so it stays;
+    only the home moves. `type(supervisor)` keeps each real adapter class under test.
     """
     from remote_agents.adapters.supervisor.installer import remove_daemon
 
-    swept = artifact_paths_to_remove(supervisor)
-    directories = set(supervisor.required_directories())
+    local = type(supervisor)(interpreter=supervisor.interpreter, home=tmp_path)
+    swept = artifact_paths_to_remove(local)
+    directories = set(local.required_directories())
+
+    # Planted, so the drive below is load-bearing. With nothing on disk `remove_daemon` finds an
+    # empty sweep and returns before its unlink loop, which is precisely the branch that has to
+    # be exercised -- and the branch that did the damage. A foreign file in every required
+    # directory is what a remover rewritten to scan those directories would take, so it fails
+    # here as an assertion instead of on somebody's host.
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+    foreign = tuple(directory / "another-tools-file.conf" for directory in directories)
+    for path in foreign:
+        path.write_text("not this tool's to delete", encoding="utf-8")
+    for path in swept:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("an artifact this tool installed", encoding="utf-8")
 
     # Driven through `remove_daemon` as well as read off the ledger, because reading the ledger
     # alone cannot catch a regression in the *remover*: a `remove_daemon` rewritten to scan
     # `required_directories()` itself would leave this assertion green. A reviewer was right that
     # the first version of this test claimed a role it did not have.
     recorded: list[tuple[str, ...]] = []
-    remove_daemon(supervisor, run=lambda argv: recorded.append(tuple(argv)) or 0)
+    remove_daemon(local, run=lambda argv: recorded.append(tuple(argv)) or 0)
 
     assert recorded, "removal ran no supervisor command at all"
     assert swept
@@ -432,8 +469,48 @@ def test_no_registered_adapter_would_sweep_a_foreign_directory(
     # "inside a required directory" -- which was the first version of this assertion and was too
     # narrow twice over: it forbade the `default.target.wants` symlink `enable` creates, and it
     # forbade a *relocated* retired entry, which is half of the obligation this ledger carries.
-    assert all(path.is_relative_to(supervisor.home) for path in swept), (
+    assert all(path.is_relative_to(local.home) for path in swept), (
         "a swept path escapes the operator's home"
+    )
+    assert not any(path.exists() for path in swept), "removal left one of its own artifacts"
+    assert all(path.exists() for path in foreign), "removal deleted a file that was not its own"
+    assert all(directory.is_dir() for directory in directories), "removal deleted a directory"
+
+
+@_PARAMS
+def test_no_adapter_can_be_built_without_being_told_whose_home_it_describes(
+    supervisor: ServiceSupervisor,
+) -> None:
+    """The structural half of the repair: `home` has no default on any registered adapter.
+
+    Fixing the one test that swept a real home fixed an instance. This pins the property that
+    makes the instance unreachable -- `SystemdSupervisor()` and `LaunchdSupervisor()` used to be
+    legal and to mean "this machine", so any construction anywhere, in any future test, silently
+    named the operator's files. Those files are what `remove_daemon` unlinks.
+
+    Asserted on the *registered* adapters rather than on the two classes by name, so an adapter
+    added tomorrow is held to it on the day it is registered.
+    """
+    with pytest.raises(TypeError, match="home"):
+        type(supervisor)()
+
+
+@_PARAMS
+def test_the_home_an_adapter_was_given_is_the_home_it_describes(
+    supervisor: ServiceSupervisor, tmp_path: Path
+) -> None:
+    """Required is not sufficient: an argument that were ignored would be worse than no argument.
+
+    Every path either adapter can render or delete has to sit under the home it was handed, or
+    the guarantee above buys nothing -- a supervisor could take a `tmp_path` and still name
+    `~/.config`.
+    """
+    local = type(supervisor)(interpreter=supervisor.interpreter, home=tmp_path)
+
+    named = (*artifact_paths_to_remove(local), *local.required_directories())
+    assert named
+    assert all(path.is_relative_to(tmp_path) for path in named), (
+        f"{local.kind.value} names a path outside the home it was given: {named}"
     )
 
 

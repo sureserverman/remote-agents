@@ -151,13 +151,19 @@ def homebrew_prefix(candidates: tuple[Path, ...] = _BREW_BINARIES) -> Path | Non
     return None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class LaunchdSupervisor:
     """`ServiceSupervisor` for a per-user launchd domain, rendering its own LaunchAgent.
 
-    Every host-specific value is a constructor parameter with a host default rather than a read
-    of the process environment, so a test renders a plist that depends on nothing about the
-    machine running it -- which is what lets this adapter be exercised in full on the Linux
+    **`home` has no default**, for the reason written out on `SystemdSupervisor`: a defaulted
+    home let a test construct the registered adapters and drive `remove_daemon` through them,
+    which deleted the real artifacts on the developer's own machine. This adapter's sweep names
+    `~/Library/LaunchAgents/remote-agents.plist` and both launchd log files, so the same test on
+    a Mac would have taken all three.
+
+    Every *other* host-specific value is a constructor parameter with a host default rather than
+    a read of the process environment, so a test renders a plist that depends on nothing about
+    the machine running it -- which is what lets this adapter be exercised in full on the Linux
     host the project is developed on. `uid` is here for that reason and not only for symmetry:
     it is the domain target `launchctl` is addressed with, and a test that could not pin it
     would be asserting against whoever ran it.
@@ -167,8 +173,8 @@ class LaunchdSupervisor:
     needing Homebrew, or needing to not have it.
     """
 
+    home: Path
     interpreter: Path = field(default_factory=lambda: Path(sys.executable))
-    home: Path = field(default_factory=Path.home)
     uid: int = field(default_factory=os.getuid)
     homebrew_prefix: Callable[[], Path | None] = homebrew_prefix
 

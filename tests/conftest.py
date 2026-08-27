@@ -23,8 +23,46 @@ def _test_sockets() -> set[Path]:
     return {path for path in directory.glob(f"{_TEST_SOCKET_PREFIX}*") if path.is_socket()}
 
 
+def _server_answers(socket: Path) -> bool:
+    """Whether a real tmux server is still behind this socket file.
+
+    `has-session` with no target asks whether the server has any session at all, which is the
+    cheapest question that distinguishes a live server from an abandoned socket file. A server
+    that is up but empty is vanishingly unlikely here -- every test server is created by
+    `new-session` -- and treating one as live is the conservative direction anyway.
+    """
+    return (
+        subprocess.run(
+            ["tmux", "-L", socket.name, "has-session"],
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Record pre-existing sockets so cleanup only ever removes this run's own."""
+    """Reap sockets no server is behind, then record the rest as not ours to remove.
+
+    The recording half is what keeps `pytest_sessionfinish` from touching a concurrent run's
+    server or the operator's own; that rule is unchanged.
+
+    The reaping half closes the leak it left open. `sessionfinish` only removes what *this* run
+    created, so a run that crashes, is interrupted, or is killed never reaches it and abandons its
+    sockets for good. They accumulated: 185 of them on this host by 2026-08-27, dating back to
+    2026-08-05, two still holding a live server from runs whose `tmp_path` had long since gone.
+
+    Only **dead** sockets are reaped, and that is what makes this safe rather than a heuristic
+    about age. A socket with no server behind it cannot belong to a concurrent run -- a running
+    suite's server answers `has-session` -- so removing one can disturb nothing. A live orphan is
+    left alone precisely because "live" and "somebody else's" are indistinguishable from here.
+
+    The prefix is the whole guard on blast radius: `remote-agents-test-` cannot match the bare
+    `remote-agents` socket the operator's own server uses, because that name has no such prefix.
+    """
+    for socket in _test_sockets():
+        if not _server_answers(socket):
+            socket.unlink(missing_ok=True)
     session.config._remote_agents_sockets_before = _test_sockets()
 
 

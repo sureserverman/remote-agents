@@ -46,6 +46,7 @@ from remote_agents.adapters.telegram.presenters import (
     Button,
     RenderedMessage,
     render_message,
+    uniform_keyboard,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE, StopController
 from remote_agents.application.backend import Backend
@@ -90,6 +91,7 @@ from remote_agents.application.session_views import (
     only_listed,
     selectable_area,
     session_row,
+    usage_lines,
     with_project_names,
 )
 from remote_agents.application.stops import execute_stop
@@ -1352,13 +1354,39 @@ class PrivateBotBoundary:
                 stops.append(Button(ACTION_LABELS[action], token))
         if stops:
             buttons.append(tuple(stops))
+        # Below the state, not above it: what a session *is* comes first, and what it has spent
+        # is context for a reader who has already read that. Escaped like every other line here
+        # even though `usage_lines` composes only digits and fixed words — the escape is a
+        # property of this boundary (DEC-014), not a judgement about each string's provenance.
+        spent = "".join(f"\n{escape(line)}" for line in await self._usage_lines(record))
         return self._message(
             f"<b>{escape(record.display.rendered)}</b>\n"
             f"State: {record.state.value}\n"
-            f"{_state_explanation(record.state, record.orphan_provenance)}",
+            f"{_state_explanation(record.state, record.orphan_provenance)}"
+            f"{spent}",
             tuple(buttons),
             back=self._sessions_back(),
         )
+
+    async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
+        """Ask the provider what this session has spent, and never let the answer cost a screen.
+
+        A host that wired no reader renders no usage line at all — the same absence-is-an-answer
+        arrangement `capture` and `activity_feed` have, rather than a row saying the host is
+        missing something the owner did not ask for.
+
+        The broad `except` is the same trade `ProfileUsageReaders` already makes one layer down,
+        made again at the seam that matters: this line is a decoration on a screen whose real
+        content is a session's state and its stop actions, and a provider that changed its file
+        format under an upgrade must not be able to take those away.
+        """
+        if self.backend.usage is None:
+            return ()
+        try:
+            return usage_lines(await self.backend.usage(record.session_id))
+        except Exception:
+            logging.getLogger(__name__).debug("usage read failed", exc_info=True)
+            return ()
 
     async def _attach_reply(self, session_value: str) -> RenderedMessage:
         record = await self._record(session_value)
@@ -2476,13 +2504,16 @@ def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
     return {
         "text": message.text,
         "parse_mode": ParseMode.HTML,
+        # `uniform_keyboard` and not `message.keyboard`: the floor is presentation, applied at
+        # the boundary where a typed screen becomes Telegram's own types, so no screen builder
+        # has to remember it and no test of a screen's *content* is reading padding.
         "reply_markup": InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(button.text, callback_data=button.callback_data)
                     for button in row
                 ]
-                for row in message.keyboard
+                for row in uniform_keyboard(message.keyboard)
             ]
         ),
     }

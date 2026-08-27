@@ -14,6 +14,7 @@ from telegram.error import BadRequest, TelegramError
 
 from remote_agents.adapters.sqlite.callback_state_store import SQLiteCallbackStateStore
 from remote_agents.adapters.sqlite.database import open_database
+from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import (
     _BOT_DESCRIPTION,
     _BOT_SHORT_DESCRIPTION,
@@ -211,7 +212,9 @@ async def test_failed_launch_explains_that_workspace_trust_is_never_approved_rem
 
     assert "Session did not become ready" in reply["text"]
     assert "never approved remotely" in reply["text"]
-    assert [button.text for row in reply["reply_markup"].inline_keyboard for button in row] == [
+    assert [
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
+    ] == [
         "Details",
         "Sessions",
         "Launch",
@@ -248,7 +251,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
 
     reply = await boundary._sessions_reply()
 
-    labels = tuple(button.text for row in reply.keyboard for button in row)
+    labels = tuple(unpadded(button.text) for row in reply.keyboard for button in row)
     assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
     assert labels[1:] == ("Sessions", "Launch")
     assert "ended" not in labels
@@ -317,7 +320,9 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     )
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.
-    assert [button.text for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]] == [
+    assert [
+        unpadded(button.text) for button in sessions.replies[0]["reply_markup"].inline_keyboard[0]
+    ] == [
         "• Sessions",
         "Launch",
     ]
@@ -325,7 +330,7 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     assert help_message.replies[0]["text"].startswith("<b>Remote agents</b>")
     assert "Stop and close" in help_message.replies[0]["text"]
     help_rows = help_message.replies[0]["reply_markup"].inline_keyboard
-    assert [button.text for button in help_rows[-1]] == ["Sessions", "Launch"]
+    assert [unpadded(button.text) for button in help_rows[-1]] == ["Sessions", "Launch"]
 
 
 @pytest.mark.asyncio
@@ -345,7 +350,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
         button.callback_data
         for row in detail.keyboard
         for button in row
-        if button.text == "Inspect"
+        if unpadded(button.text) == "Inspect"
     )
     callback = _Callback(inspect)
 
@@ -381,7 +386,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
         button.callback_data
         for row in detail.keyboard
         for button in row
-        if button.text == "Inspect"
+        if unpadded(button.text) == "Inspect"
     )
     callback = _Callback(inspect)
 
@@ -430,7 +435,12 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
     assert first.edits[0]["text"] == "<b>Projects 1/3</b>\nSelect a project to launch."
     assert [row[0].text for row in first_page[:10]] == [f"Project {number}" for number in range(10)]
     second = _Callback(
-        next(button.callback_data for row in first_page for button in row if button.text == "Next")
+        next(
+            button.callback_data
+            for row in first_page
+            for button in row
+            if unpadded(button.text) == "Next"
+        )
     )
     await boundary.callback(_trusted_update(callback=second), None)
 
@@ -439,7 +449,12 @@ async def test_private_bot_boundary_pages_through_the_entire_project_catalogue()
         f"Project {number}" for number in range(10, 20)
     ]
     third = _Callback(
-        next(button.callback_data for row in second_page for button in row if button.text == "Next")
+        next(
+            button.callback_data
+            for row in second_page
+            for button in row
+            if unpadded(button.text) == "Next"
+        )
     )
     await boundary.callback(_trusted_update(callback=third), None)
 
@@ -883,7 +898,7 @@ def test_resume_picks_a_project_the_same_way_launch_does() -> None:
     assert resume.text.startswith("<b>Resume 1/10</b>")
     # No Back: the picker is reachable in one press from every screen, so it has no single
     # parent for Back to name, and the bar is the way out.
-    assert [[button.text for button in row] for row in resume.keyboard[-3:]] == [
+    assert [[unpadded(button.text) for button in row] for row in resume.keyboard[-3:]] == [
         ["Next"],
         ["Search"],
         ["Sessions", "Launch"],
@@ -943,7 +958,7 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
 
     detail = await boundary._detail_reply(str(running.session_id))
 
-    rows = [[button.text for button in row] for row in detail.keyboard]
+    rows = [[unpadded(button.text) for button in row] for row in detail.keyboard]
     assert rows[0] == ["Inspect"]
     assert rows[-3] == ["Stop and close", "Force stop"]
     assert rows[-2] == ["Back"]
@@ -963,8 +978,8 @@ async def test_no_screen_offers_refresh_now_that_every_route_re_reads() -> None:
     sessions = await boundary._sessions_reply()
     projects = boundary._projects_reply(boundary.catalogue, view_id="all")
 
-    sessions_labels = {button.text for row in sessions.keyboard for button in row}
-    project_labels = {button.text for row in projects.keyboard for button in row}
+    sessions_labels = {unpadded(button.text) for row in sessions.keyboard for button in row}
+    project_labels = {unpadded(button.text) for row in projects.keyboard for button in row}
     assert "Refresh" not in sessions_labels
     assert "Refresh" not in project_labels
 
@@ -1004,14 +1019,16 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
         button
         for button_row in listing.keyboard
         for button in button_row
-        if button.text not in {"Previous", "Next", "Sessions", "Launch", "Resume"}
+        if unpadded(button.text) not in {"Previous", "Next", "Sessions", "Launch", "Resume"}
     )
     boundary.callbacks.bind_pending(11, 1)
     opened = boundary.callbacks.resolve(row.callback_data, owner_id=7, chat_id=11, message_id=1)
     assert opened is not None
     detail = await boundary._detail_reply(opened.entity_id)
 
-    back = next(button for row_ in detail.keyboard for button in row_ if button.text == "Back")
+    back = next(
+        button for row_ in detail.keyboard for button in row_ if unpadded(button.text) == "Back"
+    )
     boundary.callbacks.bind_pending(11, 1)
     state = boundary.callbacks.resolve(back.callback_data, owner_id=7, chat_id=11, message_id=1)
 
@@ -1035,10 +1052,10 @@ async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> 
     beyond = await boundary._sessions_reply(99)
 
     assert first.text.startswith("<b>Sessions 1/3</b> · ")
-    assert [button.text for button in first.keyboard[-2]] == ["Next"]
+    assert [unpadded(button.text) for button in first.keyboard[-2]] == ["Next"]
     assert len(first.keyboard) == 4 + 2
     assert last.text.startswith("<b>Sessions 3/3</b> · ")
-    assert [button.text for button in last.keyboard[-2]] == ["Previous"]
+    assert [unpadded(button.text) for button in last.keyboard[-2]] == ["Previous"]
     # A page number past the end clamps rather than rendering an empty list.
     assert beyond.text == last.text
 
@@ -1056,7 +1073,9 @@ async def test_force_confirmation_names_the_session_and_buffers_the_kill_from_th
 
     reply = await boundary._stop_reply("force", token, 1)
 
-    rows = [[button.text for button in row] for row in reply["reply_markup"].inline_keyboard]
+    rows = [
+        [unpadded(button.text) for button in row] for row in reply["reply_markup"].inline_keyboard
+    ]
     assert subject in reply["text"]
     assert "cannot be undone" in reply["text"]
     # Force stop first, Cancel beneath it: the bar is the bottom row now, so last-but-one is
@@ -1103,7 +1122,9 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     # on is already under the notice — which is what the "Open session" button was for, and
     # why this keyboard no longer carries it or the Back that led out of that dead end.
     assert "Sessions 1/1" in reply["text"]
-    labels = [button.text for row in reply["reply_markup"].inline_keyboard for button in row]
+    labels = [
+        unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
+    ]
     assert labels[-2:] == ["Sessions", "Launch"]
     assert "Back" not in labels
     assert "Open session" not in labels
@@ -1295,7 +1316,7 @@ def _button(reply: dict[str, object], text: str) -> str:
         button.callback_data
         for row in reply["reply_markup"].inline_keyboard
         for button in row
-        if button.text.removeprefix("• ") == text
+        if unpadded(button.text).removeprefix("• ") == text
     )
 
 
@@ -1303,7 +1324,10 @@ def _edited_button(callback: _Callback, index: int, *, text: str | None = None) 
     keyboard = callback.edits[-1]["reply_markup"].inline_keyboard
     if text is not None:
         return next(
-            button.callback_data for row in keyboard for button in row if button.text == text
+            button.callback_data
+            for row in keyboard
+            for button in row
+            if unpadded(button.text) == text
         )
     return keyboard[index][0].callback_data
 
@@ -1676,7 +1700,7 @@ async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tm
     assert boundary.view.anchor() is None, "a notification took over the chat's live view"
     assert len(bot.markups) == 1
     keyboard = bot.markups[0]["reply_markup"].inline_keyboard
-    assert [button.text for row in keyboard for button in row] == ["Open session"]
+    assert [unpadded(button.text) for row in keyboard for button in row] == ["Open session"]
     token = keyboard[0][0].callback_data
     assert (
         boundary.callbacks.resolve(

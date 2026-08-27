@@ -492,14 +492,20 @@ def test_no_adapter_constructs_a_stop_command() -> None:
 
 
 def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
-    """Read, not restated — and pinned by length so a tenth field is a decision, not a drift."""
+    """Read, not restated — and pinned by length so an eleventh field is a decision, not drift.
+
+    Ten since `usage` joined: one session's context window and rate-limit windows, read from the
+    provider's own files. It is a declared capability rather than something an adapter discovers
+    for the same reason `capture` is — a host may wire no reader, and both surfaces have to be
+    able to see that they did without asking whether the attribute happens to exist.
+    """
     fields = _backend_fields()
-    assert len(fields) == 9, (
-        f"`Backend` now declares {len(fields)} fields, not 9. That is fine — but it widens "
+    assert len(fields) == 10, (
+        f"`Backend` now declares {len(fields)} fields, not 10. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
-    assert "sessions" in fields and "profiles" in fields
+    assert "sessions" in fields and "profiles" in fields and "usage" in fields
 
 
 def test_no_adapter_discovers_a_backend_capability_by_probing() -> None:

@@ -180,6 +180,17 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         "profiles",
         "capture",
         "activity_feed",
+        # One session's context window and rate-limit windows, read from the provider's own
+        # files. **Shared** rather than the surface's, and the test for which side a capability
+        # belongs on is the one this docstring states: it is not this surface's alone. What it
+        # reads is a fact about a *session* — the same fact whichever screen asks — so putting
+        # it on the context would mean the bot either goes without it or composes a second
+        # reader, which is the double-composition `conversations` is named above for having had.
+        #
+        # Only the bot renders it today. That is a presentation decision and not a composition
+        # one, and the distinction is the point: `capture` sat here before both surfaces drew
+        # on it too.
+        "usage",
         "max_label_length",
     }
 

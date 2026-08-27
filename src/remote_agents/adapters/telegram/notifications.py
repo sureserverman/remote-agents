@@ -40,6 +40,7 @@ from remote_agents.adapters.telegram.presenters import (
     _utf16_units,
     _validate_callback,
     render_message,
+    uniform_keyboard,
 )
 from remote_agents.application.notification_policy import (
     REFUSALS_BEFORE_ABANDONING,
@@ -979,6 +980,6 @@ def _markup(keyboard: tuple[tuple[Button, ...], ...]) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(button.text, callback_data=button.callback_data)
                 for button in row
             ]
-            for row in keyboard
+            for row in uniform_keyboard(keyboard)
         ]
     )

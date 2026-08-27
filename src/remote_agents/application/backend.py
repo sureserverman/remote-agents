@@ -46,6 +46,7 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
 from remote_agents.ports.agent_activity import AgentActivity
+from remote_agents.ports.agent_usage import AgentUsage
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +133,20 @@ class Backend:
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = None
     """A bounded newest-first read of the durable activity table — a reader, never a
     drainer: consuming the spool would starve the phone's notifications (DEC-031/DEC-034)."""
+
+    usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = None
+    """Read one session's context window and rate-limit windows from its provider's own files.
+
+    A bound reader like `capture` rather than a service, and for the same reason: what it needs
+    to do its job — where each project lives on disk, when a session started, which provider
+    conversation a resumed session named — is composition-time knowledge, and threading it
+    through a frontend would put filesystem layout on a screen builder's desk for no gain.
+
+    Optional in the sense every capability here is: a host that wired no reader shows no usage
+    line, and both surfaces guard on it. Distinct from the reader *returning* `None`, which
+    means this session's conversation could not be matched — that is an answer, and the bot
+    renders it as one.
+    """
 
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the

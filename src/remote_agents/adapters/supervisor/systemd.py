@@ -163,17 +163,31 @@ def _directive_value(value: Path) -> str:
     return _escaped_specifiers(value)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SystemdSupervisor:
     """`ServiceSupervisor` for a systemd **user** manager, rendering its own unit.
 
-    Both inputs are constructor parameters with host defaults rather than reads of the process
-    environment, so a test can render a unit that depends on nothing about the machine running
-    it -- the same property that lets the launchd adapter be exercised on Linux.
+    The interpreter is a constructor parameter with a host default rather than a read of the
+    process environment, so a test can render a unit that depends on nothing about the machine
+    running it -- the same property that lets the launchd adapter be exercised on Linux.
+
+    **`home` has no default, and that is a safety property rather than a style.** It used to
+    default to `Path.home()`, which meant `SystemdSupervisor()` silently described the machine
+    the code was running on -- and this adapter's paths feed `remove_daemon`, whose last act is
+    `path.unlink()`. A contract test that constructed the registered adapters and drove removal
+    through them therefore uninstalled the developer's own daemon on 2026-08-26, deleting
+    `~/.config/systemd/user/remote-agents.service` and its `enable` symlink while systemd went
+    on running the service from the copy it had already parsed. Fixing that test fixed the
+    instance; requiring the argument is what stops the next one, because there is no longer a
+    way to reach the operator's home without naming it.
+
+    Keyword-only for the same reason the argument is required: at a call site
+    `SystemdSupervisor(home=...)` says which host is being described, and a bare positional path
+    does not. Every existing construction already used keywords, so nothing had to change.
     """
 
+    home: Path
     interpreter: Path = field(default_factory=lambda: Path(sys.executable))
-    home: Path = field(default_factory=Path.home)
 
     kind: ClassVar[SupervisorKind] = SupervisorKind.SYSTEMD
 
