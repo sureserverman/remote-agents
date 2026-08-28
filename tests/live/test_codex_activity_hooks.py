@@ -1,15 +1,15 @@
 """Opt-in proof that a real Codex turn runs only the temporary hook configuration.
 
-The Codex hook file and temporary API-key login live under a disposable project-local
-``.codex`` directory within this test's temporary workspace.  They therefore neither read nor
+The hook file, hook trust, and all writable Codex state live under a disposable project-local
+``.codex`` directory within this test's temporary workspace. They therefore neither read nor
 write the owner's ``~/.codex/hooks.json``, persisted hook trust, or the service's production
 spool. ``--dangerously-bypass-hook-trust`` is constrained to this vetted, generated hook
 definition; it is never a direction to trust the owner's configuration.
 
-An owner supplies ``OPENAI_API_KEY`` only to the process that launches this opt-in test. The
-key goes straight to ``codex login --with-api-key`` on standard input and is never written by
-this test, included in a command line, logged, or asserted. Missing API access is ``BLOCKED``;
-the owner's interactive ChatGPT login cannot be reused without reading its global hook file.
+Codex reads only the owner's existing ``auth.json`` through a temporary owner-only symlink.
+The test never opens, copies, serializes, logs, or modifies that credential; tracing the
+installed CLI confirmed it opens the file read-only. This preserves the ordinary ChatGPT
+Codex entitlement instead of requiring unrelated API billing.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path]:
     codex_home = workspace / ".codex"
     codex_home.mkdir(mode=0o700)
     spool = tmp_path / "activity"
-    _login_isolated(codex_home)
+    _link_chatgpt_auth(codex_home)
     install_agent_hooks(
         codex_home / "hooks.json",
         executable=Path(sys.executable),
@@ -56,24 +56,21 @@ def _requirements(tmp_path: Path) -> tuple[Path, Path]:
     return workspace, spool
 
 
-def _login_isolated(codex_home: Path) -> None:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        pytest.skip("BLOCKED: isolated Codex qualification requires OPENAI_API_KEY")
-    completed = subprocess.run(
-        ["codex", "login", "--with-api-key"],
-        input=api_key,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env={**os.environ, "CODEX_HOME": str(codex_home)},
-    )
-    if completed.returncode != 0:
-        pytest.skip("BLOCKED: Codex did not accept the isolated API-key login")
+def _link_chatgpt_auth(codex_home: Path) -> None:
+    source_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+    source_auth = source_home / "auth.json"
+    if not source_auth.is_file():
+        pytest.skip("BLOCKED: Codex is not logged in with ChatGPT")
+    os.symlink(source_auth, codex_home / "auth.json")
 
 
 def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
+    runtime_environment = {**os.environ, "CODEX_HOME": str(workspace / ".codex")}
+    # This pytest process can itself be a managed Codex turn. Its identity belongs to the
+    # parent, not the disposable child used for the negative proof, so make inheritance an
+    # explicit opt-in through ``environment`` rather than an accidental second managed turn.
+    runtime_environment.pop(SESSION_ID_VARIABLE, None)
+    runtime_environment.update(environment)
     completed = subprocess.run(
         [
             "codex",
@@ -90,7 +87,7 @@ def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
         text=True,
         timeout=180,
         cwd=workspace,
-        env={**os.environ, **environment, "CODEX_HOME": str(workspace / ".codex")},
+        env=runtime_environment,
     )
     output = f"{completed.stdout}\n{completed.stderr}".lower()
     if completed.returncode != 0:
