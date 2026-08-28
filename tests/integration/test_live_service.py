@@ -2074,6 +2074,33 @@ async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path)
         connection.close()
 
 
+async def test_codex_permission_request_reaches_both_feed_and_notification(tmp_path) -> None:
+    from remote_agents.adapters.sqlite.activity_store import SQLiteActivityStore
+    from remote_agents.adapters.sqlite.database import open_database
+
+    record = _running()
+    boundary, bot = _notified(record)
+    spool = tmp_path / "activity"
+    _spool(spool, str(record.session_id), event="PermissionRequest")
+    connection = open_database(tmp_path / "codex.sqlite3")
+    store = SQLiteActivityStore(connection)
+    try:
+        await _watch_quiet_once(
+            ServiceComposition(
+                boundary,
+                _SilentTerminal(),
+                _SilentReconciler(),
+                activity_directory=spool,
+                activity_store=store,
+            )
+        )
+        (activity,) = await store.recent(limit=10)
+        assert activity.kind is ActivityKind.NEEDS_ANSWER
+        assert len(bot.sends) == 1
+    finally:
+        connection.close()
+
+
 def test_serve_closes_the_database_when_secret_resolution_fails(tmp_path, monkeypatch) -> None:
     """The database is opened before the credential is resolved, so the close must be guarded.
 
