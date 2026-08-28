@@ -90,3 +90,21 @@ async def test_a_reported_hybrid_event_suppresses_only_its_current_quiet_spell()
     assert await watcher.poll() == ()
     (quiet,) = await watcher.poll()
     assert quiet.session_id == str(record.session_id)
+
+
+async def test_a_reported_record_does_not_suppress_a_quiet_only_watch() -> None:
+    record = _running_record("opencode")
+    captures = iter(("start", "working", "working", "working", "working"))
+
+    async def capture(session_id: SessionId) -> str:
+        assert session_id == record.session_id
+        return next(captures)
+
+    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2)
+
+    assert await watcher.poll() == ()
+    assert await watcher.poll() == ()
+    watcher.mark_reported((str(record.session_id),))
+    assert await watcher.poll() == ()
+    (quiet,) = await watcher.poll()
+    assert quiet.session_id == str(record.session_id)

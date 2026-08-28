@@ -311,10 +311,10 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
 
     **Every** member of `HOOK_SOURCED_PROFILES` is enrolled, derived from the frozenset rather
     than named here, and that indirection is the point rather than tidiness. This subtraction
-    is now the whole of the rule that `quiet` reaches the hookless profiles *only* — the owner
-    kept the heuristic on the grounds that `codex`, `opencode` and `cursor-agent` have no hook
-    system and would otherwise notify nothing at all, while a hooked session watched as well
-    would tell them the same thing twice, once as a report and once as a guess. Written as a
+    is now the whole of the rule that `quiet` reaches the profiles with quiet fallback — Codex
+    remains watched until a reported hook event suppresses that one spell, while `opencode` and
+    `cursor-agent` have only pane evidence. A hook-exclusive session watched as well would tell
+    the owner the same thing twice, once as a report and once as a guess. Written as a
     hand-copied pair, this test would keep passing for `claude` and `claude-remote` while a
     profile added to the frozenset later went unwatched *and* unasserted.
     """

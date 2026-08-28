@@ -423,6 +423,10 @@ class PaneQuietWatcher:
         self._capture_timeout = _CAPTURE_TIMEOUT_SECONDS
         self._now = now
         self._watches: dict[str, QuietWatch] = {}
+        # Activity source is safe provider capability, not pane content or a provider session
+        # identifier. It lets a reported spool record suppress only the hybrid fallback that
+        # can legitimately duplicate it.
+        self._watch_sources: dict[str, ActivitySource] = {}
 
     def mark_reported(self, session_ids: Collection[str]) -> None:
         """Suppress quiet inference for the current spell of each reported hybrid session.
@@ -433,7 +437,7 @@ class PaneQuietWatcher:
         """
         for session_id in session_ids:
             watch = self._watches.get(session_id)
-            if watch is not None:
+            if watch is not None and self._watch_sources.get(session_id) is ActivitySource.HYBRID:
                 self._watches[session_id] = QuietWatch(
                     watch.digest,
                     watch.unchanged_polls,
@@ -453,6 +457,10 @@ class PaneQuietWatcher:
         # of the service, one entry per session ever launched.
         live = {str(record.session_id) for record in watched}
         self._watches = {key: value for key, value in self._watches.items() if key in live}
+        self._watch_sources = {
+            str(record.session_id): activity_source_for(str(record.profile_id))
+            for record in watched
+        }
 
         activities = []
         for record in watched:
