@@ -19,10 +19,12 @@ is observation-only and never approves an action.
   Codex `/hooks` before trusting them.
 - [ ] One disposable managed Codex session completed a normal turn and produced exactly one
   reported `completed` notification.
-- [ ] I triggered one controlled local permission prompt; it produced exactly one reported
-  `needs_answer` notification. I approved or rejected it locally, and did not use Telegram to
-  approve it. The copy-ready harmless trigger is `docs/codex-permission-drill-prompt.txt`.
-- [ ] The Telegram standing message and the local activity feed showed the same reported events.
+- [ ] I triggered one controlled local permission prompt; it produced exactly one inferred
+  `needs_answer` notification from the managed pane's `Action Required` title. I approved or
+  rejected it locally, watched that title clear, and did not use Telegram to approve it. The
+  copy-ready harmless trigger is `docs/codex-permission-drill-prompt.txt`.
+- [ ] The Telegram standing message and the local activity feed showed the same completion and
+  inferred permission-wait events.
 - [ ] I removed the Codex hooks with
   `remote-agents install-agent-hooks --provider codex --remove`, created fresh pane activity,
   and observed one inferred `quiet` fallback rather than a reported event.

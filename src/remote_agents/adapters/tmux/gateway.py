@@ -23,6 +23,7 @@ from remote_agents.adapters.tmux.codec import (
     is_console_view,
     list_arrangement_args,
     pane_mark_args,
+    pane_title_args,
     parse_arrangement,
     parse_pane,
     rejoin_console_pane_args,
@@ -374,6 +375,14 @@ class TmuxGateway:
                 "-t",
                 target,
             )
+        except RuntimeError as error:
+            raise _target_missing_or(error, f"ra-{session_id}") from error
+
+    async def pane_title(self, session_id: SessionId) -> str:
+        """Read one managed pane's title without capturing its terminal contents."""
+        target = await self._following_target(session_id)
+        try:
+            return await self._runner.run(*self._base_argv(), *pane_title_args(target))
         except RuntimeError as error:
             raise _target_missing_or(error, f"ra-{session_id}") from error
 

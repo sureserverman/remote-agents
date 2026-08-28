@@ -370,6 +370,10 @@ class TmuxTerminal:
         """Return one managed pane's output for the presentation boundary to sanitize."""
         return await self._gateway.capture(session_id)
 
+    async def pane_title(self, session_id: SessionId) -> str:
+        """Return tmux metadata for one managed pane, never its captured output."""
+        return await self._gateway.pane_title(session_id)
+
     async def copy_attach(self, session_id: SessionId) -> str | None:
         """Recheck the exact trusted pane immediately before rendering its attach command.
 

@@ -593,10 +593,14 @@ rather than folded into a blanket confirmation.
 The service sends unprompted messages when a managed agent stops working, one message per
 session per delivery pass, beside the live view rather than inside it. Two sources feed them and
 only one has to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
-hooks. Codex is hybrid: its `Stop` and `PermissionRequest` hooks report `completed` and
-`needs_answer`, while pane quiet remains fallback until a report suppresses that spell. `opencode`
-and `cursor-agent` have only pane evidence. The hooks are not installed by the unit, by `serve`, or by
-`doctor`. Install them once per host:
+hooks. Codex is hybrid: its `Stop` hook reports `completed`; when Codex emits it, its
+`PermissionRequest` hook reports `needs_answer`. Its native code-mode escalation currently skips
+that hook, so the service instead watches the managed pane's content-free `Action Required` title
+and emits one inferred `needs_answer` until that title clears. It never captures or retains the
+approval's command, prompt, path, or transcript, and Telegram remains observation-only. Pane quiet
+remains fallback until a report suppresses that spell. `opencode` and `cursor-agent` have only pane
+evidence. The hooks are not installed by the unit, by `serve`, or by `doctor`. Install them once per
+host:
 
 ```bash
 uv run --locked remote-agents install-agent-hooks
@@ -842,6 +846,13 @@ The first four are the agent reporting on itself, and each carries at most one b
 line of what it last said. Everything else those hook fields can carry — every other value of
 `error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
 reporting the wrong reason an agent stopped is worse than reporting nothing.
+
+Codex is the exception to the table's Claude-hook source wording: `Stop` is reported, while a
+supported Codex `PermissionRequest` is reported only when the provider actually emits it. Current
+native code-mode command escalations do not. Their exact managed-pane title marker,
+`[ ! ] Action Required | <project>`, is observed through tmux metadata only and becomes one
+inferred `needs_answer` on the transition into that state. The title is never retained, and it must
+clear before another such notification can be sent.
 
 **A notification has to be worth acting on, and two kinds that once appeared here were not.** The
 bar is no longer only "does this say why the agent stopped" but "is there anything for the owner

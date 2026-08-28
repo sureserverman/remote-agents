@@ -123,7 +123,7 @@ from remote_agents.config import (
 )
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
-from remote_agents.ports.agent_activity import ActivityConfidence, AgentActivity
+from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
@@ -338,6 +338,17 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
                 )
             )
             composition.quiet_watcher.mark_reported(reported_session_ids)
+            reported_needs_answer_session_ids = tuple(
+                dict.fromkeys(
+                    activity.session_id
+                    for activity in activities
+                    if activity.confidence is ActivityConfidence.REPORTED
+                    and activity.kind is ActivityKind.NEEDS_ANSWER
+                )
+            )
+            composition.quiet_watcher.mark_needs_answer_reported(
+                reported_needs_answer_session_ids
+            )
             activities.extend(await composition.quiet_watcher.poll())
         except Exception:
             _LOG.exception("pane quiet watch failed")
@@ -1001,7 +1012,12 @@ def _private_boundary(
         # overwrite the state of a session whose graceful stop is between its own two writes.
         # Constructing two SessionLocks here would type-check, run, and fix nothing.
         ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
-        PaneQuietWatcher(store, terminal.capture, quiet_polls=config.activity_quiet_polls),
+        PaneQuietWatcher(
+            store,
+            terminal.capture,
+            title=terminal.pane_title,
+            quiet_polls=config.activity_quiet_polls,
+        ),
         paths.activity_directory,
         SQLiteActivityStore(connection),
     )

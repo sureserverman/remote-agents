@@ -301,8 +301,11 @@ but it writes nothing and exits 0 unless the environment carries the session ide
 service injects into the panes it launches. Descendants of a managed pane inherit that identifier,
 so a `claude` started from inside one is the exception and spools under its parent's session.
 Codex can additionally install its own `Stop` and `PermissionRequest` hooks with
-`remote-agents install-agent-hooks --provider codex`; it retains pane-quiet fallback and does not
-claim rate- or output-limit notifications.
+`remote-agents install-agent-hooks --provider codex`. Native code-mode escalations currently do
+not call `PermissionRequest`; for those, the managed tmux pane's content-free `Action Required`
+title produces one inferred `needs_answer` notification until it clears. Neither path exposes a
+remote approval action or retains the command, prompt, path, or transcript. Codex retains
+pane-quiet fallback and does not claim rate- or output-limit notifications.
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
 [agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for

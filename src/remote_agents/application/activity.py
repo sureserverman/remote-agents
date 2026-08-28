@@ -85,6 +85,12 @@ MAXIMUM_RECORD_BYTES = 65_536
 #: local tmux, and finite so a wedged server costs one pass rather than the whole watch.
 _CAPTURE_TIMEOUT_SECONDS = 15.0
 
+# Observed in the managed Codex TUI while a native local approval is open.  The project name
+# after the separator varies, so the predicate admits that suffix while refusing ordinary pane
+# titles.  This is terminal metadata, not an upstream hook contract: it may become unavailable
+# in a later Codex release, in which case it safely yields no inferred activity.
+_CODEX_ACTION_REQUIRED_TITLE = "[ ! ] Action Required | "
+
 # Only the reasons that answer "why did it stop". Every other value these fields can take --
 # authentication_failed, auth_success, elicitation_*, and whatever upstream adds next -- is
 # absent on purpose, and an event carrying one is dropped by the lookup below.
@@ -401,6 +407,32 @@ def observe_quiet(
     )
 
 
+def observe_codex_action_required(
+    was_action_required: bool,
+    *,
+    session_id: str,
+    title: str,
+    now: datetime,
+) -> tuple[bool, AgentActivity | None]:
+    """Fold one content-free Codex pane-title observation into its edge state.
+
+    Codex's native command escalation currently bypasses its ``PermissionRequest`` hook.
+    Its terminal title nevertheless changes to the fixed marker above, which tmux exposes
+    separately from pane capture.  Retaining the title would be terminal-content retention;
+    retaining one boolean answers the whole question this observation can safely support.
+    """
+    action_required = title.startswith(_CODEX_ACTION_REQUIRED_TITLE)
+    if not action_required or was_action_required:
+        return action_required, None
+    return True, AgentActivity(
+        session_id=session_id,
+        kind=ActivityKind.NEEDS_ANSWER,
+        detail=None,
+        observed_at=now,
+        confidence=ActivityConfidence.INFERRED,
+    )
+
+
 class PaneQuietWatcher:
     """Watch the panes of the agents that cannot report for themselves.
 
@@ -417,10 +449,12 @@ class PaneQuietWatcher:
         capture: Callable[[SessionId], Awaitable[str]],
         *,
         quiet_polls: int,
+        title: Callable[[SessionId], Awaitable[str]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
         self._capture = capture
+        self._title = title
         self._quiet_polls = quiet_polls
         self._capture_timeout = _CAPTURE_TIMEOUT_SECONDS
         self._now = now
@@ -429,6 +463,10 @@ class PaneQuietWatcher:
         # identifier. It lets a reported spool record suppress only the hybrid fallback that
         # can legitimately duplicate it.
         self._watch_sources: dict[str, ActivitySource] = {}
+        # A title is never stored: only whether the exact native Codex marker was present on
+        # the last pass, so one outstanding approval produces one inferred notification.
+        self._action_required: dict[str, bool] = {}
+        self._reported_needs_answer_session_ids: frozenset[str] = frozenset()
 
     def mark_reported(self, session_ids: Collection[str]) -> None:
         """Suppress quiet inference for the current spell of each reported hybrid session.
@@ -447,8 +485,14 @@ class PaneQuietWatcher:
                     already_reported=True,
                 )
 
+    def mark_needs_answer_reported(self, session_ids: Collection[str]) -> None:
+        """Let this pass prefer a same-pass provider permission over the title edge."""
+        self._reported_needs_answer_session_ids = frozenset(session_ids)
+
     async def poll(self) -> tuple[AgentActivity, ...]:
         """Take one look at every running session with quiet fallback evidence."""
+        reported_needs_answer_session_ids = self._reported_needs_answer_session_ids
+        self._reported_needs_answer_session_ids = frozenset()
         records = await self._store.list((SessionState.RUNNING,))
         watched = [
             record
@@ -463,10 +507,36 @@ class PaneQuietWatcher:
             str(record.session_id): activity_source_for(str(record.profile_id))
             for record in watched
         }
+        self._action_required = {
+            key: value for key, value in self._action_required.items() if key in live
+        }
 
         activities = []
         for record in watched:
             key = str(record.session_id)
+            # A failed title read says nothing about a prompt that was already observed. Keep
+            # its suppression state for this pass rather than misclassifying its unchanged pane
+            # as quiet while the owner is deciding locally.
+            action_required = self._action_required.get(key, False)
+            if self._title is not None and str(record.profile_id) == "codex":
+                try:
+                    title = await asyncio.wait_for(
+                        self._title(record.session_id), timeout=self._capture_timeout
+                    )
+                    action_required, activity = observe_codex_action_required(
+                        self._action_required.get(key, False),
+                        session_id=key,
+                        title=title,
+                        now=self._now(),
+                    )
+                    self._action_required[key] = action_required
+                    # A provider-reported permission in the same pass is stronger evidence of
+                    # the same wait.  Remember the marker but do not make the owner hear it
+                    # twice; a clear title re-arms the next native prompt.
+                    if activity is not None and key not in reported_needs_answer_session_ids:
+                        activities.append(activity)
+                except Exception:
+                    _LOG.warning("could not read a Codex pane title while watching activity")
             try:
                 # Bounded, because the failure it prevents is silent and permanent. The tmux
                 # runner awaits `communicate()` with no timeout of its own, so a wedged server
@@ -489,6 +559,6 @@ class PaneQuietWatcher:
                 now=self._now(),
                 quiet_polls=self._quiet_polls,
             )
-            if activity is not None:
+            if activity is not None and not action_required:
                 activities.append(activity)
         return tuple(activities)

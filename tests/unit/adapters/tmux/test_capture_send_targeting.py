@@ -37,6 +37,24 @@ async def test_capture_addresses_the_resolved_pane() -> None:
     assert runner.capture_call == (*_BASE, "capture-pane", "-p", "-t", "%3")
 
 
+async def test_pane_title_addresses_the_resolved_pane_without_a_capture() -> None:
+    runner = TargetingRunner(
+        panes=(("%3", _SESSION, "2"),), capture="[ ! ] Action Required | multitor"
+    )
+
+    assert await gateway_for(runner).pane_title(_SESSION) == "[ ! ] Action Required | multitor"
+
+    assert runner.calls[-1] == (
+        *_BASE,
+        "display-message",
+        "-p",
+        "-t",
+        "%3",
+        "#{pane_title}",
+    )
+    assert not [call for call in runner.calls if "capture-pane" in call]
+
+
 async def test_capture_addresses_the_pane_wherever_it_is_hosted() -> None:
     """The console holds the agent; the session target would read the surface instead."""
     runner = TargetingRunner(panes=(("%3", _SESSION, "2"),), host="ra-console", capture="agent")

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from remote_agents.application.activity import PaneQuietWatcher
+from remote_agents.application.activity import PaneQuietWatcher, observe_codex_action_required
 from remote_agents.domain.models import (
     ProfileId,
     ProjectId,
@@ -15,6 +15,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 
 
 class _RunningStore:
@@ -108,3 +109,92 @@ async def test_a_reported_record_does_not_suppress_a_quiet_only_watch() -> None:
     assert await watcher.poll() == ()
     (quiet,) = await watcher.poll()
     assert quiet.session_id == str(record.session_id)
+
+
+def test_codex_action_required_is_a_rising_edge_not_pane_text() -> None:
+    """The only title-derived state retained is whether the exact marker is present."""
+    moment = datetime(2026, 8, 28, tzinfo=UTC)
+
+    active, first = observe_codex_action_required(
+        False,
+        session_id="codex-title-session",
+        title="[ ! ] Action Required | multitor",
+        now=moment,
+    )
+    repeated, duplicate = observe_codex_action_required(
+        active,
+        session_id="codex-title-session",
+        title="[ ! ] Action Required | multitor",
+        now=moment,
+    )
+    cleared, after_clear = observe_codex_action_required(
+        repeated,
+        session_id="codex-title-session",
+        title="multitor",
+        now=moment,
+    )
+
+    assert active is True
+    assert first is not None
+    assert first.kind is ActivityKind.NEEDS_ANSWER
+    assert first.confidence is ActivityConfidence.INFERRED
+    assert first.detail is None
+    assert repeated is True
+    assert duplicate is None
+    assert cleared is False
+    assert after_clear is None
+
+
+async def test_only_codex_titles_can_infer_an_action_required_notification() -> None:
+    codex = _running_record("codex")
+    other = _running_record("opencode")
+
+    async def capture(session_id: SessionId) -> str:
+        return "working"
+
+    async def action_required(session_id: SessionId) -> str:
+        return "[ ! ] Action Required | multitor"
+
+    class _TwoSessionStore:
+        async def list(self, states: object) -> tuple[SessionRecord, ...]:
+            assert states == (SessionState.RUNNING,)
+            return (codex, other)
+
+    watcher = PaneQuietWatcher(
+        _TwoSessionStore(), capture, quiet_polls=2, title=action_required
+    )
+
+    (activity,) = await watcher.poll()
+
+    assert activity.session_id == str(codex.session_id)
+    assert activity.kind is ActivityKind.NEEDS_ANSWER
+    assert activity.confidence is ActivityConfidence.INFERRED
+
+
+async def test_reported_permission_wins_over_the_same_title_edge() -> None:
+    record = _running_record("codex")
+    titles = iter(
+        (
+            "[ ! ] Action Required | multitor",
+            "multitor",
+            "[ ! ] Action Required | multitor",
+        )
+    )
+
+    async def capture(session_id: SessionId) -> str:
+        return "working"
+
+    async def action_required(session_id: SessionId) -> str:
+        return next(titles)
+
+    watcher = PaneQuietWatcher(
+        _RunningStore(record), capture, quiet_polls=2, title=action_required
+    )
+    watcher.mark_needs_answer_reported((str(record.session_id),))
+
+    assert await watcher.poll() == ()
+    assert await watcher.poll() == ()
+    (activity,) = await watcher.poll()
+
+    assert activity.kind is ActivityKind.NEEDS_ANSWER
+    assert activity.confidence is ActivityConfidence.INFERRED

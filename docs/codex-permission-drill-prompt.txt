@@ -1,6 +1,6 @@
-Before doing anything, ask me locally for permission to run exactly this harmless workspace command:
+Use the terminal tool now to run exactly this command:
 
-mkdir -p .remote-agents-acceptance && printf 'permission-check\n' > .remote-agents-acceptance/permission-check.txt
+sudo -n true
 
-Do not run it until I approve. Do not use apply_patch or make any other changes. After approval,
-run it and stop.
+Do not ask me in prose. Do not use another command, apply_patch, or any other tool. Wait for
+Codex's native approval prompt; I will deny it.

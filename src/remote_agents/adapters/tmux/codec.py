@@ -416,6 +416,19 @@ def display_message_args(text: str) -> tuple[str, ...]:
     return ("display-message", "-l", "--", text)
 
 
+def pane_title_args(target: str) -> tuple[str, ...]:
+    """Return the fixed tmux query for one already-resolved pane title.
+
+    The format is a constant owned here, never title text supplied by the pane. The caller
+    classifies only an exact Codex marker without retaining this returned metadata.
+    """
+    if target.startswith("%"):
+        checked = exact_pane_target(target)
+    else:
+        checked = exact_session_target(target.removesuffix(":"))
+    return ("display-message", "-p", "-t", checked, "#{pane_title}")
+
+
 def console_zoom_args() -> tuple[str, ...]:
     """Return the argv suffix that prints whether the console is zoomed, and onto what.
 
