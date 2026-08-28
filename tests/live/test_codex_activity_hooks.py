@@ -29,18 +29,11 @@ from remote_agents.ports.agent_activity import ActivityKind
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _TURN = "Reply with exactly the word: spooled"
-_BLOCKED_OUTPUT = (
-    "login",
-    "auth",
-    "unauthorized",
-    "api key",
-    "network",
-    "connection",
-    "rate limit",
-    "usage limit",
-    "billing",
-    "credits",
-)
+_BLOCKED_OUTPUT = {
+    "authentication": ("login", "auth", "unauthorized", "api key"),
+    "network": ("network", "connection"),
+    "quota or billing": ("rate limit", "usage limit", "billing", "credits"),
+}
 
 
 def _requirements(tmp_path: Path) -> tuple[Path, Path]:
@@ -100,8 +93,17 @@ def _run_codex(workspace: Path, environment: dict[str, str]) -> None:
         env={**os.environ, **environment, "CODEX_HOME": str(workspace / ".codex")},
     )
     output = f"{completed.stdout}\n{completed.stderr}".lower()
-    if completed.returncode != 0 and any(marker in output for marker in _BLOCKED_OUTPUT):
-        pytest.skip("BLOCKED: Codex auth, network, or usage is unavailable for the live drill")
+    if completed.returncode != 0:
+        blocked_reason = next(
+            (
+                reason
+                for reason, markers in _BLOCKED_OUTPUT.items()
+                if any(marker in output for marker in markers)
+            ),
+            None,
+        )
+        if blocked_reason is not None:
+            pytest.skip(f"BLOCKED: Codex {blocked_reason} is unavailable for the live drill")
     assert completed.returncode == 0, completed.stderr
 
 
