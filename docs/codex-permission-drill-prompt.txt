@@ -1,0 +1,6 @@
+Before doing anything, ask me locally for permission to run exactly this harmless workspace command:
+
+mkdir -p .remote-agents-acceptance && printf 'permission-check\n' > .remote-agents-acceptance/permission-check.txt
+
+Do not run it until I approve. Do not use apply_patch or make any other changes. After approval,
+run it and stop.

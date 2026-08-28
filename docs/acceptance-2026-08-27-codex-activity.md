@@ -21,7 +21,7 @@ is observation-only and never approves an action.
   reported `completed` notification.
 - [ ] I triggered one controlled local permission prompt; it produced exactly one reported
   `needs_answer` notification. I approved or rejected it locally, and did not use Telegram to
-  approve it.
+  approve it. The copy-ready harmless trigger is `docs/codex-permission-drill-prompt.txt`.
 - [ ] The Telegram standing message and the local activity feed showed the same reported events.
 - [ ] I removed the Codex hooks with
   `remote-agents install-agent-hooks --provider codex --remove`, created fresh pane activity,
