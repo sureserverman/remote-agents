@@ -300,6 +300,9 @@ hook fires in every Claude session on the host — it starts a short-lived Pytho
 but it writes nothing and exits 0 unless the environment carries the session identifier this
 service injects into the panes it launches. Descendants of a managed pane inherit that identifier,
 so a `claude` started from inside one is the exception and spools under its parent's session.
+Codex can additionally install its own `Stop` and `PermissionRequest` hooks with
+`remote-agents install-agent-hooks --provider codex`; it retains pane-quiet fallback and does not
+claim rate- or output-limit notifications.
 
 See [the operator runbook](docs/operator-runbook.md) for acceptance, recovery, and rollback, and
 [agent activity notifications](docs/operator-runbook.md#agent-activity-notifications) for

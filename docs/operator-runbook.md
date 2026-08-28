@@ -593,12 +593,14 @@ rather than folded into a blanket confirmation.
 The service sends unprompted messages when a managed agent stops working, one message per
 session per delivery pass, beside the live view rather than inside it. Two sources feed them and
 only one has to be installed. A managed `claude` or `claude-remote` session reports through Claude Code's own
-hooks; every other curated profile — `codex`, `opencode`, `cursor-agent` — has no hook system, so
-it is watched by capturing its pane. The hooks are not installed by the unit, by `serve`, or by
+hooks. Codex is hybrid: its `Stop` and `PermissionRequest` hooks report `completed` and
+`needs_answer`, while pane quiet remains fallback until a report suppresses that spell. `opencode`
+and `cursor-agent` have only pane evidence. The hooks are not installed by the unit, by `serve`, or by
 `doctor`. Install them once per host:
 
 ```bash
 uv run --locked remote-agents install-agent-hooks
+uv run --locked remote-agents install-agent-hooks --provider codex
 ```
 
 With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
