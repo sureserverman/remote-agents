@@ -105,13 +105,14 @@ def spool_agent_event(
     activity_directory: Path,
     environment: Mapping[str, str] = os.environ,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    provider: str = "claude",
 ) -> int:
     """Record one hook event privately, and always report success to the agent."""
     try:
         session_id = safe_session_id(environment.get(SESSION_ID_VARIABLE))
         if session_id is None:
             return 0
-        observed = _observed_event(payload, session_id, now())
+        observed = _observed_event(payload, session_id, now(), provider)
         if observed is not None:
             _write_privately(observed, activity_directory)
     except Exception:
@@ -125,7 +126,7 @@ def spool_agent_event(
 
 
 def _observed_event(
-    payload: IO[bytes], session_id: str, moment: datetime
+    payload: IO[bytes], session_id: str, moment: datetime, provider: str = "claude"
 ) -> ObservedAgentEvent | None:
     """Read a bounded payload and keep only the fields a notification is built from."""
     raw = payload.read(MAXIMUM_PAYLOAD_BYTES + 1)
@@ -140,6 +141,10 @@ def _observed_event(
     event = _plain_token(document.get("hook_event_name"))
     if event is None:
         return None
+    if provider == "codex":
+        if event not in {"Stop", "PermissionRequest"}:
+            return None
+        return ObservedAgentEvent(session_id, event, None, None, moment.astimezone(UTC))
     return ObservedAgentEvent(
         session_id=session_id,
         event=event,

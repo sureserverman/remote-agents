@@ -303,6 +303,8 @@ def _activity(record: dict) -> AgentActivity | None:
 def _kind(event: object, reason: object) -> tuple[ActivityKind, ActivityConfidence] | None:
     if event == "Stop":
         return ActivityKind.COMPLETED, ActivityConfidence.REPORTED
+    if event == "PermissionRequest":
+        return ActivityKind.NEEDS_ANSWER, ActivityConfidence.REPORTED
     if event == "StopFailure":
         kind = _STOP_FAILURES.get(reason) if isinstance(reason, str) else None
         return None if kind is None else (kind, ActivityConfidence.REPORTED)

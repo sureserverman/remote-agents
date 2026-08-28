@@ -22,7 +22,7 @@ from pathlib import Path
 from remote_agents.ports.argv_text import NonEchoingArgumentParser
 
 
-def spool_from_stdin(activity_directory: Path | None) -> int:
+def spool_from_stdin(activity_directory: Path | None, *, provider: str = "claude") -> int:
     """Read one hook payload from stdin and record it, reporting success whatever happens.
 
     Every import is deferred into the call for the reason the module docstring gives: a hook
@@ -45,7 +45,7 @@ def spool_from_stdin(activity_directory: Path | None) -> int:
         # raised into the agent's session -- the one outcome this whole path is arranged to
         # prevent, arriving before the function that promises never to raise was even called.
         return 0
-    return spool_agent_event(payload, activity_directory=resolved)
+    return spool_agent_event(payload, activity_directory=resolved, provider=provider)
 
 
 def run_agent_event(argv: list[str] | None = None) -> int:
@@ -59,5 +59,6 @@ def run_agent_event(argv: list[str] | None = None) -> int:
     # drove `bootstrap.main`, which is not the path the console script takes.
     parser = NonEchoingArgumentParser(prog="remote-agents agent-event")
     parser.add_argument("--activity-dir", type=Path)
+    parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
     arguments = parser.parse_args(argv)
-    return spool_from_stdin(arguments.activity_dir)
+    return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
