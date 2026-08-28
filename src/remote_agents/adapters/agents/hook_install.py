@@ -98,6 +98,27 @@ session on the machine, that nothing ever consumed.
 # risk elsewhere. Matching parsed words means "mentions" and "runs" stop being the same thing.
 _COMMAND_TAIL = ("-m", "remote_agents", "agent-event")
 _ACTIVITY_DIRECTORY_OPTION = "--activity-dir"
+_PROVIDER_OPTION = "--provider"
+
+
+@dataclass(frozen=True, slots=True)
+class _HookProvider:
+    name: str
+    configuration_relative_path: Path
+    installed_events: tuple[str, ...]
+    retired_events: tuple[str, ...] = ()
+
+
+_CLAUDE = _HookProvider("claude", Path(".claude/settings.json"), INSTALLED_EVENTS, RETIRED_EVENTS)
+_CODEX = _HookProvider("codex", Path(".codex/hooks.json"), ("Stop", "PermissionRequest"))
+_PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX)}
+
+
+def _provider(name: str) -> _HookProvider:
+    try:
+        return _PROVIDERS[name]
+    except KeyError:
+        raise HookInstallError(f"unsupported hook provider: {name}") from None
 
 
 class HookInstallError(Exception):
@@ -113,12 +134,14 @@ class HookInstallOutcome:
     summary: str
 
 
-def default_settings_path(home: Path) -> Path:
+def default_settings_path(home: Path, *, provider: str = "claude") -> Path:
     """Locate the settings file the agent reads, given the home directory to look under."""
-    return home / ".claude" / "settings.json"
+    return home / _provider(provider).configuration_relative_path
 
 
-def agent_event_command(executable: Path, activity_directory: Path | None = None) -> str:
+def agent_event_command(
+    executable: Path, activity_directory: Path | None = None, *, provider: str = "claude"
+) -> str:
     """Spell the hook command against a named interpreter rather than the caller's PATH.
 
     A hook runs with whatever environment the agent happened to have, and the console script
@@ -127,7 +150,10 @@ def agent_event_command(executable: Path, activity_directory: Path | None = None
     performing the install fixes the resolution at a moment when it is known to be correct:
     that interpreter is by definition one that can import this package.
     """
+    selected = _provider(provider)
     command = f"{shlex.quote(str(executable))} -m remote_agents agent-event"
+    if selected is not _CLAUDE:
+        command = f"{command} --provider {selected.name}"
     if activity_directory is None:
         return command
     return f"{command} --activity-dir {shlex.quote(str(activity_directory))}"
@@ -138,38 +164,45 @@ def install_agent_hooks(
     *,
     executable: Path | None = None,
     activity_directory: Path | None = None,
+    provider: str = "claude",
 ) -> HookInstallOutcome:
     """Add one group per event, replacing any this installer left behind previously."""
     _refuse_a_spool_others_can_reach(activity_directory)
-    settings = _read_settings(settings_path)
+    selected = _provider(provider)
+    settings = _read_settings(settings_path, selected)
     interpreter = Path(sys.executable) if executable is None else executable
-    base = _without_our_groups(settings.document)
-    installed = _with_our_groups(base, agent_event_command(interpreter, activity_directory))
-    _refuse_when_removal_would_not_restore(settings, base, installed)
+    base = _without_our_groups(settings.document, selected)
+    installed = _with_our_groups(
+        base, agent_event_command(interpreter, activity_directory, provider=provider), selected
+    )
+    _refuse_when_removal_would_not_restore(settings, base, installed, selected)
     content = settings.style.render(installed)
     # Reported on both paths. Re-running the installer is exactly what an operator does when
     # they are trying to work out why every event arrives twice, and answering "already
     # current" while saying nothing about the variant that is doubling them is the least
     # helpful moment to stay quiet.
-    note = _foreign_variant_note(base)
+    note = _foreign_variant_note(base, selected)
     if content == settings.content:
         return HookInstallOutcome(
             settings_path, False, f"agent hooks already current in {settings_path}{note}"
         )
     _refuse_if_changed_since_it_was_read(settings_path, settings.content)
     _write_atomically(settings_path, content, settings.mode)
-    summary = f"installed {len(INSTALLED_EVENTS)} agent hooks in {settings_path}"
+    summary = (
+        f"installed {len(selected.installed_events)} {selected.name} agent hooks in {settings_path}"
+    )
     return HookInstallOutcome(settings_path, True, summary + note)
 
 
-def remove_agent_hooks(settings_path: Path) -> HookInstallOutcome:
+def remove_agent_hooks(settings_path: Path, *, provider: str = "claude") -> HookInstallOutcome:
     """Delete only this installer's own groups, leaving anything sharing an event alone."""
     if not settings_path.exists():
         # Not an error: uninstalling from a machine that was never installed to, and from one
         # whose settings file has since been deleted, should look the same and cost nothing.
         return HookInstallOutcome(settings_path, False, f"no settings file at {settings_path}")
-    settings = _read_settings(settings_path)
-    content = settings.style.render(_without_our_groups(settings.document))
+    selected = _provider(provider)
+    settings = _read_settings(settings_path, selected)
+    content = settings.style.render(_without_our_groups(settings.document, selected))
     if content == settings.content:
         return HookInstallOutcome(settings_path, False, f"no agent hooks in {settings_path}")
     _refuse_if_changed_since_it_was_read(settings_path, settings.content)
@@ -212,7 +245,7 @@ class _Settings:
     mode: int
 
 
-def _read_settings(path: Path) -> _Settings:
+def _read_settings(path: Path, provider: _HookProvider = _CLAUDE) -> _Settings:
     """Parse and validate a settings file, refusing every shape that cannot be merged into."""
     try:
         content = path.read_bytes()
@@ -236,7 +269,7 @@ def _read_settings(path: Path) -> _Settings:
         ) from error
     if not isinstance(document, dict):
         raise HookInstallError(f"{path} does not hold a JSON object; it has been left untouched")
-    _refuse_unmergeable_hooks(path, document)
+    _refuse_unmergeable_hooks(path, document, provider)
     return _Settings(
         path,
         content,
@@ -246,7 +279,9 @@ def _read_settings(path: Path) -> _Settings:
     )
 
 
-def _refuse_unmergeable_hooks(path: Path, document: dict[str, Any]) -> None:
+def _refuse_unmergeable_hooks(
+    path: Path, document: dict[str, Any], provider: _HookProvider
+) -> None:
     """Reject a hooks block whose shape this installer would have to guess at."""
     hooks = document.get("hooks")
     if hooks is None:
@@ -255,7 +290,7 @@ def _refuse_unmergeable_hooks(path: Path, document: dict[str, Any]) -> None:
         raise HookInstallError(
             f'the "hooks" key in {path} is not a JSON object; it has been left untouched'
         )
-    for event in INSTALLED_EVENTS:
+    for event in (*provider.installed_events, *provider.retired_events):
         groups = hooks.get(event)
         if groups is not None and not isinstance(groups, list):
             raise HookInstallError(
@@ -292,10 +327,12 @@ def _candidate_styles() -> Iterator[_SettingsStyle]:
                     yield _SettingsStyle(indent, separator, ensure_ascii, trailing_newline)
 
 
-def _with_our_groups(document: dict[str, Any], command: str) -> dict[str, Any]:
+def _with_our_groups(
+    document: dict[str, Any], command: str, provider: _HookProvider = _CLAUDE
+) -> dict[str, Any]:
     """Append one matcherless group per event, without disturbing any key's position."""
     hooks = dict(document.get("hooks") or {})
-    for event in INSTALLED_EVENTS:
+    for event in provider.installed_events:
         group = {"hooks": [{"type": "command", "command": command}]}
         # `or ()` rather than a `.get` default, because an explicit JSON null defeats the
         # default and unpacking it raised out through the CLI as a traceback. Reading null as
@@ -307,7 +344,9 @@ def _with_our_groups(document: dict[str, Any], command: str) -> dict[str, Any]:
     return {**document, "hooks": hooks}
 
 
-def _without_our_groups(document: dict[str, Any]) -> dict[str, Any]:
+def _without_our_groups(
+    document: dict[str, Any], provider: _HookProvider = _CLAUDE
+) -> dict[str, Any]:
     """Drop our groups, and the containers left holding nothing once they are gone.
 
     Every other event, and every other group under the events we do install into, is copied
@@ -321,12 +360,12 @@ def _without_our_groups(document: dict[str, Any]) -> dict[str, Any]:
     # Now *or ever* — see `RETIRED_EVENTS`. Sweeping only what is currently installed is what
     # would stand an event we dropped, in a file neither install nor uninstall would touch
     # again.
-    ours = (*INSTALLED_EVENTS, *RETIRED_EVENTS)
+    ours = (*provider.installed_events, *provider.retired_events)
     for event, groups in hooks.items():
         if event not in ours or not isinstance(groups, list):
             remaining[event] = groups
             continue
-        kept = [group for group in groups if not _is_our_group(group)]
+        kept = [group for group in groups if not _is_our_group(group, provider)]
         if kept:
             remaining[event] = kept
     if remaining:
@@ -376,7 +415,7 @@ def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
     )
 
 
-def _foreign_variant_note(base: dict[str, Any]) -> str:
+def _foreign_variant_note(base: dict[str, Any], provider: _HookProvider = _CLAUDE) -> str:
     """Name the events already running our subcommand in a form this installer will not manage.
 
     Leaving such an entry alone is the right call and stays the right call -- it is a wrapper,
@@ -393,8 +432,8 @@ def _foreign_variant_note(base: dict[str, Any]) -> str:
         return ""
     events = [
         event
-        for event in INSTALLED_EVENTS
-        if any(_mentions_our_subcommand(group) for group in hooks.get(event) or ())
+        for event in provider.installed_events
+        if any(_mentions_our_subcommand(group, provider) for group in hooks.get(event) or ())
     ]
     if not events:
         return ""
@@ -405,9 +444,9 @@ def _foreign_variant_note(base: dict[str, Any]) -> str:
     )
 
 
-def _mentions_our_subcommand(group: Any) -> bool:
+def _mentions_our_subcommand(group: Any, provider: _HookProvider = _CLAUDE) -> bool:
     """Report a group running our subcommand that `_is_our_group` will not claim."""
-    if _is_our_group(group) or not isinstance(group, dict):
+    if _is_our_group(group, provider) or not isinstance(group, dict):
         return False
     entries = group.get("hooks")
     if not isinstance(entries, list):
@@ -422,12 +461,16 @@ def _mentions_our_subcommand(group: Any) -> bool:
         # The parsed words, exactly as `_runs_our_command` reads them -- so a command that
         # merely *mentions* the subcommand in an echo or a grep is no more a near-miss here
         # than it is one there.
-        if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) == _COMMAND_TAIL:
+        if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) != _COMMAND_TAIL:
+            continue
+        tail = words[1 + len(_COMMAND_TAIL) :]
+        prefix = [] if provider is _CLAUDE else [_PROVIDER_OPTION, provider.name]
+        if tail[: len(prefix)] == prefix:
             return True
     return False
 
 
-def _is_our_group(group: Any) -> bool:
+def _is_our_group(group: Any, provider: _HookProvider = _CLAUDE) -> bool:
     """Recognise a group this installer wrote, and never a group that merely resembles one.
 
     Every command in the group must be ours. A group an operator has hand-edited to run our
@@ -448,12 +491,12 @@ def _is_our_group(group: Any) -> bool:
     return all(
         isinstance(entry, dict)
         and isinstance(entry.get("command"), str)
-        and _runs_our_command(entry["command"])
+        and _runs_our_command(entry["command"], provider)
         for entry in entries
     )
 
 
-def _runs_our_command(command: str) -> bool:
+def _runs_our_command(command: str, provider: _HookProvider = _CLAUDE) -> bool:
     """Decide whether this command line is one this installer could have written.
 
     Not "mentions our subcommand", and not "invokes it somehow" either. The words after the
@@ -470,11 +513,18 @@ def _runs_our_command(command: str) -> bool:
     if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) != _COMMAND_TAIL:
         return False
     rest = words[1 + len(_COMMAND_TAIL) :]
-    return not rest or (len(rest) == 2 and rest[0] == _ACTIVITY_DIRECTORY_OPTION)
+    prefix = [] if provider is _CLAUDE else [_PROVIDER_OPTION, provider.name]
+    if rest[: len(prefix)] != prefix:
+        return False
+    remaining = rest[len(prefix) :]
+    return not remaining or (len(remaining) == 2 and remaining[0] == _ACTIVITY_DIRECTORY_OPTION)
 
 
 def _refuse_when_removal_would_not_restore(
-    settings: _Settings, base: dict[str, Any], installed: dict[str, Any]
+    settings: _Settings,
+    base: dict[str, Any],
+    installed: dict[str, Any],
+    provider: _HookProvider = _CLAUDE,
 ) -> None:
     """Run the removal now and refuse the install unless it lands back on the original bytes.
 
@@ -485,12 +535,12 @@ def _refuse_when_removal_would_not_restore(
     leave it or delete it. Rather than pick and be wrong half the time, the install is
     refused; deleting the empty block by hand makes it succeed and changes nothing else.
     """
-    restored = settings.style.render(_without_our_groups(installed))
+    restored = settings.style.render(_without_our_groups(installed, provider))
     # On a reinstall the bytes on disk already hold our previous groups, so they are not what
     # removal must land on; the check that they were is the one the first install passed.
     faithful = (
         settings.content is None
-        or _holds_our_groups(settings.document)
+        or _holds_our_groups(settings.document, provider)
         or settings.style.render(base) == settings.content
     )
     if restored != settings.style.render(base) or not faithful:
@@ -505,13 +555,15 @@ def _refuse_when_removal_would_not_restore(
         )
 
 
-def _holds_our_groups(document: dict[str, Any]) -> bool:
+def _holds_our_groups(document: dict[str, Any], provider: _HookProvider = _CLAUDE) -> bool:
     """Report whether a previous install is present, which is what makes this a reinstall."""
     hooks = document.get("hooks")
     if not isinstance(hooks, dict):
         return False
     return any(
-        _is_our_group(group) for event in INSTALLED_EVENTS for group in hooks.get(event) or ()
+        _is_our_group(group, provider)
+        for event in provider.installed_events
+        for group in hooks.get(event) or ()
     )
 
 

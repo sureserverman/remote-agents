@@ -468,6 +468,7 @@ def main(
     upgrade_parser.add_argument("--repository", type=str, default=DEFAULT_REPOSITORY)
     upgrade_parser.add_argument("--check", action="store_true")
     install_hooks_parser = subcommands.add_parser("install-agent-hooks")
+    install_hooks_parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
     install_hooks_parser.add_argument("--settings", type=Path)
     install_hooks_parser.add_argument("--activity-dir", type=Path)
     install_hooks_parser.add_argument("--remove", action="store_true")
@@ -492,11 +493,17 @@ def main(
             ):
                 if given is not None:
                     refuse_a_credential_shaped_value(option, str(given))
-            settings_path = arguments.settings or default_settings_path(Path.home())
+            settings_path = arguments.settings or default_settings_path(
+                Path.home(), provider=arguments.provider
+            )
             outcome = (
-                remove_agent_hooks(settings_path)
+                remove_agent_hooks(settings_path, provider=arguments.provider)
                 if arguments.remove
-                else install_agent_hooks(settings_path, activity_directory=arguments.activity_dir)
+                else install_agent_hooks(
+                    settings_path,
+                    activity_directory=arguments.activity_dir,
+                    provider=arguments.provider,
+                )
             )
         except (HookInstallError, ValueError) as error:
             print(error, file=sys.stderr)
