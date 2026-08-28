@@ -429,6 +429,7 @@ def main(
     subcommands.add_parser("upgrade-sessions")
     agent_event_parser = subcommands.add_parser("agent-event")
     agent_event_parser.add_argument("--activity-dir", type=Path)
+    agent_event_parser.add_argument("--provider", choices=("claude", "codex"), default="claude")
     # `allow_abbrev=False` is load-bearing, not tidiness. argparse accepts any unambiguous
     # prefix by default, so `--bot-token` -- the obvious name, the one an operator reaches for
     # first -- was silently accepted as an abbreviation of `--bot-token-file`, which put a
@@ -477,7 +478,7 @@ def main(
         # Delegated rather than implemented here: `__main__` routes the installed hook command
         # straight to that module without importing this one, and two copies of a path that
         # promises never to raise would eventually stop agreeing about how it does that.
-        return spool_from_stdin(arguments.activity_dir)
+        return spool_from_stdin(arguments.activity_dir, provider=arguments.provider)
     if arguments.command == "upgrade":
         return _run_upgrade(arguments)
     if arguments.command == "install-agent-hooks":
