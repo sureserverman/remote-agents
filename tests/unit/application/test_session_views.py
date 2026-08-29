@@ -502,3 +502,14 @@ def test_a_reading_that_states_no_observation_time_is_not_dated() -> None:
     (line,) = limit_lines((_account("codex", UsageWindow("week", 61.0)),))
 
     assert "as of" not in line
+
+
+def test_a_window_that_has_already_reset_reads_as_zero_rather_than_negative() -> None:
+    """Carried over from the session line this block replaced, because the clamp still matters.
+
+    `until` refuses a negative remainder: a clock the reader cannot see disagreeing by a second
+    should read `0m`, not `-1m`, which looks like a broken session rather than a slow clock.
+    """
+    (line,) = limit_lines((_account("codex", UsageWindow("5h", 0.0, resets_at=datetime.now(UTC))),))
+
+    assert line == "codex: 5h 0% (resets in 0m)"

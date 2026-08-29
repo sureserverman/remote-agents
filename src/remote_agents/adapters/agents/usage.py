@@ -145,10 +145,17 @@ class ClaudeUsageReader:
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
         transcript = self._transcript_for(query)
-        context = None if transcript is None else _claude_context(transcript)
+        if transcript is None:
+            # No conversation matched, and the account's windows do not change that. They used
+            # to: this returned a reading carrying only windows, because the session detail drew
+            # them and a reading was the only way to get them there. They render in their own
+            # block now (Task 2.1), so a sessionless reading would produce a session line with
+            # nothing in it instead of the sentence that invites the owner to look again.
+            return None
+        context = _claude_context(transcript)
         windows, stale, _ = self._limits()
         if context is None and not windows:
-            return None if transcript is None else AgentUsage()
+            return AgentUsage()
         return AgentUsage(
             context=context,
             windows=windows,

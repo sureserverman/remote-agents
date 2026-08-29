@@ -1042,3 +1042,26 @@ def test_the_directory_bound_is_wide_enough_for_the_measured_worst_case() -> Non
     the constant down to make a slow test faster.
     """
     assert _ACCOUNT_ROLLOUT_DAYS >= 8
+
+
+def test_an_unmatched_claude_session_is_unmatched_even_when_the_account_answers(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Account windows used to keep a sessionless reading alive, because the detail drew them.
+
+    They render in their own block now, so a session whose transcript was not found has nothing
+    session-shaped to say and the honest answer is `None` — which presentation words as "no
+    conversation matched yet", the sentence that invites the owner to look again. Returning a
+    reading carrying only account windows would instead have produced a session line with
+    nothing in it.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+
+    assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None
+    # The account read is untouched by that: same cache, still answering.
+    assert _claude_reader(tmp_path, cache=cache).limits().windows != ()

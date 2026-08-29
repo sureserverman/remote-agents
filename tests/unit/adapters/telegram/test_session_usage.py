@@ -18,7 +18,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.agent_usage import AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
 
 OWNER = 4242
 CHAT = 99
@@ -85,7 +85,17 @@ async def test_the_detail_screen_shows_what_the_session_has_spent() -> None:
     )
 
     assert "Context: 24.3k of 258k · 9%" in text
-    assert "Limits: 5h 2%" in text
+
+
+@pytest.mark.asyncio
+async def test_the_detail_screen_no_longer_claims_the_accounts_limits() -> None:
+    """The owner's report: a window here reads as this session's spend, and it never was."""
+    text = await _detail_text(
+        _reader(AgentUsage(context=ContextWindow(1_000), windows=(UsageWindow("5h", 2.0),)))
+    )
+
+    assert "Limits" not in text
+    assert "5h" not in text
 
 
 @pytest.mark.asyncio
@@ -122,3 +132,85 @@ async def test_a_reader_that_raises_costs_the_line_and_not_the_screen() -> None:
 
     assert "State: running" in text
     assert "Context" not in text
+
+
+# --- the account block, on the screen that is about every session -------------------------
+
+
+def _account_boundary(limits: object) -> PrivateBotBoundary:
+    return build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(sessions=_Launcher(), catalogue=(PROJECT,), limits=limits),
+        profiles=(ProfileAvailability("claude", True, None),),
+    )
+
+
+class _NoSessions(_Launcher):
+    """The empty branch, which is exactly when a stop has just ended the last session."""
+
+    async def list_sessions(self) -> list[SessionRecord]:
+        return []
+
+
+def _limits_reader(*entries: AgentLimits):
+    async def read() -> tuple[AgentLimits, ...]:
+        return entries
+
+    return read
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_screen_carries_one_line_per_answering_agent() -> None:
+    """Where a whole-agent fact belongs: on the screen about every session, not inside one."""
+    rendered = await _account_boundary(
+        _limits_reader(
+            AgentLimits(
+                ProfileId("claude"), (UsageWindow("5h", 2.0),), stale_source="status-line cache"
+            ),
+            AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+        )
+    )._sessions_reply()
+
+    assert "claude: 5h 2% — via status-line cache" in rendered.text
+    assert "codex: week 61%" in rendered.text
+
+
+@pytest.mark.asyncio
+async def test_an_empty_list_still_carries_the_agents_limits() -> None:
+    empty = build_private_bot(
+        OWNER,
+        CHAT,
+        backend=backend_for(
+            sessions=_NoSessions(),
+            catalogue=(PROJECT,),
+            limits=_limits_reader(AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),))),
+        ),
+        profiles=(ProfileAvailability("claude", True, None),),
+    )
+
+    text = (await empty._sessions_reply()).text
+
+    assert "Nothing is running." in text
+    assert "codex: week 61%" in text
+
+
+@pytest.mark.asyncio
+async def test_a_host_that_wired_no_limits_reader_renders_no_block() -> None:
+    text = (await _account_boundary(None)._sessions_reply()).text
+
+    assert "Sessions" in text
+    assert "5h" not in text and "week" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_limits_reader_that_raises_costs_the_block_and_not_the_screen() -> None:
+    """The screen's real content is the list of sessions and the way into each one."""
+
+    async def exploding() -> tuple[AgentLimits, ...]:
+        raise RuntimeError("the provider changed its layout under an upgrade")
+
+    rendered = await _account_boundary(exploding)._sessions_reply()
+
+    assert "Sessions" in rendered.text
+    assert rendered.keyboard

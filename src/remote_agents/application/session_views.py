@@ -208,8 +208,13 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
       line says *yet* and the owner can reopen the screen.
     - **empty** — the provider matched and publishes nothing. Permanent, and said so, because
       an owner told "not yet" about cursor-agent would wait for a number that is never coming.
-    - **anything else** — the figures, one line for the context window and one for the plan's
-      limit windows, either of which may be absent on its own.
+    - **anything else** — the context window, and only that.
+
+    **The plan's rate-limit windows used to render here too, and moving them out is the whole
+    of Task 2.1.** They are the account's: both providers that publish one publish it for the
+    plan, so the same figure was appearing under whichever session happened to be open and
+    reading as that session's spend. `limit_lines` renders them once per agent instead. A
+    reading may still *carry* windows — the reader is free to — and this function ignores them.
 
     A percentage is shown only where the provider stated the ceiling. Claude records what each
     turn used and never the window it used it out of, so its line is a bare count; deriving the
@@ -221,21 +226,13 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
         return ("Usage: no conversation matched yet.",)
     if usage.is_empty:
         return ("Usage: not reported by this agent.",)
-    lines = []
-    if usage.context is not None:
-        lines.append(f"Context: {_context_phrase(usage.context)}")
-    elif usage.windows:
-        # Reached by Claude and only Claude: its limits are account-wide and come from
-        # somewhere else entirely, so they answer while this session's own transcript has not
-        # been found — a fresh pane that has not taken a turn yet, or an old session whose
-        # conversation has since been cleaned up. Saying so beats a screen that shows `Limits`
-        # with no `Context` above it and leaves the reader to work out which half is missing.
-        lines.append("Context: no conversation matched yet.")
-    if usage.windows:
-        rendered = " · ".join(_window_phrase(window) for window in usage.windows)
-        borrowed = "" if usage.stale_source is None else f" — via {usage.stale_source}"
-        lines.append(f"Limits: {rendered}{borrowed}")
-    return tuple(lines)
+    if usage.context is None:
+        # The branch that used to say "Context: no conversation matched yet." here existed only
+        # so a `Limits` line would not appear with nothing above it. With the limits gone there
+        # is no half-missing screen to explain, and a reading that reaches this point carries no
+        # context the owner can be shown -- which is what the sentence above already says.
+        return ("Usage: not reported by this agent.",)
+    return (f"Context: {_context_phrase(usage.context)}",)
 
 
 _STALE_READING_AGE = timedelta(minutes=30)

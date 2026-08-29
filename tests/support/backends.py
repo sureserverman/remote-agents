@@ -39,7 +39,7 @@ from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import AgentActivity
-from remote_agents.ports.agent_usage import AgentUsage
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
 
 _UNSET: object = object()
 """Distinguishes "the caller said nothing" from "the caller said None".
@@ -60,6 +60,7 @@ def backend_for(
     capture: Callable[[SessionId], Awaitable[str]] | None = _UNSET,  # type: ignore[assignment]
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = _UNSET,  # type: ignore[assignment]
     usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = _UNSET,  # type: ignore[assignment]
+    limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
     max_label_length: int = _UNSET,  # type: ignore[assignment]
 ) -> Backend:
     """A `Backend` carrying what the caller stated and `Backend`'s own defaults for the rest.
@@ -79,6 +80,7 @@ def backend_for(
         "capture": capture,
         "activity_feed": activity_feed,
         "usage": usage,
+        "limits": limits,
         "max_label_length": max_label_length,
     }
     return Backend(**{name: value for name, value in stated.items() if value is not _UNSET})

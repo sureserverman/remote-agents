@@ -87,6 +87,7 @@ from remote_agents.application.session_actions import (
     trust_available,
 )
 from remote_agents.application.session_views import (
+    limit_lines,
     listed_sessions,
     only_listed,
     selectable_area,
@@ -1204,13 +1205,18 @@ class PrivateBotBoundary:
             f" · {sum(record.state is SessionState.RUNNING for record in records)} active"
             f" · {sum(record.state is SessionState.PRESERVED for record in records)} preserved"
         )
+        # Read once, above the branch, because both branches render it. The empty branch needs
+        # it for the reason `notice` already reaches there: stopping the last session is exactly
+        # when this list is empty, and an agent's weekly limit does not stop existing because
+        # nothing is running against it right now.
+        spent = await self._limit_block()
         if not records:
             self._sessions_page = 1
             # No body Launch. It was the way out before a permanent way out existed; the
             # bar now carries the identical destination on the very next row, and a button
             # duplicating the one directly beneath it reads as a bug.
             return self._message(
-                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running."
+                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running.{spent}"
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -1236,7 +1242,7 @@ class PrivateBotBoundary:
         if navigation:
             buttons.append(tuple(navigation))
         return self._message(
-            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>{counts}",
+            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>{counts}{spent}",
             tuple(buttons),
         )
 
@@ -1367,6 +1373,29 @@ class PrivateBotBoundary:
             tuple(buttons),
             back=self._sessions_back(),
         )
+
+    async def _limit_block(self) -> str:
+        """Each installed agent's rate-limit windows, under the counts and above the rows.
+
+        Under the counts because it is the same kind of statement they are — something true of
+        this screen as a whole rather than of any row on it — and that placement is what stops a
+        window reading as the spend of whichever session it happens to sit beside, which is the
+        report this task exists to answer.
+
+        Escaped here rather than in `limit_lines`, which returns plain strings and takes no view
+        on either surface's markup (DEC-043, DEC-014). The broad `except` is `_usage_lines`'s
+        trade made again one screen up, and it matters more here: this block sits on the screen
+        that is the only way to reach a session at all, so a provider that changed its file
+        format under an upgrade must not be able to cost the owner the list.
+        """
+        if self.backend.limits is None:
+            return ""
+        try:
+            lines = limit_lines(await self.backend.limits())
+        except Exception:
+            logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
+            return ""
+        return "".join(f"\n{escape(line)}" for line in lines)
 
     async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
         """Ask the provider what this session has spent, and never let the answer cost a screen.
