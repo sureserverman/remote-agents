@@ -191,6 +191,19 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # one, and the distinction is the point: `capture` sat here before both surfaces drew
         # on it too.
         "usage",
+        # The account-wide sibling of `usage`, and shared for the same reason with one
+        # difference that is the whole point of it existing: it names no session. Both
+        # providers that publish a rate-limit window publish it for the *plan*, so the fact is
+        # the same fact whichever session — or no session — is open, which is exactly what
+        # makes it the backend's rather than a surface's. Keeping it beside `usage` rather than
+        # folding it into `usage` is deliberate: one takes a `SessionId` and one takes nothing,
+        # and a capability reachable only by naming a session would keep alive the confusion
+        # this stage exists to remove (a window rendered under a session reads as that
+        # session's spend).
+        #
+        # Neither surface renders it yet; both will. Composition is settled here, presentation
+        # follows — the same order `capture` and `usage` each arrived in.
+        "limits",
         "max_label_length",
     }
 

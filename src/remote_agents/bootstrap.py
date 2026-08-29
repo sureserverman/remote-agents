@@ -865,7 +865,8 @@ def _limits_reader(
 
     Handed the same `ProfileUsageReaders` the session reader uses, so a host probes for
     provider files with one set of readers rather than two (DEC-046). On a worker thread for
-    `_usage_reader`'s reason, and more so: this one sweeps two rollout directories.
+    `_usage_reader`'s reason, and more so: this one sweeps every rollout in as many as
+    `_ACCOUNT_ROLLOUT_DAYS` dated directories.
     """
 
     async def read() -> tuple[AgentLimits, ...]:

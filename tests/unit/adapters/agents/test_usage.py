@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from remote_agents.adapters.agents.usage import (
+    _ACCOUNT_ROLLOUT_DAYS,
     ClaudeUsageReader,
     CodexUsageReader,
     CursorUsageReader,
@@ -992,3 +993,52 @@ def test_the_provenance_fields_must_be_named() -> None:
     """
     with pytest.raises(TypeError):
         AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),), "status-line cache")  # type: ignore[misc]
+
+
+def test_a_session_running_since_the_measured_worst_case_is_still_reached(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Eight days: the largest start-to-last-write gap across 289 rollouts on the real host.
+
+    Deliberately a literal rather than `_ACCOUNT_ROLLOUT_DAYS - 1`. The first version of this
+    test derived its fixture from the constant, so shrinking the bound shrank the fixture with
+    it and the test stayed green against the exact mutation it was written to catch — a test
+    that measures the code against itself. The eight comes from outside the code, which is the
+    only place a bound's justification can come from.
+
+    Nine directories, one per day, with the newest write in the oldest: a session begun eight
+    days ago and still running, which is what a long-lived managed agent session is.
+    """
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [_codex_token_count(last=1_000, window=258_400, primary=34.0, secondary=61.0)],
+        at=LAUNCHED_AT + timedelta(hours=2),
+        started=LAUNCHED_AT - timedelta(days=8),
+    )
+    for offset in range(8):
+        _account_rollout(
+            tmp_path,
+            workspace,
+            f"bbbbbbbb-0000-4000-8000-{offset:012d}",
+            [_codex_token_count(last=2_000, window=258_400, primary=87.0, secondary=54.0)],
+            at=LAUNCHED_AT + timedelta(hours=1),
+            started=LAUNCHED_AT - timedelta(days=offset),
+        )
+
+    reader = CodexUsageReader(
+        sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT + timedelta(hours=3)
+    )
+
+    assert [window.used_percent for window in reader.limits().windows] == [34.0, 61.0]
+
+
+def test_the_directory_bound_is_wide_enough_for_the_measured_worst_case() -> None:
+    """Eight days was the largest start-to-last-write gap across 289 real rollouts.
+
+    Stated as a check rather than a comment because the bound's justification is a measurement,
+    and a measurement that lives only in prose stops being checked the first time someone tunes
+    the constant down to make a slow test faster.
+    """
+    assert _ACCOUNT_ROLLOUT_DAYS >= 8

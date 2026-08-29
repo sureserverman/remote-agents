@@ -463,9 +463,16 @@ class ProfileUsageReaders:
             # because there is no honest name to give it.
             try:
                 profile = reader.limits_profile  # type: ignore[attr-defined]
-                answers.append(reader.limits())  # type: ignore[attr-defined]
             except AttributeError:
+                # Narrowed to the attribute access alone. Wrapping the `limits()` call in the
+                # same guard swallowed an `AttributeError` raised *inside* a reader — a real
+                # bug — and dropped its entry, which is the opposite of what the next clause
+                # promises. `__init__` takes `Iterable[object]` with no protocol, so an
+                # unlabelled reader is reachable; it is skipped rather than given a name it
+                # does not have.
                 continue
+            try:
+                answers.append(reader.limits())  # type: ignore[attr-defined]
             except (OSError, ValueError, ArithmeticError, sqlite3.Error):
                 answers.append(AgentLimits(profile))
         return tuple(answers)

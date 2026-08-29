@@ -285,9 +285,11 @@ def _dated(observed_at: datetime | None) -> str:
     the present tense. Codex writes its limits into a rollout and then goes quiet with the
     session, which makes an old reading ordinary rather than exceptional.
 
-    Below the bound nothing is said, because a timestamp on a current number is noise; the same
-    bound `adapters.agents.usage` fences Claude's borrowed cache with, reused rather than
-    reinvented so there is one answer on this host to "how old is too old".
+    Below the bound nothing is said, because a timestamp on a current number is noise. The
+    span matches the one `adapters.agents.usage` fences Claude's borrowed cache with, but it is
+    a separate constant rather than a shared one — `application` may not import an adapter
+    (ARCH-02), and the two do different things with the same number, so `_STALE_READING_AGE`
+    states the agreement rather than inheriting it.
     """
     if observed_at is None or datetime.now(UTC) - observed_at <= _STALE_READING_AGE:
         return ""
