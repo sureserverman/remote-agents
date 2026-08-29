@@ -346,9 +346,7 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
                     and activity.kind is ActivityKind.NEEDS_ANSWER
                 )
             )
-            composition.quiet_watcher.mark_needs_answer_reported(
-                reported_needs_answer_session_ids
-            )
+            composition.quiet_watcher.mark_needs_answer_reported(reported_needs_answer_session_ids)
             activities.extend(await composition.quiet_watcher.poll())
         except Exception:
             _LOG.exception("pane quiet watch failed")

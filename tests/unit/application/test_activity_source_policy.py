@@ -160,9 +160,7 @@ async def test_only_codex_titles_can_infer_an_action_required_notification() -> 
             assert states == (SessionState.RUNNING,)
             return (codex, other)
 
-    watcher = PaneQuietWatcher(
-        _TwoSessionStore(), capture, quiet_polls=2, title=action_required
-    )
+    watcher = PaneQuietWatcher(_TwoSessionStore(), capture, quiet_polls=2, title=action_required)
 
     (activity,) = await watcher.poll()
 
@@ -187,9 +185,7 @@ async def test_reported_permission_wins_over_the_same_title_edge() -> None:
     async def action_required(session_id: SessionId) -> str:
         return next(titles)
 
-    watcher = PaneQuietWatcher(
-        _RunningStore(record), capture, quiet_polls=2, title=action_required
-    )
+    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2, title=action_required)
     watcher.mark_needs_answer_reported((str(record.session_id),))
 
     assert await watcher.poll() == ()

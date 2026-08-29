@@ -81,6 +81,11 @@ _CODEC_MAY_NAME_A_SESSION = {
         "names is the agent's **own** — nothing has been exchanged on such a host, so there is "
         "no displaced pane for the target to resolve wrongly onto"
     ),
+    "pane_title_args": (
+        "the metadata-only title query follows the same already-resolved pane target as capture; "
+        "its session-target branch is solely the schema-1 fallback, where no narrower pane id "
+        "exists. It neither captures terminal content nor acts on the pane."
+    ),
 }
 
 
