@@ -552,6 +552,195 @@ def test_the_default_reader_set_covers_every_curated_profile() -> None:
     assert {definition.profile_id for definition in closed_profiles()} <= covered
 
 
+# --- the account-wide limits read --------------------------------------------------------
+
+
+def _account_rollout(tmp_path: Path, cwd: Path, name: str, records: list[dict], *, at) -> Path:
+    """A rollout filed under the UTC day `LAUNCHED_AT` falls in, with a chosen mtime.
+
+    Separate from `_rollout` because these tests are about picking between rollouts, which
+    needs distinct modification times; `_rollout` stamps every file with the same instant
+    because the session reads it writes for only ever match one.
+    """
+    path = (
+        tmp_path
+        / "codex-sessions"
+        / f"{LAUNCHED_AT:%Y}"
+        / f"{LAUNCHED_AT:%m}"
+        / f"{LAUNCHED_AT:%d}"
+        / f"rollout-2026-08-27T06-05-00-{name}.jsonl"
+    )
+    meta = {"type": "session_meta", "payload": {"cwd": str(cwd.resolve())}}
+    written = _written(path, [meta, *records])
+    _touch(written, at)
+    return written
+
+
+def test_claude_account_limits_are_read_without_naming_a_session(tmp_path: Path) -> None:
+    """The whole ask: the windows are the account's, so obtaining them takes no `UsageQuery`.
+
+    `_limits()` already read the cache session-free; it was reachable only through `read()`,
+    which needs a session to name. Nothing about the numbers changes — only who may ask.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {
+            "five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)},
+            "seven_day": {"utilization": 88, "resets_at": _iso_in(days=2)},
+        },
+    )
+
+    limits = _claude_reader(tmp_path, cache=cache).limits()
+
+    assert limits.profile_id == ProfileId("claude")
+    assert [(window.label, window.used_percent) for window in limits.windows] == [
+        ("5h", 2.0),
+        ("week", 88.0),
+    ]
+    assert limits.stale_source == "status-line cache"
+
+
+def test_a_stale_cache_leaves_the_account_block_empty_rather_than_wrong(tmp_path: Path) -> None:
+    """One minute past the bound, so the boundary is asserted rather than the region past it."""
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    document = _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+    _touch(document, datetime.now(UTC) - timedelta(minutes=31))
+
+    limits = _claude_reader(tmp_path, cache=cache).limits()
+
+    assert limits.windows == ()
+    assert limits.stale_source is None
+
+
+def test_codex_account_limits_come_from_the_newest_rollout_whatever_wrote_it(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The account figure is in every rollout, so the newest one is the current one.
+
+    The newer rollout is deliberately filed under a *different* workspace: a rate-limit
+    window belongs to the plan rather than to a project, so an account read that filtered by
+    workspace the way `read()` does would answer with the stale copy here.
+    """
+    elsewhere = tmp_path / "dev" / "other-project"
+    elsewhere.mkdir(parents=True)
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [_codex_token_count(last=1_000, window=258_400, primary=10.0, secondary=1.0)],
+        at=LAUNCHED_AT + timedelta(minutes=5),
+    )
+    _account_rollout(
+        tmp_path,
+        elsewhere,
+        "bbbbbbbb-0000-4000-8000-000000000000",
+        [_codex_token_count(last=2_000, window=258_400, primary=77.0, secondary=3.0)],
+        at=LAUNCHED_AT + timedelta(minutes=40),
+    )
+
+    reader = CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT)
+    limits = reader.limits()
+
+    assert limits.profile_id == ProfileId("codex")
+    assert [window.used_percent for window in limits.windows] == [77.0, 3.0]
+    assert limits.stale_source is None
+
+
+def test_a_lapsed_account_window_is_dropped_exactly_as_a_session_one_is(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """An idle rollout keeps serving the percentages from whenever it last spoke (DEC-061)."""
+    lapsed = {
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {"last_token_usage": {"total_tokens": 1}, "model_context_window": 258_400},
+            "rate_limits": {
+                "primary": {
+                    "used_percent": 43.0,
+                    "window_minutes": 10080,
+                    "resets_at": 1787341653,
+                },
+                "secondary": None,
+            },
+        },
+    }
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [lapsed],
+        at=LAUNCHED_AT + timedelta(minutes=5),
+    )
+
+    assert (
+        CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT)
+        .limits()
+        .windows
+        == ()
+    )
+
+
+def test_the_providers_that_publish_no_limits_say_so_rather_than_failing(tmp_path: Path) -> None:
+    """ "Not reported by this agent" is the honest render; an absent entry would be a gap."""
+    assert OpenCodeUsageReader(database=tmp_path / "absent.db").limits().windows == ()
+    assert CursorUsageReader().limits().windows == ()
+    assert CursorUsageReader().limits().profile_id == ProfileId("cursor-agent")
+
+
+def test_the_claude_variants_share_one_account_and_so_one_entry(tmp_path: Path) -> None:
+    """`claude` and `claude-remote` are the same executable under a different argv.
+
+    `domain/profiles.py` curates both to the `claude` binary, differing only by
+    `--remote-control`, so they draw on one plan and one pair of rate-limit windows. An entry
+    each would render the same account twice and read as two budgets.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+    readers = ProfileUsageReaders(
+        (
+            _claude_reader(tmp_path, cache=cache),
+            CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT),
+            OpenCodeUsageReader(database=tmp_path / "absent.db"),
+            CursorUsageReader(),
+        )
+    )
+
+    named = [str(limits.profile_id) for limits in readers.limits()]
+
+    assert named == ["claude", "codex", "opencode", "cursor-agent"]
+    assert "claude-remote" not in named
+
+
+def test_an_unreadable_source_costs_one_entry_and_never_the_screen(tmp_path: Path) -> None:
+    """Total by construction, exactly as `read()` is and for the same reason."""
+
+    class _Exploding:
+        profiles = frozenset({ProfileId("codex")})
+        limits_profile = ProfileId("codex")
+
+        def read(self, query: UsageQuery) -> None:  # noqa: ARG002 - never reached here
+            return None
+
+        def limits(self) -> AgentLimits:
+            raise OSError("the rollout directory went away mid-read")
+
+    entries = ProfileUsageReaders((_Exploding(),)).limits()
+
+    assert [str(entry.profile_id) for entry in entries] == ["codex"]
+    assert entries[0].windows == ()
+
+
 # --- the account-wide limits type --------------------------------------------------------
 
 

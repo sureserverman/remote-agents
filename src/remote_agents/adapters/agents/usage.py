@@ -49,6 +49,7 @@ from pathlib import Path
 
 from remote_agents.domain.models import ProfileId
 from remote_agents.ports.agent_usage import (
+    AgentLimits,
     AgentUsage,
     ContextWindow,
     UsageQuery,
@@ -109,6 +110,16 @@ class ClaudeUsageReader:
 
     profiles = frozenset({ProfileId("claude"), ProfileId("claude-remote")})
 
+    limits_profile = ProfileId("claude")
+    """Which of the two profiles above an account-wide answer is filed under.
+
+    `claude` and `claude-remote` are curated in `domain/profiles.py` to the same executable,
+    differing only by `--remote-control`, so they draw on one plan and one pair of rate-limit
+    windows. `profiles` is a set because either may ask; this names the one the answer is
+    labelled with, so a set membership never has to be turned into a display name by picking
+    an arbitrary element of a frozenset.
+    """
+
     def __init__(
         self,
         *,
@@ -141,6 +152,18 @@ class ClaudeUsageReader:
             candidate = directory / f"{query.resume_source_id}.jsonl"
             return candidate if candidate.is_file() else None
         return _newest_started_after(_safe_glob(directory, "*.jsonl"), query.started_at)
+
+    def limits(self) -> AgentLimits:
+        """The account's windows, with no session named — which is the whole point.
+
+        `_limits` below always read the cache without reference to a session; it was simply
+        unreachable except through `read()`, which needs a `UsageQuery` to build. Promoting a
+        caller rather than moving the logic is deliberate: the numbers, the staleness bound and
+        the borrowed stamp are unchanged, and `read()` still composes its own answer from the
+        same method, so the two renders cannot drift.
+        """
+        windows, stale = self._limits()
+        return AgentLimits(self.limits_profile, windows, stale)
 
     def _limits(self) -> tuple[tuple[UsageWindow, ...], str | None]:
         """Read the borrowed status-line cache, or answer with nothing at all."""
@@ -183,6 +206,8 @@ class CodexUsageReader:
 
     profiles = frozenset({ProfileId("codex")})
 
+    limits_profile = ProfileId("codex")
+
     def __init__(self, *, sessions_root: Path | None = None, now: object = None) -> None:
         self._sessions_root = sessions_root or Path.home() / ".codex" / "sessions"
         self._now = now
@@ -200,6 +225,31 @@ class CodexUsageReader:
             context=_codex_context(payload.get("info")),
             windows=_codex_windows(payload.get("rate_limits"), now=self._now),
             observed_at=_moment(self._now),
+        )
+
+    def limits(self) -> AgentLimits:
+        """The account's windows, taken from whichever rollout was written most recently.
+
+        Codex stamps `rate_limits` onto every `token_count` event, and the figure it stamps is
+        the *account's* rather than that conversation's — so the newest rollout on disk holds
+        the current answer regardless of which session, or which project, produced it. That is
+        why this deliberately does not filter by workspace the way `_rollout_for` does: a
+        rate-limit window belongs to the plan, and filtering would answer with a stale copy
+        whenever the owner's most recent Codex turn happened in another project.
+
+        Bounded to the same two UTC days `_candidates` already walks for a session read, asked
+        from yesterday so that the pair is yesterday-and-today. A rollout older than that is
+        not merely stale, it is describing windows that have since closed — which `_window`
+        would drop anyway, at the cost of walking the whole archive to find out.
+        """
+        rollout = _newest(self._candidates(_moment(self._now) - timedelta(days=1)))
+        if rollout is None:
+            return AgentLimits(self.limits_profile)
+        record = _last_json_line(rollout, _is_codex_token_count)
+        payload = None if record is None else record.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        return AgentLimits(
+            self.limits_profile, _codex_windows(payload.get("rate_limits"), now=self._now)
         )
 
     def _rollout_for(self, query: UsageQuery) -> Path | None:
@@ -234,6 +284,12 @@ class OpenCodeUsageReader:
     """
 
     profiles = frozenset({ProfileId("opencode")})
+
+    limits_profile = ProfileId("opencode")
+
+    def limits(self) -> AgentLimits:
+        """OpenCode publishes no rate limits, which is an answer and not a gap."""
+        return AgentLimits(self.limits_profile)
 
     def __init__(self, *, database: Path | None = None, now: object = None) -> None:
         self._database = database or Path.home() / ".local" / "share" / "opencode" / "opencode.db"
@@ -304,8 +360,14 @@ class CursorUsageReader:
 
     profiles = frozenset({ProfileId("cursor-agent")})
 
+    limits_profile = ProfileId("cursor-agent")
+
     def read(self, query: UsageQuery) -> AgentUsage:  # noqa: ARG002 - the answer is constant
         return AgentUsage()
+
+    def limits(self) -> AgentLimits:
+        """Constant for the reason `read` is: there is nothing on disk to consult."""
+        return AgentLimits(self.limits_profile)
 
 
 class ProfileUsageReaders:
@@ -330,6 +392,7 @@ class ProfileUsageReaders:
                 CursorUsageReader(),
             )
         )
+        self._readers = resolved
         self._by_profile = {
             profile: reader
             for reader in resolved
@@ -345,6 +408,26 @@ class ProfileUsageReaders:
         is never coming. That is the failure a coverage test needs to be able to see.
         """
         return frozenset(self._by_profile)
+
+    def limits(self) -> tuple[AgentLimits, ...]:
+        """One entry per reader, in composition order, and never an exception at a caller.
+
+        Per *reader* rather than per profile: `ClaudeUsageReader` answers for two profiles that
+        share one account, and an entry each would render one plan's windows twice under two
+        names. `limits_profile` is what each reader files its answer under.
+
+        A reader that fails still contributes its entry, carrying no windows. Dropping it
+        instead would be indistinguishable, on the screen, from a provider that publishes
+        nothing — and those two are exactly the cases DEC-061 requires stay apart.
+        """
+        answers = []
+        for reader in self._readers:
+            profile = reader.limits_profile  # type: ignore[attr-defined]
+            try:
+                answers.append(reader.limits())  # type: ignore[attr-defined]
+            except (OSError, ValueError, sqlite3.Error):
+                answers.append(AgentLimits(profile))
+        return tuple(answers)
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
         reader = self._by_profile.get(query.profile_id)
@@ -512,6 +595,25 @@ def _codex_rollout_workspace(path: Path) -> Path | None:
     payload = document.get("payload") if isinstance(document, dict) else None
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
     return _resolved(Path(cwd)) if isinstance(cwd, str) and cwd else None
+
+
+def _newest(paths: Iterable[Path]) -> Path | None:
+    """The most recently written of a set of files, with no floor on how old it may be.
+
+    `_newest_started_after` is the session read's version and carries a floor, because a
+    conversation older than the session cannot be that session's. An account read has no
+    session to compare against — every rollout on disk carries the same account's windows —
+    so the floor would have nothing to mean here.
+    """
+    best: tuple[float, Path] | None = None
+    for path in paths:
+        try:
+            modified = path.stat().st_mtime
+        except OSError:
+            continue
+        if best is None or modified > best[0]:
+            best = (modified, path)
+    return None if best is None else best[1]
 
 
 def _newest_started_after(paths: Iterable[Path], started_at: datetime) -> Path | None:
