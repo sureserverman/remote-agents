@@ -271,6 +271,9 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         assert callable(backend.refresh_catalogue)
         assert "existing" in {project.name for project in backend.refresh_catalogue()}
         assert backend.capture is not None
+        # DEC-046: wired once per process, beside the session usage reader it shares its
+        # provider readers with -- not built again by whichever screen happens to ask.
+        assert backend.limits is not None
     finally:
         connection.close()
 

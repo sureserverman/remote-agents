@@ -51,6 +51,7 @@ def test_the_optional_capabilities_default_to_absent() -> None:
     assert bare.activity_feed is None
     assert bare.catalogue == ()
     assert bare.profiles == ()
+    assert bare.limits is None
 
 
 def test_the_backend_module_imports_no_adapter() -> None:
@@ -83,6 +84,17 @@ def test_the_backend_module_imports_no_adapter() -> None:
         f"found {offenders}. A field typed against an adapter makes the backend depend on "
         "the frontend it exists to serve (ARCH-02, DEC-015)."
     )
+
+
+def test_a_host_that_wires_no_limits_reader_renders_no_limits() -> None:
+    """The account-limits read is a capability like `capture`, not a requirement.
+
+    Both surfaces guard on it, so a host whose providers publish nothing -- or one composed
+    without the reader at all -- shows no Limits block rather than failing to start. Distinct
+    from the reader answering an empty tuple, which means the providers were asked and had
+    nothing to say; that one is rendered, this one is not reached.
+    """
+    assert Backend(sessions=object(), projects=object()).limits is None
 
 
 @pytest.fixture

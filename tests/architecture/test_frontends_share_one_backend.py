@@ -492,20 +492,24 @@ def test_no_adapter_constructs_a_stop_command() -> None:
 
 
 def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
-    """Read, not restated — and pinned by length so an eleventh field is a decision, not drift.
+    """Read, not restated — and pinned by length so a twelfth field is a decision, not drift.
 
-    Ten since `usage` joined: one session's context window and rate-limit windows, read from the
-    provider's own files. It is a declared capability rather than something an adapter discovers
-    for the same reason `capture` is — a host may wire no reader, and both surfaces have to be
-    able to see that they did without asking whether the attribute happens to exist.
+    Eleven since `limits` joined `usage`. The two are deliberately separate capabilities rather
+    than one: `usage` answers for a session the caller names, `limits` answers for the account
+    and takes no argument at all, which is the distinction the owner asked for on 2026-08-29 —
+    a rate-limit window rendered inside a session reads as that session's spend. Both are
+    declared capabilities rather than something an adapter discovers, for the reason `capture`
+    is — a host may wire no reader, and both surfaces have to be able to see that they did
+    without asking whether the attribute happens to exist.
     """
     fields = _backend_fields()
-    assert len(fields) == 10, (
-        f"`Backend` now declares {len(fields)} fields, not 10. That is fine — but it widens "
+    assert len(fields) == 11, (
+        f"`Backend` now declares {len(fields)} fields, not 11. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )
     assert "sessions" in fields and "profiles" in fields and "usage" in fields
+    assert "limits" in fields
 
 
 def test_no_adapter_discovers_a_backend_capability_by_probing() -> None:

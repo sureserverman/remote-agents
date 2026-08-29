@@ -46,7 +46,7 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import MAX_LABEL_LENGTH, SessionId
 from remote_agents.ports.agent_activity import AgentActivity
-from remote_agents.ports.agent_usage import AgentUsage
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +146,21 @@ class Backend:
     line, and both surfaces guard on it. Distinct from the reader *returning* `None`, which
     means this session's conversation could not be matched — that is an answer, and the bot
     renders it as one.
+    """
+
+    limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = None
+    """Read every installed agent's account-wide rate-limit windows. Takes no session.
+
+    The argumentless signature is the whole distinction from `usage` above, and it is the
+    point rather than a convenience: both providers that publish a rate-limit window publish
+    it for the *account*, so a window rendered inside a session's detail reads as that
+    session's spend and is not. A capability that could only be reached by naming a session
+    would keep that confusion available to every caller.
+
+    Bound like `usage` and `capture`, and sharing `usage`'s provider readers rather than
+    constructing a second set (DEC-046 — composed once per process). The read runs on
+    `asyncio.to_thread` for the reason `_usage_reader`'s does: it is a directory sweep and a
+    tail read, and neither frontend may block its event loop on the disk during a render.
     """
 
     max_label_length: int = MAX_LABEL_LENGTH

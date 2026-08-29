@@ -124,7 +124,7 @@ from remote_agents.config import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
-from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.ports.argv_text import (
     NonEchoingArgumentParser,
     refuse_a_credential_shaped_value,
@@ -822,7 +822,9 @@ def _narrow_profiles(
 
 
 def _usage_reader(
-    store: SQLiteSessionStore, project_paths: Mapping[ProjectId, Path]
+    store: SQLiteSessionStore,
+    project_paths: Mapping[ProjectId, Path],
+    readers: ProfileUsageReaders,
 ) -> Callable[[SessionId], Awaitable[AgentUsage | None]]:
     """Bind the provider usage readers to the two things only the root knows.
 
@@ -837,7 +839,6 @@ def _usage_reader(
     disk during a render. The store lookup ahead of it is already `async` and stays on the
     loop, because that is how every other caller drives it and it is a single indexed row.
     """
-    readers = ProfileUsageReaders()
 
     async def read(session_id: SessionId) -> AgentUsage | None:
         record = await store.get(session_id)
@@ -848,6 +849,27 @@ def _usage_reader(
             return None
         query = UsageQuery(record.profile_id, workspace, record.created_at, record.resume_source_id)
         return await asyncio.to_thread(readers.read, query)
+
+    return read
+
+
+def _limits_reader(
+    readers: ProfileUsageReaders,
+) -> Callable[[], Awaitable[tuple[AgentLimits, ...]]]:
+    """Bind the account-wide read, which needs nothing the root knows beyond the readers.
+
+    That asymmetry with `_usage_reader` is the shape of the question rather than an oversight:
+    a session read has to be turned into a workspace and a start instant before a provider's
+    files can be searched, and an account read has nothing to turn -- every provider keeps its
+    rate-limit figures in one place per host.
+
+    Handed the same `ProfileUsageReaders` the session reader uses, so a host probes for
+    provider files with one set of readers rather than two (DEC-046). On a worker thread for
+    `_usage_reader`'s reason, and more so: this one sweeps two rollout directories.
+    """
+
+    async def read() -> tuple[AgentLimits, ...]:
+        return await asyncio.to_thread(readers.limits)
 
     return read
 
@@ -903,6 +925,10 @@ def compose_backend(
     projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     runtime = runtime or _local_runtime(config, paths, projects.paths)
+    # One set of provider readers for both usage capabilities (DEC-046): the session read
+    # and the account read consult the same files, so composing two sets would double the
+    # probing a host does and let the two drift about which providers exist.
+    usage_readers = ProfileUsageReaders()
     return Backend(
         sessions=SessionService(
             store if store is not None else SQLiteSessionStore(connection),
@@ -922,8 +948,11 @@ def compose_backend(
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
         usage=_usage_reader(
-            store if store is not None else SQLiteSessionStore(connection), projects.paths
+            store if store is not None else SQLiteSessionStore(connection),
+            projects.paths,
+            usage_readers,
         ),
+        limits=_limits_reader(usage_readers),
         max_label_length=config.max_label_length,
     )
 
