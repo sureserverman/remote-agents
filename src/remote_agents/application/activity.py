@@ -464,12 +464,10 @@ class PaneQuietWatcher:
         # can legitimately duplicate it.
         self._watch_sources: dict[str, ActivitySource] = {}
         # A title is never stored: only whether the exact native Codex marker was present on
-        # the last successful pass. A failed metadata read is recorded separately so stale
-        # positive state cannot silence quiet fallback, while a recovered read can still avoid
-        # re-notifying the same outstanding local approval.
+        # the last successful pass. A separate boolean presence set tells a first title read from
+        # a known-title recovery without retaining title content.
         self._action_required: dict[str, bool] = {}
         self._title_observed: set[str] = set()
-        self._title_unavailable: set[str] = set()
         self._reported_needs_answer_session_ids: frozenset[str] = frozenset()
 
     def mark_reported(self, session_ids: Collection[str]) -> None:
@@ -515,14 +513,11 @@ class PaneQuietWatcher:
             key: value for key, value in self._action_required.items() if key in live
         }
         self._title_observed.intersection_update(live)
-        self._title_unavailable.intersection_update(live)
 
         activities = []
         for record in watched:
             key = str(record.session_id)
-            action_required = (
-                self._action_required.get(key, False) and key not in self._title_unavailable
-            )
+            action_required = self._action_required.get(key, False)
             if self._title is not None and str(record.profile_id) == "codex":
                 try:
                     title = await asyncio.wait_for(
@@ -537,7 +532,6 @@ class PaneQuietWatcher:
                     )
                     self._action_required[key] = action_required
                     self._title_observed.add(key)
-                    self._title_unavailable.discard(key)
                     # A provider-reported permission in the same pass is stronger evidence of
                     # the same wait.  Remember the marker but do not make the owner hear it
                     # twice; a clear title re-arms the next native prompt.
@@ -554,7 +548,6 @@ class PaneQuietWatcher:
                     # recovery notice can duplicate the old prompt, but silently missing the new
                     # one would strand the owner with no actionable alert.
                     self._action_required[key] = False
-                    self._title_unavailable.add(key)
                     action_required = False
                     _LOG.warning("could not read a Codex pane title while watching activity")
             try:

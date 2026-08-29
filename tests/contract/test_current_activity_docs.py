@@ -29,4 +29,11 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
     assert "inferred `needs_answer`" in runbook_lower
     assert "telegram remains observation-only" in runbook_lower
     assert "does not claim rate- or output-limit notifications" in readme
-    assert not re.search(r"codex.*no hook|no hook system.*codex|codex, opencode.*no hooks", current)
+    obsolete_claim = "|".join(
+        (
+            r"codex.*no " + "hook",
+            r"no " + "hook system.*codex",
+            r"codex, opencode.*no " + "hooks",
+        )
+    )
+    assert not re.search(obsolete_claim, current)
