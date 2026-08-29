@@ -408,8 +408,10 @@ def test_an_empty_catalogue_returns_the_records_unchanged() -> None:
 # --- the account-wide limits block --------------------------------------------------------
 
 
-def _account(profile: str, *windows, stale: str | None = None) -> AgentLimits:
-    return AgentLimits(ProfileId(profile), tuple(windows), stale)
+def _account(
+    profile: str, *windows, stale: str | None = None, observed: datetime | None = None
+) -> AgentLimits:
+    return AgentLimits(ProfileId(profile), tuple(windows), observed_at=observed, stale_source=stale)
 
 
 def test_one_line_per_answering_agent_named_by_its_profile() -> None:
@@ -464,3 +466,39 @@ def test_an_account_nothing_answered_for_renders_an_empty_block() -> None:
     """
     assert limit_lines(()) == ()
     assert limit_lines((_account("claude"), _account("codex"))) == ()
+
+
+def test_a_reading_older_than_the_bound_says_how_old_it_is() -> None:
+    """A percentage only moves when the agent takes a turn; the window moves regardless.
+
+    So an hours-old figure is not a slightly-old truth, and rendering it bare would present a
+    stale number as the present one. Codex writes its rate limits into a rollout and then goes
+    quiet with the session, which makes this the ordinary case rather than an edge.
+    """
+    (line,) = limit_lines(
+        (
+            _account(
+                "codex",
+                UsageWindow("week", 61.0),
+                observed=datetime.now(UTC) - timedelta(hours=8),
+            ),
+        )
+    )
+
+    assert line == "codex: week 61% — as of 8h ago"
+
+
+def test_a_fresh_reading_is_not_dated() -> None:
+    """Below the bound the figure is current, and a timestamp on it would be noise."""
+    (line,) = limit_lines(
+        (_account("codex", UsageWindow("week", 61.0), observed=datetime.now(UTC)),)
+    )
+
+    assert line == "codex: week 61%"
+
+
+def test_a_reading_that_states_no_observation_time_is_not_dated() -> None:
+    """`observed_at` is optional, and an absent one is not evidence of staleness."""
+    (line,) = limit_lines((_account("codex", UsageWindow("week", 61.0)),))
+
+    assert "as of" not in line

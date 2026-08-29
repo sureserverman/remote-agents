@@ -555,20 +555,32 @@ def test_the_default_reader_set_covers_every_curated_profile() -> None:
 # --- the account-wide limits read --------------------------------------------------------
 
 
-def _account_rollout(tmp_path: Path, cwd: Path, name: str, records: list[dict], *, at) -> Path:
-    """A rollout filed under the UTC day `LAUNCHED_AT` falls in, with a chosen mtime.
+def _account_rollout(
+    tmp_path: Path,
+    cwd: Path,
+    name: str,
+    records: list[dict],
+    *,
+    at,
+    started: datetime | None = None,
+) -> Path:
+    """A rollout, with its start day and its last-write time chosen independently.
 
-    Separate from `_rollout` because these tests are about picking between rollouts, which
-    needs distinct modification times; `_rollout` stamps every file with the same instant
-    because the session reads it writes for only ever match one.
+    `started` picks the **day directory**, which Codex keys to when the session began; `at`
+    picks the **mtime**, which is when it last wrote. Defaulting `started` to `LAUNCHED_AT`
+    keeps the common case short, but the two being separate parameters is the point: the
+    first version of this helper derived the directory from `LAUNCHED_AT` unconditionally, so
+    every fixture had directory-day == write-day and could not express a long-running session
+    — which is exactly the shape that broke the account read on a real host.
     """
+    day = LAUNCHED_AT if started is None else started
     path = (
         tmp_path
         / "codex-sessions"
-        / f"{LAUNCHED_AT:%Y}"
-        / f"{LAUNCHED_AT:%m}"
-        / f"{LAUNCHED_AT:%d}"
-        / f"rollout-2026-08-27T06-05-00-{name}.jsonl"
+        / f"{day:%Y}"
+        / f"{day:%m}"
+        / f"{day:%d}"
+        / f"rollout-{day:%Y-%m-%dT%H-%M-%S}-{name}.jsonl"
     )
     meta = {"type": "session_meta", "payload": {"cwd": str(cwd.resolve())}}
     written = _written(path, [meta, *records])
@@ -802,3 +814,181 @@ def _written_json(path: Path, document: dict) -> Path:
 def _touch(path: Path, moment: datetime) -> None:
     stamp = moment.timestamp()
     os.utime(path, (stamp, stamp))
+
+
+def test_a_long_running_session_is_still_the_newest_write(tmp_path: Path, workspace: Path) -> None:
+    """The defect this test was written for, measured on a real host on 2026-08-29.
+
+    Codex files a rollout under the day the session *started* and keeps appending to it for as
+    long as the session lives. The account read asks a question about *write recency*, so
+    filtering candidates by day-directory answers with the newest file among recently-*started*
+    sessions — not the newest file. On the host this was found on, the genuinely newest rollout
+    (written 19:55Z) sat in the 08/27 directory because that session began two days earlier, and
+    the read returned `week 54%` from a stale file while the truth on disk was `5h 34%` and
+    `week 61%`. A live window was omitted and the weekly figure was seven points low, with
+    nothing marking it as old — a confidently wrong number, which is the one outcome DEC-061
+    rules out entirely.
+
+    25 of the 289 rollouts on that host (8.7%) had last been written on a day other than their
+    directory's, with lags reaching eight days, so this is the ordinary case for a project whose
+    whole purpose is long-lived managed agent sessions.
+    """
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [_codex_token_count(last=1_000, window=258_400, primary=87.0, secondary=54.0)],
+        at=LAUNCHED_AT + timedelta(hours=1),
+        started=LAUNCHED_AT,
+    )
+    # Started two days earlier, still being written an hour after the other one stopped.
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "bbbbbbbb-0000-4000-8000-000000000000",
+        [_codex_token_count(last=2_000, window=258_400, primary=34.0, secondary=61.0)],
+        at=LAUNCHED_AT + timedelta(hours=2),
+        started=LAUNCHED_AT - timedelta(days=2),
+    )
+
+    reader = CodexUsageReader(
+        sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT + timedelta(hours=3)
+    )
+
+    assert [window.used_percent for window in reader.limits().windows] == [34.0, 61.0]
+
+
+def test_an_idle_host_still_reports_the_window_that_is_still_open(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Answering nothing would be indistinguishable from a provider that publishes nothing.
+
+    `limit_lines` drops an agent with no windows, so a Codex gone quiet for a few days would
+    vanish from the block exactly as `cursor-agent` permanently does — and DEC-061 requires
+    those two stay apart. The weekly window is still open and its figure is still on disk.
+    """
+    _account_rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [_codex_token_count(last=1_000, window=258_400, primary=5.0, secondary=61.0)],
+        at=LAUNCHED_AT,
+        started=LAUNCHED_AT,
+    )
+
+    reader = CodexUsageReader(
+        sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT + timedelta(days=4)
+    )
+
+    assert [window.label for window in reader.limits().windows] == ["week"]
+
+
+def test_an_account_reading_says_when_it_was_observed(tmp_path: Path, workspace: Path) -> None:
+    """Taken from the record's own timestamp: the provider's statement, not the filesystem's.
+
+    An mtime agrees with it today and is still a filesystem attribute that a copy, a restore or
+    a backup tool can move. The record is what Codex itself wrote down.
+    """
+    record = _codex_token_count(last=1_000, window=258_400, primary=5.0, secondary=61.0)
+    record["timestamp"] = "2026-08-27T06:30:00.500Z"
+    _account_rollout(
+        tmp_path, workspace, "aaaaaaaa-0000-4000-8000-000000000000", [record], at=LAUNCHED_AT
+    )
+
+    limits = CodexUsageReader(
+        sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT + timedelta(hours=2)
+    ).limits()
+
+    assert limits.observed_at == datetime(2026, 8, 27, 6, 30, 0, 500_000, tzinfo=UTC)
+
+
+def test_a_rollout_with_no_accounting_record_answers_empty_for_the_account_too(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """A session that has opened its rollout but not yet taken a turn writes no `token_count`."""
+    _account_rollout(
+        tmp_path, workspace, "aaaaaaaa-0000-4000-8000-000000000000", [], at=LAUNCHED_AT
+    )
+
+    limits = CodexUsageReader(
+        sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT
+    ).limits()
+
+    assert limits.windows == ()
+    assert limits.observed_at is None
+
+
+@pytest.mark.parametrize("poison", ["1e400", "-1e400"])
+def test_an_infinite_number_in_a_provider_file_costs_no_screen(
+    tmp_path: Path, workspace: Path, poison: str
+) -> None:
+    """`json.loads("1e400")` is `inf` — strictly valid JSON, and `int(inf)` is an OverflowError.
+
+    `OverflowError` is an `ArithmeticError`, not a `ValueError`, so it escaped the catch set
+    that makes these readers total. The account read calls *every* reader on every render of
+    the limits block, so one poisoned file anywhere on the host took out the whole block rather
+    than one session's line — which is why this is worth a guard at the conversion itself and
+    not only a wider `except`.
+    """
+    raw = (
+        '{"type":"event_msg","payload":{"type":"token_count",'
+        '"info":{"last_token_usage":{"total_tokens":' + poison + "},"
+        '"model_context_window":' + poison + "},"
+        '"rate_limits":{"primary":{"used_percent":5.0,"window_minutes":' + poison + ","
+        '"resets_at":1787341653}}}}'
+    )
+    path = (
+        tmp_path
+        / "codex-sessions"
+        / f"{LAUNCHED_AT:%Y}"
+        / f"{LAUNCHED_AT:%m}"
+        / f"{LAUNCHED_AT:%d}"
+        / "rollout-2026-08-27T06-05-00-aaaaaaaa-0000-4000-8000-000000000000.jsonl"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '{"type":"session_meta","payload":{"cwd":"'
+        + str(workspace.resolve())
+        + '"}}\n'
+        + raw
+        + "\n",
+        encoding="utf-8",
+    )
+
+    reader = CodexUsageReader(sessions_root=tmp_path / "codex-sessions", now=lambda: LAUNCHED_AT)
+
+    assert reader.limits().windows == ()
+    assert reader.read(_query("codex", workspace)) is not None
+
+
+def test_a_reader_missing_its_profile_label_costs_no_screen_either() -> None:
+    """`ProfileUsageReaders` takes `Iterable[object]` with no protocol, so this is reachable.
+
+    The label used to be read *outside* the try that makes this total, so a reader without one
+    raised straight through the boundary the docstring promises never raises.
+    """
+
+    class _Unlabelled:
+        profiles = frozenset({ProfileId("codex")})
+
+        def read(self, query: UsageQuery) -> None:  # noqa: ARG002 - never reached here
+            return None
+
+        def limits(self) -> AgentLimits:
+            return AgentLimits(ProfileId("codex"))
+
+    assert ProfileUsageReaders((_Unlabelled(),)).limits() == ()
+
+
+def test_the_provenance_fields_must_be_named() -> None:
+    """Positional construction is how a field inserted mid-dataclass silently miscompiles.
+
+    Measured during this stage: `observed_at` was added between `windows` and `stale_source`,
+    and one of the two callers still passing three positional arguments put the borrowed-cache
+    string into the timestamp field and left the provenance stamp `None` — so a figure this
+    project cannot vouch for rendered as though it had been measured here. The payload stays
+    positional because it is the answer; the two fields *about* the answer are keyword-only, so
+    the next field added between them cannot shift anything.
+    """
+    with pytest.raises(TypeError):
+        AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),), "status-line cache")  # type: ignore[misc]

@@ -271,8 +271,6 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         assert callable(backend.refresh_catalogue)
         assert "existing" in {project.name for project in backend.refresh_catalogue()}
         assert backend.capture is not None
-        # DEC-046: wired once per process, beside the session usage reader it shares its
-        # provider readers with -- not built again by whichever screen happens to ask.
         assert backend.limits is not None
     finally:
         connection.close()
@@ -489,5 +487,41 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
                 "the bot was handed the domain ProfileCompatibility rather than the one "
                 "narrowing both surfaces share -- see Backend.profiles"
             )
+    finally:
+        connection.close()
+
+
+def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_path, monkeypatch):
+    """DEC-046, asserted rather than asserted-about.
+
+    The sibling test above carried a comment claiming the session read and the account read
+    share their provider readers, while asserting only that `limits` was non-None -- which
+    stayed green when `compose_backend` was mutated to build two sets. A comment is not a
+    check, and the property it named is the one DEC-046 is about: a host should probe for
+    provider files once per process, not once per capability.
+    """
+    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    built = []
+
+    class _Counted(usage_module.ProfileUsageReaders):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            built.append(self)
+
+    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Counted)
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        backend = compose_backend(config, connection, paths)
+
+        assert len(built) == 1, f"composed {len(built)} reader sets, not one"
+        assert backend.usage is not None and backend.limits is not None
     finally:
         connection.close()

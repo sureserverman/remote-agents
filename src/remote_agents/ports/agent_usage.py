@@ -23,7 +23,7 @@ a usage reader must never do. Absent is a renderable answer; a guess is not.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -135,6 +135,33 @@ class AgentLimits:
 
     profile_id: ProfileId
     windows: tuple[UsageWindow, ...] = ()
+
+    _: KW_ONLY
+    """Everything past here is *about* the answer rather than the answer, and is named.
+
+    Measured during the stage that added `observed_at`: it was inserted between `windows` and
+    `stale_source`, and one of the two callers still passing three positional arguments put the
+    borrowed-cache string into the timestamp field and silently left the provenance stamp
+    empty — so a figure this project cannot vouch for rendered as though it had been measured
+    here, which is the one thing DEC-061 forbids outright. The payload stays positional because
+    it is what the caller asked for; a field added between these two can no longer shift one
+    into another.
+    """
+
+    observed_at: datetime | None = None
+    """When the *provider* recorded these figures — not when this process read them.
+
+    A rate-limit percentage only moves when the agent takes a turn, so the number in a file is
+    a statement about the moment it was written and stays frozen while the agent is idle. The
+    window it counts against keeps moving regardless. So a reading hours old is not a slightly
+    old truth, and presentation is entitled to say how old it is; without this field the only
+    honest alternatives would be to withhold the figure or to show it as current.
+
+    `AgentUsage.observed_at` means the other thing — when the read happened — because a context
+    window is re-derived from the transcript on every read and has no separate observation
+    instant. The names match; the questions do not.
+    """
+
     stale_source: str | None = None
     """Where these came from when they did not come from the provider's own accounting.
 

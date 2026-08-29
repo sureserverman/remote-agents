@@ -83,6 +83,18 @@ Skew between the process that wrote the figure and this one, and nothing else. S
 for why a lapsed window is dropped rather than shown.
 """
 
+_ACCOUNT_ROLLOUT_DAYS = 30
+"""How many dated rollout directories back the account-wide read looks for the newest write.
+
+Directories that exist, not calendar days — see `_recent_day_directories`. The bound exists to
+keep the sweep a fixed cost as the archive grows, and 30 is chosen against measurement rather
+than taste: the host this was calibrated on held 289 rollouts whose greatest gap between start
+day and last write was eight days, and a session that old would have to be outlived by thirty
+distinct *later* start-days to fall out of range, which cannot happen inside eight.
+"""
+
+_INF = float("inf")
+
 _STALE_LIMIT_AGE = timedelta(minutes=30)
 """How old the borrowed status-line cache may be before its numbers stop being shown.
 
@@ -134,7 +146,7 @@ class ClaudeUsageReader:
     def read(self, query: UsageQuery) -> AgentUsage | None:
         transcript = self._transcript_for(query)
         context = None if transcript is None else _claude_context(transcript)
-        windows, stale = self._limits()
+        windows, stale, _ = self._limits()
         if context is None and not windows:
             return None if transcript is None else AgentUsage()
         return AgentUsage(
@@ -162,16 +174,19 @@ class ClaudeUsageReader:
         the borrowed stamp are unchanged, and `read()` still composes its own answer from the
         same method, so the two renders cannot drift.
         """
-        windows, stale = self._limits()
-        return AgentLimits(self.limits_profile, windows, stale)
+        windows, stale, observed = self._limits()
+        return AgentLimits(self.limits_profile, windows, observed_at=observed, stale_source=stale)
 
-    def _limits(self) -> tuple[tuple[UsageWindow, ...], str | None]:
+    def _limits(self) -> tuple[tuple[UsageWindow, ...], str | None, datetime | None]:
         """Read the borrowed status-line cache, or answer with nothing at all."""
         document, age = _freshest_json(
             _safe_glob(self._limits_cache_root, "statusline-usage-cache-*.json"), self._now
         )
         if not isinstance(document, dict) or age is None or age > _STALE_LIMIT_AGE:
-            return (), None
+            return (), None, None
+        # The cache's own age, so the reading is dated by when the figures were written rather
+        # than by when this process happened to look at them.
+        observed = _moment(self._now) - age
         windows = []
         for key, label in (("five_hour", "5h"), ("seven_day", "week")):
             section = document.get(key)
@@ -186,8 +201,8 @@ class ClaudeUsageReader:
             if window is not None:
                 windows.append(window)
         if not windows:
-            return (), None
-        return tuple(windows), "status-line cache"
+            return (), None, None
+        return tuple(windows), "status-line cache", observed
 
 
 class CodexUsageReader:
@@ -237,20 +252,39 @@ class CodexUsageReader:
         rate-limit window belongs to the plan, and filtering would answer with a stale copy
         whenever the owner's most recent Codex turn happened in another project.
 
-        Bounded to the same two UTC days `_candidates` already walks for a session read, asked
-        from yesterday so that the pair is yesterday-and-today. A rollout older than that is
-        not merely stale, it is describing windows that have since closed — which `_window`
-        would drop anyway, at the cost of walking the whole archive to find out.
+        **Bounded by directories that exist, never by a date window** — and that distinction is
+        the whole correctness of this method. A rollout is filed under the day its session
+        *started* and is appended to for as long as that session lives, so a directory date is
+        a statement about a beginning and this method is asking about a most-recent write. The
+        first version filtered candidates through `_candidates`, which walks two dated
+        directories, and on a real host that returned the newest file among recently-*started*
+        sessions rather than the newest file: a session begun two days earlier and still
+        running held the current figures, and the read answered seven points low from a stale
+        rollout while omitting a live five-hour window. 25 of that host's 289 rollouts (8.7%)
+        had last been written on a day other than their directory's, reaching eight days apart
+        — ordinary for a project whose purpose is long-lived agent sessions.
+
+        So the candidates are the most recent `_ACCOUNT_ROLLOUT_DAYS` day-directories that are
+        actually present, newest first, which bounds the sweep without assuming the calendar is
+        contiguous or that a session ends on the day it began. A host that last ran Codex a
+        month ago still finds its newest rollout.
         """
-        rollout = _newest(self._candidates(_moment(self._now) - timedelta(days=1)))
+        rollout = _newest(self._recent_rollouts())
         if rollout is None:
             return AgentLimits(self.limits_profile)
         record = _last_json_line(rollout, _is_codex_token_count)
         payload = None if record is None else record.get("payload")
         payload = payload if isinstance(payload, dict) else {}
         return AgentLimits(
-            self.limits_profile, _codex_windows(payload.get("rate_limits"), now=self._now)
+            self.limits_profile,
+            _codex_windows(payload.get("rate_limits"), now=self._now),
+            observed_at=_instant(None if record is None else record.get("timestamp")),
         )
+
+    def _recent_rollouts(self) -> Iterator[Path]:
+        """Every rollout in the most recently dated directories this host actually has."""
+        for directory in _recent_day_directories(self._sessions_root, _ACCOUNT_ROLLOUT_DAYS):
+            yield from _safe_glob(directory, "rollout-*.jsonl")
 
     def _rollout_for(self, query: UsageQuery) -> Path | None:
         candidates = list(self._candidates(query.started_at))
@@ -422,10 +456,17 @@ class ProfileUsageReaders:
         """
         answers = []
         for reader in self._readers:
-            profile = reader.limits_profile  # type: ignore[attr-defined]
+            # Read inside the guard, not before it. `__init__` takes `Iterable[object]` with no
+            # protocol, so a reader without a label is reachable -- and reading it outside the
+            # try raised `AttributeError` straight through the boundary this docstring promises
+            # never raises. An unlabelled reader is skipped rather than given a fallback name,
+            # because there is no honest name to give it.
             try:
+                profile = reader.limits_profile  # type: ignore[attr-defined]
                 answers.append(reader.limits())  # type: ignore[attr-defined]
-            except (OSError, ValueError, sqlite3.Error):
+            except AttributeError:
+                continue
+            except (OSError, ValueError, ArithmeticError, sqlite3.Error):
                 answers.append(AgentLimits(profile))
         return tuple(answers)
 
@@ -435,7 +476,7 @@ class ProfileUsageReaders:
             return None
         try:
             return reader.read(query)  # type: ignore[attr-defined]
-        except (OSError, ValueError, sqlite3.Error):
+        except (OSError, ValueError, ArithmeticError, sqlite3.Error):
             return None
 
 
@@ -542,6 +583,8 @@ def _codex_windows(rate_limits: object, *, now: object = None) -> tuple[UsageWin
 def _window_label(minutes: object) -> str | None:
     if not isinstance(minutes, int | float) or isinstance(minutes, bool) or minutes <= 0:
         return None
+    if not _finite(minutes):
+        return None
     total = int(minutes)
     for span, label in ((10080, "week"), (1440, "day"), (60, None)):
         if total == span:
@@ -595,6 +638,27 @@ def _codex_rollout_workspace(path: Path) -> Path | None:
     payload = document.get("payload") if isinstance(document, dict) else None
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
     return _resolved(Path(cwd)) if isinstance(cwd, str) and cwd else None
+
+
+def _recent_day_directories(root: Path, limit: int) -> tuple[Path, ...]:
+    """The most recent `YYYY/MM/DD` directories under `root`, newest first, bounded to `limit`.
+
+    Listed rather than computed from today's date. A date window has to assume that a recent
+    write lives under a recent date, which is exactly the assumption Codex's start-keyed filing
+    breaks; listing what is there instead degrades into "the newest sessions this host has"
+    rather than into "nothing" when a host has been quiet.
+
+    Every component is zero-padded, so ordinary path ordering is chronological ordering and no
+    date parsing happens here at all — a directory whose name is not a date simply sorts
+    wherever it sorts and contributes no rollouts.
+    """
+    days = [
+        day
+        for year in _safe_glob(root, "[0-9][0-9][0-9][0-9]")
+        for month in _safe_glob(year, "[0-9][0-9]")
+        for day in _safe_glob(month, "[0-9][0-9]")
+    ]
+    return tuple(sorted(days, reverse=True)[:limit])
 
 
 def _newest(paths: Iterable[Path]) -> Path | None:
@@ -716,8 +780,21 @@ def _loads(value: object) -> object:
         return None
 
 
+def _finite(value: object) -> bool:
+    """Whether a provider's number can survive `int()` at all.
+
+    `json.loads("1e400")` is `inf` — strictly valid JSON needing no `Infinity` literal — and
+    `int(inf)` raises `OverflowError`, which is an `ArithmeticError` and so passed straight
+    through catch sets built around `ValueError`. Checked at each conversion rather than only
+    widened at the boundary, because a reader that answers `None` for one unreadable field is
+    this module's whole contract and an exception that merely gets caught further out still
+    costs every other field in the same read.
+    """
+    return not isinstance(value, float) or (value == value and value not in (_INF, -_INF))
+
+
 def _positive_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
+    if isinstance(value, bool) or not isinstance(value, int | float) or not _finite(value):
         return None
     return int(value) if value > 0 else None
 

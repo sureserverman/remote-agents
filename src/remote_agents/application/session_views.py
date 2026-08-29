@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from remote_agents.application.project_catalog import CatalogProject
@@ -237,6 +238,16 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
     return tuple(lines)
 
 
+_STALE_READING_AGE = timedelta(minutes=30)
+"""How old an account reading may be before a line says so.
+
+Deliberately the same span `adapters.agents.usage._STALE_LIMIT_AGE` discards a borrowed cache
+after. The two do different things with it — that one withholds the figure, this one dates it —
+because the cases differ: a borrowed number this project cannot vouch for is better absent,
+while a provider's own number stays worth showing as long as it is labelled.
+"""
+
+
 def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
     """Render each agent's account-wide rate-limit windows, one line per agent that has any.
 
@@ -262,8 +273,25 @@ def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
             continue
         rendered = " · ".join(_window_phrase(window) for window in entry.windows)
         borrowed = "" if entry.stale_source is None else f" — via {entry.stale_source}"
-        lines.append(f"{entry.profile_id}: {rendered}{borrowed}")
+        lines.append(f"{entry.profile_id}: {rendered}{borrowed}{_dated(entry.observed_at)}")
     return tuple(lines)
+
+
+def _dated(observed_at: datetime | None) -> str:
+    """Say how old a reading is, but only once it is old enough for that to be news.
+
+    A rate-limit percentage is frozen the moment its agent stops taking turns, while the window
+    it counts against keeps moving — so a figure hours old is a claim about the past rendered in
+    the present tense. Codex writes its limits into a rollout and then goes quiet with the
+    session, which makes an old reading ordinary rather than exceptional.
+
+    Below the bound nothing is said, because a timestamp on a current number is noise; the same
+    bound `adapters.agents.usage` fences Claude's borrowed cache with, reused rather than
+    reinvented so there is one answer on this host to "how old is too old".
+    """
+    if observed_at is None or datetime.now(UTC) - observed_at <= _STALE_READING_AGE:
+        return ""
+    return f" — as of {age(observed_at)}"
 
 
 def _context_phrase(context: ContextWindow) -> str:
