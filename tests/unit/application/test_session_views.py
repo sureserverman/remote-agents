@@ -27,6 +27,8 @@ from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
+    _window_phrase,
+    limit_lines,
     listed_in_sessions,
     listed_sessions,
     only_listed,
@@ -43,6 +45,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
+from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -400,3 +403,64 @@ def test_every_record_is_returned_even_when_none_can_be_named() -> None:
 def test_an_empty_catalogue_returns_the_records_unchanged() -> None:
     records = (_record_for("a", "a"), _record_for("b", "b"))
     assert with_project_names(records, ()) == records
+
+
+# --- the account-wide limits block --------------------------------------------------------
+
+
+def _account(profile: str, *windows, stale: str | None = None) -> AgentLimits:
+    return AgentLimits(ProfileId(profile), tuple(windows), stale)
+
+
+def test_one_line_per_answering_agent_named_by_its_profile() -> None:
+    """The name is the whole point of moving the block: it says whose plan this is."""
+    lines = limit_lines(
+        (
+            _account("claude", UsageWindow("5h", 2.0), UsageWindow("week", 88.0)),
+            _account("codex", UsageWindow("5h", 41.0)),
+        )
+    )
+
+    assert lines == ("claude: 5h 2% · week 88%", "codex: 5h 41%")
+
+
+def test_a_borrowed_figure_says_where_it_came_from() -> None:
+    """DEC-061: a number read out of a file this project does not own is stamped as such."""
+    (line,) = limit_lines((_account("claude", UsageWindow("5h", 2.0), stale="status-line cache"),))
+
+    assert line == "claude: 5h 2% — via status-line cache"
+
+
+def test_a_figure_from_the_providers_own_accounting_carries_no_stamp() -> None:
+    """Codex writes its own rate limits into its own rollout, so there is nothing to disclose."""
+    (line,) = limit_lines((_account("codex", UsageWindow("5h", 41.0)),))
+
+    assert "via" not in line
+
+
+def test_the_window_phrase_is_the_one_the_session_line_already_used() -> None:
+    """DEC-043 reached from the other side: one decision about how a window reads, not two.
+
+    A reset is worded by `_window_phrase`, so the account block and a session's own line
+    cannot start disagreeing about what `resets in` means.
+    """
+    resets = datetime.now(UTC) + timedelta(hours=3)
+
+    (line,) = limit_lines((_account("codex", UsageWindow("5h", 41.0, resets_at=resets)),))
+
+    assert line == f"codex: {_window_phrase(UsageWindow('5h', 41.0, resets_at=resets))}"
+
+
+def test_an_agent_that_published_nothing_contributes_no_line() -> None:
+    """opencode and cursor-agent are always this, and a bare name with no figure is noise."""
+    assert limit_lines((_account("opencode"), _account("cursor-agent"))) == ()
+
+
+def test_an_account_nothing_answered_for_renders_an_empty_block() -> None:
+    """Not a placeholder sentence: the surfaces decide what an absent block looks like.
+
+    DEC-043 -- this returns strings and takes no view on whether a screen shows a heading
+    over nothing, which is a layout question and stays with each adapter.
+    """
+    assert limit_lines(()) == ()
+    assert limit_lines((_account("claude"), _account("codex"))) == ()

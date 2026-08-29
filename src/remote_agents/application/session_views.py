@@ -29,7 +29,7 @@ from remote_agents.application.relative_time import age, until
 from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
-from remote_agents.ports.agent_usage import AgentUsage, ContextWindow, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
 
 
 def session_row(record: SessionRecord) -> str:
@@ -234,6 +234,35 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
         rendered = " · ".join(_window_phrase(window) for window in usage.windows)
         borrowed = "" if usage.stale_source is None else f" — via {usage.stale_source}"
         lines.append(f"Limits: {rendered}{borrowed}")
+    return tuple(lines)
+
+
+def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
+    """Render each agent's account-wide rate-limit windows, one line per agent that has any.
+
+    The move the owner asked for on 2026-08-29 is mostly this function existing. The same
+    windows used to render inside `usage_lines`, under a session's context line, where they
+    read as that session's spend — and they never were: both providers that publish a window
+    publish it for the whole plan. Naming the agent is what makes the line true, which is why
+    `AgentLimits` carries a profile at all.
+
+    **An agent with no windows contributes no line rather than an empty one.** `opencode` and
+    `cursor-agent` are permanently in that state and a bare name with nothing after it is
+    noise; a Claude whose borrowed cache went stale is temporarily in it, and a line that said
+    so would be reporting on this project's plumbing rather than on the owner's plan. The
+    surfaces are told the difference by there being nothing to draw.
+
+    Returns strings and nothing else (DEC-043). Whether an empty result means a hidden block,
+    a heading over a sentence, or an untouched pane is a layout question, and each adapter
+    answers it — as each does its own escaping (DEC-014).
+    """
+    lines = []
+    for entry in limits:
+        if not entry.windows:
+            continue
+        rendered = " · ".join(_window_phrase(window) for window in entry.windows)
+        borrowed = "" if entry.stale_source is None else f" — via {entry.stale_source}"
+        lines.append(f"{entry.profile_id}: {rendered}{borrowed}")
     return tuple(lines)
 
 
