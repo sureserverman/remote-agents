@@ -709,15 +709,17 @@ unrelated pane on the same server is silent, as is any `claude` started outside 
 
 ```bash
 uv run --locked remote-agents install-agent-hooks --remove
+uv run --locked remote-agents install-agent-hooks --provider codex --remove
 ```
 
-This deletes only the groups this installer wrote and restores the file to its pre-install content
-**byte for byte** — the file's own indentation, separators and trailing newline are recovered from
-its original bytes rather than re-picked by a JSON writer, and the install refuses outright when it
-cannot promise that. A group you have hand-edited to run this command beside one of your own is
-left alone, because failing to remove a hook is recoverable and deleting somebody else's is not. On
-a host that was never installed to, `--remove` reports `no agent hooks in <path>` or `no settings
-file at <path>` and exits 0.
+Use the first command for Claude (the default provider) and the second for Codex; removal must name
+the same provider that installed the hooks. Each deletes only the groups its installer wrote and
+restores that provider settings file to its pre-install content **byte for byte** — the file's own
+indentation, separators and trailing newline are recovered from its original bytes rather than
+re-picked by a JSON writer, and the install refuses outright when it cannot promise that. A group
+you have hand-edited to run this command beside one of your own is left alone, because failing to
+remove a hook is recoverable and deleting somebody else's is not. On a host that was never installed
+to, `--remove` reports `no agent hooks in <path>` or `no settings file at <path>` and exits 0.
 
 ### When notifications stop arriving and nothing complains
 

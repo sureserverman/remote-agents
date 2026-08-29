@@ -20,6 +20,7 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
     current = "\n".join(path.read_text(encoding="utf-8") for path in _CURRENT_ACTIVITY_DOCS).lower()
 
     assert "install-agent-hooks --provider codex" in readme
+    assert "install-agent-hooks --provider codex --remove" in runbook_lower
     assert "`stop` hook reports `completed`" in runbook_lower
     assert "`permissionrequest` hook reports `needs_answer`" in runbook_lower
     assert "content-free `action required` title" in runbook_lower
