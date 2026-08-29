@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from remote_agents.adapters.agents.usage import (
 )
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import closed_profiles
-from remote_agents.ports.agent_usage import UsageQuery
+from remote_agents.ports.agent_usage import AgentLimits, UsageQuery, UsageWindow
 
 LAUNCHED_AT = datetime(2026, 8, 27, 6, 0, tzinfo=UTC)
 
@@ -549,6 +550,59 @@ def test_the_default_reader_set_covers_every_curated_profile() -> None:
     covered = ProfileUsageReaders().profiles
 
     assert {definition.profile_id for definition in closed_profiles()} <= covered
+
+
+# --- the account-wide limits type --------------------------------------------------------
+
+
+def test_agent_limits_names_the_account_it_answers_for() -> None:
+    """The profile is on the type because the answer is the agent's, not a session's.
+
+    `AgentUsage` needs no such field: it is handed back to the caller that named a session,
+    so the identity is already in the caller's hand. A limits read takes no query at all, so
+    a set of them would otherwise be a tuple of unlabelled percentages.
+    """
+    limits = AgentLimits(
+        ProfileId("claude"),
+        (UsageWindow("5h", 2.0), UsageWindow("week", 88.0)),
+        stale_source="status-line cache",
+    )
+
+    assert limits.profile_id == ProfileId("claude")
+    assert [window.label for window in limits.windows] == ["5h", "week"]
+    assert limits.stale_source == "status-line cache"
+
+
+def test_agent_limits_reuses_the_window_type_rather_than_restating_it() -> None:
+    """One window type for both reads, so a session line and an account line cannot drift."""
+    window = UsageWindow("5h", 2.0, resets_at=datetime.now(UTC) + timedelta(hours=3))
+
+    assert AgentLimits(ProfileId("codex"), (window,)).windows[0] is window
+
+
+def test_agent_limits_is_frozen_like_every_other_reading() -> None:
+    limits = AgentLimits(ProfileId("codex"), ())
+
+    with pytest.raises(FrozenInstanceError):
+        limits.stale_source = "invented"  # type: ignore[misc]
+
+
+def test_an_account_that_published_no_windows_is_representable() -> None:
+    """DEC-061: absent is a first-class answer. `opencode` and `cursor-agent` are always this.
+
+    Refusing an empty tuple here would push every reader that publishes nothing into either
+    returning `None` — which this project words as "could not match", a different claim — or
+    inventing a window. Both are the failure the decision names.
+    """
+    limits = AgentLimits(ProfileId("cursor-agent"), ())
+
+    assert limits.windows == ()
+    assert limits.stale_source is None
+
+
+def test_a_borrowed_stamp_is_optional_because_only_one_reader_borrows() -> None:
+    """Claude's limits come from a file this project does not own; Codex's come from its own."""
+    assert AgentLimits(ProfileId("codex"), (UsageWindow("5h", 1.0),)).stale_source is None
 
 
 def _written_json(path: Path, document: dict) -> Path:

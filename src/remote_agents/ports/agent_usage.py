@@ -111,6 +111,41 @@ class AgentUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentLimits:
+    """What one agent has spent against its plan, for the whole account rather than a session.
+
+    Separate from `AgentUsage` because the two answer questions of different *scope*, and
+    collapsing them is what the owner reported on 2026-08-29: a rate-limit window rendered
+    inside a session's detail reads as that session's spend, when both providers that publish
+    one publish it for the account. The window is the same fact whichever session is open, and
+    a type that can only be obtained by naming a session cannot say so.
+
+    That difference is also why this carries a `profile_id` and `AgentUsage` does not. A usage
+    read is handed back to a caller that just named a session, so the identity is already in
+    the caller's hand; a limits read takes no query at all, and a set of them would otherwise
+    be a tuple of percentages with nothing to attach them to.
+
+    **Nothing here is required and nothing is validated beyond `UsageWindow`'s own rules.**
+    `opencode` and `cursor-agent` publish no limits at all, so an empty `windows` is the
+    honest answer rather than a degenerate one — and a type that refused it would push those
+    readers into either returning `None`, which this project words as "no conversation
+    matched" and means something else entirely, or inventing a window. DEC-061 forbids the
+    second and the first would be a lie, so the empty tuple has to be legal.
+    """
+
+    profile_id: ProfileId
+    windows: tuple[UsageWindow, ...] = ()
+    stale_source: str | None = None
+    """Where these came from when they did not come from the provider's own accounting.
+
+    Set by Claude's reader alone, and for the reason `AgentUsage.stale_source` records: its
+    limits are borrowed from the status-line cache described in `adapters.agents.usage`, and
+    a figure whose freshness depends on a script this project does not own is never rendered
+    as though the service had measured it.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class UsageQuery:
     """The identity of one managed session, in the terms a provider's files are searched by.
 
