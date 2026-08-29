@@ -152,8 +152,10 @@ async def test_only_codex_titles_can_infer_an_action_required_notification() -> 
     async def capture(session_id: SessionId) -> str:
         return "working"
 
+    titles = iter(("multitor", "[ ! ] Action Required | multitor"))
+
     async def action_required(session_id: SessionId) -> str:
-        return "[ ! ] Action Required | multitor"
+        return next(titles)
 
     class _TwoSessionStore:
         async def list(self, states: object) -> tuple[SessionRecord, ...]:
@@ -162,11 +164,59 @@ async def test_only_codex_titles_can_infer_an_action_required_notification() -> 
 
     watcher = PaneQuietWatcher(_TwoSessionStore(), capture, quiet_polls=2, title=action_required)
 
+    assert await watcher.poll() == ()
     (activity,) = await watcher.poll()
 
     assert activity.session_id == str(codex.session_id)
     assert activity.kind is ActivityKind.NEEDS_ANSWER
     assert activity.confidence is ActivityConfidence.INFERRED
+
+
+async def test_existing_action_required_title_is_a_restart_baseline_not_a_duplicate() -> None:
+    record = _running_record("codex")
+
+    async def capture(session_id: SessionId) -> str:
+        return "working"
+
+    async def action_required(session_id: SessionId) -> str:
+        return "[ ! ] Action Required | multitor"
+
+    first = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2, title=action_required)
+    restarted = PaneQuietWatcher(
+        _RunningStore(record), capture, quiet_polls=2, title=action_required
+    )
+
+    assert await first.poll() == ()
+    assert await restarted.poll() == ()
+
+
+async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_prompt() -> None:
+    record = _running_record("codex")
+    titles: list[str | Exception] = [
+        "multitor",
+        "[ ! ] Action Required | multitor",
+        RuntimeError("tmux unavailable"),
+        RuntimeError("tmux unavailable"),
+    ]
+    captures = iter(("start", "working", "working", "working"))
+
+    async def capture(session_id: SessionId) -> str:
+        return next(captures)
+
+    async def action_required(session_id: SessionId) -> str:
+        title = titles.pop(0)
+        if isinstance(title, Exception):
+            raise title
+        return title
+
+    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2, title=action_required)
+
+    assert await watcher.poll() == ()
+    (needs_answer,) = await watcher.poll()
+    assert needs_answer.kind is ActivityKind.NEEDS_ANSWER
+    assert await watcher.poll() == ()
+    (quiet,) = await watcher.poll()
+    assert quiet.kind is ActivityKind.QUIET
 
 
 async def test_reported_permission_wins_over_the_same_title_edge() -> None:

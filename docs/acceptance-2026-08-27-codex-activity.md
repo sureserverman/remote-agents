@@ -1,6 +1,6 @@
 # Acceptance: owner-managed Codex activity notifications
 
-**Plan:** `2026-08-27-activity-notifications-parity-plan.md`, Stage 4 Task 4.3  
+**Plan:** `2026-08-27-activity-notifications-parity-plan.md`, Stage 4 Task 4.3
 **Status:** ACCEPTED — 2026-08-29
 
 ## Safety boundary

@@ -1659,6 +1659,9 @@ async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> Non
         def mark_reported(self, session_ids: tuple[str, ...]) -> None:
             assert session_ids == ()
 
+        def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
+            assert session_ids == ()
+
         async def poll(self):
             self.passes += 1
             return (
@@ -1699,6 +1702,9 @@ async def test_a_reported_activity_suppresses_its_quiet_spell_before_polling(
 
         def mark_reported(self, session_ids: tuple[str, ...]) -> None:
             self.marked = session_ids
+
+        def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
+            assert session_ids == ()
 
         async def poll(self) -> tuple[AgentActivity, ...]:
             assert self.marked == (str(record.session_id),)
@@ -1768,6 +1774,9 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
 
     class _QuietWatcher:
         def mark_reported(self, session_ids: tuple[str, ...]) -> None:
+            assert session_ids == ()
+
+        def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
             assert session_ids == ()
 
         async def poll(self):
