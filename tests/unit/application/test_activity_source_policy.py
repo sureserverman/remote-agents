@@ -190,6 +190,28 @@ async def test_existing_action_required_title_is_a_restart_baseline_not_a_duplic
     assert await restarted.poll() == ()
 
 
+async def test_first_title_read_failure_keeps_recovered_marker_as_restart_baseline() -> None:
+    record = _running_record("codex")
+    titles: list[str | Exception] = [
+        RuntimeError("tmux unavailable"),
+        "[ ! ] Action Required | multitor",
+    ]
+
+    async def capture(session_id: SessionId) -> str:
+        return "working"
+
+    async def action_required(session_id: SessionId) -> str:
+        title = titles.pop(0)
+        if isinstance(title, Exception):
+            raise title
+        return title
+
+    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2, title=action_required)
+
+    assert await watcher.poll() == ()
+    assert await watcher.poll() == ()
+
+
 async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_prompt() -> None:
     record = _running_record("codex")
     titles: list[str | Exception] = [

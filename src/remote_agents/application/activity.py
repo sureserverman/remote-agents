@@ -534,14 +534,13 @@ class PaneQuietWatcher:
                         now=self._now(),
                     )
                     self._action_required[key] = action_required
-                    title_failed_before = key in self._title_unavailable
                     self._title_unavailable.discard(key)
                     # A provider-reported permission in the same pass is stronger evidence of
                     # the same wait.  Remember the marker but do not make the owner hear it
                     # twice; a clear title re-arms the next native prompt.
                     if (
                         activity is not None
-                        and (had_successful_title or title_failed_before)
+                        and had_successful_title
                         and key not in reported_needs_answer_session_ids
                     ):
                         activities.append(activity)
