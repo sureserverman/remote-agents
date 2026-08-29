@@ -112,9 +112,11 @@ def test_a_managed_codex_turn_spools_its_own_stop(tmp_path: Path) -> None:
     _run_codex(workspace, {SESSION_ID_VARIABLE: str(session_id)})
 
     activities = drain_activity(spool)
-    assert activities, "a managed Codex session's Stop hook spooled nothing"
-    assert {activity.session_id for activity in activities} == {str(session_id)}
-    assert ActivityKind.COMPLETED in {activity.kind for activity in activities}
+    assert len(activities) == 1, "a managed Codex turn must spool exactly one Stop activity"
+    (activity,) = activities
+    assert activity.session_id == str(session_id)
+    assert activity.kind is ActivityKind.COMPLETED
+    assert activity.detail is None
 
 
 @pytest.mark.live_profile
