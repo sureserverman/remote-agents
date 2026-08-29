@@ -468,6 +468,7 @@ class PaneQuietWatcher:
         # positive state cannot silence quiet fallback, while a recovered read can still avoid
         # re-notifying the same outstanding local approval.
         self._action_required: dict[str, bool] = {}
+        self._title_observed: set[str] = set()
         self._title_unavailable: set[str] = set()
         self._reported_needs_answer_session_ids: frozenset[str] = frozenset()
 
@@ -513,6 +514,7 @@ class PaneQuietWatcher:
         self._action_required = {
             key: value for key, value in self._action_required.items() if key in live
         }
+        self._title_observed.intersection_update(live)
         self._title_unavailable.intersection_update(live)
 
         activities = []
@@ -526,7 +528,7 @@ class PaneQuietWatcher:
                     title = await asyncio.wait_for(
                         self._title(record.session_id), timeout=self._capture_timeout
                     )
-                    had_successful_title = key in self._action_required
+                    had_successful_title = key in self._title_observed
                     action_required, activity = observe_codex_action_required(
                         self._action_required.get(key, False),
                         session_id=key,
@@ -534,6 +536,7 @@ class PaneQuietWatcher:
                         now=self._now(),
                     )
                     self._action_required[key] = action_required
+                    self._title_observed.add(key)
                     self._title_unavailable.discard(key)
                     # A provider-reported permission in the same pass is stronger evidence of
                     # the same wait.  Remember the marker but do not make the owner hear it
@@ -546,8 +549,11 @@ class PaneQuietWatcher:
                         activities.append(activity)
                 except Exception:
                     # A stale positive marker must not indefinitely silence the only fallback.
-                    # Keep its boolean for recovery deduplication, but make this pass eligible
-                    # for quiet inference until a title can be read again.
+                    # Re-arm the edge as well: title metadata cannot tell whether the old local
+                    # prompt cleared and a new one opened while it was unavailable. A generic
+                    # recovery notice can duplicate the old prompt, but silently missing the new
+                    # one would strand the owner with no actionable alert.
+                    self._action_required[key] = False
                     self._title_unavailable.add(key)
                     action_required = False
                     _LOG.warning("could not read a Codex pane title while watching activity")

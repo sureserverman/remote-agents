@@ -241,6 +241,33 @@ async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_pr
     assert quiet.kind is ActivityKind.QUIET
 
 
+async def test_title_recovery_rearms_the_generic_notice_after_an_unavailable_period() -> None:
+    record = _running_record("codex")
+    titles: list[str | Exception] = [
+        "multitor",
+        "[ ! ] Action Required | multitor",
+        RuntimeError("tmux unavailable"),
+        "[ ! ] Action Required | multitor",
+    ]
+
+    async def capture(session_id: SessionId) -> str:
+        return "working"
+
+    async def action_required(session_id: SessionId) -> str:
+        title = titles.pop(0)
+        if isinstance(title, Exception):
+            raise title
+        return title
+
+    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2, title=action_required)
+
+    assert await watcher.poll() == ()
+    assert (await watcher.poll())[0].kind is ActivityKind.NEEDS_ANSWER
+    assert await watcher.poll() == ()
+    (recovered,) = await watcher.poll()
+    assert recovered.kind is ActivityKind.NEEDS_ANSWER
+
+
 async def test_reported_permission_wins_over_the_same_title_edge() -> None:
     record = _running_record("codex")
     titles = iter(

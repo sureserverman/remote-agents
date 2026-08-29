@@ -607,6 +607,11 @@ uv run --locked remote-agents install-agent-hooks
 uv run --locked remote-agents install-agent-hooks --provider codex
 ```
 
+For Codex, then run `/hooks` in the local Codex session and review the exact `remote-agents`
+definition before trusting it. If the command, event names, or destination are not the definition
+you installed, leave it untrusted and remove it rather than accepting an unexpected global hook.
+Trust affects only local Codex execution; Telegram cannot approve, deny, or otherwise answer it.
+
 With no arguments this writes to `~/.claude/settings.json` — the owner's global agent
 configuration, which this project does not own — and adds one matcherless group to each of
 `Stop`, `StopFailure`, `Notification` and `SessionEnd`, each holding one command:
@@ -854,7 +859,10 @@ supported Codex `PermissionRequest` is reported only when the provider actually 
 native code-mode command escalations do not. Their exact managed-pane title marker,
 `[ ! ] Action Required | <project>`, is observed through tmux metadata only and becomes one
 inferred `needs_answer` on the transition into that state. The title is never retained, and it must
-clear before another such notification can be sent.
+clear before another such notification can be sent. If tmux title metadata is temporarily
+unavailable, quiet fallback remains eligible; the next readable active title re-arms one generic
+inferred notice rather than risking a new local approval being missed. It may therefore repeat an
+otherwise unchanged prompt after a title-read outage, without revealing what approval is needed.
 
 **A notification has to be worth acting on, and two kinds that once appeared here were not.** The
 bar is no longer only "does this say why the agent stopped" but "is there anything for the owner

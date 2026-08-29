@@ -21,6 +21,8 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
 
     assert "install-agent-hooks --provider codex" in readme
     assert "install-agent-hooks --provider codex --remove" in runbook_lower
+    assert "`/hooks`" in runbook
+    assert "before trusting it" in runbook_lower
     assert "`stop` hook reports `completed`" in runbook_lower
     assert "`permissionrequest` hook reports `needs_answer`" in runbook_lower
     assert "content-free `action required` title" in runbook_lower
