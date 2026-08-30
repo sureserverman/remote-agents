@@ -367,11 +367,11 @@ class CodexApprovalWatcher:
     Application-layer under DEC-001: the terminal is reached through a callable the caller
     supplies, so nothing here knows what tmux is, and the driver adapter never reaches a pane.
 
-    Narrowed from `PaneQuietWatcher` on 2026-08-30. That class did two jobs: it hashed a pane
-    capture per poll to infer that an agent had gone quiet, and it read a pane *title* to infer
-    that Codex had opened a native approval. The first was retired with `ActivityKind.QUIET` --
-    it told the owner nothing they could act on, and it was the only thing here that ever
-    touched pane content. The second is the whole of DEC-063 and is unchanged.
+    Narrowed on 2026-08-30 from a class that did two jobs: it hashed a pane capture per poll to
+    infer that an agent had stopped producing output, and it read a pane *title* to infer that
+    Codex had opened a native approval. The first was retired along with the `quiet` activity
+    kind -- it told the owner nothing they could act on, and it was the only thing here that
+    ever touched pane content. The second is the whole of DEC-063 and is unchanged.
 
     So this now reads titles and nothing else, for `ActivitySource.HYBRID` sessions and nothing
     else. It holds one boolean per session -- whether the exact marker was present last pass --

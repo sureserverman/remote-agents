@@ -276,8 +276,8 @@ def window(repeats: int, *, rate_limit: timedelta) -> timedelta:
     turns that into a message every two minutes until they wake up. The pane-quiet path had
     carried the equivalent rule since it was written -- it reported once per spell and re-armed
     only on a change -- while the hook-sourced kinds had nothing, because the burst was the only
-    case anyone had in mind. That path was retired on 2026-08-30 along with `ActivityKind.QUIET`;
-    the rule it demonstrated is the one below, and it now has no other home.
+    case anyone had in mind. That path was retired on 2026-08-30 along with the `quiet` activity
+    kind; the rule it demonstrated is the one below, and it now has no other home.
 
     So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
     every 64 minutes for as long as it lasts. The first message arrives as fast as ever --

@@ -122,7 +122,7 @@ when absent, never read either way, and never generated into a new file. An entr
 every host has rewritten its config; there is no way for this process to know when that is, and
 the cost of keeping one is a set union per load.
 
-`activity_quiet_polls` was retired on 2026-08-30 with `ActivityKind.QUIET`. It paced the
+`activity_quiet_polls` was retired on 2026-08-30 with the `quiet` activity kind. It paced the
 pane-digest watch, counting how many identical captures meant an agent had stopped. Nothing
 counts captures now. `activity_poll_seconds` is untouched and still paces the title watch and
 the spool drain.

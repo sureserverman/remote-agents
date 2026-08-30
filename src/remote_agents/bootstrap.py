@@ -215,8 +215,8 @@ class ServiceComposition:
     simply has nothing to do on a pass where no Codex session is running. The field is optional
     so that every composition predating it still constructs.
 
-    Named `quiet_watcher` until 2026-08-30, for the pane-digest watch retired with
-    `ActivityKind.QUIET`. `ServiceComposition` is constructed positionally in several places, so
+    Renamed on 2026-08-30, when the pane-digest watch it was named for was retired along with
+    the `quiet` activity kind. `ServiceComposition` is constructed positionally in places, so
     the field name is what a reader consults to find out what this service observes; keeping the
     old one would have gone on describing a mechanism that had been deleted.
     """
