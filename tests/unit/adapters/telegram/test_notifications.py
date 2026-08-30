@@ -952,9 +952,8 @@ async def test_a_kind_the_window_is_holding_is_never_deleted_from_a_message_goin
 async def test_a_full_queue_costs_the_session_that_filled_it_not_the_quiet_ones() -> None:
     """Retention was global while delivery was per session, so one session could evict all news.
 
-    `observe_quiet` reports once per spell and re-arms only when the pane changes, and the drain
-    deletes a record before returning it, so a quiet session's evicted report is gone for good --
-    there is no second chance anywhere in the system.
+    The drain deletes a record before returning it, so a quiet session's evicted report is gone
+    for good -- there is no second chance anywhere in the system.
     """
     clock = _Clock()
     notifier, _ = _notifier(clock)

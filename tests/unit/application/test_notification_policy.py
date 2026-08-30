@@ -292,8 +292,8 @@ def test_the_cap_costs_the_session_that_filled_it() -> None:
     so a burst cannot starve a quiet session -- but retention used to be global and per
     observation. Simulated then: five sessions reporting `QUIET` once against one session
     emitting twenty-five records a pass ended with the queue holding only the loud session, and
-    the quiet reports were destroyed permanently, because `observe_quiet` fires once per spell
-    and the drain had already deleted the files.
+    the evicted reports were destroyed permanently, because the drain deletes a record before
+    returning it and there is no second chance anywhere in the system.
     """
     held: deque[AgentActivity] = deque()
     enqueue(held, [_observed(SESSION_B, ActivityKind.QUIET, minute=1)], maximum=4)

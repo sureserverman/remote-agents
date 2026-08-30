@@ -11,7 +11,7 @@ import pytest
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
-from remote_agents.application.activity import PaneQuietWatcher
+from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.reconcile import ReconciliationService
 from remote_agents.bootstrap import ServiceComposition, _serve_with_reconciliation
 from remote_agents.config import TelegramSecrets
@@ -24,7 +24,11 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.state_machine import LifecycleEvent
-from remote_agents.ports.agent_activity import HOOK_SOURCED_PROFILES, ActivityKind
+from remote_agents.ports.agent_activity import (
+    HOOK_SOURCED_PROFILES,
+    ActivityConfidence,
+    ActivityKind,
+)
 from remote_agents.ports.terminal import TerminalObservation
 
 _SECRETS = TelegramSecrets("token", 7, 11)
@@ -275,16 +279,21 @@ async def test_an_absent_server_does_end_a_record_it_no_longer_holds(tmp_path: P
 
 
 class CapturingTerminal(StubTerminal):
-    """A terminal whose panes a test scripts, and which records what was asked for."""
+    """A terminal whose pane titles a test scripts, and which records what was asked for.
 
-    def __init__(self, captures: dict[str, list[str]] | None = None) -> None:
+    It scripted pane *captures* until 2026-08-30, when the digest watch was retired: the
+    watcher reads a title and nothing else now, so `asked` records title reads and a test that
+    wants a pane read to have happened would be asserting on a call that no longer exists.
+    """
+
+    def __init__(self, titles: dict[str, list[str]] | None = None) -> None:
         super().__init__(())
-        self.captures = captures or {}
+        self.titles = titles or {}
         self.asked: list[str] = []
 
-    async def capture(self, session_id: SessionId) -> str:
+    async def pane_title(self, session_id: SessionId) -> str:
         self.asked.append(str(session_id))
-        scripted = self.captures.get(str(session_id), ["unchanged"])
+        scripted = self.titles.get(str(session_id), ["opaque-project"])
         return scripted.pop(0) if len(scripted) > 1 else scripted[0]
 
 
@@ -311,10 +320,11 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
 
     **Every** member of `HOOK_SOURCED_PROFILES` is enrolled, derived from the frozenset rather
     than named here, and that indirection is the point rather than tidiness. This subtraction
-    is now the whole of the rule that `quiet` reaches the profiles with quiet fallback — Codex
-    remains watched until a reported hook event suppresses that one spell, while `opencode` and
-    `cursor-agent` have only pane evidence. A hook-exclusive session watched as well would tell
-    the owner the same thing twice, once as a report and once as a guess. Written as a
+    is now the whole of the rule that a pane read reaches only the profile that needs one —
+    Codex, whose native approval escalates past its own hook. `opencode` and `cursor-agent` had
+    only pane evidence until the digest watch was retired and now have none. A hook-exclusive
+    session watched as well would tell the owner the same thing twice, once as a report and
+    once as a guess. Written as a
     hand-copied pair, this test would keep passing for `claude` and `claude-remote` while a
     profile added to the frozenset later went unwatched *and* unasserted.
     """
@@ -324,7 +334,7 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
         hooked = {profile: str(await _running(store, profile)) for profile in HOOK_SOURCED_PROFILES}
         watched = await _running(store, "codex")
         terminal = CapturingTerminal()
-        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+        watcher = CodexApprovalWatcher(store, terminal.pane_title)
 
         await watcher.poll()
 
@@ -334,7 +344,7 @@ async def test_activity_watching_skips_the_profiles_that_report_for_themselves(
 
 
 async def test_activity_watching_survives_a_capture_that_raises(tmp_path: Path) -> None:
-    """A pane that cannot be read is not a pane that has gone quiet."""
+    """A title that cannot be read is not a title carrying the approval marker."""
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
         await _running(store, "codex")
@@ -342,47 +352,63 @@ async def test_activity_watching_survives_a_capture_that_raises(tmp_path: Path) 
         async def refuse(session_id: SessionId) -> str:
             raise RuntimeError("tmux command failed")
 
-        watcher = PaneQuietWatcher(store, refuse, quiet_polls=1)
+        watcher = CodexApprovalWatcher(store, refuse)
 
         assert await watcher.poll() == ()
         assert await watcher.poll() == ()
 
 
-async def test_activity_watching_reports_a_codex_pane_that_stopped_changing(
+async def test_activity_watching_reports_a_codex_pane_that_opened_an_approval(
     tmp_path: Path,
 ) -> None:
+    """The integration shape of DEC-063's title edge, over a real store.
+
+    Replaced the pane-digest version on 2026-08-30. The first read is a baseline -- a marker
+    already present at start-up is a restart baseline rather than news, since nothing here can
+    tell an approval that just opened from one that has been waiting since Tuesday.
+    """
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
         session_id = await _running(store, "codex")
-        terminal = CapturingTerminal({str(session_id): ["one", "two", "two", "two"]})
-        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+        terminal = CapturingTerminal(
+            {
+                str(session_id): [
+                    "opaque-project",
+                    "[ ! ] Action Required | opaque-project",
+                    "[ ! ] Action Required | opaque-project",
+                ]
+            }
+        )
+        watcher = CodexApprovalWatcher(store, terminal.pane_title)
 
-        assert await watcher.poll() == ()
-        assert await watcher.poll() == ()
         assert await watcher.poll() == ()
         (activity,) = await watcher.poll()
+        assert await watcher.poll() == (), "a marker still present is not news again"
 
-        assert activity.kind is ActivityKind.QUIET
+        assert activity.kind is ActivityKind.NEEDS_ANSWER
+        assert activity.confidence is ActivityConfidence.INFERRED
         assert activity.session_id == str(session_id)
 
 
 async def test_activity_watching_forgets_a_session_that_is_no_longer_running(
     tmp_path: Path,
 ) -> None:
-    """The watch map is per-session state, and a service runs for weeks."""
+    """The marker state is per-session, and a service runs for weeks."""
     with open_database(tmp_path / "state.db") as connection:
         store = SQLiteSessionStore(connection)
         session_id = await _running(store, "codex")
         terminal = CapturingTerminal()
-        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=2)
+        watcher = CodexApprovalWatcher(store, terminal.pane_title)
         await watcher.poll()
-        assert watcher._watches
+        assert watcher._action_required
+        assert watcher._title_observed
 
         await store.record_event(session_id, LifecycleEvent.RECONCILED_PANE_DEAD)
 
         await watcher.poll()
 
-        assert watcher._watches == {}
+        assert watcher._action_required == {}
+        assert watcher._title_observed == set()
 
 
 async def test_activity_watching_runs_beside_the_poll_and_stops_with_it(tmp_path: Path) -> None:
@@ -398,7 +424,7 @@ async def test_activity_watching_runs_beside_the_poll_and_stops_with_it(tmp_path
         # Reconciliation runs first and ends any record whose pane the terminal does not
         # report, so a stub with no observations would delete the very session under watch.
         terminal.observations = (TerminalObservation(session_id, live=True, preserved=False),)
-        watcher = PaneQuietWatcher(store, terminal.capture, quiet_polls=1)
+        watcher = CodexApprovalWatcher(store, terminal.pane_title)
         composition = ServiceComposition(
             build_private_bot(7, 11), terminal, ReconciliationService(store), watcher
         )
@@ -422,7 +448,7 @@ async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) ->
         store = SQLiteSessionStore(connection)
         passes = 0
 
-        class ExplodingWatcher(PaneQuietWatcher):
+        class ExplodingWatcher(CodexApprovalWatcher):
             async def poll(self):  # type: ignore[override]
                 nonlocal passes
                 passes += 1
@@ -433,7 +459,7 @@ async def test_activity_watching_never_takes_the_service_down(tmp_path: Path) ->
             build_private_bot(7, 11),
             terminal,
             ReconciliationService(store),
-            ExplodingWatcher(store, terminal.capture, quiet_polls=1),
+            ExplodingWatcher(store, terminal.pane_title),
         )
 
         async def poll_briefly(secrets: TelegramSecrets, boundary: PrivateBotBoundary) -> None:
@@ -464,7 +490,7 @@ async def test_activity_watching_gives_up_on_a_capture_that_never_returns(
             await asyncio.sleep(3600)
             raise AssertionError("unreachable")
 
-        watcher = PaneQuietWatcher(store, never_returns, quiet_polls=2)
-        watcher._capture_timeout = 0.05
+        watcher = CodexApprovalWatcher(store, never_returns)
+        watcher._title_timeout = 0.05
 
         assert await asyncio.wait_for(watcher.poll(), timeout=5) == ()

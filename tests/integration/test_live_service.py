@@ -1646,18 +1646,19 @@ async def test_a_session_that_stops_while_its_notification_waits_is_not_notified
     assert bot.sends == []
 
 
-async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
+async def test_a_watched_pane_reaches_the_owner_as_a_notification(tmp_path) -> None:
     """The other half of the source. Stage 2 computed this and dropped it on purpose; the
-    drop is what this pass exists to end, so it is pinned rather than left to a docstring."""
+    drop is what this pass exists to end, so it is pinned rather than left to a docstring.
+
+    The observation the watcher makes changed on 2026-08-30 -- a pane digest going quiet became
+    a Codex approval marker appearing -- and what this pins did not: an activity produced by the
+    watcher rather than by the spool still reaches the notifier and is sent."""
     record = _running()
     boundary, bot = _notified(record)
 
-    class _QuietWatcher:
+    class _ApprovalWatcher:
         def __init__(self) -> None:
             self.passes = 0
-
-        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
-            assert session_ids == ()
 
         def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
             assert session_ids == ()
@@ -1667,63 +1668,21 @@ async def test_a_quiet_pane_reaches_the_owner_as_a_notification(tmp_path) -> Non
             return (
                 AgentActivity(
                     session_id=str(record.session_id),
-                    kind=ActivityKind.QUIET,
+                    kind=ActivityKind.NEEDS_ANSWER,
                     detail=None,
                     observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
                     confidence=ActivityConfidence.INFERRED,
                 ),
             )
 
-    watcher = _QuietWatcher()
+    watcher = _ApprovalWatcher()
     await _watch_quiet_once(
         ServiceComposition(boundary, _SilentTerminal(), _SilentReconciler(), watcher)
     )
 
     assert watcher.passes == 1
     assert len(bot.sends) == 1
-    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
-
-
-async def test_a_reported_activity_suppresses_its_quiet_spell_before_polling(
-    tmp_path, monkeypatch
-) -> None:
-    record = _running()
-    boundary, _bot = _notified(record)
-    reported = AgentActivity(
-        session_id=str(record.session_id),
-        kind=ActivityKind.COMPLETED,
-        detail=None,
-        observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
-    )
-
-    class _QuietWatcher:
-        def __init__(self) -> None:
-            self.marked: tuple[str, ...] = ()
-
-        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
-            self.marked = session_ids
-
-        def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
-            assert session_ids == ()
-
-        async def poll(self) -> tuple[AgentActivity, ...]:
-            assert self.marked == (str(record.session_id),)
-            return ()
-
-    monkeypatch.setattr("remote_agents.bootstrap.drain_activity", lambda _directory: (reported,))
-    watcher = _QuietWatcher()
-
-    await _watch_quiet_once(
-        ServiceComposition(
-            boundary,
-            _SilentTerminal(),
-            _SilentReconciler(),
-            watcher,  # type: ignore[arg-type]
-            activity_directory=tmp_path / "activity",
-        )
-    )
-
-    assert watcher.marked == (str(record.session_id),)
+    assert "waiting for an answer" in str(bot.sends[0]["text"]).lower()
 
 
 async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tmp_path) -> None:
@@ -1772,10 +1731,7 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
     record = _running()
     boundary, bot = _notified(record)
 
-    class _QuietWatcher:
-        def mark_reported(self, session_ids: tuple[str, ...]) -> None:
-            assert session_ids == ()
-
+    class _ApprovalWatcher:
         def mark_needs_answer_reported(self, session_ids: tuple[str, ...]) -> None:
             assert session_ids == ()
 
@@ -1783,7 +1739,7 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
             return (
                 AgentActivity(
                     session_id=str(record.session_id),
-                    kind=ActivityKind.QUIET,
+                    kind=ActivityKind.NEEDS_ANSWER,
                     detail=None,
                     observed_at=datetime(2026, 8, 11, 14, 5, tzinfo=UTC),
                     confidence=ActivityConfidence.INFERRED,
@@ -1800,7 +1756,7 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
             boundary,
             _SilentTerminal(),
             _SilentReconciler(),
-            _QuietWatcher(),
+            _ApprovalWatcher(),
             activity_directory=tmp_path / "activity",
         )
     )

@@ -13,8 +13,16 @@ from remote_agents.application import activity as activity_module
 from remote_agents.application.activity import (
     MAXIMUM_DRAIN,
     MAXIMUM_RECORD_BYTES,
+    CodexApprovalWatcher,
     drain_activity,
-    observe_quiet,
+)
+from remote_agents.domain.models import (
+    ProfileId,
+    ProjectId,
+    SessionDisplayIdentity,
+    SessionId,
+    SessionRecord,
+    SessionState,
 )
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind
 
@@ -517,106 +525,64 @@ def test_a_huge_record_is_refused_without_being_read_into_memory(tmp_path: Path)
 _POLLED_AT = datetime(2026, 8, 11, 9, 0, tzinfo=UTC)
 
 
-def _observe(watch, capture: str, *, polls: int = 3, minute: int = 0):
-    """One poll, with the clock and the capture supplied rather than read."""
-    return observe_quiet(
-        watch,
-        session_id="a-session",
-        capture=capture,
-        now=_POLLED_AT.replace(minute=minute),
-        quiet_polls=polls,
+def test_the_watcher_computes_no_digest_and_asks_for_no_pane_capture() -> None:
+    """The pane-digest watch is gone, and its absence is structural rather than unused.
+
+    `observe_quiet` hashed a pane capture on every poll for every hookless session. Retiring
+    the `quiet` kind removes the only consumer of that hash, so what has to be proven is not
+    that the report stopped firing but that the *reading* stopped happening: a watcher still
+    holding a capture callable would go on pulling terminal text into this process once per
+    poll and throwing it away, which is the retention `session_store` and `_append_event`
+    already refuse elsewhere.
+    """
+    import inspect
+
+    from remote_agents.application import activity as module
+
+    assert not hasattr(module, "observe_quiet")
+    assert not hasattr(module, "QuietWatch")
+    assert not hasattr(module, "PaneQuietWatcher")
+    assert "sha256" not in inspect.getsource(module)
+    assert "capture" not in inspect.signature(CodexApprovalWatcher.__init__).parameters
+
+
+def test_the_narrowed_watcher_keeps_no_state_but_the_marker_edge() -> None:
+    """One boolean per session, and a presence set -- never a title (DEC-063).
+
+    The old watcher carried a digest map beside this. What survives has to be checkable, so
+    this asserts on the instance's own state rather than on behaviour: a title that reached an
+    attribute would be terminal-content retention no test of the emitted activity would catch.
+    """
+    marker = "[ ! ] Action Required | multitor"
+    record = _title_record()
+
+    async def title(session_id: SessionId) -> str:
+        return marker
+
+    watcher = CodexApprovalWatcher(_TitleStore(record), title)
+
+    assert marker not in repr(watcher.__dict__)
+    assert not any(
+        isinstance(value, dict) and any(isinstance(item, str) for item in value.values())
+        for value in watcher.__dict__.values()
     )
 
 
-def test_a_pane_quiet_for_the_configured_number_of_polls_reports_once(tmp_path: Path) -> None:
-    """The signal is the pane not changing, and it is worth saying exactly once."""
-    watch, activity = _observe(None, "working...")
-    assert activity is None
-
-    watch, activity = _observe(watch, "working... done step one", minute=1)
-    assert activity is None
-
-    for minute in (2, 3):
-        watch, activity = _observe(watch, "working... done step one", minute=minute)
-        assert activity is None
-
-    watch, activity = _observe(watch, "working... done step one", minute=4)
-
-    assert activity is not None
-    assert activity.kind is ActivityKind.QUIET
-    assert activity.session_id == "a-session"
-    assert activity.observed_at == _POLLED_AT.replace(minute=4)
+def _title_record() -> SessionRecord:
+    return SessionRecord(
+        SessionId("codex-marker-session"),
+        ProjectId("marker-project"),
+        ProfileId("codex"),
+        SessionDisplayIdentity("marker-project", "codex", "regular", 1),
+        SessionState.RUNNING,
+        _POLLED_AT,
+    )
 
 
-def test_a_pane_that_stays_quiet_is_not_reported_again(tmp_path: Path) -> None:
-    """Repeating "no output since" every minute is the storm this whole path avoids."""
-    watch, _ = _observe(None, "start")
-    watch, _ = _observe(watch, "changed", minute=1)
-    for minute in (2, 3, 4):
-        watch, activity = _observe(watch, "changed", minute=minute)
-    assert activity is not None
+class _TitleStore:
+    def __init__(self, record: SessionRecord) -> None:
+        self._record = record
 
-    for minute in (5, 6, 7, 8):
-        watch, activity = _observe(watch, "changed", minute=minute)
-        assert activity is None
-
-
-def test_a_pane_that_changes_again_re_arms_the_quiet_report(tmp_path: Path) -> None:
-    """An agent that went quiet, was answered, and went quiet again is quiet twice."""
-    watch, _ = _observe(None, "start")
-    watch, _ = _observe(watch, "first", minute=1)
-    for minute in (2, 3, 4):
-        watch, first = _observe(watch, "first", minute=minute)
-    assert first is not None
-
-    watch, activity = _observe(watch, "second", minute=5)
-    assert activity is None
-
-    for minute in (6, 7, 8):
-        watch, second = _observe(watch, "second", minute=minute)
-
-    assert second is not None
-    assert second.kind is ActivityKind.QUIET
-
-
-def test_a_pane_quiet_since_start_up_is_never_reported_as_having_gone_quiet(
-    tmp_path: Path,
-) -> None:
-    """A restart must not tell the owner every idle pane on the host just went quiet.
-
-    The claim is that an agent *stopped* producing output, which is a claim about a
-    transition. A service that has only ever seen one state has not observed one -- the pane
-    may have been finished for a week. So a change has to be seen before an absence of change
-    can mean anything.
-    """
-    watch = None
-    for minute in range(12):
-        watch, activity = _observe(
-            watch, "an idle pane, unchanged since before we started", minute=minute
-        )
-        assert activity is None, f"reported at poll {minute} having never seen a change"
-
-
-def test_a_quiet_report_is_never_stated_as_a_fact(tmp_path: Path) -> None:
-    """Pane quiet is a heuristic by construction, and carries the confidence that says so."""
-    watch, _ = _observe(None, "start")
-    watch, _ = _observe(watch, "changed", minute=1)
-    for minute in (2, 3, 4):
-        watch, activity = _observe(watch, "changed", minute=minute)
-
-    assert activity is not None
-    assert activity.confidence is ActivityConfidence.INFERRED
-
-
-def test_the_quiet_classifier_keeps_no_pane_text(tmp_path: Path) -> None:
-    """The watch is carried between polls, and pane text must not be what is carried.
-
-    `session_store` refuses to persist pane content and `_append_event` rejects error codes
-    that even mention it. A classifier holding captures would put that text in the service's
-    memory for every managed session, one poll from anywhere that logs its state.
-    """
-    secret = "sk-not-a-real-key-000 and a whole transcript"
-    watch, _ = _observe(None, secret)
-
-    assert secret not in repr(watch)
-    assert secret not in str(watch)
+    async def list(self, states: object) -> tuple[SessionRecord, ...]:
+        assert states == (SessionState.RUNNING,)
+        return (self._record,)

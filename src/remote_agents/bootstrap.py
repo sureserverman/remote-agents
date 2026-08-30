@@ -85,7 +85,7 @@ from remote_agents.adapters.supervisor.installer import (
     remove_daemon,
 )
 from remote_agents.agent_event import spool_from_stdin
-from remote_agents.application.activity import PaneQuietWatcher, drain_activity
+from remote_agents.application.activity import CodexApprovalWatcher, drain_activity
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
 from remote_agents.application.dependencies import (
@@ -208,7 +208,7 @@ class ServiceComposition:
     boundary: PrivateBotBoundary
     terminal: TmuxTerminal
     reconciler: ReconciliationService
-    quiet_watcher: PaneQuietWatcher | None = None
+    approval_watcher: CodexApprovalWatcher | None = None
     """None only in compositions that do not wire pane watching, which today means tests.
 
     Production always supplies one -- `_private_boundary` builds it unconditionally -- and it
@@ -263,7 +263,7 @@ async def _serve_with_reconciliation(
     await composition.boundary.refresh_catalogue()
     await _reconcile_quietly(composition)
     periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
-    if composition.quiet_watcher is not None or composition.activity_directory is not None:
+    if composition.approval_watcher is not None or composition.activity_directory is not None:
         # A separate task rather than another step inside the reconciliation pass: the two
         # answer different questions on different clocks, and a pane capture that hangs must
         # not stop records being reconciled. Nothing is polled before the service is serving,
@@ -328,16 +328,8 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
             )
         except Exception:
             _LOG.exception("draining the activity spool failed")
-    if composition.quiet_watcher is not None:
+    if composition.approval_watcher is not None:
         try:
-            reported_session_ids = tuple(
-                dict.fromkeys(
-                    activity.session_id
-                    for activity in activities
-                    if activity.confidence is ActivityConfidence.REPORTED
-                )
-            )
-            composition.quiet_watcher.mark_reported(reported_session_ids)
             reported_needs_answer_session_ids = tuple(
                 dict.fromkeys(
                     activity.session_id
@@ -346,8 +338,10 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
                     and activity.kind is ActivityKind.NEEDS_ANSWER
                 )
             )
-            composition.quiet_watcher.mark_needs_answer_reported(reported_needs_answer_session_ids)
-            activities.extend(await composition.quiet_watcher.poll())
+            composition.approval_watcher.mark_needs_answer_reported(
+                reported_needs_answer_session_ids
+            )
+            activities.extend(await composition.approval_watcher.poll())
         except Exception:
             _LOG.exception("pane quiet watch failed")
     if composition.activity_store is not None:
@@ -1051,12 +1045,7 @@ def _private_boundary(
         # overwrite the state of a session whose graceful stop is between its own two writes.
         # Constructing two SessionLocks here would type-check, run, and fix nothing.
         ReconciliationService(store, confirm_ready=terminal.confirm_ready, locks=locks),
-        PaneQuietWatcher(
-            store,
-            terminal.capture,
-            title=terminal.pane_title,
-            quiet_polls=config.activity_quiet_polls,
-        ),
+        CodexApprovalWatcher(store, terminal.pane_title),
         paths.activity_directory,
         SQLiteActivityStore(connection),
     )

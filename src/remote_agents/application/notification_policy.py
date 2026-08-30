@@ -273,10 +273,11 @@ def window(repeats: int, *, rate_limit: timedelta) -> timedelta:
     condition. `Stop` fires per turn, so a busy agent repeats "finished" and one message
     per two minutes is a fair summary. But `needs_answer` repeats for as long as the owner
     does not answer -- which, at three in the morning, is all night -- and a fixed window
-    turns that into a message every two minutes until they wake up. The pane-quiet path
-    already has the equivalent rule (`observe_quiet` reports once per spell and re-arms only
-    on a change); the hook-sourced kinds had nothing, because the burst was the only case
-    anyone had in mind.
+    turns that into a message every two minutes until they wake up. The pane-quiet path had
+    carried the equivalent rule since it was written -- it reported once per spell and re-armed
+    only on a change -- while the hook-sourced kinds had nothing, because the burst was the only
+    case anyone had in mind. That path was retired on 2026-08-30 along with `ActivityKind.QUIET`;
+    the rule it demonstrated is the one below, and it now has no other home.
 
     So the window doubles per consecutive repeat, capped: 2 minutes, 4, 8, 16, 32, then
     every 64 minutes for as long as it lasts. The first message arrives as fast as ever --
@@ -486,11 +487,11 @@ def enqueue(
     fairness -- `grouped_for_delivery` orders by first appearance precisely so a burst
     cannot starve a quiet session -- but retention was global and per observation, so one
     chatty session could own all hundred slots and evict every other session's news from
-    the head. Simulated: five sessions each reporting `QUIET` once, against one session
-    emitting twenty-five distinct records a pass, ended with the queue holding a hundred
-    observations from the loud session and nothing from the other five. Their reports were
-    destroyed permanently -- `observe_quiet` fires once per spell and re-arms only on a
-    pane change, so there is no second chance, and the drain had already deleted the files.
+    the head. Simulated: five sessions each reporting once, against one session emitting
+    twenty-five distinct records a pass, ended with the queue holding a hundred observations
+    from the loud session and nothing from the other five. Their reports were destroyed
+    permanently -- the drain deletes a record before returning it, so an evicted observation
+    has no second chance anywhere in the system.
 
     Evicting from the session with the most queued observations makes the cap cost the
     session that filled it. Its *oldest* goes, because within one session the newest news

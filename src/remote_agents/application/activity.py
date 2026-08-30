@@ -43,9 +43,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Iterator
 from contextlib import suppress
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
@@ -337,76 +335,6 @@ def _moment(value: object) -> datetime | None:
     return None if moment.tzinfo is None else moment
 
 
-@dataclass(frozen=True, slots=True)
-class QuietWatch:
-    """What one session's pane looked like last time, in the only form worth keeping.
-
-    A digest, never the capture. This is held in memory for every managed session between
-    polls, and pane text is the one thing this project refuses to keep anywhere -- the store
-    rejects it, and `_append_event` rejects error codes that merely mention it. A digest
-    answers the only question the classifier asks ("is this the same as before?") and answers
-    nothing else, which is exactly the right amount to remember.
-    """
-
-    digest: str
-    unchanged_polls: int
-    seen_a_change: bool
-    already_reported: bool
-
-
-def observe_quiet(
-    watch: QuietWatch | None,
-    *,
-    session_id: str,
-    capture: str,
-    now: datetime,
-    quiet_polls: int,
-) -> tuple[QuietWatch, AgentActivity | None]:
-    """Fold one poll into a session's watch, and say whether it just went quiet.
-
-    Pure: the clock and the capture are given, never read, so a test drives the whole state
-    machine without a terminal or a sleep, and the caller keeps the only I/O.
-
-    Two rules carry the honesty of this signal, and both are about *not* reporting.
-
-    A change must have been seen before an absence of change can mean anything. The claim is
-    that an agent stopped producing output, which is a claim about a transition; a service
-    that has only ever seen one state has not observed one, and the pane may have been
-    finished for a week. Without this, restarting the service tells the owner that every idle
-    pane on the host just went quiet.
-
-    And a pane that is still quiet is not news. The report fires once per quiet spell and
-    re-arms only when the pane changes again, so an agent that goes quiet, is answered, and
-    goes quiet again is reported twice, while one left alone overnight is reported once.
-    """
-    digest = sha256(capture.encode("utf-8", errors="replace")).hexdigest()
-    if watch is None:
-        # The first poll establishes a baseline and claims nothing about it.
-        return QuietWatch(digest, 0, seen_a_change=False, already_reported=False), None
-    if digest != watch.digest:
-        return QuietWatch(digest, 0, seen_a_change=True, already_reported=False), None
-
-    unchanged = watch.unchanged_polls + 1
-    due = watch.seen_a_change and not watch.already_reported and unchanged >= quiet_polls
-    settled = QuietWatch(
-        digest,
-        unchanged,
-        seen_a_change=watch.seen_a_change,
-        already_reported=watch.already_reported or due,
-    )
-    if not due:
-        return settled, None
-    return settled, AgentActivity(
-        session_id=session_id,
-        kind=ActivityKind.QUIET,
-        detail=None,
-        observed_at=now,
-        # Never REPORTED: nothing said this. It is inferred from a pane that stopped changing,
-        # and the wording the owner sees has to be able to say so.
-        confidence=ActivityConfidence.INFERRED,
-    )
-
-
 def observe_codex_action_required(
     was_action_required: bool,
     *,
@@ -433,36 +361,34 @@ def observe_codex_action_required(
     )
 
 
-class PaneQuietWatcher:
-    """Watch the panes of the agents that cannot report for themselves.
+class CodexApprovalWatcher:
+    """Watch Codex panes for the one approval its own hook never reports.
 
     Application-layer under DEC-001: the terminal is reached through a callable the caller
     supplies, so nothing here knows what tmux is, and the driver adapter never reaches a pane.
 
-    It holds one `QuietWatch` per session between passes, which is the only state the service
-    keeps about an agent's behaviour -- digests, never captures.
+    Narrowed from `PaneQuietWatcher` on 2026-08-30. That class did two jobs: it hashed a pane
+    capture per poll to infer that an agent had gone quiet, and it read a pane *title* to infer
+    that Codex had opened a native approval. The first was retired with `ActivityKind.QUIET` --
+    it told the owner nothing they could act on, and it was the only thing here that ever
+    touched pane content. The second is the whole of DEC-063 and is unchanged.
+
+    So this now reads titles and nothing else, for `ActivitySource.HYBRID` sessions and nothing
+    else. It holds one boolean per session -- whether the exact marker was present last pass --
+    and never a title, a capture, a command, a prompt, a path or a provider identifier.
     """
 
     def __init__(
         self,
         store: SessionStore,
-        capture: Callable[[SessionId], Awaitable[str]],
+        title: Callable[[SessionId], Awaitable[str]],
         *,
-        quiet_polls: int,
-        title: Callable[[SessionId], Awaitable[str]] | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._store = store
-        self._capture = capture
         self._title = title
-        self._quiet_polls = quiet_polls
-        self._capture_timeout = _CAPTURE_TIMEOUT_SECONDS
+        self._title_timeout = _CAPTURE_TIMEOUT_SECONDS
         self._now = now
-        self._watches: dict[str, QuietWatch] = {}
-        # Activity source is safe provider capability, not pane content or a provider session
-        # identifier. It lets a reported spool record suppress only the hybrid fallback that
-        # can legitimately duplicate it.
-        self._watch_sources: dict[str, ActivitySource] = {}
         # A title is never stored: only whether the exact native Codex marker was present on
         # the last successful pass. A separate boolean presence set tells a first title read from
         # a known-title recovery without retaining title content.
@@ -470,45 +396,28 @@ class PaneQuietWatcher:
         self._title_observed: set[str] = set()
         self._reported_needs_answer_session_ids: frozenset[str] = frozenset()
 
-    def mark_reported(self, session_ids: Collection[str]) -> None:
-        """Suppress quiet inference for the current spell of each reported hybrid session.
-
-        This state is intentionally in-memory and only applies to watches that already have a
-        baseline. A restart therefore starts with a baseline rather than inventing a quiet
-        report, while a later pane change re-arms inference through `observe_quiet`.
-        """
-        for session_id in session_ids:
-            watch = self._watches.get(session_id)
-            if watch is not None and self._watch_sources.get(session_id) is ActivitySource.HYBRID:
-                self._watches[session_id] = QuietWatch(
-                    watch.digest,
-                    watch.unchanged_polls,
-                    seen_a_change=watch.seen_a_change,
-                    already_reported=True,
-                )
-
     def mark_needs_answer_reported(self, session_ids: Collection[str]) -> None:
         """Let this pass prefer a same-pass provider permission over the title edge."""
         self._reported_needs_answer_session_ids = frozenset(session_ids)
 
     async def poll(self) -> tuple[AgentActivity, ...]:
-        """Take one look at every running session with quiet fallback evidence."""
+        """Take one look at every running session whose provider can escalate past its hook."""
         reported_needs_answer_session_ids = self._reported_needs_answer_session_ids
         self._reported_needs_answer_session_ids = frozenset()
         records = await self._store.list((SessionState.RUNNING,))
         watched = [
             record
             for record in records
-            if activity_source_for(str(record.profile_id)) is not ActivitySource.HOOK_EXCLUSIVE
+            if activity_source_for(str(record.profile_id)) is ActivitySource.HYBRID
         ]
-        # Sessions that have gone away keep no state. Without this the map grows for the life
+        # `is HYBRID`, not `is not HOOK_EXCLUSIVE`. The old predicate also swept in every
+        # `UNOBSERVED` profile, which was right while a pane digest was the fallback for
+        # exactly those profiles and is wrong now that the only thing read here is a Codex
+        # marker: an `opencode` session under the old test would cost a tmux round trip per
+        # pass to read a title that can never carry it.
+        # Sessions that have gone away keep no state. Without this the maps grow for the life
         # of the service, one entry per session ever launched.
         live = {str(record.session_id) for record in watched}
-        self._watches = {key: value for key, value in self._watches.items() if key in live}
-        self._watch_sources = {
-            str(record.session_id): activity_source_for(str(record.profile_id))
-            for record in watched
-        }
         self._action_required = {
             key: value for key, value in self._action_required.items() if key in live
         }
@@ -517,61 +426,40 @@ class PaneQuietWatcher:
         activities = []
         for record in watched:
             key = str(record.session_id)
-            action_required = self._action_required.get(key, False)
-            if self._title is not None and str(record.profile_id) == "codex":
-                try:
-                    title = await asyncio.wait_for(
-                        self._title(record.session_id), timeout=self._capture_timeout
-                    )
-                    had_successful_title = key in self._title_observed
-                    action_required, activity = observe_codex_action_required(
-                        self._action_required.get(key, False),
-                        session_id=key,
-                        title=title,
-                        now=self._now(),
-                    )
-                    self._action_required[key] = action_required
-                    self._title_observed.add(key)
-                    # A provider-reported permission in the same pass is stronger evidence of
-                    # the same wait.  Remember the marker but do not make the owner hear it
-                    # twice; a clear title re-arms the next native prompt.
-                    if (
-                        activity is not None
-                        and had_successful_title
-                        and key not in reported_needs_answer_session_ids
-                    ):
-                        activities.append(activity)
-                except Exception:
-                    # A stale positive marker must not indefinitely silence the only fallback.
-                    # Re-arm the edge as well: title metadata cannot tell whether the old local
-                    # prompt cleared and a new one opened while it was unavailable. A generic
-                    # recovery notice can duplicate the old prompt, but silently missing the new
-                    # one would strand the owner with no actionable alert.
-                    self._action_required[key] = False
-                    action_required = False
-                    _LOG.warning("could not read a Codex pane title while watching activity")
             try:
                 # Bounded, because the failure it prevents is silent and permanent. The tmux
                 # runner awaits `communicate()` with no timeout of its own, so a wedged server
                 # hangs this coroutine forever -- and the guard below never fires, because
                 # nothing is ever raised. The loop simply stops, for the life of the process,
                 # with every watched session frozen at whatever it last looked like.
-                capture = await asyncio.wait_for(
-                    self._capture(record.session_id), timeout=self._capture_timeout
+                title = await asyncio.wait_for(
+                    self._title(record.session_id), timeout=self._title_timeout
                 )
             except Exception:
-                # A pane that cannot be read is not a pane that has gone quiet, and this loop
-                # runs beside the poll that serves the owner. The watch is left untouched, so
-                # a transient failure does not read as a change and re-arm the report.
-                _LOG.warning("could not capture a pane while watching for quiet")
+                # A stale positive marker must not indefinitely silence the only signal there
+                # is. Re-arm the edge: title metadata cannot tell whether the old local prompt
+                # cleared and a new one opened while it was unavailable. A generic recovery
+                # notice can duplicate the old prompt, but silently missing the new one would
+                # strand the owner with no actionable alert.
+                self._action_required[key] = False
+                _LOG.warning("could not read a Codex pane title while watching activity")
                 continue
-            self._watches[key], activity = observe_quiet(
-                self._watches.get(key),
+            had_successful_title = key in self._title_observed
+            action_required, activity = observe_codex_action_required(
+                self._action_required.get(key, False),
                 session_id=key,
-                capture=capture,
+                title=title,
                 now=self._now(),
-                quiet_polls=self._quiet_polls,
             )
-            if activity is not None and not action_required:
+            self._action_required[key] = action_required
+            self._title_observed.add(key)
+            # A provider-reported permission in the same pass is stronger evidence of the same
+            # wait.  Remember the marker but do not make the owner hear it twice; a clear title
+            # re-arms the next native prompt.
+            if (
+                activity is not None
+                and had_successful_title
+                and key not in reported_needs_answer_session_ids
+            ):
                 activities.append(activity)
         return tuple(activities)
