@@ -105,7 +105,12 @@ class RowStopAction(Message):
     fix lives: it asserts the caller is a method on a `*Screen` class, and `confirm_force` is
     one. What the decision actually requires is a property of the *pump the call arrives on*,
     which no static check of the call site can see. The sweep is unchanged and still worth
-    having; this note is the part it cannot enforce.
+    having — it catches workers, timers and app-level bindings — and this note is the part it
+    cannot enforce.
+
+    Recorded as **DEC-068**, which extends DEC-025 to the caller its own list missed and states
+    the sweep's limit. DEC-027 covers the app-level case and keeps the modal for a destructive
+    action; this is how force keeps it without suspending the application.
     """
 
     def __init__(self, action: str, session_value: str) -> None:
