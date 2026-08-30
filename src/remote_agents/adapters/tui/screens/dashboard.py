@@ -52,11 +52,23 @@ from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsSc
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import limit_lines
+from remote_agents.domain.models import SessionRecord
 
 _LOG = logging.getLogger(__name__)
 
 _SESSION_KEY_PREFIX = "session:"
 _SESSIONS_AUTO_REFRESH = 10.0
+
+_CONTEXT_AUTO_REFRESH = 60.0
+"""How often the per-row context gauges are re-read from the providers, in seconds.
+
+An order of magnitude slower than the pane's own repaint, because the two answer questions
+that move at different speeds: a session's *state* can change at any moment and the rows show
+it, while its *context* moves only when the agent takes a turn. The read is also far more
+expensive -- a directory sweep and a tail read per session against the provider's own files --
+so putting it on the pane's cadence would mean a filesystem walk per row every ten seconds,
+behind a timer nobody asked to start.
+"""
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
 
@@ -191,6 +203,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     def __init__(self) -> None:
         super().__init__()
         self._sessions_timer: Timer | None = None
+        self._context_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
 
@@ -285,8 +298,14 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             # Under console hosting it is still worth naming, because the key is bound on
             # this server and will act whatever surface is looking at it.
             self.sub_title = "F12 shows the console's projects pane"
+        # Before the first draw, so the gauges are on the screen the owner opens on rather than
+        # arriving a minute later.
+        await self._refresh_context_windows()
         await self._reload_sessions_pane()
         self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
+        # Then its own slower schedule. `_reload_sessions_pane` never triggers this -- that
+        # separation is what keeps a provider read off the repaint path.
+        self._context_timer = self.set_interval(_CONTEXT_AUTO_REFRESH, self._refresh_context_gauges)
 
     async def on_reveal(self) -> None:
         await super().on_reveal()
@@ -295,10 +314,14 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     def on_screen_suspend(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.pause()
+        if self._context_timer is not None:
+            self._context_timer.pause()
 
     def on_screen_resume(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.resume()
+        if self._context_timer is not None:
+            self._context_timer.resume()
         # The first resume is the screen's own activation at mount, where populate() has
         # just made (or is about to make) the first fill; scheduling another read there
         # doubled every startup — measured by the flaky-store test's read budget.
@@ -311,6 +334,24 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # "No sessions are running." for up to ten seconds beside a session that
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
+
+    async def _refresh_context_windows(self) -> tuple[SessionRecord, ...] | None:
+        """Re-read every listed session's context. Answers the records, or None on failure."""
+        try:
+            records = await self.tui.load_sessions()
+        except Exception:
+            _LOG.exception("the session context gauges could not be refreshed")
+            return None
+        await self.tui.refresh_context_windows(records)
+        return records
+
+    async def _refresh_context_gauges(self) -> None:
+        """The slower timer: re-read the contexts, then redraw the rows and nothing else."""
+        if not self.showing or self.tui.busy:
+            return
+        records = await self._refresh_context_windows()
+        if records is not None:
+            self._draw_session_rows(records)
 
     async def _auto_reload_sessions(self) -> None:
         if not self.showing or self.tui.busy or self._reloading_sessions:
@@ -380,6 +421,16 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # dashboard the timer is paused, so no flash fires until the flow pops — the same
         # trade the sessions pane's staleness note records.
         await self._reload_feed()
+        self._draw_session_rows(records)
+
+    def _draw_session_rows(self, records: tuple[SessionRecord, ...]) -> None:
+        """Draw the rows alone, without re-reading the other two panes.
+
+        Split out so the context-gauge refresh can put new figures on screen without dragging
+        the limits and notifications reads along with it. Folding them together doubled both on
+        every gauge tick, and doubled them at mount -- caught by the limits pane's own
+        one-read-at-mount check.
+        """
         pane = self.query_one("#sessions-pane", OptionList)
         held_id = held_option_id(pane)
         pane.clear_options()
@@ -389,7 +440,11 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         for record in records:
             pane.add_option(
                 Option(
-                    session_row(record),
+                    # Appended by this surface, never folded into `session_row`: that function
+                    # is shared and pinned by the parity contract, so a gauge inside it would
+                    # appear on the bot's rows too. The id stays the record's, so DEC-007's
+                    # cursor restoration is unaffected by what the row now says.
+                    f"{session_row(record)}{self.tui.context_gauge_for(record.session_id)}",
                     id=f"{_SESSION_KEY_PREFIX}{record.session_id}",
                 )
             )

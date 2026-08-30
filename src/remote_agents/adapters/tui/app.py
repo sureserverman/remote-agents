@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from typing import TypeVar
 
@@ -67,6 +67,7 @@ from remote_agents.application.session_actions import (
     remote_control_available,
 )
 from remote_agents.application.session_views import (
+    context_gauge,
     listed_sessions,
     only_listed,
     with_project_names,
@@ -81,6 +82,7 @@ from remote_agents.domain.models import (
     SessionState,
 )
 from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.ports.agent_usage import ContextWindow
 
 _LOG = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -228,6 +230,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: alphabetical list would silently take alphabetical as the tie-break and lose
         #: DEC-012's registered-first-then-alphabetical fallback after one round trip.
         self._raw_catalogue = context.backend.catalogue
+        self._context_windows: dict[str, ContextWindow] = {}
+        """The last context reading per session, keyed by session id as a string.
+
+        A cache, and having one is the whole of this feature's cost control. The sessions pane
+        repaints every ten seconds; a provider read per row on that tick would put a directory
+        sweep and a tail read *per session* behind a timer nobody asked to start. So the rows
+        render from whatever is here and the reads happen on their own slower schedule --
+        `refresh_context_windows`, which no repaint calls.
+
+        Held on the app rather than on a screen because two screens draw these rows (the
+        dashboard's pane and the sessions list), and a cache per screen would read the same
+        files twice and let the two disagree about one session.
+        """
         self._catalogue = context.backend.catalogue
         #: Which of the two orders the projects list is in. Read once, from the file the
         #: composition root pointed at, and total in every failure -- an unreadable
@@ -1212,6 +1227,43 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         catalogue, refreshed by `reload_catalogue`.
         """
         return with_project_names(records, self._catalogue)
+
+    def context_gauge_for(self, session_id: object) -> str:
+        """The gauge suffix for one row, or nothing at all when there is no reading.
+
+        Nothing, deliberately: an absent reading is not a zero one, and a row is not the place
+        to explain the difference -- the session detail already words both absences. A row that
+        rendered an empty bar for an unread session would assert a fullness nobody measured.
+        """
+        window = self._context_windows.get(str(session_id))
+        return "" if window is None else f"  {context_gauge(window)}"
+
+    async def refresh_context_windows(self, records: Iterable[SessionRecord]) -> None:
+        """Re-read every listed session's context, off the repaint path.
+
+        Called on its own slower schedule, never from a draw: see `_context_windows`. Total by
+        construction like every other read into this surface -- a provider that changed its
+        file format under an upgrade costs the gauges and never the list.
+
+        Rebuilt rather than updated, so a session that has ended stops carrying a reading and a
+        read that failed shows no gauge rather than the previous one. A context window is not a
+        rate-limit percentage -- it belongs to a conversation that is still there or is not --
+        but the same rule applies for the same reason: what is drawn should be something that
+        was read, not something that was read once.
+        """
+        reader = self._services.backend.usage
+        if reader is None:
+            return
+        fresh: dict[str, ContextWindow] = {}
+        for record in records:
+            try:
+                usage = await reader(record.session_id)
+            except Exception:
+                _LOG.debug("a session usage read failed", exc_info=True)
+                continue
+            if usage is not None and usage.context is not None:
+                fresh[str(record.session_id)] = usage.context
+        self._context_windows = fresh
 
     async def load_sessions(self) -> tuple[SessionRecord, ...]:
         """Refresh readiness, then return the sessions worth showing.

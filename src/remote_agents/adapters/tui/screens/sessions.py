@@ -726,7 +726,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             self.set_status(self.empty_status)
             return
         self.set_status(self.listing_status.format(count=len(records)))
-        rows = tuple((str(record.session_id), session_row(record)) for record in records)
+        rows = tuple(
+            (
+                str(record.session_id),
+                f"{session_row(record)}{self.tui.context_gauge_for(record.session_id)}",
+            )
+            for record in records
+        )
         if not keep_cursor:
             self.show_choices(rows)
             return

@@ -34,7 +34,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.ports.agent_activity import ActivityKind
-from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -71,7 +71,9 @@ def _record(slug: str = "existing") -> SessionRecord:
     )
 
 
-def _context(records: tuple[SessionRecord, ...] = (), feed=None, limits=None) -> TuiContext:
+def _context(
+    records: tuple[SessionRecord, ...] = (), feed=None, limits=None, usage=None
+) -> TuiContext:
     return TuiContext(
         backend=backend_for(
             sessions=_Launcher(records),  # type: ignore[arg-type]
@@ -80,6 +82,7 @@ def _context(records: tuple[SessionRecord, ...] = (), feed=None, limits=None) ->
             catalogue=(_PROJECT,),
             activity_feed=feed,
             limits=limits,
+            usage=usage,
         ),
         profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
@@ -486,3 +489,99 @@ async def test_no_row_of_the_limits_pane_is_cut_off_at_any_width(width: int) -> 
             f"at {width} columns the pane scrolls by {pane.max_scroll_y} row(s) that no key "
             "can reach, because every option is disabled"
         )
+
+
+# --- the per-row context gauge ------------------------------------------------------------
+
+
+def _usage_reader(window: ContextWindow | None):
+    async def read(session_id: SessionId) -> AgentUsage | None:
+        return None if window is None else AgentUsage(context=window)
+
+    return read
+
+
+async def test_a_cached_reading_appends_a_gauge_to_the_session_row() -> None:
+    """The owner's sixth ask: every TUI session row shows how full its context is."""
+    app = RemoteAgentsTui(
+        _context((_record(),), usage=_usage_reader(ContextWindow(250_000, 1_000_000)))
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.refresh_context_windows(await app.load_sessions())
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+
+        assert "25%" in str(pane.get_option_at_index(0).prompt)
+
+
+async def test_an_uncached_session_appends_nothing_at_all() -> None:
+    """No reading is not a zero reading, and a row is not the place to explain the difference."""
+    app = RemoteAgentsTui(_context((_record(),), usage=_usage_reader(None)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.refresh_context_windows(await app.load_sessions())
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+        drawn = str(pane.get_option_at_index(0).prompt)
+
+        assert "%" not in drawn and "█" not in drawn and "░" not in drawn
+
+
+async def test_the_repaint_issues_no_provider_read_of_its_own() -> None:
+    """The gauge rides a cache, because the repaint is a timer and the read is a disk sweep.
+
+    Ten seconds is the pane's cadence; a provider read per row on that tick would put a
+    filesystem walk per session behind a timer nobody asked to start.
+    """
+    reads = []
+
+    async def counting(session_id: SessionId) -> AgentUsage | None:
+        reads.append(session_id)
+        return AgentUsage(context=ContextWindow(1_000, 1_000_000))
+
+    app = RemoteAgentsTui(_context((_record(),), usage=counting))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        before = len(reads)
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        await screen._reload_sessions_pane()
+
+        assert len(reads) == before
+
+
+async def test_the_gauge_changes_no_row_key() -> None:
+    """DEC-007: the cursor still rests where `_draw_listing` puts it, so ids stay the record's."""
+    app = RemoteAgentsTui(
+        _context((_record(),), usage=_usage_reader(ContextWindow(250_000, 1_000_000)))
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.refresh_context_windows(await app.load_sessions())
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+
+        assert pane.get_option_at_index(0).id == f"session:{_SESSION}"
+        assert pane.highlighted == 0
+
+
+async def test_the_gauge_populates_without_anyone_asking() -> None:
+    """A cache nothing fills is a feature nobody sees, so the app schedules the read itself.
+
+    Its own timer, an order of magnitude slower than the pane's: the rows repaint every ten
+    seconds because a session's *state* changes on that scale, while its context moves only
+    when the agent takes a turn.
+    """
+    app = RemoteAgentsTui(
+        _context((_record(),), usage=_usage_reader(ContextWindow(250_000, 1_000_000)))
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#sessions-pane", OptionList)
+
+        assert "25%" in str(pane.get_option_at_index(0).prompt)
