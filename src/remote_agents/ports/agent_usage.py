@@ -43,6 +43,19 @@ class ContextWindow:
 
     used_tokens: int
     limit_tokens: int | None = None
+    limit_declared: bool = False
+    """Whether the ceiling was *stated* by the owner rather than published by the provider.
+
+    The two are not the same claim and must not read the same. Codex writes
+    `model_context_window` into its own rollout, so its denominator is measured; Claude publishes
+    none, so its denominator is whatever the owner declared in config -- or, on a host that has
+    stated nothing, this project's default. DEC-061's rule is that a figure this service did not
+    measure says so out loud, which is why `AgentUsage.stale_source` exists for the borrowed
+    limits; this is the same rule reaching the other borrowed number.
+
+    Without it `556k of 1.0M · 56%` and `184k of 258k · 71%` render identically while one
+    denominator is an assertion and the other is a measurement.
+    """
 
     def __post_init__(self) -> None:
         if self.used_tokens < 0:

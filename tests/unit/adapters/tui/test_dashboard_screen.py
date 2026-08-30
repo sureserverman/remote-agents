@@ -10,6 +10,7 @@ still returns to it on Escape.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,7 +21,11 @@ from tui_feedback import announcements
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.screens.dashboard import NO_LIMITS, DashboardScreen
+from remote_agents.adapters.tui.screens.dashboard import (
+    _SESSIONS_AUTO_REFRESH,
+    NO_LIMITS,
+    DashboardScreen,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -585,3 +590,45 @@ async def test_the_gauge_populates_without_anyone_asking() -> None:
         pane = app.screen.query_one("#sessions-pane", OptionList)
 
         assert "25%" in str(pane.get_option_at_index(0).prompt)
+
+
+async def test_a_session_that_has_ended_stops_carrying_a_reading() -> None:
+    """The cache is rebuilt, not updated, and that is the whole of why a gauge can disappear.
+
+    `.update()` would have kept an ended session's last reading forever and turned a failed read
+    into a stale gauge -- the exact contract `_context_windows`' docstring states, which nothing
+    checked: swapping the rebuild for an update passed the whole suite.
+    """
+    live = [_record()]
+
+    class _Shrinking(_Launcher):
+        async def list_sessions(self):
+            return tuple(live)
+
+    async def usage(session_id):
+        return AgentUsage(context=ContextWindow(250_000, 1_000_000))
+
+    context = _context(usage=usage)
+    context = replace(context, backend=replace(context.backend, sessions=_Shrinking(())))
+    app = RemoteAgentsTui(context)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.refresh_context_windows(await app.load_sessions())
+        assert app.context_gauge_for(_SESSION) != ""
+
+        live.clear()
+        await app.refresh_context_windows(await app.load_sessions())
+
+        assert app.context_gauge_for(_SESSION) == ""
+
+
+def test_the_gauge_cadence_stays_slower_than_the_repaint() -> None:
+    """Two cadences, and the gap between them is the stage's whole performance argument.
+
+    Collapsing them would put a directory sweep and a tail read per session behind the ten-second
+    repaint -- and nothing pinned it, so the constant could be edited back to 10.0 with the suite
+    still green.
+    """
+    from remote_agents.adapters.tui.app import CONTEXT_AUTO_REFRESH
+
+    assert CONTEXT_AUTO_REFRESH >= _SESSIONS_AUTO_REFRESH * 4

@@ -14,6 +14,7 @@ from textual.app import App, ScreenStackError
 from textual.binding import Binding
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.worker import WorkerCancelled, WorkerFailed
 
 from remote_agents.adapters.tui.context import TuiContext
@@ -85,6 +86,21 @@ from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.ports.agent_usage import ContextWindow
 
 _LOG = logging.getLogger(__name__)
+
+CONTEXT_AUTO_REFRESH = 60.0
+"""How often the per-row context gauges are re-read from the providers, in seconds.
+
+Six times slower than the sessions repaint, and the gap is the whole performance argument: a
+session's *state* can change at any moment and the rows show it, while its *context* moves only
+when the agent takes a turn. The read is also far more expensive -- a directory sweep and a tail
+read per session -- so collapsing the two would put a filesystem walk per row behind the 10s
+timer.
+
+**On the app, not on a screen.** It lived on `DashboardScreen` for one commit, which meant the
+cache was filled only in a process that mounts that screen -- and `remote-agents pane sessions`
+mounts `SessionsPaneScreen` in a process of its own, where the gauge therefore never appeared at
+all. A cache filled by one screen is a cache empty everywhere that screen is not.
+"""
 _T = TypeVar("_T")
 
 # Re-exported so importers that predate the `model` split keep working, and because these
@@ -230,6 +246,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: alphabetical list would silently take alphabetical as the tie-break and lose
         #: DEC-012's registered-first-then-alphabetical fallback after one round trip.
         self._raw_catalogue = context.backend.catalogue
+        self._context_timer: Timer | None = None
         self._context_windows: dict[str, ContextWindow] = {}
         """The last context reading per session, keyed by session id as a string.
 
@@ -293,6 +310,18 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # that could never be false and left this one open.
             return True
         return screen.check_action(action, parameters)
+
+    async def on_mount(self) -> None:
+        """Start the gauge cache's own schedule, once per process.
+
+        Here rather than on a screen: whichever screen this process mounts -- the dashboard, the
+        dedicated sessions list, or the console's sessions pane, each of which is its own OS
+        process -- reads rows out of one cache, and only a refresh that does not belong to a
+        screen reaches all three.
+        """
+        self._context_timer = self.set_interval(
+            CONTEXT_AUTO_REFRESH, self._refresh_context_windows_tick
+        )
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.
@@ -1227,6 +1256,23 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         catalogue, refreshed by `reload_catalogue`.
         """
         return with_project_names(records, self._catalogue)
+
+    async def _refresh_context_windows_tick(self) -> None:
+        """Keep the cache warm for whichever screen this process mounts.
+
+        Draws nothing. Every screen that shows rows already repaints on its own cadence and
+        reads the gauge out of this cache when it does, so a refresh here reaches the dashboard
+        pane, the dedicated sessions list and the console's sessions pane without any of them
+        knowing about the others -- and without a provider read on any repaint path.
+        """
+        if self.busy:
+            return
+        try:
+            records = await self.load_sessions()
+        except Exception:
+            _LOG.debug("the session context gauges could not be refreshed", exc_info=True)
+            return
+        await self.refresh_context_windows(records)
 
     def context_gauge_for(self, session_id: object) -> str:
         """The gauge suffix for one row, or nothing at all when there is no reading.

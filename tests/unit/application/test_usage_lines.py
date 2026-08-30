@@ -78,3 +78,19 @@ def test_a_reading_with_windows_but_no_context_is_not_called_permanent() -> None
     transient = AgentUsage(context=None, windows=(UsageWindow("5h", 2.0),))
 
     assert usage_lines(transient) != usage_lines(AgentUsage())
+
+
+def test_a_declared_ceiling_says_it_was_declared() -> None:
+    """DEC-061's disclosure rule, reaching the denominator rather than only the figure.
+
+    Claude publishes no context window, so its percentage is computed against the owner's
+    statement; Codex publishes one, so its percentage is computed against a measurement. Rendered
+    identically the two read as equally solid, and the owner has no way to tell which number to
+    distrust when a row looks wrong.
+    """
+    declared = AgentUsage(context=ContextWindow(556_000, 1_000_000, limit_declared=True))
+    measured = AgentUsage(context=ContextWindow(184_000, 258_400))
+
+    assert usage_lines(declared) == ("Context: 556k of 1.0M declared · 56%",)
+    assert usage_lines(measured) == ("Context: 184k of 258k · 71%",)
+    assert "declared" not in usage_lines(measured)[0]

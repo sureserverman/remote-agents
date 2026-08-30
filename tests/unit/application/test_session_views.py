@@ -574,3 +574,37 @@ def test_a_session_that_has_taken_a_turn_never_reads_as_an_empty_bar() -> None:
     assert barely.startswith("█")
     assert untouched.startswith("░")
     assert barely != untouched
+
+
+@pytest.mark.parametrize(
+    ("used", "limit", "percent", "cells"),
+    [(400_000, 200_000, "200%", 8), (2_000_000, 200_000, "1000%", 8), (10**6, 1_000, "100000%", 8)],
+)
+def test_a_session_past_a_wrong_ceiling_says_so_instead_of_clamping(
+    used: int, limit: int, percent: str, cells: int
+) -> None:
+    """The one loud tell a row can produce, and the reason the percent is not clamped.
+
+    The Claude ceiling is the owner's declaration, so it can be wrong. Above 100% is impossible
+    for a correct one, so the row announces an understated ceiling by itself -- clamping to 100%
+    would delete that and leave a wrong ceiling silent in both directions, which is the risk
+    this stage was flagged for. Pinned as intended behaviour rather than left as an
+    unconsidered path.
+    """
+    gauge = context_gauge(ContextWindow(used, limit))
+
+    assert percent in gauge
+    assert gauge.count("█") == cells and gauge.count("░") == 0
+
+
+def test_the_bar_is_clamped_even_though_the_percent_is_not() -> None:
+    """The bar has a track and the number does not, so only one of them may overflow.
+
+    Without the clamp the fill count grows with the fraction and the empty remainder goes
+    negative -- rendering an 8000-cell bar across one row at the schema's own floor. That guard
+    had no test: every case constructed here previously topped out at exactly the ceiling, where
+    `min` is a no-op.
+    """
+    gauge = context_gauge(ContextWindow(1_000_000, 1_000))
+
+    assert len(gauge.split(" ")[0]) == 8

@@ -117,7 +117,7 @@ from remote_agents.ports.agent_activity import (
     ActivityKind,
     AgentActivity,
 )
-from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
 
 _SNAPSHOTS = Path(__file__).parent / "snapshots"
 _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
@@ -327,6 +327,19 @@ class _Conversations:
 #: Claude's line is the long one on purpose: it carries both windows and the `via` stamp, so a
 #: baseline taken at the captured width is what pins whether that stamp survives the render at
 #: all -- which it did not, until the pane stopped clipping.
+#: What the session rows' context gauges draw. Wired for the reason `_limits` and `_activities`
+#: are, and against the same defect a third time: without it the DASHBOARD baseline captured
+#: session rows with no gauge at all -- the whole of Stage 3's deliverable outside the net that
+#: exists to catch a render. It matters here in particular because at this file's 100x30 the
+#: sessions pane is 36 columns and the row wraps, so the gauge lands as the tail of a second
+#: line with nothing to spare.
+def _session_usage():
+    async def read(session_id):
+        return AgentUsage(context=ContextWindow(560_000, 1_000_000, limit_declared=True))
+
+    return read
+
+
 def _limits() -> tuple[AgentLimits, ...]:
     return (
         AgentLimits(
@@ -398,6 +411,7 @@ def _context(
     capture=None,
     activity_feed=None,
     limits=None,
+    usage=None,
 ) -> TuiContext:
     """The collaborators every capture is driven against.
 
@@ -417,6 +431,7 @@ def _context(
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
             activity_feed=_activity_reader() if activity_feed is None else activity_feed,
             limits=_limits_reader() if limits is None else limits,
+            usage=_session_usage() if usage is None else usage,
         ),
         profiles=(
             ProfileAvailability("claude", True),

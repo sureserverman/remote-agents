@@ -59,16 +59,6 @@ _LOG = logging.getLogger(__name__)
 _SESSION_KEY_PREFIX = "session:"
 _SESSIONS_AUTO_REFRESH = 10.0
 
-_CONTEXT_AUTO_REFRESH = 60.0
-"""How often the per-row context gauges are re-read from the providers, in seconds.
-
-An order of magnitude slower than the pane's own repaint, because the two answer questions
-that move at different speeds: a session's *state* can change at any moment and the rows show
-it, while its *context* moves only when the agent takes a turn. The read is also far more
-expensive -- a directory sweep and a tail read per session against the provider's own files --
-so putting it on the pane's cadence would mean a filesystem walk per row every ten seconds,
-behind a timer nobody asked to start.
-"""
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
 
@@ -203,7 +193,6 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     def __init__(self) -> None:
         super().__init__()
         self._sessions_timer: Timer | None = None
-        self._context_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
 
@@ -298,16 +287,17 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             # Under console hosting it is still worth naming, because the key is bound on
             # this server and will act whatever surface is looking at it.
             self.sub_title = "F12 shows the console's projects pane"
-        # The gauges land on the screen the owner opens on rather than a minute later -- but
-        # from the records that draw already read, not from a second read of the store.
         records = await self._reload_sessions_pane()
+        # The interval is installed *before* the gauge read, not after. Awaiting a provider read
+        # first meant a stalled filesystem -- an NFS dev root, a sleeping disk -- left this line
+        # unreached, so the ten-second repaint never started at all and the pane sat frozen at
+        # its first snapshot for the life of the process, with no error anywhere.
+        self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
+        # The gauges land on the screen the owner opens on rather than a minute later -- from
+        # the records that draw already read, not from a second read of the store.
         if records:
             await self.tui.refresh_context_windows(records)
             self._draw_session_rows(records)
-        self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
-        # Then its own slower schedule. `_reload_sessions_pane` never triggers this -- that
-        # separation is what keeps a provider read off the repaint path.
-        self._context_timer = self.set_interval(_CONTEXT_AUTO_REFRESH, self._refresh_context_gauges)
 
     async def on_reveal(self) -> None:
         await super().on_reveal()
@@ -316,14 +306,10 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     def on_screen_suspend(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.pause()
-        if self._context_timer is not None:
-            self._context_timer.pause()
 
     def on_screen_resume(self) -> None:
         if self._sessions_timer is not None:
             self._sessions_timer.resume()
-        if self._context_timer is not None:
-            self._context_timer.resume()
         # The first resume is the screen's own activation at mount, where populate() has
         # just made (or is about to make) the first fill; scheduling another read there
         # doubled every startup — measured by the flaky-store test's read budget.
@@ -336,18 +322,6 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # "No sessions are running." for up to ten seconds beside a session that
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
-
-    async def _refresh_context_gauges(self) -> None:
-        """The slower timer: re-read the contexts, then redraw the rows and nothing else."""
-        if not self.showing or self.tui.busy:
-            return
-        try:
-            records = await self.tui.load_sessions()
-        except Exception:
-            _LOG.exception("the session context gauges could not be refreshed")
-            return
-        await self.tui.refresh_context_windows(records)
-        self._draw_session_rows(records)
 
     async def _auto_reload_sessions(self) -> None:
         if not self.showing or self.tui.busy or self._reloading_sessions:

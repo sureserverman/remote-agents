@@ -211,6 +211,10 @@ projects:
 """
 
 
+_STATED_CEILING = 314_159
+"""A ceiling no default could coincide with, so the wiring assertion cannot be a tautology."""
+
+
 def _config_file(home, paths):
     registry = home / "projects-registry.yaml"
     registry.write_text(
@@ -222,7 +226,12 @@ def _config_file(home, paths):
         f'registry_path = "{registry}"\n'
         f'database_path = "{paths.database_path}"\n\n'
         "[limits]\nmax_label_length = 40\nproject_page_size = 10\n"
-        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n",
+        "activity_poll_seconds = 30\nactivity_quiet_polls = 3\n"
+        # A ceiling that is nothing's default, so a test asserting it survives the wiring is
+        # asserting something. With the key absent this file's `claude_context_window` was the
+        # module default, and the wiring test below reduced to `[1000000] == [1000000]` --
+        # replacing the whole composition with a hardcoded constant passed all 3453 tests.
+        f"claude_context_window = {_STATED_CEILING}\n",
         encoding="utf-8",
     )
     return Path(config_path)
@@ -558,6 +567,9 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
     try:
         compose_backend(config, connection, paths)
 
-        assert seen == [config.claude_context_window]
+        # Against the literal as well as the config, so this cannot pass by both sides being
+        # the same default.
+        assert seen == [_STATED_CEILING]
+        assert config.claude_context_window == _STATED_CEILING
     finally:
         connection.close()

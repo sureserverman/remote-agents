@@ -230,8 +230,12 @@ carrying, and how much of the plan's rate-limit windows has gone. Both are read 
 files the provider itself writes — nothing is asked of the agent, and nothing leaves the host.
 The providers publish very different amounts, and the screen says which case it is in rather
 than filling a gap: codex reports its context against a stated window and both its rate limits;
-claude reports its context as a bare count, since a transcript records what a turn used and
-never the ceiling it used it out of; cursor-agent reports neither and the row says so. Claude's
+claude's transcript records what a turn used and never the ceiling it used it out of, so its
+percentage is computed against a window you state as `limits.claude_context_window` and the line
+says `declared` where codex's says nothing; cursor-agent reports neither and the row says so.
+A rate-limit window belongs to the whole agent rather than to any session, so both surfaces
+render them once per agent — a block on the bot's Sessions screen and the TUI's own limits pane —
+and never under a session, where the same figure read as that session's spend. Claude's
 rate limits are the one figure that is not the session's own — Claude Code hands them to a
 status-line command and never writes them down, so they are read from the status-line cache when
 one is fresh, and the line says where they came from. A rate-limit window whose reset has already

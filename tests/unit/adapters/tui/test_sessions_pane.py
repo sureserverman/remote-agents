@@ -1050,3 +1050,42 @@ async def test_the_drawn_records_do_not_outlive_the_rows_they_describe() -> None
 
         assert not app.screen._drawn
         assert app.screen.highlighted_session() is None
+
+
+# --- the context gauge, on the pane that is its own process -------------------------------
+
+
+async def test_the_console_pane_fills_its_own_gauge_cache() -> None:
+    """The defect this test was written for: the pane is a process, not a screen.
+
+    `remote-agents pane sessions` mounts `SessionsPaneScreen` in an OS process of its own, where
+    `DashboardScreen` never mounts. While the gauge refresh lived on the dashboard, that process
+    filled no cache and drew no gauge -- for the life of the process, with no error. The refresh
+    belongs to the app, which every process has exactly one of.
+
+    Guarded here rather than only on the dashboard because this file is the one that runs the
+    pane, and it is where "the named file was green" stopped being evidence: it passed the whole
+    stage without containing a single assertion about the feature it was named to cover.
+    """
+    from remote_agents.ports.agent_usage import AgentUsage, ContextWindow
+
+    async def usage(session_id):
+        return AgentUsage(context=ContextWindow(250_000, 1_000_000))
+
+    app = SessionsPane(_context((_record(),), usage=usage))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, SessionsPaneScreen)
+        # The app's own tick, which is the only thing that fills the cache in this process.
+        await app._refresh_context_windows_tick()
+        app.screen._draw_listing(await app.load_sessions())
+        await pilot.pause()
+
+        pane = app.screen.query_one("#choices", OptionList)
+        rows = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+
+        assert any("25%" in row for row in rows), rows
+        # And that this process schedules the refresh itself. Without this the test proves the
+        # row can *draw* a gauge and not that anything ever fills the cache here -- which is
+        # exactly the shape of the defect it was written for.
+        assert app._context_timer is not None

@@ -1120,6 +1120,8 @@ def test_a_declared_ceiling_turns_claudes_bare_count_into_a_share(
     assert usage is not None and usage.context is not None
     assert usage.context.limit_tokens == 1_000_000
     assert usage.context.used_fraction == pytest.approx(0.25, abs=0.01)
+    # And it is marked as the owner's statement, not as something this service measured.
+    assert usage.context.limit_declared is True
 
 
 def test_a_reader_given_no_ceiling_still_answers_a_bare_count(
@@ -1161,6 +1163,7 @@ def test_codex_still_takes_its_window_from_the_provider_not_the_config(
 
     assert usage is not None and usage.context is not None
     assert usage.context.limit_tokens == 258_400
+    assert usage.context.limit_declared is False, "codex publishes its window; nothing declared it"
 
 
 def test_the_default_reader_set_carries_the_ceiling_it_was_built_with() -> None:

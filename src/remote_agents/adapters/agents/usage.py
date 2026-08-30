@@ -552,7 +552,7 @@ def _claude_context(transcript: Path, ceiling: int | None = None) -> ContextWind
     # model name in this function's reach and that is deliberate, since `message.model` reads
     # `claude-opus-5` for the 1M-context variant too and an inference from it would be wrong
     # exactly when it mattered.
-    return ContextWindow(total, ceiling) if total else None
+    return ContextWindow(total, ceiling, limit_declared=ceiling is not None) if total else None
 
 
 def _is_claude_main_thread_usage(record: dict) -> bool:

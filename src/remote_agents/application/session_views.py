@@ -321,6 +321,14 @@ def context_gauge(context: ContextWindow) -> str:
     picture of a number nobody stated, which is the inference DEC-061 forbids, drawn instead of
     written.
 
+    **Over 100% is deliberate and is not clamped.** The Claude ceiling is the owner's
+    declaration, so it can be wrong, and a percentage above 100 is impossible for a correct one
+    -- which makes it the single loud tell this row can produce. Clamping would delete it and
+    leave a wrong ceiling silent in both directions, which is the failure this stage's risk flag
+    names. The *bar* is clamped, because a bar wider than its track is a rendering fault rather
+    than a signal, and an unclamped one would draw thousands of cells across the row at the
+    schema's own floor.
+
     Returns a string and never an empty one (DEC-043): both surfaces append it to a row they
     have already built, so an empty answer would leave a dangling separator. Placement, and the
     decision to append it at all, stay with each surface -- the TUI appends it and the bot does
@@ -337,11 +345,22 @@ def context_gauge(context: ContextWindow) -> str:
 
 
 def _context_phrase(context: ContextWindow) -> str:
+    """The session's context, saying which denominators this service did not measure.
+
+    The `declared` stamp is DEC-061's disclosure rule reaching the ceiling: Codex publishes its
+    window and Claude does not, so one of these percentages is computed against a measurement and
+    the other against the owner's statement. Rendered identically they read as equally solid, and
+    the owner has no way to tell which number to distrust when a row looks wrong.
+
+    Said here, on the detail line, and not on the row gauge -- the gauge is a glance in a pane a
+    third of a narrow terminal wide, and the detail is where a reader goes to check.
+    """
     used = _tokens(context.used_tokens)
     fraction = context.used_fraction
     if context.limit_tokens is None or fraction is None:
         return used
-    return f"{used} of {_tokens(context.limit_tokens)} · {round(fraction * 100)}%"
+    declared = " declared" if context.limit_declared else ""
+    return f"{used} of {_tokens(context.limit_tokens)}{declared} · {round(fraction * 100)}%"
 
 
 def _window_phrase(window: UsageWindow) -> str:
