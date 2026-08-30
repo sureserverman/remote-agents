@@ -422,9 +422,9 @@ class _SessionActionKeys:
         deliberately: an action the policy no longer allows is refused by the policy itself,
         in its own words, rather than by a check kept here that could drift from it.
 
-        DEC-018 is untouched: neither `s` nor `c` gains a confirmation. Force still asks, and
-        still asks from the detail until Task 2.2 moves that modal onto this screen's own
-        handler — see the branch below for why it is excluded by name rather than by order.
+        DEC-018 is untouched: neither `s` nor `c` gains a confirmation. Force does ask, from
+        `SessionsScreen.confirm_force` — see there for why the modal is raised on this screen
+        rather than on a detail pushed to hold it.
         """
         session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:
@@ -433,14 +433,16 @@ class _SessionActionKeys:
             # the detail exists; this is the same refusal one step earlier, so the two entry
             # paths agree rather than relying on the pump staying serialized forever.
             return
-        if action in ACTION_LABELS and action != FORCE:
-            # **`action != FORCE` is load-bearing here, exactly as it is in
-            # `SessionDetailScreen.choose`.** FORCE is a member of `ACTION_LABELS`, so without
-            # it this branch would reach `tui.stop` with no modal in between and one keypress
-            # would force-stop a session — DEC-018 permits an unconfirmed `s` and `c` and says
-            # nothing of the kind about force. Force keeps routing through the detail until
-            # Task 2.2 gives it a confirmation raised from this screen's own handler, which is
-            # what DEC-025 requires; until then the detail is where its modal is raised.
+        if action == FORCE:
+            # **Checked before the unconfirmed branch, and by name rather than by order.**
+            # FORCE is a member of `ACTION_LABELS`, so if this branch were removed the next
+            # one would reach `tui.stop` with no modal in between and one keypress would
+            # force-stop a session. DEC-018 permits an unconfirmed `s` and `c` and says
+            # nothing of the kind about force. `SessionDetailScreen.choose` keeps the same
+            # redundancy for the same reason, and says so.
+            await self.confirm_force(session_value)
+            return
+        if action in ACTION_LABELS:
             await self.tui.stop(action, session_value, self)
             return
         await self.tui.show_detail(session_value, action)
@@ -709,8 +711,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         await self.reload()
 
-    async def reload(self) -> None:
+    async def reload(self, *, rest_on_nothing: bool = False) -> None:
         """Refresh readiness, then list what the shared store actually holds — on request.
+
+        `rest_on_nothing` is asked for by `redraw_after_failure` alone: a command that raised
+        leaves the row it failed on under the cursor, and `s`/`c` carry no confirmation.
 
         Sets `_reading` for its duration so the interval stands down rather than issuing a
         second concurrent probe underneath a refresh the owner actually asked for. It does
@@ -730,10 +735,14 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         finally:
             self._reading = False
-        self._draw_listing(records)
+        self._draw_listing(records, rest_on_nothing=rest_on_nothing)
 
     def _draw_listing(
-        self, records: tuple[SessionRecord, ...], *, keep_cursor: bool = False
+        self,
+        records: tuple[SessionRecord, ...],
+        *,
+        keep_cursor: bool = False,
+        rest_on_nothing: bool = False,
     ) -> None:
         """Draw a listing, optionally leaving the cursor on the row it was already on.
 
@@ -783,6 +792,14 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             )
             for record in records
         )
+        if rest_on_nothing:
+            # The third answer, and it goes through `show_choices`'s own `highlight=None`
+            # rather than assigning `highlighted` afterwards — which does not work: that call
+            # schedules `_rest_cursor` with `call_after_refresh`, so a later assignment is
+            # overwritten by the deferred rest. Measured, when the first version of
+            # `redraw_after_failure` did exactly that and the cursor came back on row 0.
+            self.show_choices(rows, highlight=None)
+            return
         if not keep_cursor:
             self.show_choices(rows)
             return
@@ -824,6 +841,102 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             await self.tui.go_back()
             return
         await self.tui.show_detail(key)
+
+    async def redraw_after_failure(self) -> None:
+        """Re-read the listing and rest the cursor on nothing.
+
+        The base class collapses to a lone `Back` row, which is right for a screen describing
+        one record and destroys this one: a single stop that raised would hide every other
+        session on the host, which is the reported defect with a larger blast radius.
+
+        Both halves matter. The **re-read** is what keeps the other rows — they are still
+        accurate, and the one that failed may have moved. **Resting the cursor on nothing** is
+        what the base class was buying with its lone `Back`: after a failure the row that
+        failed is still under the cursor and `s`/`c` carry no confirmation (DEC-018), so a
+        repeated keypress would re-issue a stop nobody deliberately chose. The same answer
+        `_draw_listing` already gives a vanished row (`_CLEARS_VANISHED_CURSOR`) and the same
+        one `ProfilesScreen` gives a failed launch — a list whose keys act on a live session
+        may not have its cursor moved by anything but the owner.
+
+        `reload` rather than `on_reveal` so this is one read rather than two, with the `_visit`
+        bump `on_reveal` owns kept.
+
+        **That bump is defensive rather than closing an observed race**, and this file is
+        otherwise scrupulous about naming the race each guard closes, so: `tui.stop` holds
+        `busy` from entry to its `finally` and `_auto_reload` returns immediately while `busy`,
+        so on *this* path no background read can be in flight for it to invalidate. It is kept
+        because the hook has three other call sites whose guard windows are their own, and
+        `on_reveal`'s own reasoning already records that bumping twice is harmless. Noted at
+        the Stage 2 Tier-1 re-review's request, which found it the one guard left to be
+        inferred.
+        """
+        self._visit += 1
+        await self.reload(rest_on_nothing=True)
+
+    async def confirm_force(self, session_value: str) -> None:
+        """Re-read the record, ask the modal over this list, and issue only on a `True`.
+
+        **The same chain `SessionDetailScreen.confirm_force` runs, entered from the list**, and
+        the shape is copied deliberately rather than shared: read under the guard, re-check the
+        policy before asking, ask, refresh on an abort without letting go, and take the guard
+        off only for the call that takes it itself. What differs is the position the refusals
+        and the refresh land on — `refuse` and `on_reveal` are this screen's, so a session that
+        moved under a rendered row is reported onto the list the owner is looking at rather
+        than onto a detail they never asked for.
+
+        **Defined on `SessionsScreen`, not on the `_SessionActionKeys` mixin**, and that is a
+        requirement rather than a preference. `tests/architecture/
+        test_confirmations_are_asked_from_screen_handlers.py` asserts that every direct caller
+        of `ask_to_confirm` is a method on a class whose name ends in `Screen` — because
+        DEC-025's whole protection is that the caller runs on the *screen's* message pump, so a
+        suspension there holds back the events that would pop the modal out from under it. A
+        mixin is not a screen and would fail that sweep. `SessionsPaneScreen` subclasses this
+        one, so both sessions positions get it.
+
+        The guard is held across the read *and* the whole modal for the reasons the detail's
+        twin gives at length: `action_back` runs on the app's pump while this runs on the
+        screen's, so without it an escape landing inside the read pops this screen and the
+        modal is pushed onto whatever the pop revealed. It is released before the stop, because
+        `tui.stop` takes it itself and refuses outright when it is already held.
+        """
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(session_value)
+            except Exception as error:
+                # The detail's twin lets this raise, because `render_detail` has already
+                # reported a failed read by the time it runs. Nothing has reported one here:
+                # this is the first read on this path, and an exception escaping a binding
+                # action exits the app.
+                self.tui.report_store_failure(error, self)
+                return
+            if record is None:
+                await self.refuse()
+                return
+            if FORCE not in available_actions(record.state, record.orphan_provenance):
+                # Asked before the question rather than only after the answer. `stop`
+                # re-checks regardless — that is DEC-007's fourth mitigation and it is what
+                # makes this safe rather than necessary — but a surface that opens a kill
+                # confirmation it already knows it will refuse is asking the owner to
+                # authorise nothing.
+                await self.refuse(
+                    f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
+                    f"{explain_state(record.state, record.orphan_provenance)}"
+                )
+                return
+            if not self.showing:
+                return
+            try:
+                confirmed = await self.tui.ask_to_confirm(ForceConfirmModal.for_record(record))
+            except Exception as error:
+                _LOG.exception("the force confirmation could not be shown")
+                self.announce(f"The confirmation could not be shown: {error} Nothing was stopped.")
+                return
+            if not confirmed:
+                # Abort re-reads, for the reason the detail's twin gives: the owner may have
+                # opened it only to look, and the session can have moved on while it was open.
+                await self.on_reveal()
+                return
+        await self.tui.stop(FORCE, session_value, self)
 
 
 class SessionsPaneScreen(SessionsScreen):

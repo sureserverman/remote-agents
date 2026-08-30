@@ -593,3 +593,192 @@ async def test_a_session_vanishing_during_an_escape_does_not_take_the_app_down(
 
         assert app.is_running, f"{entry_point} took the app down when the session vanished"
         assert launcher.issued == []
+
+
+# Force, pressed on the list ------------------------------------------------------
+#
+# Ask 6, for the one stop key that asks first. `s` and `c` moved onto the list in Task 2.1;
+# `f` could not follow them there until its modal could be raised from this screen's own
+# handler, because DEC-025's whole protection is that a confirmation is asked from something
+# running on the screen's message pump — a suspension anywhere else does not hold back the
+# events that would pop the modal out from under it, and DEC-025 deliberately declined a
+# timeout, so such a hang has no runtime net under it.
+
+
+async def _sessions_list(app: RemoteAgentsTui, pilot, index: int = 0) -> None:
+    await app.action_sessions()
+    await pilot.pause()
+    app.screen.query_one("#choices", OptionList).highlighted = index
+    await pilot.pause()
+
+
+async def _press_force_on_the_list(app: RemoteAgentsTui, pilot) -> asyncio.Task[None]:
+    """Press `f` and hand back the suspended handler, as `_open_the_confirm` does for a row."""
+    task = asyncio.create_task(app.screen.action_row_action("force"))
+    await pilot.pause()
+    return task
+
+
+async def test_force_from_the_list_raises_the_modal_over_the_list() -> None:
+    """`f` asks, and asks *here* — it does not open a detail to ask on.
+
+    The modal is the one the detail already raises: `ForceConfirmModal.for_record`, naming the
+    session the way the row named it. What changes is where it is raised from, which is the
+    whole of ask 6 for this key.
+    """
+    record = _record()
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        asking = await _press_force_on_the_list(app, pilot)
+        step = position(app)
+        modal = app.screen.is_modal
+        status = _status(app)
+        await pilot.press("escape")
+        await _answered(asking)
+        after = position(app)
+
+    assert step == "FORCE_MODAL", f"`f` on the list reached {step} instead of the confirmation"
+    assert modal, "the confirmation must be modal, or an app binding can leave it unanswered"
+    assert launcher.issued == [], "force must not be issued before it is confirmed"
+    (named,) = with_project_names((record,), (_PROJECT,))
+    assert named.display.rendered in status, "the confirmation must name the session"
+    assert after == "SESSIONS", f"aborting the modal left the owner on {after}, not the list"
+
+
+async def test_aborting_force_from_the_list_issues_nothing_and_keeps_the_list() -> None:
+    """An abort is a decision, and the owner is returned to what they were looking at.
+
+    Escape rather than the abort row, because escape is the path that also has to unwind the
+    modal without unwinding the position beneath it.
+    """
+    record = _record()
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        asking = await _press_force_on_the_list(app, pilot)
+        await pilot.press("escape")
+        await _answered(asking)
+        step = position(app)
+        rows = [str(o.prompt) for o in app.screen.query_one("#choices", OptionList).options]
+
+    assert launcher.issued == [], f"an aborted force issued {launcher.issued}"
+    assert step == "SESSIONS", f"the abort landed on {step}"
+    assert len(rows) >= 1, "the list came back empty after an abort"
+
+
+async def test_confirming_force_from_the_list_issues_one_force_and_keeps_the_list() -> None:
+    """The whole of ask 6 for this key: it acts, and the owner is still on the list.
+
+    Both halves asserted. A surface that issued the force and then pushed a detail — which is
+    what this key used to do — would satisfy the count and still be the reported defect.
+    """
+    record = _record()
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        asking = await _press_force_on_the_list(app, pilot)
+        assert position(app) == "FORCE_MODAL", "the modal did not open"
+        # Moving off the abort row is the second deliberate act, exactly as it is from the
+        # detail — the modal is the same one, so the way it is answered is the same too.
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _answered(asking)
+        await pilot.pause()
+        step = position(app)
+
+    assert len(launcher.issued) == 1, f"a confirmed force issued {launcher.issued}"
+    assert isinstance(launcher.issued[0], ForceStopCommand)
+    assert step == "SESSIONS", f"a confirmed force navigated to {step} instead of staying"
+
+
+@pytest.mark.parametrize("extra", [1, 2, 4, 9])
+async def test_holding_the_force_key_down_on_the_list_destroys_nothing(extra: int) -> None:
+    """`f` held down must not walk itself through its own confirmation.
+
+    **The first press is driven as a task and the rest as ordinary presses, and the asymmetry
+    is the mechanism rather than a convenience.** `f` on a row opens a modal and *suspends the
+    handler* until it is answered — which is correct, and is what the detail's own force has
+    always done — so `await pilot.press("f")` never returns and a loop of them deadlocks the
+    test rather than failing it. That is exactly what the first version of this test did.
+
+    What a held-down key actually produces is one press that opens the modal and a burst that
+    arrives afterwards, by which time the modal is on top of the stack and is what they are
+    delivered to. It binds no `f`, so they are inert — and that is the property worth pinning:
+    the repeat lands somewhere that cannot act on it, rather than being refused by a guard
+    somebody could later remove.
+    """
+    launcher = _RecordingLauncher(tuple(_record() for _ in range(3)))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        asking = await _press_force_on_the_list(app, pilot)
+        assert position(app) == "FORCE_MODAL", "the first press did not reach the confirmation"
+        for _ in range(extra):
+            await pilot.press("f")
+            await pilot.pause()
+        assert position(app) == "FORCE_MODAL", (
+            "a repeated `f` moved the surface off the confirmation it had just opened"
+        )
+        await pilot.press("escape")
+        await _answered(asking)
+        step = position(app)
+
+    assert launcher.issued == [], f"{extra + 1} `f` presses issued {launcher.issued}"
+    assert step == "SESSIONS", f"the burst left the owner on {step}"
+
+
+async def test_a_confirmed_force_that_raises_from_the_list_keeps_every_other_session() -> None:
+    """The third path into the failure redraw, proven rather than argued.
+
+    `s` and `c` reach `SessionsScreen.redraw_after_failure` directly; `f` reaches it through
+    `confirm_force` → `tui.stop(FORCE, ...)`, which is the same override on the same screen.
+    The Stage 2 Tier-1 re-review closed the Critical for `s`/`c` on the tests and for `f` on
+    *inspection* — identical code path, identical override — and asked for this before calling
+    the `f` path proven. It is the right ask: "the same code path" is a claim about the code as
+    it is today, and the confirmation standing in front of this one is exactly the kind of
+    thing that grows a branch of its own later.
+
+    Three sessions, so "the others survived" is a claim the assertion can make; with one, a
+    surviving row and a collapsed list are the same length.
+    """
+    def _raises() -> TerminalObservation:
+        raise RuntimeError("tmux server is gone")
+
+    # Through `force_result` rather than a new `error` field: this double already models "what
+    # `force_stop` observed" as a callable, so a raising one is the shape it was built for and
+    # needs no second mechanism that could drift from it.
+    records = tuple(_record() for _ in range(3))
+    launcher = _RecordingLauncher(records, force_result=_raises)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        rows_before = app.screen.query_one("#choices", OptionList).option_count
+        assert rows_before == 3, f"the walk drew {rows_before} rows, not 3"
+
+        asking = await _press_force_on_the_list(app, pilot)
+        assert position(app) == "FORCE_MODAL", "the modal did not open"
+        await pilot.press("down")
+        await pilot.press("enter")
+        await _answered(asking)
+        await pilot.pause()
+
+        step = position(app)
+        choices = app.screen.query_one("#choices", OptionList)
+        rows_after = choices.option_count
+        cursor = choices.highlighted
+
+    assert step == "SESSIONS", f"a failed force navigated to {step}"
+    assert rows_after == 3, (
+        f"a force that raised left {rows_after} rows instead of 3 — the other sessions were "
+        f"hidden because one stop failed"
+    )
+    assert cursor is None, f"the cursor rests on row {cursor} after a failed force"

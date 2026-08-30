@@ -1095,11 +1095,40 @@ class ChoiceScreen(Screen[None]):
             return
         await self.choose(key)
 
+    async def redraw_after_failure(self) -> None:
+        """Redraw this position after a command raised, moving the cursor off what failed.
+
+        **A hook rather than a literal, because the right redraw depends on what the rows
+        are.** Every failure path in `app.py` used to write `show_choices(((_BACK, "Back"),))`
+        directly, and that is correct for a screen describing *one* record: it takes the
+        cursor off the button that just failed, so a second enter cannot re-issue the command
+        as a blind retry, and the one thing left to do really is go back.
+
+        It is wrong for a screen whose rows are a **listing**. `show_choices` clears and
+        redraws rather than appending, so the same call on the managed-sessions list replaces
+        every row with a lone `Back` — hiding N-1 sessions that are working fine because one
+        stop raised. That is the defect ask 6 was filed about, one level up and with a larger
+        blast radius, and it became reachable the moment a listing started calling `tui.stop`.
+        Found by the Stage 2 Tier-1 review.
+
+        The default is the old literal, so every screen that was right stays byte-identical;
+        `SessionsScreen` overrides it. Async because a listing has to re-read to redraw, and a
+        hook that could not await would force the override back into the caller.
+        """
+        self.show_choices(((_BACK, "Back"),))
+
     async def after_command(self) -> None:
         """What this screen does once a command it asked for has landed.
 
-        Re-read in place, which is right for the session detail issuing any of its commands:
-        the owner stays where they are and the rows are redrawn from the store.
+        Re-read in place, which is right for every screen that issues a command: the owner
+        stays where they are and the rows are redrawn from the store.
+
+        **Two screens reach this now, not one.** It was written when the session detail was
+        the only caller of `tui.stop`, and its own wording said so; the sessions list became a
+        second caller when `s`, `c` and `f` moved onto it. Nothing had to change — the
+        implementation is `self.on_reveal()`, which each screen already defines as "read what
+        I show again" — but a comment naming one caller is how the next reader concludes the
+        other path does not come through here.
 
         **Nothing overrides this today, and the docstring here used to say something did.**
         The override was the two confirmations, which left themselves after issuing so the

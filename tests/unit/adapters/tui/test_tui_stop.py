@@ -628,3 +628,47 @@ async def test_the_opening_keys_still_open_their_screens(action: str) -> None:
         step = position(app)
 
     assert step != "SESSIONS", f"{action!r} was expected to open a screen and stayed on {step}"
+
+
+@pytest.mark.parametrize("action", ["graceful", "cleanup"])
+async def test_a_stop_that_raises_from_the_list_keeps_every_other_session(action: str) -> None:
+    """A failed stop must not hide the sessions it did not touch.
+
+    **The defect this pins is ask 6 one level up.** `tui.stop`'s exception branch was written
+    when the session detail was its only caller, where redrawing down to a lone `Back` row is
+    right: it takes the cursor off the button that just failed so a second enter cannot
+    re-issue the command, and on a screen describing one record there really is nothing else
+    to show. `show_choices` clears and redraws rather than appending, so the identical call on
+    the *list* replaced every row with that one `Back` — N-1 sessions that are running
+    perfectly hidden because one stop raised. Found by the Stage 2 Tier-1 review, which read
+    the chain rather than the diff.
+
+    Three sessions, so "the others survived" is a claim the assertion can actually make: with
+    one, a surviving row and a collapsed list are the same length.
+    """
+    kept = SessionState.RUNNING if action == "graceful" else SessionState.PRESERVED
+    records = tuple(_record(kept) for _ in range(3))
+    launcher = _RecordingLauncher(records, error=RuntimeError("tmux server is gone"))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        assert len(_rows(app)) == 3, "the walk did not draw the three sessions"
+
+        await app.screen.action_row_action(action)
+        await pilot.pause()
+        rows = _rows(app)
+        step = position(app)
+        cursor = app.screen.query_one("#choices", OptionList).highlighted
+        said = " ".join(announcements(app))
+
+    assert step == "SESSIONS", f"a failed stop navigated to {step}"
+    assert len(rows) == 3, (
+        f"a stop that raised left {len(rows)} rows instead of 3 — the other sessions were "
+        f"hidden by the failure of one: {rows}"
+    )
+    # The half the lone `Back` row was buying, kept: `s` and `c` carry no confirmation
+    # (DEC-018), so the row that just failed must not still be under the cursor waiting for a
+    # repeated keypress to retry it.
+    assert cursor is None, f"the cursor rests on row {cursor} after a failed stop"
+    assert "did not complete" in said, f"the failure was not reported: {said!r}"

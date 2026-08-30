@@ -941,27 +941,41 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             record = outcome.record
         except Exception as error:
             _LOG.exception("resume failed")
-            screen.show_choices(((_BACK, "Back"),))
+            await screen.redraw_after_failure()
             screen.set_status("Nothing was started. Go back and try again.")
             screen.announce(f"The conversation was not resumed: {error}")
             return
+        else:
+            if record.state is SessionState.FAILED:
+                # The command stays in the status line and the explanation goes to the toast,
+                # which is the split this whole task turns on applied to its hardest case: the
+                # owner has to be able to *copy* the attach command, and a toast expires. What
+                # they need to keep is the artifact; what they need to be told once is why they
+                # are being handed it.
+                #
+                # **Inside the guard, and it was not until `redraw_after_failure` became a
+                # hook.** This branch used to sit after the `finally`, which was harmless while
+                # the redraw was a synchronous `show_choices` call — there was no yield point
+                # for anything to interleave at, whatever `_busy` said. The hook can now do
+                # real work: `SessionsScreen`'s override re-reads the store. No caller passes a
+                # listing screen here today, so nothing was broken — but "nothing can
+                # interleave" would have been true by an accident of which screen types reach
+                # this method rather than by anything the code enforces, and `stop` guards its
+                # own equivalent branch for exactly this reason and says so. Found by the Stage
+                # 2 Tier-1 re-review.
+                await screen.redraw_after_failure()
+                screen.set_status(
+                    f"Attach with: {' '.join(self._services.attach_argv(str(record.session_id)))}"
+                )
+                screen.announce(
+                    "The resumed session did not become ready, but its pane may still exist. "
+                    "The command below reaches it."
+                )
+                return
         finally:
             self._busy = False
-        if record.state is SessionState.FAILED:
-            # The command stays in the status line and the explanation goes to the toast,
-            # which is the split this whole task turns on applied to its hardest case: the
-            # owner has to be able to *copy* the attach command, and a toast expires. What
-            # they need to keep is the artifact; what they need to be told once is why they
-            # are being handed it.
-            screen.show_choices(((_BACK, "Back"),))
-            screen.set_status(
-                f"Attach with: {' '.join(self._services.attach_argv(str(record.session_id)))}"
-            )
-            screen.announce(
-                "The resumed session did not become ready, but its pane may still exist. "
-                "The command below reaches it."
-            )
-            return
+        # Outside the guard, unchanged: this exits the app, and `_leave` sets `_leaving`
+        # which `busy` reads for the rest of the process's life.
         await self._open_or_leave(str(record.session_id))
 
     # The mutating path ------------------------------------------------------------
@@ -1026,7 +1040,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
             # button that just failed, or a second enter re-issues it as a blind retry.
-            screen.show_choices(((_BACK, "Back"),))
+            await screen.redraw_after_failure()
             screen.set_status("Go back and open the session again to see its current state.")
             screen.announce(f"Remote Control was not changed: {error}")
             return
@@ -1117,7 +1131,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Move the cursor off the confirm button before reporting. A failed force
             # leaves the owner resting on "Yes, force stop it", so without this a second
             # enter re-issues the kill as a retry nobody deliberately chose.
-            screen.show_choices(((_BACK, "Back"),))
+            await screen.redraw_after_failure()
             screen.set_status("Go back and open the session again to see its current state.")
             screen.announce(
                 f"{_ACTION_LABELS[action]} did not complete: {error} "
