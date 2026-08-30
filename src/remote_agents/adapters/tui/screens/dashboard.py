@@ -298,10 +298,12 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             # Under console hosting it is still worth naming, because the key is bound on
             # this server and will act whatever surface is looking at it.
             self.sub_title = "F12 shows the console's projects pane"
-        # Before the first draw, so the gauges are on the screen the owner opens on rather than
-        # arriving a minute later.
-        await self._refresh_context_windows()
-        await self._reload_sessions_pane()
+        # The gauges land on the screen the owner opens on rather than a minute later -- but
+        # from the records that draw already read, not from a second read of the store.
+        records = await self._reload_sessions_pane()
+        if records:
+            await self.tui.refresh_context_windows(records)
+            self._draw_session_rows(records)
         self._sessions_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload_sessions)
         # Then its own slower schedule. `_reload_sessions_pane` never triggers this -- that
         # separation is what keeps a provider read off the repaint path.
@@ -335,23 +337,17 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # already existed — measured live by the Stage 4 gate evaluator.
         self.call_later(self._reload_sessions_pane)
 
-    async def _refresh_context_windows(self) -> tuple[SessionRecord, ...] | None:
-        """Re-read every listed session's context. Answers the records, or None on failure."""
-        try:
-            records = await self.tui.load_sessions()
-        except Exception:
-            _LOG.exception("the session context gauges could not be refreshed")
-            return None
-        await self.tui.refresh_context_windows(records)
-        return records
-
     async def _refresh_context_gauges(self) -> None:
         """The slower timer: re-read the contexts, then redraw the rows and nothing else."""
         if not self.showing or self.tui.busy:
             return
-        records = await self._refresh_context_windows()
-        if records is not None:
-            self._draw_session_rows(records)
+        try:
+            records = await self.tui.load_sessions()
+        except Exception:
+            _LOG.exception("the session context gauges could not be refreshed")
+            return
+        await self.tui.refresh_context_windows(records)
+        self._draw_session_rows(records)
 
     async def _auto_reload_sessions(self) -> None:
         if not self.showing or self.tui.busy or self._reloading_sessions:
@@ -396,20 +392,25 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
         _fit_to_content(pane, lines)
 
-    async def _reload_sessions_pane(self) -> None:
+    async def _reload_sessions_pane(self) -> tuple[SessionRecord, ...] | None:
         """Redraw the sessions pane from a fresh read, keeping the cursor on its row.
 
         Failure leaves the pane as it was: the rows already drawn are stale, not wrong, and
         the resting position must never break because a background read had a bad moment.
+
+        Answers the records it drew, so a caller that needs them does not read the store a
+        second time. `populate` does exactly that for the context gauges: reading twice at
+        mount was both wasteful and visible -- it consumed one call of the flaky-store
+        double's budget and moved a failure the suite pins onto a different read.
         """
         if self._reloading_sessions:
-            return
+            return None
         self._reloading_sessions = True
         try:
             records = await self.tui.load_sessions()
         except Exception:
             _LOG.exception("the dashboard sessions pane could not be reloaded")
-            return
+            return None
         finally:
             self._reloading_sessions = False
         # The feed and the limits pane ride the same cadence: one schedule, three panes, so
@@ -422,6 +423,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         # trade the sessions pane's staleness note records.
         await self._reload_feed()
         self._draw_session_rows(records)
+        return records
 
     def _draw_session_rows(self, records: tuple[SessionRecord, ...]) -> None:
         """Draw the rows alone, without re-reading the other two panes.
