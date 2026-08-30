@@ -632,3 +632,30 @@ def test_the_gauge_cadence_stays_slower_than_the_repaint() -> None:
     from remote_agents.adapters.tui.app import CONTEXT_AUTO_REFRESH
 
     assert CONTEXT_AUTO_REFRESH >= _SESSIONS_AUTO_REFRESH * 4
+
+
+async def test_the_repaint_interval_exists_before_the_gauge_read_is_made() -> None:
+    """Ordering, asserted from inside the read rather than by stalling it.
+
+    With the await placed first, a filesystem that stalls -- an NFS dev root, a sleeping disk --
+    left `populate` short of `set_interval`, so the ten-second repaint never started and the pane
+    sat frozen at its first snapshot for the life of the process, with no error anywhere. A test
+    that really stalls the read hangs the mount it is inspecting (the first draft of this one
+    did), so it checks the invariant at the only moment that matters: what is already installed
+    when the read begins.
+    """
+    observed: dict[str, object] = {}
+
+    async def watching(session_id):
+        observed["timer"] = getattr(app.screen, "_sessions_timer", None)
+        return AgentUsage(context=ContextWindow(250_000, 1_000_000))
+
+    app = RemoteAgentsTui(_context((_record(),), usage=watching))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert observed, "the gauge read never happened, so the ordering was not exercised"
+        assert observed["timer"] is not None, (
+            "the repaint interval must be installed before the gauge read, or a stalled "
+            "provider freezes the pane for the life of the process"
+        )

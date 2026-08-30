@@ -1115,6 +1115,7 @@ def test_a_declared_ceiling_turns_claudes_bare_count_into_a_share(
         sessions_root=tmp_path / "claude-projects",
         limits_cache_root=tmp_path / "absent-cache",
         context_window=1_000_000,
+        context_window_stated=True,
     ).read(_query("claude", workspace))
 
     assert usage is not None and usage.context is not None
@@ -1173,3 +1174,30 @@ def test_the_default_reader_set_carries_the_ceiling_it_was_built_with() -> None:
     claude = next(r for r in readers._readers if isinstance(r, ClaudeUsageReader))
 
     assert claude._context_window == 123_456
+
+
+def test_a_defaulted_ceiling_is_not_credited_to_the_owner(tmp_path: Path, workspace: Path) -> None:
+    """A host that stated nothing still gets a ceiling -- the project's, not the owner's.
+
+    `bootstrap` passes `config.claude_context_window` unconditionally, and it is the module
+    default when the config states no key. Marking that "declared" would credit the owner with a
+    statement they never made, which is the same misattribution DEC-061 forbids from the other
+    direction. The percentage is still shown -- it is the best available -- but it is not
+    presented as anyone's assertion.
+    """
+    transcript = _written(
+        _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
+        [_claude_turn(100_000)],
+    )
+    _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
+
+    usage = ClaudeUsageReader(
+        sessions_root=tmp_path / "claude-projects",
+        limits_cache_root=tmp_path / "absent-cache",
+        context_window=1_000_000,
+        context_window_stated=False,
+    ).read(_query("claude", workspace))
+
+    assert usage is not None and usage.context is not None
+    assert usage.context.limit_tokens == 1_000_000
+    assert usage.context.limit_declared is False

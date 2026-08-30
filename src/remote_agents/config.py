@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 from pathlib import Path
 
 
@@ -69,6 +69,15 @@ class AppConfig:
     activity_poll_seconds: int
     activity_quiet_polls: int
 
+    _: KW_ONLY
+    """Everything past here is optional, and named so an insertion cannot shift a caller.
+
+    The same guard `AgentLimits` carries, added for the same reason and immediately earning it:
+    adding `claude_context_window_stated` *before* its sibling silently shifted `load_config`'s
+    positional call and turned five tests red. Keyword-only makes that a `TypeError` at the call
+    site instead of a wrong value at the field.
+    """
+
     claude_context_window: int = DEFAULT_CLAUDE_CONTEXT_WINDOW
     """Defaulted on the type as well as in the schema, because it is optional in both.
 
@@ -76,6 +85,15 @@ class AppConfig:
     and the exact-key schema exists to say so. This one is the config's single declaration
     rather than a knob, so a `AppConfig` built without it is a host that has stated nothing --
     exactly what `load_config` produces from a file that states nothing, and the same figure.
+    """
+
+    claude_context_window_stated: bool = False
+    """Whether the owner actually wrote the ceiling down, as opposed to inheriting the default.
+
+    Carried because presentation has to tell the two apart. A figure the owner stated is their
+    assertion and is labelled as one; the default is *this project's* number, and labelling it
+    "declared" would credit the owner with a statement they never made -- which is the same
+    misattribution DEC-061 forbids in the other direction when a reader invents a figure.
     """
 
 
@@ -285,6 +303,7 @@ def load_config(path: Path) -> AppConfig:
         "limits.claude_context_window",
         *_CLAUDE_CONTEXT_BOUNDS,
     )
+    claude_context_window_stated = "claude_context_window" in limits
     return AppConfig(
         dev_root,
         registry_path,
@@ -293,7 +312,8 @@ def load_config(path: Path) -> AppConfig:
         project_page_size,
         activity_poll_seconds,
         activity_quiet_polls,
-        claude_context_window,
+        claude_context_window=claude_context_window,
+        claude_context_window_stated=claude_context_window_stated,
     )
 
 

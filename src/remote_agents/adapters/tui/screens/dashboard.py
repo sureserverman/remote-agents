@@ -169,6 +169,11 @@ class ProjectsPaneScreen(ProjectsScreen):
 class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     """Three panes, one resting position; everything the projects picker was, plus sight."""
 
+    draws_session_rows = True
+    """This screen renders session rows, so the app's gauge cache is worth refreshing while it
+    is the one showing. Read by `RemoteAgentsTui._refresh_context_windows_tick`; screens without
+    it cost no provider read at all."""
+
     position = "DASHBOARD"
 
     BINDINGS = [

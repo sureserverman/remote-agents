@@ -1265,14 +1265,36 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         pane, the dedicated sessions list and the console's sessions pane without any of them
         knowing about the others -- and without a provider read on any repaint path.
         """
-        if self.busy:
+        if self.busy or self._services.backend.usage is None:
+            return
+        screen = self.screen if self.is_screen_installed_check() else None
+        if not getattr(screen, "draws_session_rows", False):
+            # Nothing on screen renders a gauge, so nothing here is worth reading. Two of the
+            # three pane processes never draw one at all, and a flow or detail screen pushed
+            # above a list hides the rows while it is up. This is the rule `SessionsScreen`
+            # already states for its own interval: an unpaused one "would keep a background
+            # conversation with the runtime going underneath every detail, confirmation and
+            # inspect screen pushed on top of this one". The screen-local timer this replaced
+            # was paused by `on_screen_suspend`; an app-level timer has no such hook, so the
+            # check is made here instead.
             return
         try:
-            records = await self.load_sessions()
+            # `read_sessions`, not `load_sessions`: the latter refreshes readiness -- a tmux
+            # capture per FAILED session -- and runs the console sync, which is the list-open
+            # pass and has no business on a cache refresh. The gauge needs the records' ids and
+            # nothing else.
+            records = await self.read_sessions()
         except Exception:
             _LOG.debug("the session context gauges could not be refreshed", exc_info=True)
             return
         await self.refresh_context_windows(records)
+
+    def is_screen_installed_check(self) -> bool:
+        """Whether a screen is mounted yet — the tick can fire before one is."""
+        try:
+            return self.screen is not None
+        except ScreenStackError:
+            return False
 
     def context_gauge_for(self, session_id: object) -> str:
         """The gauge suffix for one row, or nothing at all when there is no reading.

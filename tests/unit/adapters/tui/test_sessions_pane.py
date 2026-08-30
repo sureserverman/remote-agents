@@ -1089,3 +1089,25 @@ async def test_the_console_pane_fills_its_own_gauge_cache() -> None:
         # row can *draw* a gauge and not that anything ever fills the cache here -- which is
         # exactly the shape of the defect it was written for.
         assert app._context_timer is not None
+
+
+async def test_the_pane_shows_a_gauge_at_mount_without_waiting_for_a_tick() -> None:
+    """Nothing is called by hand here, which is the point.
+
+    The sibling test above drives the tick itself, so it proves the row can draw a gauge once
+    the cache is warm -- not that the cache is warm when the owner first looks. This process has
+    no dashboard to seed it, so before `populate` seeded the gauges the pane drew bare rows for
+    up to the full sixty-second cadence plus a repaint after launch.
+    """
+    from remote_agents.ports.agent_usage import AgentUsage, ContextWindow
+
+    async def usage(session_id):
+        return AgentUsage(context=ContextWindow(250_000, 1_000_000))
+
+    app = SessionsPane(_context((_record(),), usage=usage))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#choices", OptionList)
+        rows = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+
+        assert any("25%" in row for row in rows), rows

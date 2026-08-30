@@ -498,6 +498,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     doing so the moment it is not the screen on top.
     """
 
+    draws_session_rows = True
+    """This screen renders session rows, so the app's gauge cache is worth refreshing while it
+    is the one showing. Read by `RemoteAgentsTui._refresh_context_windows_tick`; screens without
+    it cost no provider read at all."""
+
     BINDINGS = list(SESSION_ACTION_BINDINGS)
 
     empty_state = "No managed sessions on this host."
@@ -535,6 +540,23 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # defining one, and `populate` is the hook it leaves for exactly this.
         if self._auto is None:
             self._auto = self.set_interval(_SESSIONS_AUTO_REFRESH, self._auto_reload)
+        # Seed the gauges now rather than at the first sixty-second tick. The dashboard already
+        # does this in its own `populate`; without it here, the console's sessions pane -- which
+        # mounts this screen as a process of its own and has no dashboard to seed it -- drew
+        # rows with no gauge for up to seventy seconds after launch.
+        await self._seed_context_gauges()
+
+    async def _seed_context_gauges(self) -> None:
+        """Fill the app's gauge cache once, then redraw, without the list-open pass."""
+        if self.tui.services.backend.usage is None:
+            return
+        try:
+            records = await self.tui.read_sessions()
+        except Exception:
+            _LOG.debug("the session context gauges could not be seeded", exc_info=True)
+            return
+        await self.tui.refresh_context_windows(records)
+        self._draw_listing(records, keep_cursor=True)
 
     def on_screen_suspend(self) -> None:
         """Stop polling the store for a screen the owner is no longer looking at.
