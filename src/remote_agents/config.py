@@ -315,9 +315,17 @@ def load_config(path: Path) -> AppConfig:
     database_path = _absolute_path(paths["database_path"], "paths.database_path")
     max_label_length = _bounded_int(limits["max_label_length"], "limits.max_label_length", 1, 40)
     project_page_size = _bounded_int(limits["project_page_size"], "limits.project_page_size", 1, 20)
-    # Five seconds is a floor on self-inflicted load: every pass captures one pane per running
-    # hookless session on the same loop that long-polls Telegram. Ten minutes is a ceiling on
-    # how stale "has produced no output since" may be before it stops being worth sending.
+    # Five seconds is a floor on self-inflicted load: every pass reads one pane *title* per
+    # running Codex session, and drains the hook spool, on the same loop that long-polls
+    # Telegram. Ten minutes is a ceiling on how long a native approval may stand before anyone
+    # is told about it -- the owner is being asked a question, and a question nobody relays for
+    # ten minutes has mostly stopped being worth relaying.
+    #
+    # Both bounds were argued from the pane-digest watch until 2026-08-30 -- a capture per
+    # hookless session, and the staleness of "has produced no output since". Neither happens
+    # now: nothing captures a pane, and hookless profiles are skipped by name. The numbers are
+    # unchanged and the reasons are not, which is the more dangerous half of a retirement to
+    # leave behind.
     activity_poll_seconds = _bounded_int(
         limits["activity_poll_seconds"], "limits.activity_poll_seconds", 5, 600
     )

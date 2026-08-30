@@ -286,9 +286,11 @@ while nothing has been observed for it — requires a second confirmation, and u
 qualified enable/disable interaction; it never carries a prompt, transcript, or session URL.
 
 The service also speaks first when a managed agent stops working: it has
-finished, it hit a usage limit, one reply hit its output length limit, it is waiting for an answer,
-or — for the profiles with no hook system — its pane has produced no output since a stated time,
-which is said as the guess it is. It speaks only about a session that is still live, and only when
+finished, it hit a usage limit, one reply hit its output length limit, or it is waiting for an
+answer. Those four are the whole vocabulary. `opencode` and `cursor-agent` contribute none of
+them — neither publishes a hook system, so nothing observes them at all — while `claude`,
+`claude-remote` and `codex` each report for themselves. It speaks
+only about a session that is still live, and only when
 there is something to do about it: an agent reporting after the owner has already stopped its
 session is telling them their own action back. **One session gets one message, not one per
 report**: the first thing it says sends that message, and each later report sends a replacement

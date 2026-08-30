@@ -770,7 +770,12 @@ ls -A ~/.local/state/remote-agents/activity | wc -l
 Every component must be a real directory, and the leaf `drwx------`. A spool that stays empty while
 managed Claude sessions finish work is this fault; a spool that grows without shrinking is the
 opposite one, and points at the service rather than at the hook — check
-`journalctl --user -u remote-agents.service` for `activity watch pass failed`.
+`journalctl --user -u remote-agents.service` for the three lines the activity pass can log —
+`draining the activity spool failed`, `the Codex approval watch failed`, and
+`delivering activity notifications failed`. Each source is guarded separately on purpose, so
+which one appears tells you which half failed. (This said `activity watch pass failed` until
+2026-08-30, a string that has never appeared in the source — an operator following it found
+nothing and concluded the pass was healthy.)
 
 The other way notifications go missing is a restart. Whenever Telegram is unreachable, refusing
 sends, or simply behind — a burst of more than ten messages in one pass is throttled and the
@@ -940,12 +945,12 @@ subjects: an upstream idle timer this service no longer maps, and the pane-diges
 on 2026-08-30. A future inferred signal is hedged by that rule rather than by whoever writes its
 wording.
 
-**The pane-digest watch was retired on 2026-08-30.** It reported that a managed pane's captured
-output had stopped changing for a configured number of polls, and it was the only signal
-`opencode` and `cursor-agent` ever had. It went because it failed the "is there anything to do about it" bar in
-the same way `ended` did: a pane that has stopped changing belongs to an agent that has finished,
-an agent that is thinking, and an agent nobody has typed at since Tuesday, and the message could
-not tell them apart. Its config knob, `activity_quiet_polls`, is retired with it and is described
+**The pane-digest watch was retired on 2026-08-30.** It reported that a managed pane's
+captured output had gone unchanged across a configured number of polls, and it was the only
+signal `opencode` and `cursor-agent` ever had. It went because it failed the "is there anything to do about it" bar in
+the same way `ended` did: a pane holding still belongs equally to an agent that has finished, an
+agent that is thinking, and an agent nobody has typed at since Tuesday, and the message could not
+tell them apart. Its config knob, `activity_quiet_polls`, is retired with it and is described
 under the upgrade note above.
 
 `activity_poll_seconds` lives under `[limits]` in `~/.config/remote-agents/config.toml`. The

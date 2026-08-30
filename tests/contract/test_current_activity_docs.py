@@ -57,7 +57,19 @@ def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> N
     architecture document below are the documents that speak in the present tense.
     """
     swept = (*_CURRENT_ACTIVITY_DOCS, _ROOT / "docs" / "architecture.md")
-    retired = re.compile(r"gone quiet|pane[ -]quiet|quiet fallback|`quiet`", re.IGNORECASE)
+    # **The vocabulary AND the claim.** The first version of this swept only the retired
+    # identifiers, which is what the Stage 1 gate remediation commit -- titled "name the concept,
+    # not the deleted symbol" -- had just finished arguing was the wrong instrument. It passed
+    # over a README paragraph describing the retired notification in full, hedge and all, without
+    # once using a swept word: "for the profiles with no hook system -- its pane has produced no
+    # output since a stated time, which is said as the guess it is." Two stages read past it, and
+    # the close-out evaluator found it by reading rather than grepping. A promise is made in
+    # prose, so the sweep has to look for the promise.
+    retired = re.compile(
+        r"gone quiet|pane[ -]quiet|quiet fallback|`quiet`"
+        r"|no output since|stopped changing|profiles with no hook system",
+        re.IGNORECASE,
+    )
 
     offenders = [
         f"{path.relative_to(_ROOT)}:{number}: {line.strip()}"

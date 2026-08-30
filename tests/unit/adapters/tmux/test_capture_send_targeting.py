@@ -5,9 +5,8 @@ feeds readiness detection, folder-trust classification and Remote Control state 
 of which then decides something on evidence about somebody else's terminal. Pane-digest
 quiet watching was a fourth consumer until it was retired on 2026-08-30; nothing reads a
 capture for activity now. A keystroke sent to the wrong pane is worse, because it is not a
-wrong reading but a wrong *write*: DEC-016 lets a surface answer the folder-trust question with a
-bare
-Enter, which is the single most dangerous key this service sends.
+wrong reading but a wrong *write*: DEC-016 lets a surface answer the folder-trust question with
+a bare Enter, which is the single most dangerous key this service sends.
 
 So both resolve the pane first. A session that resolves to no pane — schema 1, or gone —
 keeps the session target it has always used, which is what makes the upgrade continuous

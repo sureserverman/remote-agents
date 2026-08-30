@@ -271,10 +271,11 @@ async def _serve_with_reconciliation(
     periodic = [asyncio.create_task(_reconcile_periodically(composition, interval))]
     if composition.approval_watcher is not None or composition.activity_directory is not None:
         # A separate task rather than another step inside the reconciliation pass: the two
-        # answer different questions on different clocks, and a pane capture that hangs must
+        # answer different questions on different clocks, and a pane-title read that hangs must
         # not stop records being reconciled. Nothing is polled before the service is serving,
-        # unlike reconciliation -- a first pass at start-up could only establish the baseline
-        # the classifier already refuses to report on.
+        # unlike reconciliation -- a first pass at start-up could only establish a baseline
+        # nothing may report from, since `CodexApprovalWatcher` treats a marker already present
+        # on its first successful title read as a restart baseline rather than as news.
         #
         # Either source is reason enough to run it. A host serving only Claude sessions has no
         # pane anything can observe and a spool full of what those sessions reported, and gating
