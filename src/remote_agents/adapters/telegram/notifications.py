@@ -106,12 +106,21 @@ _SENTENCES = {
 }
 
 _WAITING = "The agent is waiting for an answer."
-"""The one sentence `NEEDS_ANSWER` has, now that every source of it is the agent's own report.
+"""The one sentence `NEEDS_ANSWER` has, whether it was reported or inferred.
 
 There were two, chosen by confidence, and the weaker of them -- "may be waiting" -- existed for
-an upstream idle timer that is no longer mapped at all. Stating this plainly does not loosen
-this module's first rule: what reaches here is an agent asking permission or an agent saying it
-needs input, and in both the agent is the one making the claim.
+an upstream idle timer that is no longer mapped at all. What replaced the pair is a division of
+labour rather than a claim that every source now reports: **the sentence says what was observed,
+and the hedge says how well it is known.** A `needs_answer` reaching here is an agent asking
+permission, an agent saying it needs input, or -- since DEC-063 -- a Codex pane title carrying
+the native approval marker, which nothing said at all. The first two are the agent's own claim;
+the third is this service's, and `_HEDGE` is what tells them apart. One sentence for all three is
+correct precisely because the confidence carries the difference.
+
+This docstring claimed the opposite until 2026-08-30 -- "now that every source of it is the
+agent's own report" -- which stopped being true the day DEC-063 added the title edge, and sat two
+paragraphs below a module docstring that said so. Found by the sub-plan close-out review, in prose
+this sub-plan had edited without reading downward.
 
 "An agent asking permission" is spelled the long way round on purpose: upstream calls that case
 `permission_` followed by the word for a question put to a terminal, and

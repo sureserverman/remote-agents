@@ -237,7 +237,16 @@ session has finished work since the restart.
 
 ## The measured gap, carried forward from Stage 2
 
-`tests/live/test_idle_pane_settles.py` exists because every automated test of the quiet path drives
+> **Annotated 2026-08-30: the gap below closed by removal, not by measurement.** The pane-digest
+> quiet path this section is about was retired with `ActivityKind.QUIET` (DEC-066), and
+> `tests/live/test_idle_pane_settles.py` was deleted with it — its whole subject was proving a
+> real agent's idle pane settles enough for a digest to stop changing. The unmeasured
+> `cursor-agent` case is therefore moot: that profile no longer has a quiet path to verify, and
+> reports nothing at all. Annotated rather than edited, because what follows is a dated record of
+> what was measured on 2026-08-11 and rewriting it would falsify an observation — the same rule
+> that kept every `docs/acceptance-*.md` out of this sub-plan's documentation sweep.
+
+`tests/live/test_idle_pane_settles.py` existed because every automated test of the quiet path drives
 a plain-stdout script while the three profiles it serves are full-screen TUIs — a live timer or
 spinner in an idle frame would mean the digest never settles and quiet never fires, silently. Run
 against the real binaries at Stage 2 it measured **codex settling and opencode settling**;
