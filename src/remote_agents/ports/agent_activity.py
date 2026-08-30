@@ -34,7 +34,25 @@ def bounded_detail_line(value: object) -> str | None:
     # later consumer being total -- and the presentation layer is made total anyway, through
     # this same function, for the inputs that never come through here at all.
     normalized = " ".join(encodable_text(value).split())
-    return normalized[:MAXIMUM_DETAIL_CHARACTERS] if normalized else None
+    # Then the characters that survive an encoder and still lie to a reader. `str.isprintable()`
+    # is False for every `Cc` and `Cf` code point, which is the same filter -- and the same
+    # argument -- `terminal_text.probe_version_line` already applies to a version banner: it
+    # covers `U+202E` RIGHT-TO-LEFT OVERRIDE, `U+200B` ZERO WIDTH SPACE and `U+00AD` SOFT
+    # HYPHEN, "the ones a reader would not think to check for".
+    #
+    # It belongs here rather than at either renderer because this text is an *agent's*, and an
+    # agent writes whatever it likes. Escaping is not the same guard and does not substitute:
+    # `html.escape` makes markup inert and leaves a bidi override untouched, so a notification
+    # can arrive correctly escaped and still display its words in an order the agent chose. It
+    # arrives unprompted on a phone at the moment the owner is deciding whether to act on it,
+    # which is the worst possible place to render reordered text.
+    #
+    # The whitespace collapse above runs first on purpose: newline and tab are `Cc`, and they
+    # are meant to become spaces rather than to vanish. Space itself is printable, so it
+    # survives this. Found by the Stage 2 gate's second review, which noticed the project had
+    # already solved this class one module over and not reused it.
+    printable = "".join(character for character in normalized if character.isprintable())
+    return printable[:MAXIMUM_DETAIL_CHARACTERS] if printable else None
 
 
 class ActivityKind(Enum):

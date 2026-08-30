@@ -600,3 +600,44 @@ class _TitleStore:
     async def list(self, states: object) -> tuple[SessionRecord, ...]:
         assert states == (SessionState.RUNNING,)
         return (self._record,)
+
+
+def test_agent_text_cannot_reorder_itself_on_the_owners_phone() -> None:
+    """A character that survives every encoder and still lies to the reader.
+
+    `encodable_text` drops lone surrogates and the whitespace collapse flattens newlines, and
+    both were enough while the only question was "will this encode". This one is different: a
+    `U+202E` RIGHT-TO-LEFT OVERRIDE encodes fine, escapes fine, and reverses the words after it
+    wherever they are displayed. Escaping is not the same guard and does not substitute --
+    `html.escape` makes markup inert and leaves a bidi override untouched, so a notification can
+    be correctly escaped and still show its text in an order the agent chose.
+
+    It matters here rather than anywhere because this string is an *agent's*, it arrives
+    unprompted on a phone, and it arrives at the moment the owner is deciding whether to act on
+    it. The project had already reached this conclusion once, for a version banner
+    (`terminal_text.probe_version_line`), and `str.isprintable()` is the same filter reused.
+    """
+    from remote_agents.ports.agent_activity import bounded_detail_line
+
+    hostile = "Deleted nothing‮ important​, all­ clear"
+
+    line = bounded_detail_line(hostile)
+
+    assert line is not None
+    for character in ("‮", "​", "­"):
+        assert character not in line, f"{character!r} reached a rendered line"
+    assert "Deleted nothing important, all clear" == line
+
+
+def test_the_filter_keeps_the_text_an_agent_legitimately_writes() -> None:
+    """The other direction: a guard that stripped anything unusual would be worse than none.
+
+    Emoji, accents and CJK are printable and must survive -- an agent reporting on a file named
+    in Japanese is ordinary, and a detail line that silently lost it would be a quieter bug than
+    the one above.
+    """
+    from remote_agents.ports.agent_activity import bounded_detail_line
+
+    ordinary = "Ran 12 tests ✅ — updated café.txt and 設定ファイル"
+
+    assert bounded_detail_line(ordinary) == ordinary

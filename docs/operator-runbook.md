@@ -616,7 +616,9 @@ asymmetry is deliberate and is the half worth reading twice: an approval notific
 hook or from the pane title. Nothing on that event describes the request. The payload does carry fields that
 would — `tool_input.command` is the literal command, and `tool_input.description` reads like a
 safe summary while restating the path — and this service reads none of them. So a Codex approval
-still tells you *that* an agent is waiting and never *what for*; open the session to find out. `opencode` and `cursor-agent` report nothing at all: they publish no hooks and set
+still tells you *that* an agent is waiting and never *what for*; open the session to find out.
+
+`opencode` and `cursor-agent` report nothing at all: they publish no hooks and set
 no title marker, and the pane-digest fallback that was their only signal was retired on 2026-08-30
 for telling the owner nothing they could act on. The hooks are not installed by the unit, by
 `serve`, or by `doctor`. Install them once per host:

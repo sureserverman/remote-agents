@@ -125,6 +125,34 @@ One behaviour difference between the builds was observed directly: `approval_pol
 is rejected by 0.151.0 with *"no longer supported; remove this setting"*. `--ask-for-approval` now
 accepts only `on-request` and `never`.
 
+## What the measurement did not look at, and what was done about it
+
+The tables above are a *field vocabulary*: which names exist, what types they hold, whether a
+value is present. They say nothing about what a value may legitimately **contain**, and the
+Stage 2 gate's second review pointed out the omission. `last_assistant_message` is free text an
+agent wrote, and an agent writes whatever it likes.
+
+The class that mattered is Unicode format and control characters — `U+202E` RIGHT-TO-LEFT
+OVERRIDE, `U+200B` ZERO WIDTH SPACE, `U+00AD` SOFT HYPHEN. They survive every encoder, survive
+HTML escaping (escaping makes markup inert and leaves a bidi override untouched), and reorder or
+hide the words around them wherever they are displayed — including on a phone, unprompted, at the
+moment the owner is deciding whether to act. **This project had already reached that conclusion
+once**, for a version banner: `ports/terminal_text.probe_version_line` filters on
+`str.isprintable()` and its docstring names those three code points as "the ones a reader would
+not think to check for". The filter was simply not reused for agent text.
+
+It is now folded into `bounded_detail_line` itself, so both surfaces inherit it structurally
+rather than each remembering to ask. That function runs twice on the real path — once in the hook
+as it writes the spool file, once in `application/activity._activity` as the service reads a file
+a foreign process wrote — and the whole path was checked end to end afterwards: an agent line
+carrying all three characters reaches the rendered Telegram message with none of them.
+
+Two honest limits on that. The filter lives at `bounded_detail_line`, not at the renderers, so a
+caller that constructs an `AgentActivity` directly from untrusted text would bypass it; nothing
+in the service does, because `_activity` is the only place an activity is built from a spooled
+record. And this gap was never Codex-specific — Claude's detail had travelled the same
+unfiltered path since the spool was written. Widening Codex is what caused anyone to look.
+
 ## What this licenses the next task to parse
 
 - **`Stop` → `last_assistant_message`**, bounded by `bounded_detail_line` exactly as Claude's is.
