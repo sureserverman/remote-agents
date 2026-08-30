@@ -17,8 +17,11 @@ captures live in a scratchpad outside this repository and are deleted with it.
 
 ## Boundaries the drill held
 
-- The owner's `~/.codex/hooks.json` was neither read nor written. Its `sha256` was recorded before
-  the drill and re-asserted after every run: `3301a3fe…428dc1`, unchanged throughout.
+- The owner's `~/.codex/hooks.json` was **never used as configuration and never modified**. It was
+  read for exactly one purpose — to digest it — and its `sha256` was recorded before the drill and
+  re-asserted after every run: `3301a3fe…428dc1`, unchanged throughout. (An earlier draft of this
+  line said the file was "neither read nor written", which cannot be true of a file you have
+  hashed.)
 - `~/.codex/config.toml` was not modified (mtime still 2026-08-29).
 - `auth.json` was **symlinked**, never copied, opened, logged or serialized — the same approach
   `tests/live/test_codex_activity_hooks.py` documents, preserving the ordinary ChatGPT entitlement

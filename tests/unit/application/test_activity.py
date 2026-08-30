@@ -641,3 +641,25 @@ def test_the_filter_keeps_the_text_an_agent_legitimately_writes() -> None:
     ordinary = "Ran 12 tests ✅ — updated café.txt and 設定ファイル"
 
     assert bounded_detail_line(ordinary) == ordinary
+
+
+def test_a_shortened_line_says_it_was_shortened() -> None:
+    """An unmarked cut reads as the agent having stopped mid-word, which is worse news than it is.
+
+    A hard slice at the budget ended a Telegram detail like "...used for validation, formatt" --
+    indistinguishable, to the owner, from an agent that broke off. That mattered little while
+    Codex's detail was always `None` and Claude's lines were often short; it is the common case
+    now that Codex `Stop` carries prose. Raised as Minor by the Stage 2 gate evaluator, whose own
+    drill produced exactly that message.
+
+    The marker is *inside* the bound rather than added to it, so no caller's arithmetic changes.
+    """
+    from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS, bounded_detail_line
+
+    line = bounded_detail_line("word " * 400)
+
+    assert line is not None
+    assert len(line) <= MAXIMUM_DETAIL_CHARACTERS
+    assert line.endswith("…")
+    # And the other direction: something that fits is returned whole, unmarked.
+    assert bounded_detail_line("short enough") == "short enough"

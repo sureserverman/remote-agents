@@ -90,17 +90,20 @@ def test_a_codex_permission_request_stays_content_free() -> None:
     command, `tool_input.description` restates the path, and `transcript_path` is populated here
     unlike on `Stop`. So the plan expected to admit `tool_name`.
 
-    Safe is not the same as needed. `ObservedAgentEvent.reason` exists for exactly one purpose:
-    `application/activity._kind` reads it to choose an `ActivityKind`. For `PermissionRequest`
-    that choice is unconditional -- `NEEDS_ANSWER, REPORTED`, whatever the reason says -- and
-    `AgentActivity` has no `reason` field, so nothing downstream renders it. Admitting
-    `tool_name` would write a provider string to a file on disk that no surface ever shows and
-    no decision ever consults. That is retention without rendering, which is the thing DEC-013
-    bounds and the thing DEC-063's content-free claim is about.
+    Safe is not the same as needed -- but the first argument for that was wrong and is worth
+    recording as wrong. It ran: `ObservedAgentEvent.reason` exists only for `_kind`, that pick is
+    unconditional for `PermissionRequest`, `AgentActivity` has no `reason` field, therefore
+    nothing would render `tool_name`. True of `reason`; false of `detail`, which is
+    provider-agnostic. `AgentActivity(kind=NEEDS_ANSWER, confidence=REPORTED, detail="Bash")`
+    renders on both surfaces today with no renderer change -- the Stage 2 gate evaluator checked
+    it instead of believing the argument.
 
-    So this event keeps the behaviour it already had, and the sub-plan's goal is met by the
-    `Stop` half alone. Rendering the tool class would be a real improvement to ask 4 and is a
-    renderer change, not a spool change; it is raised rather than smuggled in under this task.
+    What survives is narrower: `detail` means *the agent's own words*. A bare provider token is a
+    different kind of string in a field every consumer reads as a sentence the agent wrote. The
+    honest version of the owner's ask 4 is a sentence -- "waiting for an answer about a shell
+    command" -- and that is wording, shared with Claude's `needs_answer`, so it is a decision to
+    take deliberately rather than to inherit from a parser widening. DEC-067 records both the
+    conclusion and the corrected reasoning.
     """
     observed = _codex(_MEASURED_PERMISSION)
 

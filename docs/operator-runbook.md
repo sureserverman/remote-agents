@@ -613,9 +613,14 @@ exactly as Claude's is — the `last_assistant_message` field, read from the hoo
 was measured rather than assumed (`docs/acceptance-2026-08-29-codex-activity-detail.md`). The
 asymmetry is deliberate and is the half worth reading twice: an approval notification
 **names no command, path, prompt or transcript**, whether it came from the `PermissionRequest`
-hook or from the pane title. Nothing on that event describes the request. The payload does carry fields that
-would — `tool_input.command` is the literal command, and `tool_input.description` reads like a
-safe summary while restating the path — and this service reads none of them. So a Codex approval
+hook or from the pane title. The payload does carry fields that could describe it, and this
+service reads none of them: `tool_input.command` is the literal command and
+`tool_input.description` reads like a safe summary while restating the path, so both are
+refused outright. One field — `tool_name`, the tool class, e.g. `Bash` — would be safe, and is
+declined for a different reason: it would land in the field that means *the agent's own words*,
+where a bare token reads as a sentence the agent wrote. Saying "waiting for an answer about a
+shell command" instead would be an improvement, and it is a wording decision shared with
+Claude's identical notification (DEC-067). So a Codex approval
 still tells you *that* an agent is waiting and never *what for*; open the session to find out.
 
 `opencode` and `cursor-agent` report nothing at all: they publish no hooks and set

@@ -52,7 +52,18 @@ def bounded_detail_line(value: object) -> str | None:
     # survives this. Found by the Stage 2 gate's second review, which noticed the project had
     # already solved this class one module over and not reused it.
     printable = "".join(character for character in normalized if character.isprintable())
-    return printable[:MAXIMUM_DETAIL_CHARACTERS] if printable else None
+    if not printable:
+        return None
+    if len(printable) <= MAXIMUM_DETAIL_CHARACTERS:
+        return printable
+    # Marked, because an unmarked cut is indistinguishable from the agent having stopped there.
+    # A hard slice ended mid-word with nothing to say it had been cut -- "...used for validation,
+    # formatt" reads as a sentence the agent left unfinished, which is a different and more
+    # alarming thing than a message this service shortened. `feed._elide` already appends one for
+    # the pane's own narrower width; this is the same courtesy at the budget both ends of the
+    # spool agree on. The ellipsis is inside the bound, not added to it, so every caller's
+    # arithmetic is unchanged.
+    return printable[: MAXIMUM_DETAIL_CHARACTERS - 1] + "…"
 
 
 class ActivityKind(Enum):

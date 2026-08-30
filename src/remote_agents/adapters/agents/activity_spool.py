@@ -77,12 +77,20 @@ _DETAIL_FIELDS = ("message", "last_assistant_message")
 #: a Codex payload, and a field this project has not seen is not a field it reads.
 #:
 #: `Stop` is the only key. `PermissionRequest` admits nothing, which is narrower than the
-#: measurement permits and is the point: `tool_name` is the one field on that event that names
-#: the ask without carrying a command, a path or a prompt -- but `reason` exists solely for
-#: `_kind` to pick an `ActivityKind`, that pick is unconditional for `PermissionRequest`, and
-#: `AgentActivity` has no `reason` field. Admitting it would write a provider string to disk that
-#: nothing renders and nothing consults, which is retention without rendering -- the thing
-#: DEC-013 clause (2) bounds when it lists what a hook may keep.
+#: measurement permits: `tool_name` is the one field on that event that names the ask without
+#: carrying a command, a path or a prompt, and it is declined anyway.
+#:
+#: **Not because nothing would render it.** That was the first reason given and it was wrong --
+#: it holds for `reason`, which only ever feeds `_kind`, and not for `detail`, which is
+#: provider-agnostic and renders on both surfaces with no renderer change. The Stage 2 gate
+#: evaluator checked rather than believed it.
+#:
+#: The reason that survives: `detail` means *the agent's own words*. It is what `_detail_of`
+#: guards, what the feed elides and expands, and what every consumer reads as a sentence the
+#: agent chose to write. A bare provider token is a different kind of string, and the honest
+#: version of the owner's ask is a sentence -- "waiting for an answer about a shell command" --
+#: which is wording, shared with Claude's `needs_answer`, and a decision to take deliberately
+#: rather than to inherit from a parser change. Recorded as DEC-067.
 _CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
