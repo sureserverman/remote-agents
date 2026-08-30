@@ -71,6 +71,30 @@ def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> N
     )
 
 
+def test_current_docs_say_what_a_codex_notification_carries_and_what_it_does_not() -> None:
+    """Both halves, because the asymmetry is the whole boundary and is easy to state as one.
+
+    A Codex `Stop` now carries the agent's own last line, bounded exactly as Claude's is. A Codex
+    `PermissionRequest` still carries nothing, and neither does the title-derived
+    `needs_answer` -- and an operator who reads only the first half will expect a wordy approval
+    notification that is never coming. The documents have to say which is which.
+    """
+    runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8").lower()
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8").lower()
+
+    # Phrases chosen after checking they appear nowhere in either document, so this fails for
+    # its own reason. A first draft asserted on `last_assistant_message`, "bounded" and
+    # "carries no" and passed on arrival: the field name appears in an unrelated drill command
+    # example, and the other two hit elsewhere for other reasons. A contract case satisfied by
+    # coincidence pins nothing.
+    assert "codex `stop` carries" in runbook, "the runbook must say the detail now arrives"
+    assert "the agent's own last line" in runbook + readme
+    assert "names no command" in runbook, (
+        "the negative half: an approval notification is still wordless, and an operator who "
+        "reads only the positive half will wait for words that are never coming"
+    )
+
+
 def test_the_retired_config_key_is_described_as_retired_rather_than_required() -> None:
     """The upgrade note told operators to add a key that is now tolerated, not required.
 
