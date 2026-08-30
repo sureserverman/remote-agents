@@ -555,9 +555,12 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
     seen = []
 
     class _Recording(usage_module.ProfileUsageReaders):
-        def __init__(self, readers=None, *, context_window=None):
-            seen.append(context_window)
-            super().__init__(readers, context_window=context_window)
+        def __init__(self, readers=None, **passed):
+            # `**passed` rather than a copied signature: a double that restates the real one
+            # goes stale the moment an argument is added, and fails with a TypeError that reads
+            # like a product bug rather than a test that was not updated.
+            seen.append(passed)
+            super().__init__(readers, **passed)
 
     monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Recording)
 
@@ -569,7 +572,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
 
         # Against the literal as well as the config, so this cannot pass by both sides being
         # the same default.
-        assert seen == [_STATED_CEILING]
+        assert seen == [{"context_window": _STATED_CEILING, "context_window_stated": True}]
         assert config.claude_context_window == _STATED_CEILING
     finally:
         connection.close()
