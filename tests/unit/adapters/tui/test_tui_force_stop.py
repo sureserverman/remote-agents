@@ -713,6 +713,14 @@ async def test_holding_the_force_key_down_on_the_list_destroys_nothing(extra: in
     delivered to. It binds no `f`, so they are inert — and that is the property worth pinning:
     the repeat lands somewhere that cannot act on it, rather than being refused by a guard
     somebody could later remove.
+
+    **The first version of this docstring drew a wrong lesson from the same observation.** It
+    said a suspending handler simply could not be driven by an awaited press, as though that
+    were a fact about the harness. It was a fact about a **deadlock**: the key ran on the app's
+    pump and froze the surface. `test_the_force_key_on_the_list_leaves_the_surface_answering`
+    is the test that says so, and `RowStopAction` is the fix. This test keeps the
+    `create_task` shape because what it pins is the *burst*, not the pump — but it is no longer
+    the reason `f` cannot be pressed normally, because now it can be.
     """
     launcher = _RecordingLauncher(tuple(_record() for _ in range(3)))
     app = RemoteAgentsTui(_context(launcher))
@@ -783,3 +791,120 @@ async def test_a_confirmed_force_that_raises_from_the_list_keeps_every_other_ses
         f"hidden because one stop failed"
     )
     assert cursor is None, f"the cursor rests on row {cursor} after a failed force"
+
+
+async def _pop_any_modal(app: RemoteAgentsTui) -> None:
+    """Unblock a suspended confirmation so `run_test` teardown can finish.
+
+    Only ever reached when an assertion below has already failed. Without it a deadlocked
+    surface takes the whole *file* down with it — no failure, no timeout, no output — which is
+    exactly the shape this test exists to catch, and a test that reproduces its own subject
+    during teardown reports nothing at all.
+    """
+    while isinstance(app.screen, ConfirmScreen):
+        app.pop_screen()
+        await asyncio.sleep(0)
+
+
+async def test_the_force_key_on_the_list_leaves_the_surface_answering() -> None:
+    """`f` must open its confirmation **and leave the app alive**. It did not.
+
+    **The seam this covers is the one every other list test steps over.** They all drive
+    `asyncio.create_task(app.screen.action_row_action("force"))` — a task of the test's own
+    making, which runs on whatever task the test is on and therefore cannot observe the pump a
+    real keypress uses. Pressed for real, Textual dispatches a *screen's* binding from
+    `App._on_key` → `run_action`, so the action runs on the **App's** message-pump task.
+    `ask_to_confirm` suspends there and the app stops draining messages entirely: measured on
+    the owner's real workstation, the modal came up correctly and then `Escape` did nothing,
+    `ctrl+q` did nothing, and the process had to be killed. `SessionsPaneScreen` inherits the
+    binding, so the console pane froze the same way.
+
+    The detail's force is safe for the reason this now copies: it is reached from
+    `on_option_list_option_selected`, a *message handler on the screen*, which runs on the
+    screen's own pump — so a suspension there holds back only that screen's events, which is
+    precisely the protection DEC-025 describes and the property its architecture sweep was
+    written to preserve. That sweep checks the caller is a method on a `*Screen` class; it
+    cannot see which pump the call arrives on, so `SessionsScreen.confirm_force` passed it
+    while violating the decision in substance.
+
+    Asserted as *the press returns and the surface still answers*, because that is the whole
+    of the defect. A test that only checked the modal opened would have passed against a
+    frozen application — the modal is the last thing it draws.
+    """
+    records = tuple(_record() for _ in range(2))
+    launcher = _RecordingLauncher(records)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        try:
+            await asyncio.wait_for(pilot.press("f"), timeout=5)
+        except TimeoutError:
+            await _pop_any_modal(app)
+            raise AssertionError(
+                "pressing `f` never returned: the confirmation suspended the app's message "
+                "pump, so the whole surface stopped answering"
+            ) from None
+
+        assert position(app) == "FORCE_MODAL", f"`f` reached {position(app)}"
+
+        try:
+            await asyncio.wait_for(pilot.press("escape"), timeout=5)
+        except TimeoutError:
+            await _pop_any_modal(app)
+            raise AssertionError(
+                "the confirmation opened but escape never returned: the surface is frozen "
+                "with a modal the owner cannot dismiss"
+            ) from None
+
+        step = position(app)
+
+    assert step == "SESSIONS", f"aborting the confirmation left the owner on {step}"
+    assert launcher.issued == [], "an abandoned confirmation issued a force stop"
+
+
+async def test_aborting_the_force_modal_leaves_the_cursor_where_the_owner_put_it() -> None:
+    """Aborting is a decision, and it must not rearm the key on a different session.
+
+    `confirm_force`'s abort branch re-reads through `on_reveal`, which reset the cursor to row
+    0. Measured before the fix: three RUNNING sessions, cursor on row 2, `f`, escape, then `s`
+    — one graceful stop issued against **row 0**, a session the owner never pointed at.
+    `check_action` does not save it, because row 0 is RUNNING and so genuinely offers
+    `graceful`.
+
+    The follow-up `s` is pressed rather than reasoned about, because the claim is about what
+    the *next keypress* does and a cursor assertion alone would leave that inferred.
+    """
+    records = tuple(_record() for _ in range(3))
+    launcher = _RecordingLauncher(records)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot, index=2)
+        choices = app.screen.query_one("#choices", OptionList)
+        chosen = [option.id for option in choices.options][2]
+
+        asking = await _press_force_on_the_list(app, pilot)
+        assert position(app) == "FORCE_MODAL", "the modal did not open"
+        await pilot.press("escape")
+        await _answered(asking)
+        await pilot.pause()
+
+        after = app.screen.query_one("#choices", OptionList)
+        keys = [option.id for option in after.options]
+        cursor = after.highlighted
+        landed = keys[cursor] if cursor is not None and keys else None
+
+        # And what the next unconfirmed key actually does with it.
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        await pilot.pause()
+
+    assert landed in (chosen, None), (
+        f"aborting moved the cursor from {chosen[:8]} to {landed and landed[:8]}"
+    )
+    stopped = [str(command.session_id) for command in launcher.issued]
+    assert stopped in ([], [chosen]), (
+        f"after aborting a force on {chosen[:8]}, `s` stopped {stopped} — the abort left the "
+        f"cursor on a session the owner never selected"
+    )

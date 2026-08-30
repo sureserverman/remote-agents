@@ -672,3 +672,131 @@ async def test_a_stop_that_raises_from_the_list_keeps_every_other_session(action
     # repeated keypress to retry it.
     assert cursor is None, f"the cursor rests on row {cursor} after a failed stop"
     assert "did not complete" in said, f"the failure was not reported: {said!r}"
+
+
+class _ShrinkingLauncher(_RecordingLauncher):
+    """Lists one session fewer once a stop has been issued, as the real store does.
+
+    A graceful stop that works *ends* the session, and an ended session is not listed. The
+    fixed-record double cannot show that, so it cannot show what the cursor does when the row
+    it was holding leaves the list — which is the half of this hazard DEC-062 is actually
+    about.
+    """
+
+    async def list_sessions(self):
+        if self.issued:
+            stopped = {str(command.session_id) for command in self.issued}
+            return tuple(r for r in self.records if str(r.session_id) not in stopped)
+        return self.records
+
+    async def refresh_readiness(self):
+        return await self.list_sessions()
+
+
+async def test_a_stop_from_the_list_never_moves_the_cursor_onto_another_session() -> None:
+    """DEC-062's hazard, on the path this stage created. The mitigation had one exit, not three.
+
+    `_CLEARS_VANISHED_CURSOR`'s import-time guard states the whole argument for binding an
+    unconfirmed `s`/`c` at all: the cursor may never end up on a row the owner did not put it
+    on, because one keypress there stops an agent they never selected. That was wired into
+    `tui.stop`'s **exception** exit, through `redraw_after_failure`. It was not wired into the
+    success exit — `after_command` → `on_reveal` → `reload()` → `_draw_listing(keep_cursor=
+    False)` → `show_choices(rows)`, whose `highlight` defaults to **0**.
+
+    Measured before the fix, with three RUNNING sessions and the cursor deliberately on the
+    second: `s` stopped the right session and left the cursor on row 0 — a different, still
+    running session, with `s` still live on it. Found by the Stage 2 Tier-2 review.
+
+    The property is stated as *identity*, not as an index: "row 1" is meaningless once the
+    list can shorten under the cursor, and an index assertion is what let the old behaviour
+    read as correct.
+    """
+    records = tuple(_record(SessionState.RUNNING) for _ in range(3))
+    launcher = _RecordingLauncher(records)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot, index=1)
+        choices = app.screen.query_one("#choices", OptionList)
+        chosen = [option.id for option in choices.options][1]
+
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+        keys = [option.id for option in after.options]
+        cursor = after.highlighted
+
+    assert str(launcher.issued[0].session_id) == chosen, "the wrong session was stopped"
+    landed = keys[cursor] if cursor is not None and keys else None
+    assert landed in (chosen, None), (
+        f"after stopping {chosen[:8]} the cursor rests on {landed and landed[:8]}, which is "
+        f"neither the row the owner acted on nor nothing — one more `s` would stop a session "
+        f"they never selected"
+    )
+
+
+async def test_a_stop_that_ends_the_session_rests_the_cursor_on_nothing() -> None:
+    """The other half: when the acted-on row leaves the list, the cursor rests on nothing.
+
+    This is `_CLEARS_VANISHED_CURSOR` itself, reached through a stop the owner issued rather
+    than through the ten-second refresh it was written for. Row 0 would be a *different*
+    session; keeping the index would be worse than useless once the list has shortened.
+    """
+    records = tuple(_record(SessionState.RUNNING) for _ in range(3))
+    launcher = _ShrinkingLauncher(records)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot, index=1)
+        choices = app.screen.query_one("#choices", OptionList)
+        chosen = [option.id for option in choices.options][1]
+
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+        keys = [option.id for option in after.options]
+        cursor = after.highlighted
+
+    assert chosen not in keys, "the stopped session is still listed, so this proves nothing"
+    assert len(keys) == 2, f"the listing did not shorten: {keys}"
+    assert cursor is None, (
+        f"the row the cursor held has gone and the cursor fell back to row {cursor} — "
+        f"DEC-062's import-time guard says that is what makes `s` unsafe to bind at all"
+    )
+
+
+async def test_a_refusal_leaves_the_cursor_where_the_owner_put_it() -> None:
+    """The fourth exit that redraws this list, and the last one found.
+
+    `ChoiceScreen.refuse` ends in `await self.on_reveal()`, so every refusal `tui.stop` and
+    `confirm_force` raise onto the list is a redraw — and it reset the cursor to row 0 like the
+    others. Nothing is stopped *by* the refusal, which is why it reads as harmless; what it
+    leaves behind is a cursor on a live session the owner never selected, with unconfirmed
+    `s`/`c` armed on it. One more keypress and the refusal has cost a session.
+
+    Driven through the real refusal path — a row drawn STARTING, which the policy offers no
+    stop for, so `tui.stop` re-reads, re-checks and refuses in words (DEC-007's fourth
+    mitigation) rather than issuing anything.
+    """
+    records = (_record(SessionState.RUNNING), _record(SessionState.STARTING))
+    launcher = _RecordingLauncher(records)
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot, index=1)
+        choices = app.screen.query_one("#choices", OptionList)
+        chosen = [option.id for option in choices.options][1]
+
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        await pilot.pause()
+        after = app.screen.query_one("#choices", OptionList)
+        keys = [option.id for option in after.options]
+        cursor = after.highlighted
+
+    assert launcher.issued == [], f"a refused action issued {launcher.issued}"
+    landed = keys[cursor] if cursor is not None and keys else None
+    assert landed in (chosen, None), (
+        f"a refusal moved the cursor from {chosen[:8]} to {landed and landed[:8]} — a live "
+        f"session the owner never selected, with an unconfirmed stop key armed on it"
+    )

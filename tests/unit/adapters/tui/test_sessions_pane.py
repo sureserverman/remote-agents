@@ -444,23 +444,43 @@ async def test_a_session_whose_project_left_the_catalogue_still_renders() -> Non
         assert "vanished" in str(choices.get_option_at_index(0).prompt)
 
 
-# A key per action, each routed into the detail's own chain ------------------------------------
+# A key per action that OPENS something, each routed into the detail's own chain ---------------
 
-#: `s` and `c` are here since DEC-052 was amended. They are the two the detail performs
-#: **without asking**, so what this parametrisation pins for them is narrower than for the
-#: others and worth saying: that the key is an entry to the detail's own chain, not a second
-#: implementation of a stop. The safety argument for binding them at all is elsewhere --
-#: `test_a_vanished_row_leaves_the_cursor_on_nothing`.
+#: **This block used to introduce `s` and `c` and no longer does**, and the correction is the
+#: point rather than housekeeping: it explained that those keys were "an entry to the detail's
+#: own chain", which stopped being true when they moved onto the list. It was left standing one
+#: paragraph above a tuple that no longer contains them — the same shape of stale-prose defect
+#: that hung this file when `f` was left in the tuple itself, found by the Stage 2 Tier-2
+#: review. The safety argument for binding the unconfirmed keys at all is unchanged and lives
+#: where it always did: `test_a_vanished_row_leaves_the_cursor_on_nothing`, plus
+#: `test_tui_stop.py`'s cursor-identity tests for the stop the owner issues themselves.
 _ACTION_KEYS = (
     ("a", "attach"),
     ("i", "inspect"),
     ("r", "rename"),
-    # `s` and `c` are deliberately **not** here any more: they act on the list they were
-    # pressed on rather than opening anything, which is ask 6, and
-    # `test_tui_stop.py` owns what they do instead. `f` stays for now — it still routes
-    # through the detail, because that is where its confirmation is raised until Task 2.2
-    # moves the modal onto the list's own handler under DEC-025.
-    ("f", "force"),
+    # **None of the three stop keys is here any more.** They act on the list they were pressed
+    # on rather than opening anything, which is ask 6; `test_tui_stop.py` and
+    # `test_tui_force_stop.py` own what they do instead, and
+    # `test_session_detail.py::test_no_stop_key_opens_a_detail` owns the claim that none of
+    # them reaches a detail at all.
+    #
+    # `f` was the last to go, and removing it from this list was at first done for the **wrong
+    # reason** — which is worth recording, because the wrong reason was written down here and
+    # would have taught the next reader to look away from a shipping defect.
+    #
+    # When `f`'s confirmation moved onto the list, this parametrization was not revisited, and
+    # the file then hung with no output. That was diagnosed as a *test-driving limitation* — "a
+    # key whose handler suspends cannot be driven by an awaited press" — and the key was
+    # dropped from the tuple. The diagnosis was wrong. **The hang was the product defect.**
+    # Textual dispatches a screen's binding on the *App's* pump, so `ask_to_confirm` suspended
+    # the whole application: driven on the owner's real workstation, the modal drew, and then
+    # Escape did nothing, `ctrl+q` did nothing, and the process had to be killed. A gate
+    # evaluator found it by driving the real surface rather than the harness.
+    #
+    # The fix is in the product — `RowStopAction`, which puts the work on the screen's own
+    # pump — and `test_the_force_key_on_the_list_leaves_the_surface_answering` in
+    # `test_tui_force_stop.py` presses the real key and asserts the surface still answers. `f`
+    # stays out of *this* tuple because it no longer opens a detail, the honest reason.
 )
 
 
@@ -475,12 +495,12 @@ async def test_each_opening_key_pushes_the_detail_carrying_its_action(
     gets. The key itself decides nothing about whether the action is legal; that is the
     policy's answer, re-checked at issue time.
 
-    **This used to cover every row key, and covering `s` and `c` was the defect.** Pushing a
-    detail is right for a key that exists to open something and wrong for a key that ends a
-    session: the owner got a screen they had not asked for, and a graceful stop that worked
-    then redrew it as "That session is no longer available." above a lone `Back` row. The
-    parametrization shrank rather than the assertion loosening, so what is left still asserts
-    the exact push it always did.
+    **This used to cover every row key, and covering the three stop keys was the defect.**
+    Pushing a detail is right for a key that exists to open something and wrong for a key that
+    ends a session: the owner got a screen they had not asked for, and a graceful stop that
+    worked then redrew it as "That session is no longer available." above a lone `Back` row.
+    The parametrization shrank rather than the assertion loosening, so what is left still
+    asserts the exact push it always did.
     """
     opened: list[tuple[str, str | None]] = []
     app = SessionsPane(_context((_record(),)))

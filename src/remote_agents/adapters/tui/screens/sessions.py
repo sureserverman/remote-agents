@@ -83,6 +83,37 @@ def remote_control_entries(record) -> tuple[tuple[str, str], ...]:
 _SESSIONS_AUTO_REFRESH = 10.0
 
 
+class RowStopAction(Message):
+    """A stop the owner asked for with a row key, delivered to the screen's own pump.
+
+    **Posted rather than performed inline, and the reason is a deadlock that shipped in this
+    stage before a gate evaluator drove the real surface.** Textual dispatches a *screen's*
+    binding from `App._on_key` -> `_check_bindings` -> `run_action`, so a binding action runs
+    on the **App's** message-pump task, not the screen's. `confirm_force` suspends there on
+    `ask_to_confirm`, the app stops draining messages, and nothing gets through again: measured
+    on the owner's real workstation, the modal drew correctly and then Escape did nothing,
+    `ctrl+q` did nothing, and the process had to be killed. `SessionsPaneScreen` inherits the
+    binding, so the console pane froze the same way.
+
+    The detail's force was never exposed to this and that is what showed the way out: it is
+    reached from `on_option_list_option_selected`, a *message handler on the screen*, which
+    runs on the screen's own pump — so a suspension holds back only that screen's events. That
+    is exactly the protection DEC-025 describes, and `OpeningAction` below already exists
+    because the same decision forced the same shape on the detail's opening actions.
+
+    **DEC-025's architecture sweep could not catch this**, which is worth recording where the
+    fix lives: it asserts the caller is a method on a `*Screen` class, and `confirm_force` is
+    one. What the decision actually requires is a property of the *pump the call arrives on*,
+    which no static check of the call site can see. The sweep is unchanged and still worth
+    having; this note is the part it cannot enforce.
+    """
+
+    def __init__(self, action: str, session_value: str) -> None:
+        super().__init__()
+        self.action = action
+        self.session_value = session_value
+
+
 class OpeningAction(Message):
     """One action for a freshly-opened session detail to perform on arrival.
 
@@ -433,17 +464,15 @@ class _SessionActionKeys:
             # the detail exists; this is the same refusal one step earlier, so the two entry
             # paths agree rather than relying on the pump staying serialized forever.
             return
-        if action == FORCE:
-            # **Checked before the unconfirmed branch, and by name rather than by order.**
-            # FORCE is a member of `ACTION_LABELS`, so if this branch were removed the next
-            # one would reach `tui.stop` with no modal in between and one keypress would
-            # force-stop a session. DEC-018 permits an unconfirmed `s` and `c` and says
-            # nothing of the kind about force. `SessionDetailScreen.choose` keeps the same
-            # redundancy for the same reason, and says so.
-            await self.confirm_force(session_value)
-            return
         if action in ACTION_LABELS:
-            await self.tui.stop(action, session_value, self)
+            # **Posted, not performed**, and for all three keys rather than only for force.
+            # A binding action runs on the *App's* pump (see `RowStopAction`), so anything
+            # that suspends here suspends the whole surface: force deadlocked it outright on
+            # the modal, and `s`/`c` blocked it for the duration of the stop, queueing the
+            # owner's keystrokes and replaying them afterwards onto whatever screen had by
+            # then arrived. Handing the work to `on_row_stop_action` puts every one of them on
+            # this screen's own pump, which is where the detail has always run them.
+            self.post_message(RowStopAction(action, session_value))
             return
         await self.tui.show_detail(session_value, action)
 
@@ -644,8 +673,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
           detail than the one they were looking at.
         - **Never over work in flight.** Two different guards, because the first version of
           this docstring named only one and overclaimed it. `self.tui.busy` covers a mutating
-          command — but those are issued from the *detail* screen, which suspends this timer
-          by being pushed on top, so that check is the belt and the suspension is the braces.
+          command — and **`busy` is now the whole of that half rather than the belt to a
+          braces.** Those commands used to be issued only from the *detail* screen, which
+          suspends this timer by being pushed on top; since `s`, `c` and `f` moved onto this
+          list they are issued from **here**, with no detail pushed and the timer running. The
+          suspension no longer covers them, which makes `busy` load-bearing where it used to be
+          redundant, and makes the `_visit` bump on the re-read after a command the thing that
+          discards a tick which was already in flight.
           What `busy` does not cover is this screen's own reads: Ctrl+R and `on_reveal` call
           `reload`, which holds no guard at all, so a tick landing mid-refresh used to start a
           second concurrent `load_sessions` — doubling the readiness probe on a host already
@@ -697,9 +731,26 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         Both bumps are kept — the counter only has to *change*, so bumping twice on a back
         path is harmless, and `on_screen_resume` still covers the paths that do not come
         through `go_back`.
+
+        **`keep_cursor=True`, and this is the one place that closes a whole class.** Every
+        redraw of this listing that resets the cursor to row 0 is a hazard, because `s` and
+        `c` act on the row under the cursor without asking (DEC-018) and the import-time guard
+        above says so in terms: a key must not be able to act on a row the owner did not put
+        the cursor on. Four exits redraw this list, and they were fixed one at a time as each
+        was found — `after_command` after a stop, `redraw_after_failure` after one that
+        raised, `confirm_force`'s abort, and `ChoiceScreen.refuse` — of which the last two
+        both come through *here*. Measured before this: three RUNNING sessions, cursor on row
+        2, `f` then escape, then `s` — one graceful stop issued against **row 0**, a session
+        the owner never selected.
+
+        So the fix belongs at the funnel rather than at each mouth. `keep_cursor` restores by
+        row *key* and rests on **nothing** when that key has gone, which is the mechanism
+        DEC-052 built for the ten-second refresh and the one `_CLEARS_VANISHED_CURSOR`
+        describes. It is also simply better on the path this method was written for: coming
+        back from a detail, the owner lands on the row they opened rather than at the top.
         """
         self._visit += 1
-        await self.reload()
+        await self.reload(keep_cursor=True)
 
     async def refresh_contents(self) -> None:
         """Re-run readiness and the listing, which is what Refresh means on this screen.
@@ -711,7 +762,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         await self.reload()
 
-    async def reload(self, *, rest_on_nothing: bool = False) -> None:
+    async def reload(self, *, rest_on_nothing: bool = False, keep_cursor: bool = False) -> None:
         """Refresh readiness, then list what the shared store actually holds — on request.
 
         `rest_on_nothing` is asked for by `redraw_after_failure` alone: a command that raised
@@ -735,7 +786,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         finally:
             self._reading = False
-        self._draw_listing(records, rest_on_nothing=rest_on_nothing)
+        self._draw_listing(records, rest_on_nothing=rest_on_nothing, keep_cursor=keep_cursor)
 
     def _draw_listing(
         self,
@@ -842,6 +893,27 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         await self.tui.show_detail(key)
 
+    async def on_row_stop_action(self, message: RowStopAction) -> None:
+        """The screen handler `RowStopAction` is delivered to. DEC-025's required shape.
+
+        Guarded again here rather than trusting the check the key already made: a posted
+        message is delivered later, and `dispatch_opening` on the detail states the same rule
+        for the same reason — the two entry paths agree instead of relying on the pump staying
+        serialized forever.
+
+        `FORCE` is separated by name rather than by branch order, exactly as
+        `SessionDetailScreen.choose` does and for the same reason: FORCE is a member of
+        `ACTION_LABELS`, so without this the next branch would reach `tui.stop` with no modal
+        in between and one keypress would force-stop a session. DEC-018 permits an unconfirmed
+        `s` and `c` and says nothing of the kind about force.
+        """
+        if not self.showing or self.tui.busy:
+            return
+        if message.action == FORCE:
+            await self.confirm_force(message.session_value)
+            return
+        await self.tui.stop(message.action, message.session_value, self)
+
     async def redraw_after_failure(self) -> None:
         """Re-read the listing and rest the cursor on nothing.
 
@@ -861,14 +933,16 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         `reload` rather than `on_reveal` so this is one read rather than two, with the `_visit`
         bump `on_reveal` owns kept.
 
-        **That bump is defensive rather than closing an observed race**, and this file is
-        otherwise scrupulous about naming the race each guard closes, so: `tui.stop` holds
-        `busy` from entry to its `finally` and `_auto_reload` returns immediately while `busy`,
-        so on *this* path no background read can be in flight for it to invalidate. It is kept
-        because the hook has three other call sites whose guard windows are their own, and
-        `on_reveal`'s own reasoning already records that bumping twice is harmless. Noted at
-        the Stage 2 Tier-1 re-review's request, which found it the one guard left to be
-        inferred.
+        **That bump closes a real race, and an earlier version of this paragraph said it did
+        not.** It claimed `tui.stop` holds `busy` end to end and `_auto_reload` returns while
+        `busy`, so nothing could be in flight to invalidate — which confuses *scheduling* a
+        tick with one already suspended inside `load_sessions`. `busy` refuses ticks that have
+        not started; a read that was already awaiting the store resumes and draws whatever it
+        fetched. Measured by the Stage 2 second review pass: gate a tick inside the store read,
+        stop a session, let the read answer, and the stopped session is drawn back onto the
+        list as RUNNING, offering `s` and `f` against a pane that no longer exists. The bump is
+        what discards it — the same mechanism, and the same defect, `on_screen_resume` records
+        for the detour through a detail.
         """
         self._visit += 1
         await self.reload(rest_on_nothing=True)
@@ -953,9 +1027,16 @@ class SessionsPaneScreen(SessionsScreen):
     process of its own, and inherits every one of `SessionsScreen`'s stale-read guards
     unchanged.
 
-    The resting cursor stays on a non-mutating row (DEC-007, BL-004) and this pane satisfies
-    that by what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
-    Every mutating action is behind `d`.
+    The resting cursor stays on a non-mutating row (DEC-007) and this pane satisfies that by
+    what Enter *is*: an exchange writes no record and touches no lifecycle (DEC-040).
+
+    **Every mutating action used to be behind `d`, and three of them no longer are.** `s`, `c`
+    and `f` act on this list directly — that is ask 6, and `action_row_action` above carries
+    the full account. What still holds is the sentence that matters for this pane's own safety
+    argument: *Enter* mutates nothing here. What changed is that a bare `s` or `c` now ends a
+    session without the detail in between, which is safe only because `_draw_listing` rests a
+    vanished cursor on nothing and `after_command` keeps the cursor on the row the owner acted
+    on. Both are inherited from `SessionsScreen` rather than restated here.
     """
 
     #: Its own name, not `SESSIONS`. It shares the sessions screen's body and inherits its

@@ -877,7 +877,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         a stop, a confirmation abort, or a remote-control change from growing the stack by one
         screen every time the owner uses it.
 
-        `opening_action` is what the sessions pane's per-action keys carry. On the redraw path
+        `opening_action` is what the sessions pane's per-action keys carry — the keys that
+        **open** something (`a`, `i`, `r`) and the Remote Control direction. The three that end
+        a session stopped passing through here when they moved onto the list; the field is
+        narrower than it was rather than unused, and `test_no_stop_key_opens_a_detail` is what
+        keeps it so. On the redraw path
         it is dispatched explicitly, because that path does not re-mount the screen and so
         never reaches `populate` — a key pressed on a detail already showing must still do
         what it says. It is passed through `choose` there for the same reason `populate` does:
