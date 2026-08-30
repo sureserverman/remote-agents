@@ -227,21 +227,21 @@ def _queue_two(app: RemoteAgentsTui, key: str) -> None:
     screen.post_message(OptionList.OptionSelected(choices, chosen, index))
 
 
-async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
-    """Gather a project and an agent, and stop on Review.
+async def _walk_to_the_agent_list(app: RemoteAgentsTui, pilot) -> None:
+    """Gather a project, and stop on the agent list — which is where the launch is issued.
 
     Driven through the screens' own `choose` rather than through keys, exactly as the
-    exclusivity tests next door do: the wizard's earlier steps are not what is under
-    test, and the burst has to land on a Review screen that was reached the ordinary way.
+    exclusivity tests next door do: the wizard's earlier steps are not what is under test, and
+    the burst has to land on a screen that was reached the ordinary way.
 
-    Two choices, not three and no submit: the agent choice is the arrival at the review since
-    the launch flow lost its label step.
+    **One choice, not three.** The flow lost its label step and then its review step, so the
+    agent list is the commit position: choosing a row here *is* the launch, which is why the
+    burst below is queued on an agent row rather than on a `launch` row.
     """
     await app.screen.choose("opaque-existing")
     await app.screen.choose("launch")
-    await app.screen.choose("claude")
     await settle(app, pilot)
-    assert position(app) == "REVIEW", f"the wizard stopped on {position(app)}"
+    assert position(app) == "PROFILES", f"the wizard stopped on {position(app)}"
 
 
 async def test_a_queued_burst_reaches_the_screen_twice() -> None:
@@ -282,18 +282,22 @@ async def test_a_queued_burst_reaches_the_screen_twice() -> None:
     )
 
 
-async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
-    """BL-015's launch half: a doubled enter on Review must not start two managed sessions.
+async def test_two_queued_enters_on_an_agent_start_exactly_one_session() -> None:
+    """BL-015's launch half: a doubled enter on an agent must not start two managed sessions.
 
     A launch is the most expensive thing this surface does — a tmux pane, an agent process, a
-    record in the shared store — and it is the one command with no confirmation in front of it,
-    because the Review screen *is* the confirmation. So the only thing between a doubled
-    keypress and two live agents in one project is whatever refuses the second selection.
+    record in the shared store — and it now has no confirmation in front of it at all, because
+    the review step that was standing there guarded nothing and was removed. So the only thing
+    between a doubled keypress and two live agents in one project is whatever refuses the
+    second selection.
 
-    Nothing does. `RemoteAgentsTui.launch` clears `_busy` in a `finally` that runs before
-    `self.exit(...)`, and `ReviewScreen.choose` does not leave the position on success, so when
-    the pump dispatches the second `OptionSelected` it finds the same screen, the same
-    `launch` row and an open guard. Observed: `['launch', 'launch']`.
+    **What refuses it is `_leaving`, and that is why removing the review did not reopen this.**
+    `RemoteAgentsTui.launch` clears `_busy` in a `finally` that runs before `self.exit(...)`,
+    and the screen that issued the launch does not leave the position on success — so the guard
+    the second dispatch meets cannot be `_busy`. `_leave` sets `_leaving`, `busy` reads
+    `self._busy or self._leaving`, and nothing clears it. That guard belongs to the app rather
+    than to any screen, which is precisely why the act could move between screens without the
+    protection moving with it. Observed before it existed: `['launch', 'launch']`.
 
     The error-toast assertion is not decoration. Without it this test would pass identically
     for a surface that issued one launch and then failed — the count assertion holds while the
@@ -304,9 +308,9 @@ async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await _walk_to_review(app, pilot)
+        await _walk_to_the_agent_list(app, pilot)
 
-        _queue_two(app, "launch")
+        _queue_two(app, "claude")
         # Two pumps rather than one: the first drains the burst, the second gives a second
         # dispatch that got as far as the launcher somewhere to land. A single pause would
         # leave a real double looking like a single.
@@ -315,7 +319,8 @@ async def test_two_queued_enters_on_review_start_exactly_one_session() -> None:
         reported = announcements(app, severity="error")
 
     assert launcher.issued == ["launch"], (
-        f"two queued enters on Review issued {launcher.issued}; exactly one launch was required"
+        f"two queued enters on an agent issued {launcher.issued}; exactly one launch was "
+        f"required"
     )
     # Checked *after* the count, per the Stage 1 gate evaluator: with the order reversed, a
     # regression that issued one launch and also reported an error would fail here and read
@@ -378,19 +383,20 @@ async def test_quit_during_the_leaving_window_keeps_the_attach_request() -> None
     session the owner just started is left running with no handle offered. Silent, on the
     success path, with the work already done.
 
-    Both flows are driven because they used to arm differently: `ReviewScreen.work_in_flight`
-    was hardcoded `True`, so the launch case needed a second press to reach the clobber, while
-    the resume screen holds no entry and is unarmed, so one press did it. `ReviewScreen` has
-    since stopped protecting work too, so the two now arm the same way — the second press below
-    is harmless either way and is kept because the clobber is what is under test, not the
-    number of presses it takes to reach it.
+    Both flows are driven because they used to arm differently: the launch review's
+    `work_in_flight` was hardcoded `True`, so the launch case needed a second press to reach
+    the clobber, while the resume screen holds no entry and is unarmed, so one press did it.
+    That review stopped protecting work before it was removed altogether, and the agent list
+    that inherited the launch never claimed to — so the two arm the same way now. The second
+    press below is harmless either way and is kept because the clobber is what is under test,
+    not the number of presses it takes to reach it.
     """
     launcher = _RecordingLauncher()
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await _walk_to_review(app, pilot)
-        await app.screen.choose("launch")
+        await _walk_to_the_agent_list(app, pilot)
+        await app.screen.choose("claude")
         assert app._leaving, "the launch did not reach `_leave`, so there is no window to test"
         launched = app.return_value
         assert isinstance(launched, AttachRequest), (

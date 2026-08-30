@@ -1,20 +1,37 @@
-"""The launch wizard: pick a project, pick an agent, review it, go.
+"""The launch wizard: pick a project, pick an agent, go.
 
-Three screens replacing three wizard positions. Each owns the rows it renders and what a row
-means when it is chosen, so the position an event belongs to is decided by which screen is
-on top of the stack rather than by an `if` chain re-reading a field.
+Two screens for two wizard positions. Each owns the rows it renders and what a row means when
+it is chosen, so the position an event belongs to is decided by which screen is on top of the
+stack rather than by an `if` chain re-reading a field.
 
-**It was four, and the step it lost was the optional label.** A name chosen before the launch
-is chosen before there is anything to look at, and nothing could change it afterwards — so the
-surface asked for a name at the one moment the owner knew least, and then never asked again.
-Naming a session now lives on the session, as the detail's Rename row, which is also where the
-bot has always done it; `telegram/service.py` records the same decision for the same reason.
-`label_or_error` and `LabelWithinBound` outlived the step and belong to that entry now.
+**It was four, and it lost two steps, one per plan.** The optional label went first: a name
+chosen before the launch is chosen before there is anything to look at, and nothing could
+change it afterwards — so the surface asked for a name at the one moment the owner knew least,
+and then never asked again. Naming a session now lives on the session, as the detail's Rename
+row, which is also where the bot has always done it; `telegram/service.py` records the same
+decision for the same reason. `label_or_error` and `LabelWithinBound` outlived the step and
+belong to that entry now.
+
+**Then the review step went, and losing the label is why it could.** That position existed to
+protect a typed label from an escape that would clear it. Without one it held two list
+selections, re-pickable in two keystrokes, and guarded nothing at all — while the resume flow,
+which commits to the same kind of act, had no equivalent position. DEC-033 says a step the
+other surface does not have is a step to remove. `ProfilesScreen` inherited what actually
+belonged to the *act* rather than to the position: the sentence naming the consequence, the
+resting cursor that stops a repeated keypress committing, and the failure handling.
+
+**`ProjectReviewScreen` in `project.py` is a different screen and stays**, and that asymmetry
+is deliberate rather than an oversight: it holds a *typed* project name that `NameScreen.populate`
+also clears, so its work is still work escape cannot give back. It is therefore the one
+remaining subclass of `GatheredSelectionScreen` — the class stays because the screen that needs
+it needs it, not because two screens once shared it.
 
 **One back-path shortcut is deliberately gone**, and this is where the pair that `project.py`
 and `resume.py` both refer back to was removed. Back at the review used to jump straight to the
 agent list; on a real stack it is one level. Its sibling — Escape at the label jumping past the
 agent choice to the project list — left with the label screen itself rather than being fixed.
+Both subjects have now outlived the positions they were about, which is why this paragraph
+names them in the past tense and no code enforces either.
 """
 
 from __future__ import annotations
@@ -26,7 +43,7 @@ from textual.binding import Binding
 from textual.timer import Timer
 from textual.widgets import Input, OptionList
 
-from remote_agents.adapters.tui.model import _BACK, _CANCEL, LaunchSelection
+from remote_agents.adapters.tui.model import _BACK, LaunchSelection
 from remote_agents.adapters.tui.preferences import ALPHABETICAL, RECENCY
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
@@ -259,14 +276,44 @@ class ProjectsScreen(ChoiceScreen):
 
 
 class ProfilesScreen(ChoiceScreen):
-    """The curated agents, each named with the reason it cannot be launched here."""
+    """The curated agents, each named with the reason it cannot be launched here.
+
+    **This is the launch flow's commit position**, and it became one when the review step
+    between it and the launch was removed. That step guarded nothing: DEC-033 removed the
+    label that gave it a reason to exist, and what was left was two list selections that
+    escape gives back in two keystrokes. The resume flow has no equivalent position — the
+    conversation list *is* its commit — which is the asymmetry DEC-033 says to resolve by
+    removing the step the other surface does not have.
+
+    Two things followed the act onto this screen rather than dying with the position that
+    used to hold them, and both are load-bearing:
+
+    - **The consequence is said before it happens.** A ready launch execs this process away
+      (DEC-023), which is the largest thing this surface does, and the owner reads it on the
+      screen that commits to it. The wording covers both routes because `attach_to` has more
+      than one: with `TMUX` set it refuses to nest and prints the command instead, and an
+      `execvp` that raises does the same.
+    - **No repeated keypress commits here.** DEC-007's mitigation, and the reason the list
+      grows a Back row and rests on it — see `render_profiles`.
+    """
 
     #: The curated profile list is the host's own configuration; a host offering none could
     #: not launch anything at all, so an empty agent list is a broken install, not a state.
+    #: The Back row goes through `trailing` rather than `entries` for the reason
+    #: `show_choices` gives: a list holding nothing but Back is empty in every sense the owner
+    #: cares about, and passing it as data is how a screen silently opts out of its own empty
+    #: state. `NEVER_EMPTY` is the honest answer here either way.
     empty_state = NEVER_EMPTY
 
     position = "PROFILES"
-    status = "Choose an agent."
+    #: No severity, per DEC-010: this is an instruction about what is about to happen, not a
+    #: report of a condition. Inherited whole from the review position, whose own comment
+    #: recorded that "or prints how to reach it" is not hedging but the other half of the
+    #: truth — `docs/operator-runbook.md` treats running this surface inside tmux as ordinary.
+    status = (
+        "Choose an agent — a ready launch hands this terminal to the session's pane, "
+        "or prints how to reach it."
+    )
 
     @property
     def crumb(self) -> str:
@@ -290,137 +337,82 @@ class ProfilesScreen(ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
-        self.show_choices(
-            tuple(
-                (
-                    profile.profile_id,
-                    profile.profile_id
-                    if profile.available
-                    else f"{profile.profile_id}  (unavailable: {profile.blocked_reason})",
-                )
-                for profile in self.services.profiles
+        self.render_profiles()
+
+    def render_profiles(self, *, resting: bool = True) -> None:
+        """Draw the agents, resting the cursor on the row that commits nothing.
+
+        **The resting row is the whole of DEC-007's mitigation at this position**, and it
+        arrived with the act. `ResumeConversationsScreen` went through the identical
+        transformation when its own confirmation was removed, and its comment names the
+        hazard in the words that apply here unchanged: two enters from the list before this
+        one — one to arrive, one still queued — would otherwise start a session and exec this
+        terminal away. The rule being applied is *no repeated keypress commits at a commit
+        position*, not "review screens rest on Back"; whether the rows are data or actions
+        does not enter into it.
+
+        **The cost is one key**, and it depends on an upstream default worth naming: Down from
+        the resting row reaches the first agent because Textual's `OptionList.action_cursor_down`
+        goes through `find_next_enabled`, which *wraps*. `find_next_enabled_no_wrap` ships
+        beside it, and were the widget ever to use that the first agent would be a full
+        list-length away with nothing failing.
+
+        `resting=False` — rest on **nothing** — is what the failure path asks for, and it is a
+        different question from where the cursor rests on arrival. See `choose`.
+        """
+        entries = tuple(
+            (
+                profile.profile_id,
+                profile.profile_id
+                if profile.available
+                else f"{profile.profile_id}  (unavailable: {profile.blocked_reason})",
             )
+            for profile in self.services.profiles
+        )
+        self.show_choices(
+            entries,
+            highlight=len(entries) if resting else None,
+            trailing=((_BACK, "Back"),),
         )
 
     async def choose(self, key: str) -> None:
+        if key == _BACK:
+            # Kept beside the central `_BACK` branch in
+            # `ChoiceScreen.on_option_list_option_selected` rather than left to it, for the
+            # reason that branch's own comment gives: `choose` is called directly, by tests
+            # and by `after_command`, without passing through the handler at all.
+            await self.tui.go_back()
+            return
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:
             reason = profile.blocked_reason if profile is not None else "unknown profile"
             self.announce(f"That agent cannot be launched here: {reason}", severity="warning")
             return
         self.tui.selection = replace(self.tui.selection, profile=profile)
-        await self.advance_to(ReviewScreen())
-
-
-class ReviewScreen(ChoiceScreen):
-    """The last position before a launch is issued, resting on Back rather than Launch.
-
-    **It was a `GatheredSelectionScreen` and no longer needs to be, because the work it was
-    protecting was the label.** That base class exists for a review position holding "a whole
-    flow's worth of choices... one keystroke from being discarded with no way back to them", and
-    the load-bearing half of that is *no way back*: this screen held the gathered selection plus
-    a typed label, and walking back cleared the entry on the way in, so the label was genuinely
-    unrecoverable. What is left is two list selections, and escape lands on the agent list with
-    both lists still standing — two keystrokes to re-pick, which is the same reasoning that has
-    always exempted the project filter from the flow-jump protection.
-
-    `ProjectReviewScreen` keeps the base class, and that asymmetry is the point rather than an
-    oversight: it holds a *typed* project name that `NameScreen.populate` also clears, so its
-    work is still work escape cannot give back. `GatheredSelectionScreen` therefore has one
-    subclass, which is one more than none — the class stays because the screen that needs it
-    needs it, not because two screens once shared it.
-    """
-
-    #: Launch, Back and Cancel are written here.
-    empty_state = NEVER_EMPTY
-
-    position = "REVIEW"
-
-    @property
-    def crumb(self) -> str:
-        """The agent chosen a screen ago.
-
-        **It read "Review", and that became wrong the moment the label step was removed.**
-        The label step's own crumb was the profile id, and its docstring recorded exactly why:
-        named for its own step instead, "it read fine and lost the agent from the trail
-        entirely, since no later position carried it." Review was that later position. So
-        deleting the step reintroduced the defect its predecessor had already been fixed for,
-        and the trail at the commit point read `Projects › infra/existing › Review` — the
-        project, and no sign of which agent was about to be launched into it.
-
-        Naming the agent here is also what the convention already asked for: a crumb names *the
-        choice that led here* when there was one, and the step's own name when there was not.
-        There was not, when the label sat in between; there is now. What the position *is* goes
-        to the status line under the same region split — the trail carries what the owner chose,
-        the status carries what going through with it does.
-        """
-        profile = self.tui.selection.profile
-        return profile.profile_id if profile is not None else "Review"
-
-    async def populate(self) -> None:
-        self.hide_entry()
-        self.render_review()
-
-    def render_review(self) -> None:
-        # The project and the agent are both in the breadcrumb, so this line does not repeat
-        # them. It named the label — the one part of the selection the trail could not carry —
-        # and once that step was removed it rendered `Label: none` unconditionally, which is a
-        # line whose whole content is the absence of a step that no longer exists.
+        failure = await self.tui.launch()
+        if failure is None:
+            return
+        # Re-render before reporting, so the cursor leaves the agent row and a second enter
+        # cannot re-issue a launch nobody deliberately chose. **The reasoning is inherited
+        # from the review position and was never about it**: `RemoteAgentsTui.launch` clears
+        # `_busy` in a `finally`, so the guard is open again the moment a failure returns.
         #
-        # What it says instead is the consequence, because this is the position that commits to
-        # it and the consequence is the largest the surface has: from a bare shell a ready
-        # launch execs away, replacing this process with the tmux client; hosted by a client
-        # on the project's own server it switches that client instead and this app stays. The
-        # status line below covers both — "hands this terminal to the session's pane" is what
-        # each route does — and the routing itself lives in `adapters/tui/attach.py` and the
-        # README's attach paragraph.
+        # Rested on **nothing** rather than on Back, which is where arrival rests. Back is a
+        # legal place for the cursor to sit and a terrible place to *move* it to: a queued
+        # enter would then walk the owner out of the flow, away from a status line holding
+        # the attach command they may need in a minute. `SessionsScreen._draw_listing` takes
+        # the same option for the same reason — a list whose keys act on a live session may
+        # not have its cursor moved by anything but the owner.
         #
-        # **"or prints how to reach it" is not hedging; it is the other half of the truth.**
-        # The first version of this line stopped at "hands this terminal to the session's pane"
-        # and reasoned carefully about only one of the ways that can fail to happen — a launch
-        # that never reaches readiness. `attach_to` has two more, both inside *ready*: with
-        # `TMUX` set it refuses to nest and prints the command instead (`attach.py`), and an
-        # `execvp` that raises does the same. Running the surface from inside tmux is a path
-        # `docs/operator-runbook.md` treats as ordinary, so that branch is not exotic. Both a
-        # Tier-2 review and a gate evaluator found the overclaim independently.
-        #
-        # Deliberately *not* branched on `os.environ["TMUX"]` at render time, which would be
-        # more precise and is the obvious alternative: this string is captured in `REVIEW.svg`,
-        # and a status that depends on the environment would make that baseline differ for a
-        # developer who runs the suite inside tmux — the exact class of flake
-        # `test_tui_snapshots.py` pins `TEXTUAL_THEME` and `NO_COLOR` against. One sentence true
-        # in every case beats two that are each true in one and make the net non-deterministic.
-        #
-        # No severity, per DEC-010 — this is an instruction about what is about to happen, not a
-        # report of a condition, and that entry is explicit that a status carries a severity
-        # only when its words do.
-        self.set_status(
-            "A ready launch hands this terminal to the session's pane, or prints how to reach it."
-        )
-        self.show_choices((("launch", "Launch"), (_BACK, "Back"), (_CANCEL, "Cancel")), highlight=1)
-
-    async def choose(self, key: str) -> None:
-        if key == _BACK:
-            await self.tui.go_back()
-        elif key == _CANCEL:
-            self.tui.selection = LaunchSelection()
-            self.tui.return_to_projects()
-        elif key == "launch":
-            failure = await self.tui.launch()
-            if failure is not None:
-                # Re-render before reporting, so the cursor leaves "Launch" and a second
-                # enter cannot re-issue a launch nobody deliberately chose. It also resets
-                # this screen's status, which is why the failure's own status is set after.
-                self.render_review()
-                # Deliberately *not* severity-coloured, and this is the closest call of the
-                # five sites considered — a reviewer flagged it as one a later reader may
-                # reasonably reopen. `failure.status` is the half the owner may still need in
-                # a minute: the attach command, or where to go next. Some values of it do
-                # report a condition ("Nothing was started"), which is the argument for
-                # colouring it; against that, the *why* already goes to a toast under the
-                # region split sub-plan 3 built, and colouring a string whose content varies
-                # would mean the same region is sometimes an explanation and sometimes an
-                # instruction, in the same colour. Left neutral until the split itself is
-                # revisited, rather than decided one call site at a time.
-                self.set_status(failure.status)
-                self.announce(failure.explanation)
+        # It also resets this screen's status, which is why the failure's own status is set
+        # after.
+        self.render_profiles(resting=False)
+        # Deliberately *not* severity-coloured, and this is the closest call of the five sites
+        # considered. `failure.status` is the half the owner may still need in a minute: the
+        # attach command, or where to go next. Some values of it do report a condition
+        # ("Nothing was started"), which is the argument for colouring it; against that, the
+        # *why* already goes to a toast under the region split, and colouring a string whose
+        # content varies would mean the same region is sometimes an explanation and sometimes
+        # an instruction, in the same colour.
+        self.set_status(failure.status)
+        self.announce(failure.explanation)

@@ -20,6 +20,7 @@ from remote_agents.adapters.tui.app import (
 )
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import _BACK, _CANCEL
+from remote_agents.adapters.tui.screens import ProfilesScreen
 from remote_agents.application.commands import LaunchCommand
 from remote_agents.application.errors import ProjectCreationError
 from remote_agents.application.profiles import ProfileAvailability
@@ -151,7 +152,9 @@ async def test_the_agent_list_names_every_curated_profile_with_its_blocking_reas
         await pilot.pause()
         rows = _rows(app)
 
-    assert rows == ["claude", "cursor-agent  (unavailable: executable_missing)"]
+    # Back is part of the list now, not decoration: the agent list is the commit position, so
+    # it carries the row DEC-007's mitigation rests the cursor on.
+    assert rows == ["claude", "cursor-agent  (unavailable: executable_missing)", "Back"]
 
 
 async def test_an_unavailable_agent_cannot_be_chosen() -> None:
@@ -168,46 +171,132 @@ async def test_an_unavailable_agent_cannot_be_chosen() -> None:
 
     assert "cannot be launched" in reported
     assert "executable_missing" in reported
-    assert status == "Choose an agent.", (
+    assert status == ProfilesScreen.status, (
         "the refusal replaced the instruction the owner was following, which is the "
         "competition for one region this split exists to end"
     )
+    # Read off the screen rather than quoted, because this test is about the region not being
+    # overwritten and a literal here would fail on a rewording instead of on a regression.
+    # `test_status_region.py` owns what the sentence must *say*.
     assert launcher.commands == []
 
 
-async def test_choosing_an_agent_reaches_the_review_with_no_step_in_between() -> None:
-    """The launch flow is three positions, not four.
+async def test_choosing_an_agent_launches_with_no_step_in_between() -> None:
+    """The launch flow is two positions, not three, and choosing the agent *is* the launch.
 
-    The label step it loses named a session before there was one to look at, and could never
-    change it afterwards — naming now lives on the session's own detail as Rename, which is
-    the moment the owner actually knows what to call it. The bot dropped its own launch-time
-    label for the same reason and names a session from its menu instead.
+    It lost two steps, one per plan. The label step named a session before there was one to
+    look at and could never change it afterwards — naming now lives on the session's own
+    detail as Rename. The review step that replaced it as the commit position guarded nothing:
+    once the label was gone it held two list selections, re-pickable in two keystrokes, and
+    the resume flow has no equivalent position at all. DEC-033 says a step the other surface
+    does not have is a step to remove.
 
-    Asserted as the *position*, not as the absence of a screen class: the claim is about what
-    the owner walks through, and a flow that kept the step under another name would pass a
-    test written against the import.
+    Asserted as *one issued launch*, not as the absence of a screen class: the claim is about
+    what the owner walks through, and a flow that kept the step under another name would pass
+    a test written against the import.
     """
-    app = RemoteAgentsTui(_context())
+    launcher = FakeLauncher()
+    app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
         assert position(app) == "PROFILES"
         await _choose(app, pilot, "claude")
-        step = position(app)
+
+    assert len(launcher.commands) == 1, (
+        f"choosing an agent issued {len(launcher.commands)} launches; the agent list is the "
+        f"commit position now, so exactly one was required"
+    )
+    assert str(launcher.commands[0].profile_id) == "claude"
+
+
+async def test_the_agent_list_rests_on_the_row_that_launches_nothing() -> None:
+    """The agent list became a commit position, so no repeated keypress may commit on it.
+
+    DEC-007's mitigation, applied to the position that inherited the act. `ResumeConversations`
+    went through this exact transformation when *its* confirmation was removed and its own
+    comment records the hazard in the same words: two enters from the agent list — one to
+    arrive, one still queued — would otherwise start a session and exec this terminal away.
+
+    So the list grows a Back row and rests on it, and the first agent is one wrapping Down
+    away. Asserted as the *drawn* cursor rather than as the row order, which is the
+    distinction `test_resting_cursor.py` exists to draw: a row order with the cursor painted
+    somewhere else proves nothing about what a stray enter does.
+    """
+    launcher = FakeLauncher()
+    app = RemoteAgentsTui(_context(sessions=launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
+        assert position(app) == "PROFILES"
+        choices = app.screen.query_one("#choices", OptionList)
         keys = _keys(app)
+        resting = choices.highlighted
 
-    assert step == "REVIEW", f"choosing an agent landed on {step}"
-    assert keys[:1] == ["launch"], f"the review did not offer Launch first: {keys}"
+        await pilot.press("enter")
+        await pilot.pause()
+        after_a_stray_enter = len(launcher.commands)
+
+    assert keys[-1] == _BACK, f"the agent list offers no Back row to rest on: {keys}"
+    assert resting == len(keys) - 1, (
+        f"the cursor rests on row {resting} of {keys}, which is not the row that commits "
+        f"nothing; a queued enter arriving here would launch an agent nobody chose"
+    )
+    assert after_a_stray_enter == 0, "an enter on the resting row issued a launch"
 
 
-async def test_review_names_the_project_and_the_agent_before_any_launch() -> None:
-    """Both facts, still before anything is created — now carried entirely by the trail.
+async def test_a_failed_launch_leaves_the_cursor_off_the_agent_it_tried() -> None:
+    """A launch that failed must not be one queued keypress from being re-issued.
+
+    The reasoning is inherited whole from the review position this replaces, because it was
+    never about the review: `RemoteAgentsTui.launch` clears `_busy` in a `finally`, so the
+    guard is open again the moment a failure returns, and the agent row the owner pressed is
+    still under the cursor. The review re-rendered itself before reporting so the cursor left
+    "Launch"; the agent list has no non-committing row to move to that is not also the way
+    out, so it rests the cursor on **nothing** — `show_choices(highlight=None)`, the same
+    mechanism `SessionsScreen._draw_listing` uses where a stray enter would stop an agent.
+
+    Both halves of the failure are asserted alongside it. `failure.status` is what the owner
+    may still need in a minute and it goes to the status line; `failure.explanation` is read
+    once and goes to a toast. A regression that dropped either would still move the cursor.
+    """
+    launcher = FakeLauncher(state=SessionState.FAILED)
+    app = RemoteAgentsTui(_context(sessions=launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _choose(app, pilot, "opaque-existing")
+        await _choose(app, pilot, "launch")
+        await _choose(app, pilot, "claude")
+        await pilot.pause()
+        resting = app.screen.query_one("#choices", OptionList).highlighted
+        step = position(app)
+        status = _status(app)
+        reported = " ".join(announcements(app, severity="error"))
+
+    assert step == "PROFILES", f"a failed launch left the owner on {step}"
+    assert resting is None, (
+        f"the cursor rests on row {resting} after a failed launch; a second enter would "
+        f"re-issue a launch nobody deliberately chose"
+    )
+    assert "did not become ready" in reported, reported
+    assert "attach-session" in status, status
+
+
+async def test_the_agent_list_names_the_project_before_any_launch() -> None:
+    """The project, still before anything is created — carried entirely by the trail.
 
     This asserted three facts and the third was the label, which the status line held because
-    the breadcrumb could not. With that step gone the trail carries everything the owner chose,
-    and what the status line owes them is what going through with it *does* — asserted by
+    the breadcrumb could not. With that step gone the trail carries what the owner chose, and
+    what the status line owes them is what going through with it *does* — asserted by
     `test_status_region.py`, which owns that sentence.
+
+    **It asserts one fact rather than two now, and that is the position moving rather than a
+    claim being dropped.** The review stood *after* the agent choice, so the trail could name
+    the agent behind it; the agent list stands *before* it, and the row under the cursor is
+    what names the agent at this position. The launch that follows carries the profile id, and
+    `test_choosing_an_agent_launches_with_no_step_in_between` asserts exactly that.
     """
     launcher = FakeLauncher()
     app = RemoteAgentsTui(_context(sessions=launcher))
@@ -215,63 +304,49 @@ async def test_review_names_the_project_and_the_agent_before_any_launch() -> Non
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
-        await _choose(app, pilot, "claude")
         await pilot.pause()
         trail = breadcrumb(app)
         keys = _keys(app)
 
     assert "infra/existing" in trail
-    assert "claude" in trail
-    assert keys[:1] == ["launch"]
-    assert launcher.commands == [], "the review must not have launched anything"
+    assert keys[:-1] == ["claude", "cursor-agent"], (
+        f"the agent list must name every agent before any launch; it offered {keys}"
+    )
+    assert launcher.commands == [], "arriving at the agent list must not have launched anything"
 
 
-async def test_cancel_at_review_returns_to_the_projects_without_launching() -> None:
+async def test_back_from_the_agent_list_returns_to_the_project_choice_without_launching() -> None:
+    """Back goes to the position it was reached from, one step at a time, and launches nothing.
+
+    **This test has been narrowed twice, once per position removed, and the claim it makes is
+    the same each time.** The hand-rolled chain this behaviour replaced had two shortcuts: Back
+    at the review jumped straight past the label to the agent list, and Escape at the label
+    jumped past the agent choice to the project list. On a real stack each was one level, and
+    asserting the legs is what kept either from being reinstated. Removing the label removed
+    the second shortcut's subject; removing the review has now removed the first's. What
+    survives is the rule both were violations of — **one pop, one level** — asserted on the leg
+    that still exists.
+
+    It also absorbs what `test_cancel_at_review_returns_to_the_projects_without_launching`
+    pinned. That test walked the `Cancel` row, which was the third of the triplet ask 5 names
+    and left with the position; its surviving claim is that leaving this flow launches nothing,
+    which is asserted here on the row that still exists. A `_CANCEL` that unwound to the
+    project list from *within* the launch flow no longer has a screen to be pressed on.
+    """
     launcher = FakeLauncher()
     app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
-        await _choose(app, pilot, "claude")
-        await _choose(app, pilot, _CANCEL)
-        await pilot.pause()
-        rows = _rows(app)
-
-    assert launcher.commands == []
-    assert rows == ["infra/existing  [Registered]", "dev-area/other-thing  [Unregistered]"]
-
-
-async def test_back_from_review_returns_to_the_agent_choice() -> None:
-    """Back goes to the position it was reached from, one step at a time.
-
-    **This test used to assert two pops and now asserts one, because one of the two positions
-    it walked through is gone.** The hand-rolled chain this behaviour replaced had two
-    shortcuts: Back at Review jumped straight past the label to the agent list, and Escape at
-    the label jumped straight past the agent choice to the project list. On a real stack each
-    was one level, and asserting both legs is what kept either from being reinstated.
-
-    Removing the label step removes the *second* shortcut's subject entirely — there is no
-    longer a position between Review and the agent list to skip. So the surviving claim is the
-    first leg, and it is now the whole walk: Review pops to the agent list, not past it to the
-    projects. Narrowed rather than deleted, because a Review that unwound two levels is exactly
-    the regression the original shortcut was.
-    """
-    app = RemoteAgentsTui(_context())
-
-    async with app.run_test() as pilot:
-        await _choose(app, pilot, "opaque-existing")
-        await _choose(app, pilot, "launch")
-        await _choose(app, pilot, "claude")
-        assert _keys(app)[:1] == ["launch"], "expected the review before walking back from it"
+        assert position(app) == "PROFILES", "expected the agent list before walking back from it"
 
         await _choose(app, pilot, _BACK)
         await pilot.pause()
         step = position(app)
-        rows = _rows(app)
 
-    assert step == "PROFILES", f"back from the review landed on {step}, not the agent list"
-    assert rows == ["claude", "cursor-agent  (unavailable: executable_missing)"]
+    assert step == "PROJECT_CHOOSER", f"back from the agent list landed on {step}"
+    assert launcher.commands == [], "walking back out of the flow launched something"
 
 
 async def test_confirming_issues_one_launch_and_it_carries_no_label() -> None:
@@ -282,7 +357,6 @@ async def test_confirming_issues_one_launch_and_it_carries_no_label() -> None:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
-        await _choose(app, pilot, "launch")
 
     assert len(launcher.commands) == 1
     command = launcher.commands[0]
@@ -310,7 +384,7 @@ async def test_two_launches_never_reuse_an_idempotency_key() -> None:
     assert len(set(keys)) == 2
 
 
-async def test_a_failed_launch_reports_and_returns_to_review_without_attaching() -> None:
+async def test_a_failed_launch_reports_and_returns_to_the_agent_list_without_attaching() -> None:
     launcher = FakeLauncher(state=SessionState.FAILED)
     app = RemoteAgentsTui(_context(sessions=launcher))
 
@@ -318,13 +392,15 @@ async def test_a_failed_launch_reports_and_returns_to_review_without_attaching()
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
-        await _choose(app, pilot, "launch")
         await pilot.pause()
         reported = " ".join(announcements(app, severity="error"))
         keys = _keys(app)
 
     assert "did not become ready" in reported
-    assert keys[:1] == ["launch"]
+    # The rows are the agent list's own, unchanged by the failure — the owner can pick again
+    # without leaving. Where the *cursor* sits after one is
+    # `test_a_failed_launch_leaves_the_cursor_off_the_agent_it_tried`'s claim, not this one.
+    assert keys[:-1] == ["claude", "cursor-agent"], keys
     assert app.return_value is None
 
 
@@ -451,16 +527,15 @@ async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method
         assert _keys(app)[:1] == ["launch"]
         await pilot.press("enter")
         await pilot.pause()
-        assert _keys(app) == ["claude", "cursor-agent"]
+        assert _keys(app) == ["claude", "cursor-agent", _BACK]
 
-        # One enter now, not two: choosing the agent lands on the review directly, where it
-        # used to land on the label entry and need an enter to commit an empty one.
-        await pilot.press("enter")
-        await pilot.pause()
-        assert [key for key in _keys(app)] == ["launch", "\x00back", "\x00cancel"]
-
-        # The review rests on Back, so reaching Launch means moving the cursor on purpose.
-        await pilot.press("up")
+        # **The agent list is the last position, and the launch is one Down and one enter from
+        # here.** It rests on Back, so reaching an agent means moving the cursor on purpose —
+        # the same shape the review had, on the screen that inherited the act. Down rather
+        # than Up, and that is the assertion doing work: it proves the wrap this position's
+        # own comment depends on, since Down from the last row reaches the first only because
+        # `find_next_enabled` wraps.
+        await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
 
@@ -489,16 +564,18 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
         await pilot.pause()
         assert app.screen.query_one("#choices").has_focus, "the agent list takes the keyboard"
 
-        # The walk used to end on the label entry taking the keyboard back. With that step gone
-        # it ends on the review, which is a list -- so the keyboard stays on the rows, and the
-        # claim this test makes is unchanged: every choice list hands the keyboard to its list.
-        await pilot.press("enter")
-        await pilot.pause()
-        assert position(app) == "REVIEW"
-        assert app.screen.query_one("#choices").has_focus, "the review takes the keyboard too"
+        # The walk used to end on the label entry taking the keyboard back, then on the
+        # review. Both steps are gone and the agent list is the end of it -- so this presses
+        # enter on the row the agent list rests on, which is Back, and the claim this test
+        # makes is unchanged: every choice list hands the keyboard to its list, including the
+        # one a pop returns to.
+        assert position(app) == "PROFILES"
 
         await pilot.press("enter")
         await pilot.pause()
+        assert position(app) == "PROJECT_CHOOSER", (
+            "the agent list rests on Back, so an enter here is the way out of the flow"
+        )
         assert app.screen.query_one("#choices").has_focus
 
 
@@ -646,7 +723,7 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
 
         await _choose(app, pilot, "opaque-other")
         await _choose(app, pilot, "launch")
-        assert _rows(app) == ["claude", "cursor-agent  (unavailable: executable_missing)"]
+        assert _rows(app) == ["claude", "cursor-agent  (unavailable: executable_missing)", "Back"]
 
         # Two positions between the rows and home now: the agent list and the chooser.
         await app.action_back()
@@ -687,7 +764,6 @@ async def test_a_launch_failure_outside_the_error_contract_does_not_kill_the_app
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
-        await _choose(app, pilot, "launch")
         await pilot.pause()
         reported = " ".join(announcements(app, severity="error"))
 
@@ -703,7 +779,6 @@ async def test_a_failed_launch_still_names_a_way_to_reach_its_pane() -> None:
         await _choose(app, pilot, "opaque-existing")
         await _choose(app, pilot, "launch")
         await _choose(app, pilot, "claude")
-        await _choose(app, pilot, "launch")
         await pilot.pause()
         status = _status(app)
         reported = " ".join(announcements(app, severity="error"))

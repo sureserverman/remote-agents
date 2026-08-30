@@ -29,10 +29,7 @@ from remote_agents.adapters.tui.screens.dashboard import (
     ProjectsPaneScreen,
 )
 from remote_agents.adapters.tui.screens.feed import FeedScreen
-from remote_agents.adapters.tui.screens.launch import (
-    ProfilesScreen,
-    ReviewScreen,
-)
+from remote_agents.adapters.tui.screens.launch import ProfilesScreen
 from remote_agents.adapters.tui.screens.project import (
     AreasScreen,
     NameScreen,
@@ -52,8 +49,15 @@ from remote_agents.adapters.tui.screens.sessions import (
     SessionsScreen,
 )
 
-#: Every screen the owner can reach — all fifteen positions, one class each. Nothing is
-#: repainted in place any more, so this registry is the whole surface.
+#: Every screen the owner can reach, one class each. Nothing is repainted in place any more,
+#: so this registry is the whole surface.
+#:
+#: **Deliberately not counted in words here.** This comment read "all fifteen positions" while
+#: the tuple held nineteen entries: the numeral was written once and the registry grew past it
+#: in silence, since nothing checks a count in prose. The membership *is* checked, in both
+#: directions — `test_screen_back_paths.py` fails a screen listed here with no arrangement and
+#: an arrangement naming no screen — so the list is the count, and a second copy of it in
+#: English was only ever something to keep agreeing.
 ALL_SCREENS = (
     DashboardScreen,
     ProjectsPaneScreen,
@@ -61,7 +65,6 @@ ALL_SCREENS = (
     FeedScreen,
     ProjectChooserScreen,
     ProfilesScreen,
-    ReviewScreen,
     AreasScreen,
     NameScreen,
     ProjectReviewScreen,
@@ -95,7 +98,6 @@ __all__ = [
     "ResumeConversationsScreen",
     "ResumeProfilesScreen",
     "ResumeProjectsScreen",
-    "ReviewScreen",
     "SessionDetailScreen",
     "SessionsPaneScreen",
     "SessionsScreen",
