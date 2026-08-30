@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import Protocol
 
 from remote_agents.application.project_catalog import CatalogProject
@@ -295,6 +296,44 @@ def _dated(observed_at: datetime | None) -> str:
     if observed_at is None or datetime.now(UTC) - observed_at <= _STALE_READING_AGE:
         return ""
     return f" — as of {age(observed_at)}"
+
+
+_GAUGE_CELLS = 8
+"""How many cells the bar is drawn from.
+
+Eight, because the gauge sits at the end of a session row that already carries a project, an
+agent, a state and an age, and the row has to stay readable in a pane roughly a third of a
+narrow terminal wide. Eight cells resolve to 12.5% each, which is finer than the decision the
+bar supports -- it answers "roughly how full", and the percent beside it answers exactly.
+"""
+
+
+def context_gauge(context: ContextWindow) -> str:
+    """Render how full one session's context is, as a bar and a share, or as a bare count.
+
+    The owner's sixth ask, and the reason it is a gauge rather than the count the detail screen
+    already showed: a list is read by scanning, and `185k` requires knowing the ceiling to mean
+    anything while a bar does not.
+
+    **A bar is only drawn where a ceiling is known**, which for Claude means the owner declared
+    one and for Codex means the provider published one. Without it this renders the abbreviated
+    count `_tokens` already produces and nothing else -- a bar with no denominator would be a
+    picture of a number nobody stated, which is the inference DEC-061 forbids, drawn instead of
+    written.
+
+    Returns a string and never an empty one (DEC-043): both surfaces append it to a row they
+    have already built, so an empty answer would leave a dangling separator. Placement, and the
+    decision to append it at all, stay with each surface -- the TUI appends it and the bot does
+    not, because `session_row` is shared and pinned by the parity contract.
+    """
+    fraction = context.used_fraction
+    if fraction is None:
+        return _tokens(context.used_tokens)
+    filled = min(_GAUGE_CELLS, ceil(fraction * _GAUGE_CELLS))
+    # Rounded up, so any use at all shows one cell: a session that has taken a turn is not in
+    # the same state as one that has not, and a bar that reads empty for both hides the
+    # difference the gauge exists to show.
+    return f"{'█' * filled}{'░' * (_GAUGE_CELLS - filled)} {round(fraction * 100)}%"
 
 
 def _context_phrase(context: ContextWindow) -> str:

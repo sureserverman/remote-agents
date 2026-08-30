@@ -28,6 +28,7 @@ from remote_agents.application.relative_time import age
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
     _window_phrase,
+    context_gauge,
     limit_lines,
     listed_in_sessions,
     listed_sessions,
@@ -45,7 +46,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
+from remote_agents.ports.agent_usage import AgentLimits, ContextWindow, UsageWindow
 
 _NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -513,3 +514,63 @@ def test_a_window_that_has_already_reset_reads_as_zero_rather_than_negative() ->
     (line,) = limit_lines((_account("codex", UsageWindow("5h", 0.0, resets_at=datetime.now(UTC))),))
 
     assert line == "codex: 5h 0% (resets in 0m)"
+
+
+# --- the per-row context gauge ------------------------------------------------------------
+
+
+def test_a_known_ceiling_renders_a_bar_and_a_whole_percent() -> None:
+    """A share is the readable form, and the bar is what makes it readable at a glance."""
+    gauge = context_gauge(ContextWindow(250_000, 1_000_000))
+
+    assert "25%" in gauge
+    assert gauge.count("█") == 2 and gauge.count("░") == 6
+
+
+@pytest.mark.parametrize(
+    ("used", "limit", "expected"),
+    [(0, 1_000_000, "0%"), (1_000_000, 1_000_000, "100%"), (999_999, 1_000_000, "100%")],
+)
+def test_the_percent_spans_its_whole_range(used: int, limit: int, expected: str) -> None:
+    assert expected in context_gauge(ContextWindow(used, limit))
+
+
+def test_a_ceilingless_reading_renders_the_count_it_already_had() -> None:
+    """No ceiling, no share -- and the abbreviated count `_tokens` already produces, not a bar.
+
+    A bar with no denominator would be a picture of a number nobody stated, which is the
+    inference DEC-061 exists to forbid rendered as a graphic.
+    """
+    assert context_gauge(ContextWindow(24_349)) == "24.3k"
+
+
+def test_nothing_ever_renders_an_empty_string() -> None:
+    """The surfaces append this to a row, so an empty answer would leave a dangling separator."""
+    for context in (ContextWindow(0), ContextWindow(0, 1_000_000), ContextWindow(1)):
+        assert context_gauge(context).strip()
+
+
+def test_the_gauge_is_never_folded_into_the_shared_row() -> None:
+    """`tests/contract/test_session_row_parity.py` pins that both surfaces resolve to one
+    `session_row`, so a gauge added there would appear on the bot's rows too -- which the owner
+    asked for on the TUI alone. The TUI appends it at its own draw sites instead."""
+    record = _record()
+
+    assert "%" not in session_row(record)
+    assert "█" not in session_row(record)
+
+
+def test_a_session_that_has_taken_a_turn_never_reads_as_an_empty_bar() -> None:
+    """Rounded up, so the first cell lights the moment there is anything to show.
+
+    A session that has taken one turn is not in the same state as one that has taken none, and
+    a bar that floors renders both as empty -- hiding exactly the difference a glance-readable
+    gauge exists to show. Pinned because the rounding is otherwise invisible: flooring passed
+    every other check in this file.
+    """
+    barely = context_gauge(ContextWindow(1, 1_000_000))
+    untouched = context_gauge(ContextWindow(0, 1_000_000))
+
+    assert barely.startswith("█")
+    assert untouched.startswith("░")
+    assert barely != untouched
