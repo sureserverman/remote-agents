@@ -576,3 +576,47 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
         assert config.claude_context_window == _STATED_CEILING
     finally:
         connection.close()
+
+
+def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, monkeypatch):
+    """A host that declared nothing gets no ceiling, and so no percentage against one.
+
+    Passing the default unconditionally made `ClaudeUsageReader`'s bare-count path unreachable
+    in production, so every Claude row on such a host rendered a percentage against this
+    project's assumption. On a 200k plan that reads 68% for a context 340% full, with no tell on
+    either surface -- which is the invented number DEC-061 forbids, arriving through the config
+    layer rather than through the reader.
+    """
+    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    seen = []
+
+    class _Recording(usage_module.ProfileUsageReaders):
+        def __init__(self, readers=None, **passed):
+            seen.append(passed)
+            super().__init__(readers, **passed)
+
+    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Recording)
+
+    paths = ProductionPaths.for_home(composed_home)
+    config_path = _config_file(composed_home, paths)
+    # The deployed shape: every other key, and no ceiling.
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            f"claude_context_window = {_STATED_CEILING}\n", ""
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        compose_backend(config, connection, paths)
+
+        assert config.claude_context_window_stated is False
+        assert seen == [{"context_window": None, "context_window_stated": False}]
+    finally:
+        connection.close()

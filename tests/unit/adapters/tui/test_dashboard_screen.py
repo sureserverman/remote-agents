@@ -659,3 +659,40 @@ async def test_the_repaint_interval_exists_before_the_gauge_read_is_made() -> No
             "the repaint interval must be installed before the gauge read, or a stalled "
             "provider freezes the pane for the life of the process"
         )
+
+
+async def test_the_scheduled_tick_actually_refreshes_a_drawn_gauge(monkeypatch) -> None:
+    """The tick is the only thing that refreshes the cache after mount, and nothing checked it.
+
+    Both lists *seed* their gauges at mount and only ever *read* the cache when they repaint, so
+    every existing gauge assertion held with the tick deleted — making it a no-op passed the
+    whole 3464-test suite. A dead tick freezes every gauge at its mount-time value for the life
+    of the process, in every TUI process, with no error: the same shape as the defect the tick
+    was moved onto the app to fix.
+
+    Driven through the real schedule rather than by calling the tick, so it fails for a timer
+    that is never installed as well as for one that does nothing.
+    """
+    from remote_agents.adapters.tui import app as app_module
+
+    monkeypatch.setattr(app_module, "CONTEXT_AUTO_REFRESH", 0.05)
+    used = [250_000]
+
+    async def moving(session_id):
+        return AgentUsage(context=ContextWindow(used[0], 1_000_000))
+
+    app = RemoteAgentsTui(_context((_record(),), usage=moving))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "25%" in app.context_gauge_for(_SESSION)
+
+        used[0] = 900_000
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if "90%" in app.context_gauge_for(_SESSION):
+                break
+
+        assert "90%" in app.context_gauge_for(_SESSION), (
+            "the scheduled tick never refreshed the cache, so every gauge is frozen at its "
+            "mount-time value for the life of the process"
+        )

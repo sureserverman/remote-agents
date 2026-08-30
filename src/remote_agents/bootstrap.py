@@ -929,8 +929,16 @@ def compose_backend(
     # One set of provider readers for both usage capabilities (DEC-046): the session read
     # and the account read consult the same files, so composing two sets would double the
     # probing a host does and let the two drift about which providers exist.
+    # The ceiling reaches the reader only when the owner stated it. Passing the default
+    # unconditionally meant `ClaudeUsageReader`'s careful bare-count path -- whose docstring
+    # says a reader supplying its own ceiling "would be inventing one, which DEC-061 forbids in
+    # exactly those words" -- was unreachable in production, and every Claude row on a host that
+    # had declared nothing rendered a percentage against this project's assumption. On a 200k
+    # plan that reads 68% for a context 340% full, with no tell on either surface.
     usage_readers = ProfileUsageReaders(
-        context_window=config.claude_context_window,
+        context_window=(
+            config.claude_context_window if config.claude_context_window_stated else None
+        ),
         context_window_stated=config.claude_context_window_stated,
     )
     return Backend(

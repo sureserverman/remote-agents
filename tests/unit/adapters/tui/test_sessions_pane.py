@@ -1076,7 +1076,10 @@ async def test_the_console_pane_fills_its_own_gauge_cache() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert isinstance(app.screen, SessionsPaneScreen)
-        # The app's own tick, which is the only thing that fills the cache in this process.
+        # `_seed_context_gauges` has already filled the cache at mount; the tick is called here
+        # so this stays a statement about drawing. That the *schedule* works is the sibling
+        # test below, because this one held with the tick deleted -- which is exactly the
+        # claim-more-than-you-check shape it was written to close.
         await app._refresh_context_windows_tick()
         app.screen._draw_listing(await app.load_sessions())
         await pilot.pause()
@@ -1111,3 +1114,37 @@ async def test_the_pane_shows_a_gauge_at_mount_without_waiting_for_a_tick() -> N
         rows = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
 
         assert any("25%" in row for row in rows), rows
+
+
+async def test_the_panes_own_tick_keeps_its_gauges_moving(monkeypatch) -> None:
+    """The pane process refreshes its own cache after mount, not just at it.
+
+    `SessionsScreen` seeds its gauges in `populate`, so every other assertion in this file holds
+    with the refresh dead — and a dead refresh freezes the console pane's gauges at their
+    launch-time values for the life of the process, silently. This is also what pins
+    `draws_session_rows` on this screen: clear it and the tick declines to read here.
+    """
+    from remote_agents.adapters.tui import app as app_module
+    from remote_agents.ports.agent_usage import AgentUsage, ContextWindow
+
+    monkeypatch.setattr(app_module, "CONTEXT_AUTO_REFRESH", 0.05)
+    used = [250_000]
+
+    async def moving(session_id):
+        return AgentUsage(context=ContextWindow(used[0], 1_000_000))
+
+    app = SessionsPane(_context((_record(),), usage=moving))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "25%" in app.context_gauge_for(_SESSION)
+
+        used[0] = 900_000
+        for _ in range(40):
+            await pilot.pause(0.05)
+            if "90%" in app.context_gauge_for(_SESSION):
+                break
+
+        assert "90%" in app.context_gauge_for(_SESSION), (
+            "the console pane's gauges never refresh after mount, so they are frozen at their "
+            "launch-time values for the life of the process"
+        )

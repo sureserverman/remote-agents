@@ -416,9 +416,22 @@ _LIMIT_COMMENTS: dict[str, str] = {
         "# read, so a session's context percentage can only come from a number you state here.\n"
         "# If it is wrong, every Claude row shows a confidently wrong percentage and nothing\n"
         "# else will say so; correct it here. Codex needs no equivalent -- it writes its own\n"
-        "# window into its rollout."
+        "# window into its rollout. Uncomment and set it to see a context percentage on\n"
+        "# Claude rows; leave it commented and those rows show a token count instead."
     ),
 }
+
+_DEFAULTED_LIMITS: dict[str, int] = {"claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW}
+"""Keys the generated file explains but writes commented out **when nothing chose the value**.
+
+Writing the key at its own default would make `claude_context_window_stated` true on a config
+the *generator* wrote, so the reader would stamp `declared` on a number no owner ever chose --
+crediting them with a line this project typed. Commented, the explanation still lands where they
+will find it and "stated" still means stated.
+
+A caller who passes a *different* value has chosen one, so it is written live: `render_config`
+is also how an onboarding flow records an answer the owner actually gave.
+"""
 """Prose the generated file carries, for the keys whose value is a *declaration*.
 
 The only commented key, and it earns the machinery: the rest of `DEFAULT_LIMITS` are knobs with
@@ -478,7 +491,9 @@ def render_config(
     # A blank line before a commented key and nowhere else: separating every key would make the
     # file's own shape argue that each one needs reading, when only this one does.
     rendered_limits = "\n".join(
-        f"\n{_LIMIT_COMMENTS[key]}\n{key} = {values[key]:d}"
+        f"\n{_LIMIT_COMMENTS[key]}\n# {key} = {values[key]:d}"
+        if _DEFAULTED_LIMITS.get(key) == values[key]
+        else f"\n{_LIMIT_COMMENTS[key]}\n{key} = {values[key]:d}"
         if key in _LIMIT_COMMENTS
         else f"{key} = {values[key]:d}"
         for key in sorted(values)
