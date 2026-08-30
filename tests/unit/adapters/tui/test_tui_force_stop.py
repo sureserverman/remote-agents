@@ -749,6 +749,7 @@ async def test_a_confirmed_force_that_raises_from_the_list_keeps_every_other_ses
     Three sessions, so "the others survived" is a claim the assertion can make; with one, a
     surviving row and a collapsed list are the same length.
     """
+
     def _raises() -> TerminalObservation:
         raise RuntimeError("tmux server is gone")
 

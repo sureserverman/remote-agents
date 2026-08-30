@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -233,13 +234,21 @@ async def test_a_renamed_session_keeps_its_label_after_the_named_project() -> No
 
 
 async def test_a_detail_opened_with_force_shows_the_same_confirmation_as_the_row() -> None:
-    """The whole design of Stage 4 in one assertion.
+    """The opening-action mechanism's contract, asserted on its most destructive case.
 
-    A key on the sessions pane must not grow a second confirmation chain: `confirm_force`
-    holds `holding_the_guard()` across a store re-read *and* the whole modal, re-checks the
-    policy before asking, and refreshes on abort. A second copy of that would be the single
-    highest-risk thing this plan could do, so the pane's keys push this screen with an opening
-    action and the detail performs it through the branch it already had.
+    **This used to be reached by the sessions pane's `f` key and no longer is**, and the
+    distinction is worth keeping straight. The mechanism is unchanged and still carries `a`,
+    `i`, `r` and Remote Control; what moved is the three keys that end a session, which now
+    act on the list they were pressed on rather than pushing a detail nobody asked for (ask 6,
+    and `test_tui_force_stop.py` owns what `f` does instead). No caller passes a stop action
+    here any more — `test_no_stop_key_opens_a_detail` is what keeps it that way.
+
+    So this asserts the API's contract rather than a keypress's behaviour: an opening `force`
+    reaches the detail's own `confirm_force`, with `holding_the_guard()` held across the store
+    re-read *and* the whole modal, the policy re-checked before asking, and a refresh on abort.
+    That chain is still the detail's, and a second copy of it would be the highest-risk thing
+    this plan could do — which is exactly why `SessionsScreen.confirm_force` was measured
+    against it line by line rather than written fresh.
     """
     record = _record()
     app = RemoteAgentsTui(_context(_Listing((record,))))
@@ -437,3 +446,55 @@ async def test_set_remote_control_refuses_a_second_concurrent_command_itself() -
         assert listing.reads == before, (
             "a Remote Control change read the store while another command was in flight"
         )
+
+
+@pytest.mark.parametrize("action", ["graceful", "cleanup", "force"])
+async def test_no_stop_key_opens_a_detail(action: str) -> None:
+    """The regression guard for ask 6, stated as a property of all three keys at once.
+
+    Each of `s`, `c` and `f` used to push a detail the owner had not asked for and perform the
+    action there — and because a graceful stop that works *ends* the session, the detail's own
+    re-read then rendered "That session is no longer available." above a lone `Back` row. That
+    screen and that row are what the owner reported.
+
+    Asserted as a class rather than one key at a time, and as *what the surface must not
+    become* rather than as what each key now does: the per-key behaviour lives in
+    `test_tui_stop.py` and `test_tui_force_stop.py`, while what belongs here is the claim this
+    file is about — what `d` reaches, and what nothing else may reach. A fourth stop action
+    added to the policy later gets this coverage by being added to the parametrization, which
+    is one line, rather than by somebody remembering the whole argument.
+
+    `force` opens a modal rather than acting outright (DEC-018 confirms only force), so the
+    assertion is that the surface is not on a *detail* — not that it did not move at all.
+    """
+    from remote_agents.adapters.tui.screens import SessionDetailScreen, SessionsScreen
+
+    record = _record(SessionState.RUNNING if action != "cleanup" else SessionState.PRESERVED)
+    app = RemoteAgentsTui(_context(_Listing((record,))))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await app.show_sessions()
+        await pilot.pause()
+        app.screen.query_one("#choices", OptionList).highlighted = 0
+        await pilot.pause()
+        assert isinstance(app.screen, SessionsScreen), "the walk did not reach the sessions list"
+
+        asking = asyncio.create_task(app.screen.action_row_action(action))
+        await pilot.pause()
+        # **The whole stack, not the top of it**, and the difference is what makes this test
+        # able to fail for `force`. Under the defect, force pushed a detail and the detail
+        # immediately pushed its confirmation on top — so the *top* screen was the modal and a
+        # check against it reported "no detail" while a detail was sitting right under it.
+        # Measured: with the routing reverted, a top-of-stack check caught `graceful` and
+        # `cleanup` and let `force` pass.
+        opened_a_detail = any(
+            isinstance(screen, SessionDetailScreen) for screen in app.screen_stack
+        )
+        # Force suspends its handler on the modal; the other two have already returned. Escape
+        # is harmless either way and is what lets the suspended one finish.
+        await pilot.press("escape")
+        await asyncio.wait_for(asking, timeout=5)
+
+    assert not opened_a_detail, (
+        f"the {action!r} key pushed a session detail the owner did not ask for"
+    )
