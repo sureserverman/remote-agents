@@ -1065,3 +1065,29 @@ def test_an_unmatched_claude_session_is_unmatched_even_when_the_account_answers(
     assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None
     # The account read is untouched by that: same cache, still answering.
     assert _claude_reader(tmp_path, cache=cache).limits().windows != ()
+
+
+def test_a_matched_transcript_with_no_turn_yet_is_not_reported_as_publishing_nothing(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The most likely moment to open a session detail: launched, prompted, still thinking.
+
+    A Claude transcript exists from the first message, but `_claude_context` finds no assistant
+    turn to total until the agent answers. That state is *temporary* and resolves on the next
+    turn, so it must not reach the sentence presentation reserves for a provider that publishes
+    nothing at all -- which is what a reading carrying only account windows now does, because
+    `usage_lines` no longer has a windows-shaped branch to catch it.
+    """
+    cache = tmp_path / "claude-cache"
+    cache.mkdir()
+    _written_json(
+        cache / "statusline-usage-cache-d1c0b541.json",
+        {"five_hour": {"utilization": 2, "resets_at": _iso_in(hours=3)}},
+    )
+    transcript = _written(
+        _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
+        [{"type": "user", "message": {"role": "user", "content": "do the thing"}}],
+    )
+    _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
+
+    assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None

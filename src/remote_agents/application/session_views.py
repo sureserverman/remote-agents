@@ -227,11 +227,15 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
     if usage.is_empty:
         return ("Usage: not reported by this agent.",)
     if usage.context is None:
-        # The branch that used to say "Context: no conversation matched yet." here existed only
-        # so a `Limits` line would not appear with nothing above it. With the limits gone there
-        # is no half-missing screen to explain, and a reading that reaches this point carries no
-        # context the owner can be shown -- which is what the sentence above already says.
-        return ("Usage: not reported by this agent.",)
+        # Not the sentence above, and the difference is the point. `is_empty` means the provider
+        # matched and publishes nothing -- permanent, and worded so. *This* is a reading that
+        # carries something (windows, today) but no context, which is a conversation that has
+        # not produced a turn yet and will. Collapsing the two told the owner Claude "does not
+        # report" in the single most likely moment to open a session detail: launched, prompted,
+        # still thinking. `ClaudeUsageReader` no longer produces this shape, but `AgentUsage` is
+        # a port type and any reader may, so the distinction is kept where it is rendered rather
+        # than left to one adapter's discipline.
+        return ("Usage: no conversation matched yet.",)
     return (f"Context: {_context_phrase(usage.context)}",)
 
 

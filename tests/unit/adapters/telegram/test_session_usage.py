@@ -214,3 +214,7 @@ async def test_a_limits_reader_that_raises_costs_the_block_and_not_the_screen() 
 
     assert "Sessions" in rendered.text
     assert rendered.keyboard
+    # The assertion the test is named for. Without it, a guard that swallowed the exception and
+    # then rendered a diagnostic line in its place passed here -- proven by mutation.
+    assert "Agent limits" not in rendered.text
+    assert "limits" not in rendered.text.replace("Agent limits", "")

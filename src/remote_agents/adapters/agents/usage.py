@@ -153,9 +153,17 @@ class ClaudeUsageReader:
             # nothing in it instead of the sentence that invites the owner to look again.
             return None
         context = _claude_context(transcript)
+        if context is None:
+            # A transcript exists but carries no assistant turn to total yet -- the ordinary
+            # state of a pane that was launched a moment ago and has been given its first
+            # prompt. It resolves on the agent's next turn, so it is "not matched *yet*" and
+            # not "this provider publishes nothing", which is the permanent sentence and the
+            # one presentation reserves for `cursor-agent`. Returning a reading here used to be
+            # right because the account's windows rode along inside it and the detail screen
+            # drew them; they render in their own block now, so what is left to carry is an
+            # absence, and `None` is how this port words that one.
+            return None
         windows, stale, _ = self._limits()
-        if context is None and not windows:
-            return AgentUsage()
         return AgentUsage(
             context=context,
             windows=windows,

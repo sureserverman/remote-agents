@@ -1395,7 +1395,12 @@ class PrivateBotBoundary:
         except Exception:
             logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
             return ""
-        return "".join(f"\n{escape(line)}" for line in lines)
+        # A heading, because the TUI pane has one and this is the same block. Without it the
+        # empty branch reads "Nothing is running." straight into two agents' live percentages,
+        # which is the adjacency this whole task exists to remove -- one screen down rather
+        # than one row down. Bold to match the screen's own heading, which is the only markup
+        # this block carries.
+        return "".join(["\n<b>Agent limits</b>", *(f"\n{escape(line)}" for line in lines)])
 
     async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
         """Ask the provider what this session has spent, and never let the answer cost a screen.

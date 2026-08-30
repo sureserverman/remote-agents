@@ -117,6 +117,7 @@ from remote_agents.ports.agent_activity import (
     ActivityKind,
     AgentActivity,
 )
+from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 
 _SNAPSHOTS = Path(__file__).parent / "snapshots"
 _UPDATE = os.environ.get("REMOTE_AGENTS_SNAPSHOT_UPDATE") == "1"
@@ -317,6 +318,33 @@ class _Conversations:
 #:
 #: The long detail is deliberate: it is what proves the row is *cut* rather than wrapped, and
 #: a wrapped row is the defect the live capture at Preflight showed.
+#: What the limits pane draws. Wired for the reason `_activities` above is, and against the
+#: same defect: without it the DASHBOARD baseline could only ever capture the pane's *empty*
+#: sentence, so the row format, the borrowed-cache stamp and the pane's fitted height were all
+#: outside the net that exists to catch them. The new pane reintroduced exactly the blindness
+#: the comment above records having fixed for the feed.
+#:
+#: Claude's line is the long one on purpose: it carries both windows and the `via` stamp, so a
+#: baseline taken at the captured width is what pins whether that stamp survives the render at
+#: all -- which it did not, until the pane stopped clipping.
+def _limits() -> tuple[AgentLimits, ...]:
+    return (
+        AgentLimits(
+            ProfileId("claude"),
+            (UsageWindow("5h", 4.0), UsageWindow("week", 49.0)),
+            stale_source="status-line cache",
+        ),
+        AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+    )
+
+
+def _limits_reader():
+    async def read() -> tuple[AgentLimits, ...]:
+        return _limits()
+
+    return read
+
+
 def _activities() -> tuple[AgentActivity, ...]:
     return (
         AgentActivity(
@@ -369,6 +397,7 @@ def _context(
     conversations: object | None = None,
     capture=None,
     activity_feed=None,
+    limits=None,
 ) -> TuiContext:
     """The collaborators every capture is driven against.
 
@@ -387,6 +416,7 @@ def _context(
             capture=(lambda _session_id: _captured()) if capture is None else capture,
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
             activity_feed=_activity_reader() if activity_feed is None else activity_feed,
+            limits=_limits_reader() if limits is None else limits,
         ),
         profiles=(
             ProfileAvailability("claude", True),

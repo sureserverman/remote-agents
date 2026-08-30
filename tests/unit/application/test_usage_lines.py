@@ -66,3 +66,15 @@ def test_nothing_here_escapes_or_measures_anything() -> None:
     usage = AgentUsage(context=ContextWindow(1_000))
 
     assert all("<" not in line and "&" not in line for line in usage_lines(usage))
+
+
+def test_a_reading_with_windows_but_no_context_is_not_called_permanent() -> None:
+    """ "Not reported by this agent" is the permanent sentence; this state resolves next turn.
+
+    Guarded here as well as at the reader that produces it, because the collapse happened when
+    the windows-shaped branch was deleted and nothing downstream noticed the two absences had
+    become one sentence.
+    """
+    transient = AgentUsage(context=None, windows=(UsageWindow("5h", 2.0),))
+
+    assert usage_lines(transient) != usage_lines(AgentUsage())

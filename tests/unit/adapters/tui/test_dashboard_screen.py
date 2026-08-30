@@ -19,7 +19,7 @@ from tui_feedback import announcements
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.screens.dashboard import DashboardScreen
+from remote_agents.adapters.tui.screens.dashboard import NO_LIMITS, DashboardScreen
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -384,5 +384,62 @@ async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None
         assert isinstance(screen, DashboardScreen)
         await screen._reload_sessions_pane()
 
-        assert first >= 1
+        # `== 1`, not `>= 1`: a double read at mount is a defect this would otherwise pass.
+        assert first == 1
         assert len(reads) == first + 1
+
+
+async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() -> None:
+    """A successful empty read is not a failed read, and the pane used to treat them alike.
+
+    Claude's borrowed cache is fenced at thirty minutes, so half an hour of idleness is the
+    routine way for a reader to go from answering to answering nothing. Returning early there
+    pinned the last percentage on screen permanently -- countdown included, so `(resets in 3h)`
+    still read 3h four hours later -- while the bot correctly dropped its block at the same
+    instant. Two surfaces asserting different things about one account is the divergence sharing
+    `limit_lines` exists to prevent.
+    """
+    answers = [
+        (AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),)),),
+        (AgentLimits(ProfileId("claude"), ()),),
+    ]
+
+    async def withdrawing() -> tuple[AgentLimits, ...]:
+        return answers.pop(0) if answers else ()
+
+    app = RemoteAgentsTui(_context(limits=withdrawing))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+        assert drawn == ["claude: 5h 2%"]
+
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_limits()
+
+        redrawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+        assert redrawn == [NO_LIMITS]
+
+
+async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
+    """The other half of the same distinction: what is drawn is stale, not known to be wrong."""
+    answers: list[tuple[AgentLimits, ...]] = [
+        (AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),)),)
+    ]
+
+    async def then_failing() -> tuple[AgentLimits, ...]:
+        if answers:
+            return answers.pop(0)
+        raise RuntimeError("the provider changed its layout under an upgrade")
+
+    app = RemoteAgentsTui(_context(limits=then_failing))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_limits()
+
+        pane = screen.query_one("#limits-pane", OptionList)
+        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+        assert drawn == ["claude: 5h 2%"]

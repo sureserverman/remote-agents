@@ -25,7 +25,9 @@ screen's auxiliary panes.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import replace
+from math import ceil
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -179,10 +181,7 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     DashboardScreen #dashboard-left { width: 3fr; }
     DashboardScreen #dashboard-right { width: 2fr; }
     DashboardScreen #sessions-pane { height: 2fr; border: round $secondary; }
-    DashboardScreen #limits-pane {
-        height: auto; max-height: 30%; border: round $secondary;
-        text-wrap: nowrap; text-overflow: ellipsis;
-    }
+    DashboardScreen #limits-pane { max-height: 40%; border: round $secondary; }
     DashboardScreen #feed-pane {
         height: 1fr; border: round $secondary;
         text-wrap: nowrap; text-overflow: ellipsis;
@@ -338,12 +337,23 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             _LOG.exception("the agent limits pane could not be reloaded")
             return
         lines = limit_lines(entries)
-        if not lines:
-            return
         pane = self.query_one("#limits-pane", OptionList)
         pane.clear_options()
+        if not lines:
+            # A *successful* read that found nothing is not the same event as a read that
+            # raised, and this used to treat them alike -- it returned early, leaving the last
+            # figures drawn. That is the routine state, not an exotic one: Claude's borrowed
+            # cache is fenced at thirty minutes, so half an hour of idleness pinned a stale
+            # percentage on screen permanently, countdown and all, with `(resets in 3h)` still
+            # reading 3h four hours later. Worse, the bot correctly dropped its block at the
+            # same instant, so the two surfaces asserted different things about one account --
+            # the exact divergence sharing `limit_lines` exists to prevent.
+            pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
+            _fit_to_content(pane, (NO_LIMITS,))
+            return
         for index, line in enumerate(lines):
             pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+        _fit_to_content(pane, lines)
 
     async def _reload_sessions_pane(self) -> None:
         """Redraw the sessions pane from a fresh read, keeping the cursor on its row.
@@ -390,6 +400,37 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         restore_highlight_by_id(
             pane, held_id, [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records]
         )
+
+
+def _fit_to_content(pane: OptionList, lines: Iterable[str]) -> None:
+    """Give the pane exactly the rows its wrapped text needs, and no more.
+
+    `height: auto` does not track an `OptionList`'s content here -- measured at several sizes,
+    the pane held the same height with nothing drawn and with eight rows, so `max-height` alone
+    decided it and the box sat mostly blank while taking rows from the two panes either side.
+    Four readers is the production ceiling, so the blank-heavy render was the normal case, not
+    an edge.
+
+    Counting **wrapped** rows rather than lines is the part that has to be right. Sizing to
+    `len(lines)` looked correct on a wide terminal and cut the continuation of every wrapped
+    line on a narrow one -- which took the borrowed-cache stamp off the screen at 70 columns,
+    the one thing DEC-061 requires presentation to say out loud. The width is read off the pane
+    the way `_continuation_rows` reads the feed's, and is 0 until the first layout, where
+    leaving the height alone lets `max-height` cover a frame nobody has seen yet.
+    """
+    rows = tuple(lines)
+
+    def measure() -> None:
+        width = pane.content_size.width
+        if width <= 0:
+            return
+        pane.styles.height = sum(max(1, ceil(len(line) / width)) for line in rows) + 2
+
+    # Deferred, because the first draw happens inside `populate()` -- before the pane has been
+    # laid out, so its width is still 0 and a measurement taken there silently does nothing.
+    # That is not a rare frame: it is the view the owner opens on, and it left the pane at its
+    # `max-height` until the ten-second tick came round and re-measured it.
+    pane.call_after_refresh(measure)
 
 
 class ProjectChooserScreen(ChoiceScreen):
