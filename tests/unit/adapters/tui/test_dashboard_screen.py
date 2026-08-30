@@ -33,6 +33,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_usage import AgentLimits, UsageWindow
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
@@ -69,7 +70,7 @@ def _record(slug: str = "existing") -> SessionRecord:
     )
 
 
-def _context(records: tuple[SessionRecord, ...] = (), feed=None) -> TuiContext:
+def _context(records: tuple[SessionRecord, ...] = (), feed=None, limits=None) -> TuiContext:
     return TuiContext(
         backend=backend_for(
             sessions=_Launcher(records),  # type: ignore[arg-type]
@@ -77,6 +78,7 @@ def _context(records: tuple[SessionRecord, ...] = (), feed=None) -> TuiContext:
             refresh_catalogue=lambda: (_PROJECT,),
             catalogue=(_PROJECT,),
             activity_feed=feed,
+            limits=limits,
         ),
         profiles=(ProfileAvailability("claude", True),),
         attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
@@ -259,3 +261,128 @@ async def test_choosing_a_project_row_is_unaffected_by_the_feed_branch() -> None
         # reopen saved" first (DEC-033). The point of the assertion is that it still gets
         # somewhere, not which somewhere.
         assert app.screen.position == "PROJECT_CHOOSER", "a project row must still route"
+
+
+# --- the limits pane ----------------------------------------------------------------------
+
+
+def _limits_reader(*entries: AgentLimits):
+    async def read() -> tuple[AgentLimits, ...]:
+        return entries
+
+    return read
+
+
+async def test_the_limits_pane_sits_between_the_sessions_and_the_notifications() -> None:
+    """Where the owner asked for it: "on the right, between the sessions and notifications".
+
+    Order is asserted through the right column's own children rather than by querying each id,
+    because the ask is about position and a test that only proved existence would pass with the
+    pane anywhere on the screen.
+    """
+    app = RemoteAgentsTui(_context((_record(),)))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        column = app.screen.query_one("#dashboard-right")
+        ids = [child.id for child in column.children]
+
+        assert ids == ["sessions-pane", "limits-pane", "feed-pane"]
+
+
+async def test_the_limits_pane_declares_its_empty_state_before_any_read() -> None:
+    """DEC-009, and seeded at compose time for the reason `#feed-pane` is.
+
+    `_reload_limits` returns early when the capability is absent or the read raises, so a pane
+    left blank would answer both of those with an empty box instead of the sentence the
+    decision requires it to declare.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert pane.option_count == 1
+        option = pane.get_option_at_index(0)
+        assert option.disabled is True
+        assert "No agent limits" in str(option.prompt)
+
+
+async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
+    app = RemoteAgentsTui(
+        _context(
+            limits=_limits_reader(
+                AgentLimits(ProfileId("claude"), (UsageWindow("5h", 2.0),)),
+                AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),
+            )
+        )
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+
+        assert drawn == ["claude: 5h 2%", "codex: week 61%"]
+
+
+async def test_every_row_in_the_limits_pane_is_disabled() -> None:
+    """It reports a fact and offers no action, so the cursor must not come to rest on it.
+
+    The same reason `#feed-pane`'s empty row is disabled: a highlighted row on a pane with
+    nothing to open answers Enter with silence, which reads as a broken key.
+    """
+    app = RemoteAgentsTui(
+        _context(
+            limits=_limits_reader(AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)))
+        )
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert all(pane.get_option_at_index(i).disabled for i in range(pane.option_count))
+
+
+async def test_a_raising_limits_read_leaves_the_drawn_text_standing() -> None:
+    """What is drawn is stale, not wrong, and a background read having a bad moment
+    must not blank a pane the owner is reading."""
+
+    async def exploding() -> tuple[AgentLimits, ...]:
+        raise RuntimeError("the provider changed its layout under an upgrade")
+
+    app = RemoteAgentsTui(_context(limits=exploding))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert pane.option_count == 1
+        assert "No agent limits" in str(pane.get_option_at_index(0).prompt)
+
+
+async def test_a_host_that_wired_no_limits_reader_keeps_its_empty_sentence() -> None:
+    app = RemoteAgentsTui(_context(limits=None))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert pane.option_count == 1
+        assert "No agent limits" in str(pane.get_option_at_index(0).prompt)
+
+
+async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None:
+    """One schedule, three panes -- so the right column cannot drift out of step with itself."""
+    reads = []
+
+    async def counting() -> tuple[AgentLimits, ...]:
+        reads.append(1)
+        return (AgentLimits(ProfileId("codex"), (UsageWindow("week", 61.0),)),)
+
+    app = RemoteAgentsTui(_context(limits=counting))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        first = len(reads)
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+
+        assert first >= 1
+        assert len(reads) == first + 1

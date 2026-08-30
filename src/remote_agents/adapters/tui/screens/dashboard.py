@@ -49,6 +49,7 @@ from remote_agents.adapters.tui.screens.feed import (
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.application.project_catalog import CatalogProject
+from remote_agents.application.session_views import limit_lines
 
 _LOG = logging.getLogger(__name__)
 
@@ -56,6 +57,21 @@ _SESSION_KEY_PREFIX = "session:"
 _SESSIONS_AUTO_REFRESH = 10.0
 #: The sessions pane's one line when nothing runs — DEC-009's answer for this pane.
 _NO_SESSIONS = "No sessions are running."
+
+NO_LIMITS = "No agent limits reported."
+"""DEC-009's answer for the limits pane, in the vocabulary the readers already use.
+
+Reached three ways that are one sentence to the owner: a host that wired no reader, a read
+that raised, and every installed agent publishing nothing (`opencode` and `cursor-agent`
+always, `codex` on a host that has not run it, `claude` when its borrowed cache went stale).
+Distinguishing them here would report on this project's plumbing rather than on the owner's
+plan.
+"""
+
+_EMPTY_LIMITS_ROW = "limits:none"
+"""A stable id for the empty row, so a redraw can tell it from an agent's row."""
+
+_LIMITS_ROW_PREFIX = "limits:"
 
 
 class ProjectsPaneScreen(ProjectsScreen):
@@ -163,6 +179,10 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
     DashboardScreen #dashboard-left { width: 3fr; }
     DashboardScreen #dashboard-right { width: 2fr; }
     DashboardScreen #sessions-pane { height: 2fr; border: round $secondary; }
+    DashboardScreen #limits-pane {
+        height: auto; max-height: 30%; border: round $secondary;
+        text-wrap: nowrap; text-overflow: ellipsis;
+    }
     DashboardScreen #feed-pane {
         height: 1fr; border: round $secondary;
         text-wrap: nowrap; text-overflow: ellipsis;
@@ -193,6 +213,22 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
                     sessions = OptionList(id="sessions-pane", markup=False)
                     sessions.border_title = "Sessions — enter opens, d for detail"
                     yield sessions
+                    # Between the sessions and the notifications, which is where the owner
+                    # asked for it on 2026-08-29. Seeded with its empty state at compose time
+                    # for the reason `#feed-pane` below is: `_reload_limits` returns early on
+                    # an absent capability and on a raising read, so an unseeded pane would
+                    # answer both with an empty box instead of the sentence DEC-009 requires.
+                    #
+                    # Every row is disabled. The pane reports a fact and offers no action, so a
+                    # cursor resting here would answer Enter with silence -- which reads as a
+                    # broken key rather than as a pane that never had anything to open.
+                    limits = OptionList(
+                        Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),
+                        id="limits-pane",
+                        markup=False,
+                    )
+                    limits.border_title = "Agent limits"
+                    yield limits
                     # Seeded with its empty state at compose time, not left blank. `_reload_feed`
                     # returns early when the capability is absent or the read raises, and a
                     # `Static` used to carry this sentence as its initial content -- so an
@@ -282,6 +318,33 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             return
         await self._reload_sessions_pane()
 
+    async def _reload_limits(self) -> None:
+        """Redraw the account-wide limits, or leave whatever is drawn exactly as it is.
+
+        Failure leaves the pane alone, which is the same contract `_reload_sessions_pane` and
+        `_reload_feed` state: the rows already drawn are stale, not wrong, and a background read
+        having a bad moment must never blank a pane the owner is reading.
+
+        The rows come from `limit_lines`, so this pane and the bot's block are one decision
+        rendered twice rather than two renderers that agree today (DEC-043). What stays here is
+        placement and the disabled-row rule -- the surface's half.
+        """
+        reader = self.services.backend.limits
+        if reader is None:
+            return
+        try:
+            entries = await reader()
+        except Exception:
+            _LOG.exception("the agent limits pane could not be reloaded")
+            return
+        lines = limit_lines(entries)
+        if not lines:
+            return
+        pane = self.query_one("#limits-pane", OptionList)
+        pane.clear_options()
+        for index, line in enumerate(lines):
+            pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+
     async def _reload_sessions_pane(self) -> None:
         """Redraw the sessions pane from a fresh read, keeping the cursor on its row.
 
@@ -298,6 +361,9 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
             return
         finally:
             self._reloading_sessions = False
+        # The feed and the limits pane ride the same cadence: one schedule, three panes, so
+        # the right column cannot drift out of step with itself.
+        await self._reload_limits()
         # The feed rides the same cadence: one schedule, two panes. Its failure mode is
         # the placeholder, never a broken resting position. Known blind spot, inherited
         # from the pane's own suspend behavior: while a flow screen is pushed above the
