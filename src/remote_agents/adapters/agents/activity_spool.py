@@ -69,6 +69,21 @@ _PLAIN_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 #: correctly on the way to being dropped.
 _DISCRIMINATING_FIELDS = ("error", "notification_type", "reason")
 _DETAIL_FIELDS = ("message", "last_assistant_message")
+
+#: What a Codex payload may contribute, per event. **Measured, never assumed** --
+#: `docs/acceptance-2026-08-29-codex-activity-detail.md` records the field vocabulary of real
+#: payloads captured against a disposable `CODEX_HOME`, and this tuple is its licensing section
+#: written as code. Deliberately narrower than `_DETAIL_FIELDS`: `message` was never observed on
+#: a Codex payload, and a field this project has not seen is not a field it reads.
+#:
+#: `Stop` is the only key. `PermissionRequest` admits nothing, which is narrower than the
+#: measurement permits and is the point: `tool_name` is the one field on that event that names
+#: the ask without carrying a command, a path or a prompt -- but `reason` exists solely for
+#: `_kind` to pick an `ActivityKind`, that pick is unconditional for `PermissionRequest`, and
+#: `AgentActivity` has no `reason` field. Admitting it would write a provider string to disk that
+#: nothing renders and nothing consults, which is retention without rendering -- the thing
+#: DEC-013 clause (2) bounds when it lists what a hook may keep.
+_CODEX_DETAIL_FIELDS: dict[str, tuple[str, ...]] = {"Stop": ("last_assistant_message",)}
 #: How many times a colliding name is stepped over before the record is dropped in silence.
 #:
 #: A collision needs two events in the same *microsecond* for one session, so the hooks
@@ -144,7 +159,25 @@ def _observed_event(
     if provider == "codex":
         if event not in {"Stop", "PermissionRequest"}:
             return None
-        return ObservedAgentEvent(session_id, event, None, None, moment.astimezone(UTC))
+        # Widened on 2026-08-30 from "every payload field discarded" to "the one measured field
+        # a notification renders" -- which supersedes nothing. DEC-013 clause (2) already allows
+        # a hook to keep "one bounded single line of detail" beside the event name, session id
+        # and time, and DEC-063 kept that clause binding while replacing only DEC-013's obsolete
+        # claim that Codex has no usable source. Codex simply was not using an allowance Claude
+        # has had since the spool was written; this brings it to parity. DEC-063's content-free
+        # claim is scoped to the pane-*title* watcher, which is untouched and still retains one
+        # boolean.
+        #
+        # `PermissionRequest` admits nothing, deliberately -- see `_CODEX_DETAIL_FIELDS`.
+        # What crosses here is bounded by `bounded_detail_line`, exactly as Claude's is, because
+        # the far end of the spool measures against the same budget.
+        return ObservedAgentEvent(
+            session_id=session_id,
+            event=event,
+            reason=None,
+            detail=_first(document, _CODEX_DETAIL_FIELDS.get(event, ()), bounded_detail_line),
+            observed_at=moment.astimezone(UTC),
+        )
     return ObservedAgentEvent(
         session_id=session_id,
         event=event,

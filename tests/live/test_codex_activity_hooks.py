@@ -25,7 +25,7 @@ import pytest
 from remote_agents.adapters.agents.hook_install import install_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.agent_activity import ActivityKind
+from remote_agents.ports.agent_activity import MAXIMUM_DETAIL_CHARACTERS, ActivityKind
 from remote_agents.ports.session_identity import SESSION_ID_VARIABLE
 
 _TURN = "Reply with exactly the word: spooled"
@@ -116,7 +116,19 @@ def test_a_managed_codex_turn_spools_its_own_stop(tmp_path: Path) -> None:
     (activity,) = activities
     assert activity.session_id == str(session_id)
     assert activity.kind is ActivityKind.COMPLETED
-    assert activity.detail is None
+    # `detail is None` until 2026-08-30, when the Codex branch of `_observed_event` stopped
+    # discarding every payload field and began reading the one `last_assistant_message` that
+    # `docs/acceptance-2026-08-29-codex-activity-detail.md` measured. `_TURN` asks for one exact
+    # word, so this is the agent's own line arriving through a real hook rather than a fixture --
+    # which is the whole reason this drill exists (DEC-013: "what prevents a recurrence is a live
+    # drill, not another fixture"). Asserted on the *content*, not merely on not-None: a bound
+    # that silently truncated to the empty string would satisfy the weaker check.
+    assert activity.detail is not None, (
+        "a managed Codex Stop now carries the agent's last line; if this is None the spool's "
+        "codex branch has stopped reading `last_assistant_message`"
+    )
+    assert "spooled" in activity.detail.casefold()
+    assert len(activity.detail) <= MAXIMUM_DETAIL_CHARACTERS
 
 
 @pytest.mark.live_profile
