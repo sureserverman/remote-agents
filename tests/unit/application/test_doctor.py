@@ -232,14 +232,14 @@ def test_production_doctor_refuses_health_for_a_config_the_code_cannot_load() ->
         registered_projects=2,
         discovered_projects=3,
         catalogue_projects=4,
-        config_drift={"readable": False, "missing": ["activity_quiet_polls"], "unknown": []},
+        config_drift={"readable": False, "missing": ["activity_poll_seconds"], "unknown": []},
     )
 
     # Every component is green and the deploy is still not healthy, which is the whole point:
     # the service crash-loops on a config it cannot load however well everything else answers.
     assert all(component["status"] == "healthy" for component in report["components"].values())
     assert report["healthy"] is False
-    assert report["config"]["missing"] == ["activity_quiet_polls"]
+    assert report["config"]["missing"] == ["activity_poll_seconds"]
 
 
 def _healthy_production(**overrides):

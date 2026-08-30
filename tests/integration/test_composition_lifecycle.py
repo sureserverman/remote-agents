@@ -137,7 +137,7 @@ def test_the_service_composition_gives_the_bot_a_durable_callback_store(
     paths = ProductionPaths.for_home(home)
     paths.ensure_directories()
     (home / "dev").mkdir()
-    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
         composition = _private_boundary(config, connection, paths, load_secrets())
@@ -183,7 +183,7 @@ def test_the_service_composition_lets_the_bot_step_the_console_aside(tmp_path, m
     paths = ProductionPaths.for_home(home)
     paths.ensure_directories()
     (home / "dev").mkdir()
-    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30, 3)
+    config = AppConfig(home / "dev", home / "registry.yaml", paths.database_path, 40, 10, 30)
     connection = open_database(paths.database_path, migrations=MIGRATIONS)
     try:
         composition = _private_boundary(config, connection, paths, load_secrets())

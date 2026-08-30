@@ -1848,10 +1848,11 @@ def test_doctor_stale_config_missing_key_reports_the_drift_it_was_built_to_diagn
     # failures nobody looked for would send an operator chasing phantoms behind one fault.
     assert report["checked"] is False
     assert report["components"] == {}
-    # Naming the keys is the whole point: the runbook fix is four lines of TOML, and a report
-    # that says only "config_schema_drift" sends the operator back to the runbook to find out
-    # which four.
-    assert set(report["config"]["missing"]) == {"activity_poll_seconds", "activity_quiet_polls"}
+    # Naming the keys is the whole point: the runbook fix is a line of TOML, and a report that
+    # says only "config_schema_drift" sends the operator back to the runbook to find out which.
+    # `activity_quiet_polls` was in this set until it was retired on 2026-08-30; a retired key
+    # is never missing, which is the whole of what retiring one buys.
+    assert set(report["config"]["missing"]) == {"activity_poll_seconds"}
 
 
 def test_doctor_stale_config_unknown_key_reports_the_drift_rather_than_raising(

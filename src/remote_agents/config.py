@@ -67,7 +67,6 @@ class AppConfig:
     max_label_length: int
     project_page_size: int
     activity_poll_seconds: int
-    activity_quiet_polls: int
 
     _: KW_ONLY
     """Everything past here is optional, and named so an insertion cannot shift a caller.
@@ -103,9 +102,31 @@ _LIMIT_KEYS = {
     "max_label_length",
     "project_page_size",
     "activity_poll_seconds",
-    "activity_quiet_polls",
     "claude_context_window",
 }
+
+_RETIRED_LIMIT_KEYS = frozenset({"activity_quiet_polls"})
+"""Keys this schema used to require and must still accept, reading nothing from them.
+
+**Without this, retiring a key breaks every host it was written for.** `_require_exact_keys`
+refuses unknown *and* missing keys, so simply deleting `activity_quiet_polls` from the set above
+makes every config already deployed fail with `limits has unknown or missing keys` -- from
+`serve`, `tui` and `add-project` alike, because all three load through here. There is no way to
+work around it on the host either: the fix would be to edit a file the operator has no reason to
+think is wrong, after an upgrade that gave them no warning.
+
+So a key leaves the schema by moving here rather than by disappearing -- the shape
+`hook_install.RETIRED_EVENTS` already uses for an event that stops being installed, and what
+DEC-051 decided for a signal that stops being produced. Tolerated when present, never required
+when absent, never read either way, and never generated into a new file. An entry stays until
+every host has rewritten its config; there is no way for this process to know when that is, and
+the cost of keeping one is a set union per load.
+
+`activity_quiet_polls` was retired on 2026-08-30 with `ActivityKind.QUIET`. It paced the
+pane-digest watch, counting how many identical captures meant an agent had stopped. Nothing
+counts captures now. `activity_poll_seconds` is untouched and still paces the title watch and
+the spool drain.
+"""
 
 _OPTIONAL_LIMIT_KEYS = frozenset({"claude_context_window"})
 """Keys the schema accepts but does not require, and the only ones in it.
@@ -245,7 +266,13 @@ def _schema_sections(
     ]
     for name, allowed, optional in (
         ("paths", _PATH_KEYS, frozenset()),
-        ("limits", _LIMIT_KEYS, _OPTIONAL_LIMIT_KEYS),
+        # A retired key is in `allowed` so its presence is not drift, and in `optional` so its
+        # absence is not either. `doctor` must send nobody to edit a file that is already right.
+        (
+            "limits",
+            _LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
+            _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
+        ),
     ):
         section = raw.get(name)
         if isinstance(section, dict):
@@ -275,7 +302,12 @@ def load_config(path: Path) -> AppConfig:
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")
     _require_exact_keys(paths, _PATH_KEYS, "paths")
-    _require_exact_keys(limits, _LIMIT_KEYS, "limits", _OPTIONAL_LIMIT_KEYS)
+    _require_exact_keys(
+        limits,
+        _LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
+        "limits",
+        _OPTIONAL_LIMIT_KEYS | _RETIRED_LIMIT_KEYS,
+    )
     if any("token" in key.lower() or "secret" in key.lower() for key in _walk_keys(raw)):
         raise ConfigError("TOML must not contain tokens or secrets")
     dev_root = _absolute_directory(paths["dev_root"], "paths.dev_root")
@@ -288,12 +320,6 @@ def load_config(path: Path) -> AppConfig:
     # how stale "has produced no output since" may be before it stops being worth sending.
     activity_poll_seconds = _bounded_int(
         limits["activity_poll_seconds"], "limits.activity_poll_seconds", 5, 600
-    )
-    # Two is the real floor, not one. At one, "quiet" means a single capture matched the one
-    # before it -- true of any agent between two lines of output. The claim is that output
-    # stopped, and a single poll cannot support it.
-    activity_quiet_polls = _bounded_int(
-        limits["activity_quiet_polls"], "limits.activity_quiet_polls", 2, 20
     )
     # `.get`, because this is the one key the schema does not require. An absent one is the
     # deployed shape on every host written before it existed, and the default is the owner's
@@ -311,7 +337,6 @@ def load_config(path: Path) -> AppConfig:
         max_label_length,
         project_page_size,
         activity_poll_seconds,
-        activity_quiet_polls,
         claude_context_window=claude_context_window,
         claude_context_window_stated=claude_context_window_stated,
     )
@@ -405,7 +430,6 @@ DEFAULT_LIMITS: dict[str, int] = {
     "max_label_length": 40,
     "project_page_size": 10,
     "activity_poll_seconds": 30,
-    "activity_quiet_polls": 3,
     "claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW,
 }
 
@@ -476,6 +500,9 @@ def render_config(
     }
     values = DEFAULT_LIMITS if limits is None else limits
     _require_exact_keys(paths, _PATH_KEYS, "generated paths")
+    # No retired key here: a generated file is written fresh and must carry only what the
+    # schema requires today. Tolerating one on load is compatibility; writing one would be
+    # manufacturing the drift the retirement exists to absorb.
     _require_exact_keys(values, _LIMIT_KEYS, "generated limits", _OPTIONAL_LIMIT_KEYS)
     for key, value in paths.items():
         # **Values, not only key sets**, and the difference cost a second gate round. The first

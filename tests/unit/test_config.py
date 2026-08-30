@@ -58,28 +58,25 @@ def test_production_secrets_require_all_environment_values() -> None:
 
 
 def test_activity_polling_limits_are_loaded_and_bounded(tmp_path: Path) -> None:
-    """Both knobs the pane watcher runs on, validated like every other limit."""
+    """The one knob the activity pass still runs on, validated like every other limit.
+
+    There were two until 2026-08-30. `activity_quiet_polls` paced the pane-digest watch and was
+    retired with it; this one still paces the Codex title watch and the spool drain.
+    """
     config = load_config(write_config(tmp_path, example(tmp_path)))
 
     assert config.activity_poll_seconds == 30
-    assert config.activity_quiet_polls == 3
 
 
 @pytest.mark.parametrize(
     "replacement",
-    (
-        "activity_poll_seconds = 4",
-        "activity_poll_seconds = 601",
-        "activity_quiet_polls = 1",
-        "activity_quiet_polls = 21",
-    ),
+    ("activity_poll_seconds = 4", "activity_poll_seconds = 601"),
 )
 def test_an_activity_limit_outside_its_bounds_is_refused(tmp_path: Path, replacement: str) -> None:
-    """A poll every second is self-inflicted load; one quiet poll is not evidence of quiet.
+    """Five seconds is a floor on self-inflicted load; ten minutes a ceiling on staleness.
 
-    The lower bound on `activity_quiet_polls` is the one that carries meaning: at 1, "quiet"
-    means a single capture matched the one before it, which any agent between two lines of
-    output satisfies. The claim is that output *stopped*, and one poll cannot support it.
+    Every pass reads a pane title per running Codex session on the same loop that long-polls
+    Telegram, and an observation older than the ceiling has stopped being worth sending.
     """
     key = replacement.split(" =")[0]
     invalid = (
@@ -106,23 +103,28 @@ def test_an_absent_activity_limit_is_refused_by_the_exact_key_schema(tmp_path: P
     assert "activity_poll_seconds" in str(refusal.value)
 
 
-def test_the_shipped_example_config_carries_both_activity_limits() -> None:
-    """The README installs from this file, so a knob absent here is a broken first run."""
+def test_the_shipped_example_config_carries_the_activity_limit_and_not_the_retired_one() -> None:
+    """The README installs from this file, so a knob absent here is a broken first run.
+
+    Both directions, because a retired key is not merely unneeded in a fresh file -- writing one
+    would manufacture on a new host exactly the drift the retirement exists to absorb on old
+    ones, and it would be tolerated silently, so nothing else would object.
+    """
     shipped = Path("config/remote-agents.example.toml").read_text(encoding="utf-8")
 
     assert "activity_poll_seconds" in shipped
-    assert "activity_quiet_polls" in shipped
+    assert "activity_quiet_polls" not in shipped
 
 
 def test_the_shipped_example_config_satisfies_the_schema_the_code_requires() -> None:
-    """Pin the example against the schema itself, not against two key names.
+    """Pin the example against the schema itself, not against a key name.
 
-    The test above names `activity_poll_seconds` and `activity_quiet_polls` because those are
-    the two that were once missing. That check cannot fail for the *next* key, which is the
-    whole failure mode BL-029 exists to close: the example config drifts from the code, the
-    README installs from the example, and the first run crash-loops. Loading it is the
-    strongest available statement -- it exercises every rule `load_config` enforces, so a
-    schema change that the example does not follow fails here rather than on someone's host.
+    The test above names `activity_poll_seconds` because it was once missing. That check cannot
+    fail for the *next* key, which is the whole failure mode BL-029 exists to close: the example
+    config drifts from the code, the README installs from the example, and the first run
+    crash-loops. Loading it is the strongest available statement -- it exercises every rule
+    `load_config` enforces, so a schema change that the example does not follow fails here
+    rather than on someone's host.
     """
     from remote_agents.config import describe_schema_drift
 
@@ -311,6 +313,74 @@ def test_the_ceiling_is_the_one_field_a_caller_may_omit() -> None:
 
     from remote_agents.config import DEFAULT_CLAUDE_CONTEXT_WINDOW, AppConfig
 
-    config = AppConfig(_Path("/dev"), _Path("/r.yaml"), _Path("/s.sqlite3"), 40, 10, 30, 3)
+    config = AppConfig(_Path("/dev"), _Path("/r.yaml"), _Path("/s.sqlite3"), 40, 10, 30)
 
     assert config.claude_context_window == DEFAULT_CLAUDE_CONTEXT_WINDOW
+
+
+def test_a_deployed_config_still_carrying_the_retired_key_loads_and_ignores_it(
+    tmp_path: Path,
+) -> None:
+    """DEC-051's shape, applied to a config key: retired, tolerated, never required.
+
+    `_require_exact_keys` refuses unknown *and* missing keys, so deleting `activity_quiet_polls`
+    from the schema would make every config already on an operator's host fail to load --
+    `ConfigError: limits has unknown or missing keys`. That is a schema change breaking the
+    hosts it was written for, from a service whose whole start-up depends on it. The key
+    therefore moves to a retired set rather than disappearing, exactly as `SessionEnd` moved to
+    `RETIRED_EVENTS` when it stopped being installed.
+    """
+    carried = example(tmp_path)
+    assert "activity_quiet_polls = 3" in carried, "the fixture must still carry the retired key"
+
+    config = load_config(write_config(tmp_path, carried))
+
+    assert config.dev_root == tmp_path.resolve()
+    assert not hasattr(config, "activity_quiet_polls"), (
+        "the value is ignored, not read; a field would invite a caller to use a dead knob"
+    )
+
+
+def test_a_config_written_without_the_retired_key_loads_too(tmp_path: Path) -> None:
+    """The other direction: retired means not required, so a freshly generated file is legal."""
+    without = example(tmp_path).replace("activity_quiet_polls = 3\n", "")
+    assert "activity_quiet_polls" not in without
+
+    config = load_config(write_config(tmp_path, without))
+
+    assert config.activity_poll_seconds == 30
+
+
+def test_a_retired_key_is_drift_in_neither_direction(tmp_path: Path) -> None:
+    """`doctor` must call neither its presence unknown nor its absence missing.
+
+    Either verdict would send an operator to edit a file that is already correct -- and the
+    presence verdict would do it on every host that has not been rewritten, which is all of
+    them.
+    """
+    from remote_agents.config import describe_schema_drift
+
+    carried = describe_schema_drift(write_config(tmp_path, example(tmp_path)))
+    without = describe_schema_drift(
+        write_config(tmp_path, example(tmp_path).replace("activity_quiet_polls = 3\n", ""))
+    )
+
+    assert carried["unknown"] == [] and carried["missing"] == []
+    assert without["unknown"] == [] and without["missing"] == []
+
+
+def test_a_genuinely_unknown_key_is_still_refused_by_name(tmp_path: Path) -> None:
+    """Tolerating one retired key must not become tolerating anything.
+
+    The retired set is a named, closed set of exactly what this project used to require. A
+    schema that had simply stopped checking would pass this file too, and nothing else in the
+    suite distinguishes the two.
+    """
+    invented = example(tmp_path).replace(
+        "activity_poll_seconds = 30", "activity_poll_seconds = 30\nactivity_quiet_pols = 3"
+    )
+
+    with pytest.raises(ConfigError) as refusal:
+        load_config(write_config(tmp_path, invented))
+
+    assert "activity_quiet_pols" in str(refusal.value)
