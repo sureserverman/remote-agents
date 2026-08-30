@@ -51,15 +51,14 @@ KIND_WORDS = {
     ActivityKind.LIMIT_REACHED: "hit a usage limit",
     ActivityKind.OUTPUT_LIMIT: "hit its output ceiling",
     ActivityKind.NEEDS_ANSWER: "waiting for an answer",
-    ActivityKind.QUIET: "gone quiet",
 }
 """Each phrase leads with what *differs*, and drops the subject the row already names.
 
 These read "the agent has finished its work", "the agent is waiting for an answer" and so on
 until the Stage 3 gate measured them at the width the dashboard actually gives this pane. Three
-of the five began with the same eight characters, and the row prefixes them with a session
-identity -- so at ~36 columns three observations of three different kinds truncated to the
-*same 36 characters*, and a pane of identical rows cannot be glanced at.
+of the five kinds then defined began with the same eight characters, and the row prefixes them
+with a session identity -- so at ~36 columns three observations of three different kinds
+truncated to the *same 36 characters*, and a pane of identical rows cannot be glanced at.
 
 Dropping "the agent" is not a shortening for its own sake: the row now opens with the session,
 so the subject was being said twice. `existing · claude · #1 · waiting for an answer` names who

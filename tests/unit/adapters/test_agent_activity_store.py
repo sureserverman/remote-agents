@@ -53,11 +53,11 @@ async def test_the_migration_applies_over_an_existing_database(tmp_path: Path) -
 async def test_appended_observations_read_back_newest_first_and_bounded(store) -> None:
     await store.append(_activity(ActivityKind.COMPLETED, minutes_ago=3))
     await store.append(_activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="push?"))
-    await store.append(_activity(ActivityKind.QUIET, minutes_ago=0))
+    await store.append(_activity(ActivityKind.LIMIT_REACHED, minutes_ago=0))
 
     recent = await store.recent(limit=2)
     assert [activity.kind for activity in recent] == [
-        ActivityKind.QUIET,
+        ActivityKind.LIMIT_REACHED,
         ActivityKind.NEEDS_ANSWER,
     ]
     # The agent's words persist deliberately (DEC-037, superseding DEC-013's storage

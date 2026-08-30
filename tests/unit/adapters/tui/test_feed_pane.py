@@ -314,7 +314,7 @@ async def test_a_reload_keeps_the_cursor_on_the_row_it_was_on(surface) -> None:
         (
             _activity(ActivityKind.NEEDS_ANSWER, minutes_ago=1, detail="one"),
             _activity(ActivityKind.COMPLETED, minutes_ago=5, detail="two"),
-            _activity(ActivityKind.QUIET, minutes_ago=9, detail="three"),
+            _activity(ActivityKind.LIMIT_REACHED, minutes_ago=9, detail="three"),
         )
     ]
 
@@ -359,7 +359,7 @@ async def test_a_cursor_whose_row_aged_out_rests_on_the_first_row(surface) -> No
         await pilot.pause()
         _feed_pane(app).highlighted = 1
 
-        rows[0] = (_activity(ActivityKind.QUIET, minutes_ago=0, detail="only"),)
+        rows[0] = (_activity(ActivityKind.LIMIT_REACHED, minutes_ago=0, detail="only"),)
         await app.screen._reload_feed()
         await pilot.pause()
 
@@ -522,7 +522,9 @@ async def test_an_observation_whose_session_is_unknown_falls_back_to_its_id(surf
     async def feed():
         return (
             _named_activity(
-                ActivityKind.QUIET, minutes_ago=2, session="deadbeef-0000-0000-0000-000000000000"
+                ActivityKind.COMPLETED,
+                minutes_ago=2,
+                session="deadbeef-0000-0000-0000-000000000000",
             ),
         )
 
@@ -610,7 +612,7 @@ async def test_the_feed_read_never_refreshes_readiness(surface) -> None:
     session = "01234567-89ab-cdef-0123-456789abcdef"
 
     async def feed():
-        return (_named_activity(ActivityKind.QUIET, minutes_ago=1, session=session),)
+        return (_named_activity(ActivityKind.COMPLETED, minutes_ago=1, session=session),)
 
     context, sessions = _index_context(feed, (_session_record(session),))
     app = surface(context)
@@ -953,7 +955,7 @@ async def test_a_row_with_no_detail_toggles_without_emitting_an_empty_row(surfac
     mean different things on different rows -- but it has nothing to show, and an empty
     continuation row would be a blank line the cursor skips over for no reason."""
 
-    observations = (_activity(ActivityKind.QUIET, minutes_ago=1, detail=None),)
+    observations = (_activity(ActivityKind.COMPLETED, minutes_ago=1, detail=None),)
 
     async def feed():
         return observations
@@ -1139,7 +1141,7 @@ async def test_rows_of_different_kinds_are_distinguishable_at_the_narrow_width()
 
         'existing · claude · regular · #1 · t'   (waiting for an answer)
         'existing · claude · regular · #1 · t'   (finished its work)
-        'existing · claude · regular · #1 · t'   (gone quiet)
+        'existing · claude · regular · #1 · t'   (hit a usage limit)
 
     An expansion is a *targeted* read: at most one row opens at a time, so a pane of
     indistinguishable rows means opening each in turn to find the one that needs an answer.
@@ -1147,13 +1149,7 @@ async def test_rows_of_different_kinds_are_distinguishable_at_the_narrow_width()
     """
     session = "01234567-89ab-cdef-0123-456789abcdef"
     stamp = datetime.now(UTC)
-    kinds = (
-        ActivityKind.NEEDS_ANSWER,
-        ActivityKind.COMPLETED,
-        ActivityKind.LIMIT_REACHED,
-        ActivityKind.OUTPUT_LIMIT,
-        ActivityKind.QUIET,
-    )
+    kinds = tuple(ActivityKind)
     observations = tuple(
         AgentActivity(
             session, kind, None, stamp - timedelta(minutes=n), ActivityConfidence.REPORTED
@@ -1206,3 +1202,18 @@ async def test_a_real_enter_keypress_expands_the_highlighted_row(surface) -> Non
         await pilot.press("enter")
         await pilot.pause()
         assert _feed_pane(app).option_count == 1, "Enter did not collapse it again"
+
+
+def test_the_feed_has_a_phrase_for_every_kind_and_no_others() -> None:
+    """Set equality, not coverage: a stale entry is as wrong as a missing one.
+
+    `KIND_WORDS` is a module-level dict keyed by enum member, so an entry naming a retired kind
+    is an `AttributeError` at import and takes this whole surface with it -- which is what
+    retiring `QUIET` did on 2026-08-30 until this pane followed. Asserting `>=` would have
+    passed on the entry that could not be constructed; asserting equality is what makes the
+    next retirement fail here rather than at whichever screen imports the module first.
+    """
+    from remote_agents.adapters.tui.screens.feed import KIND_WORDS
+
+    assert set(KIND_WORDS) == set(ActivityKind)
+    assert all(phrase and not phrase.endswith(".") for phrase in KIND_WORDS.values())

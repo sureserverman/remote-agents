@@ -55,9 +55,7 @@ def _observed(
     detail: str | None = None,
     minute: int = 0,
 ) -> AgentActivity:
-    confidence = (
-        ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
-    )
+    confidence = ActivityConfidence.REPORTED
     return AgentActivity(
         session_id=session_id,
         kind=kind,
@@ -158,7 +156,7 @@ def test_two_sessions_whose_observations_interleave_come_back_in_first_appearanc
             _observed(SESSION_B, ActivityKind.COMPLETED, detail="pushed the branch", minute=9),
             _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=1),
             _observed(SESSION_B, ActivityKind.NEEDS_ANSWER, detail="may I write here?", minute=2),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=3),
+            _observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=3),
         ]
     )
 
@@ -214,13 +212,13 @@ def test_two_quiet_reports_collapse_even_though_neither_carries_any_agent_text()
     """
     groups = grouped_for_delivery(
         [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=1),
-            _observed(SESSION_A, ActivityKind.QUIET, minute=4),
+            _observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=1),
+            _observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=4),
         ]
     )
 
     assert len(groups) == 1
-    assert groups[0].activities == (_observed(SESSION_A, ActivityKind.QUIET, minute=4),)
+    assert groups[0].activities == (_observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=4),)
 
 
 def test_a_single_observation_becomes_a_group_of_one() -> None:
@@ -234,7 +232,7 @@ def test_a_group_reads_in_the_order_its_observations_were_made() -> None:
     """One session's news is a small timeline, so it is told in the order it happened."""
     groups = grouped_for_delivery(
         [
-            _observed(SESSION_A, ActivityKind.QUIET, minute=7),
+            _observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=7),
             _observed(SESSION_A, ActivityKind.COMPLETED, detail="ran the suite", minute=2),
             _observed(SESSION_A, ActivityKind.NEEDS_ANSWER, detail="which branch?", minute=5),
         ]
@@ -243,7 +241,7 @@ def test_a_group_reads_in_the_order_its_observations_were_made() -> None:
     assert [activity.kind for activity in groups[0].activities] == [
         ActivityKind.COMPLETED,
         ActivityKind.NEEDS_ANSWER,
-        ActivityKind.QUIET,
+        ActivityKind.LIMIT_REACHED,
     ]
 
 
@@ -296,7 +294,7 @@ def test_the_cap_costs_the_session_that_filled_it() -> None:
     returning it and there is no second chance anywhere in the system.
     """
     held: deque[AgentActivity] = deque()
-    enqueue(held, [_observed(SESSION_B, ActivityKind.QUIET, minute=1)], maximum=4)
+    enqueue(held, [_observed(SESSION_B, ActivityKind.LIMIT_REACHED, minute=1)], maximum=4)
     enqueue(
         held,
         [_observed(SESSION_A, ActivityKind.COMPLETED, minute=n) for n in range(2, 5)],
@@ -321,7 +319,7 @@ def test_the_evicted_observation_is_the_loudest_sessions_oldest() -> None:
     )
     oldest = held[0]
 
-    enqueue(held, [_observed(SESSION_A, ActivityKind.QUIET, minute=99)], maximum=len(held))
+    enqueue(held, [_observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=99)], maximum=len(held))
 
     assert oldest not in held
     assert len(held) == len(EVERY_KIND_IN_ORDER)
@@ -340,7 +338,7 @@ def test_eviction_reports_rather_than_says() -> None:
         held, [_observed(SESSION_A, ActivityKind.COMPLETED, minute=n) for n in range(3)], maximum=3
     )
 
-    reports = enqueue(held, [_observed(SESSION_A, ActivityKind.QUIET, minute=9)], maximum=3)
+    reports = enqueue(held, [_observed(SESSION_A, ActivityKind.LIMIT_REACHED, minute=9)], maximum=3)
 
     assert reports == ((SESSION_A, 3),)
     session_id, count = reports[0]

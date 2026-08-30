@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from telegram.error import TelegramError
@@ -59,23 +59,18 @@ def _utf16_units(text: str) -> int:
     return len(text.encode("utf-16-le")) // 2
 
 
-EVERY_KIND = (
-    ActivityKind.COMPLETED,
-    ActivityKind.LIMIT_REACHED,
-    ActivityKind.OUTPUT_LIMIT,
-    ActivityKind.NEEDS_ANSWER,
-    ActivityKind.QUIET,
-)
+EVERY_KIND = tuple(ActivityKind)
+"""Derived from the enum rather than hand-copied, which it was until 2026-08-30.
+
+A hand-written tuple is a second vocabulary: retiring `QUIET` left it naming a member that no
+longer existed, and adding a kind would have left it silently not covering one -- the direction
+that fails as a passing test rather than an import error.
+"""
 
 
 @pytest.mark.parametrize("kind", EVERY_KIND)
 def test_every_kind_names_the_session_and_offers_to_open_it(kind: ActivityKind) -> None:
-    confidence = (
-        ActivityConfidence.INFERRED if kind is ActivityKind.QUIET else ActivityConfidence.REPORTED
-    )
-    message = render_activity(
-        _group(_activity(kind, confidence=confidence)), display=DISPLAY, open_session=OPEN
-    )
+    message = render_activity(_group(_activity(kind)), display=DISPLAY, open_session=OPEN)
 
     assert DISPLAY in message.text
     assert message.keyboard == ((message.keyboard[0][0],),)
@@ -88,16 +83,7 @@ def test_every_kind_says_something_distinct() -> None:
     one thing while the service knows another."""
     rendered = {
         other: render_activity(
-            _group(
-                _activity(
-                    other,
-                    confidence=(
-                        ActivityConfidence.INFERRED
-                        if other is ActivityKind.QUIET
-                        else ActivityConfidence.REPORTED
-                    ),
-                )
-            ),
+            _group(_activity(other)),
             display=DISPLAY,
             open_session=OPEN,
         ).text
@@ -168,72 +154,17 @@ def test_a_need_for_an_answer_is_stated_plainly_because_the_agent_asked() -> Non
     assert "not something it reported" not in message.text
 
 
-def test_quiet_is_a_report_of_silence_and_never_a_claim_of_completion() -> None:
-    """The Stage 2 gate's judgment criterion, pinned: the heuristic describes what was
-    observed — no output — and never the conclusion the owner might jump to."""
-    message = render_activity(
-        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
-    lowered = message.text.casefold()
-    assert "no output since" in lowered
-    assert "finished" not in lowered
-    assert "completed" not in lowered
-    assert "done" not in lowered
-
-
-def test_quiet_names_the_time_it_stopped_being_observed_to_change() -> None:
-    message = render_activity(
-        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
-    assert "14:05 UTC" in message.text
-
-
-def test_quiet_renders_the_same_moment_whatever_offset_it_arrived_in() -> None:
-    """An observation is an instant; two spellings of one instant must not read as two."""
-    elsewhere = OBSERVED.astimezone(timezone(timedelta(hours=5, minutes=30)))
-    message = render_activity(
-        _group(
-            _activity(
-                ActivityKind.QUIET,
-                confidence=ActivityConfidence.INFERRED,
-                observed_at=elsewhere,
-            )
-        ),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
-    assert "14:05 UTC" in message.text
-
-
-def test_quiet_never_renders_agent_text_even_if_a_caller_supplies_it() -> None:
-    """Nothing said this. A quiet report that carried a parting sentence would present the
-    last thing on the screen as a statement the agent chose to make."""
-    message = render_activity(
-        _group(
-            _activity(
-                ActivityKind.QUIET,
-                detail="I have completed the migration.",
-                confidence=ActivityConfidence.INFERRED,
-            )
-        ),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
-    assert "migration" not in message.text
-
-
 def test_an_inferred_report_says_so_rather_than_asserting_it() -> None:
-    """Pane quiet is the one guess left, and the hedge is what keeps it honest.
+    """A Codex approval read off a pane title is the one guess left; the hedge keeps it honest.
 
     The rule is the renderer's rather than the sentence's on purpose: it fires on the
     confidence, so a future inferred kind cannot arrive unhedged by whoever writes its wording.
+    That design has now survived its own subject twice -- it was written for an upstream idle
+    timer, inherited by pane quiet, and inherited again when pane quiet was retired on
+    2026-08-30 -- which is the whole argument for keying it on confidence.
     """
     message = render_activity(
-        _group(_activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED)),
+        _group(_activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED)),
         display=DISPLAY,
         open_session=OPEN,
     )
@@ -740,9 +671,9 @@ def test_one_hedge_covers_a_group_however_many_guesses_are_in_it() -> None:
     """
     message = render_activity(
         _group(
-            _activity(ActivityKind.QUIET, confidence=ActivityConfidence.INFERRED),
+            _activity(ActivityKind.NEEDS_ANSWER, confidence=ActivityConfidence.INFERRED),
             _activity(
-                ActivityKind.QUIET,
+                ActivityKind.NEEDS_ANSWER,
                 confidence=ActivityConfidence.INFERRED,
                 observed_at=datetime(2026, 8, 11, 15, 30, tzinfo=UTC),
             ),
@@ -767,27 +698,6 @@ def test_a_reported_group_carries_no_hedge_at_all() -> None:
     )
 
     assert "This is a guess" not in message.text
-
-
-def test_a_grouped_quiet_report_still_carries_no_agent_text() -> None:
-    """`QUIET` drops detail regardless of what a caller supplies, and grouping must not be the
-    seam where that rule is lost -- the last line of an idle screen rendered under a session's
-    name reads exactly like a parting statement."""
-    message = render_activity(
-        _group(
-            _activity(
-                ActivityKind.QUIET,
-                detail="sk-not-a-real-key-000",
-                confidence=ActivityConfidence.INFERRED,
-            ),
-            _activity(ActivityKind.QUIET, detail="and a transcript", observed_at=OBSERVED),
-        ),
-        display=DISPLAY,
-        open_session=OPEN,
-    )
-
-    assert "sk-not-a-real-key-000" not in message.text
-    assert "transcript" not in message.text
 
 
 def test_a_group_of_pathological_details_still_fits_the_telegram_budget() -> None:
@@ -960,7 +870,9 @@ async def test_a_full_queue_costs_the_session_that_filled_it_not_the_quiet_ones(
     notifier._bot = None  # hold everything: no delivery, so the cap is what is under test
 
     for index in range(5):
-        await notifier.deliver([_for(f"quiet-{index}", ActivityKind.QUIET, None, clock.moment)])
+        await notifier.deliver(
+            [_for(f"quiet-{index}", ActivityKind.NEEDS_ANSWER, None, clock.moment)]
+        )
     for index in range(400):
         await notifier.deliver(
             [_for("loud", ActivityKind.COMPLETED, f"step {index}", clock.moment)]
@@ -1380,3 +1292,19 @@ async def test_the_queue_full_warning_names_the_session_that_paid(caplog) -> Non
     assert "held)" in message and str(notifications._MAXIMUM_PENDING) in message, (
         f"the tally the id sits beside is gone or wrong: {message!r}"
     )
+
+
+def test_the_bot_has_a_sentence_for_every_kind_and_none_it_cannot_reach() -> None:
+    """Every surviving kind renders, and nothing renders a kind that no longer exists.
+
+    `_sentence` had a `QUIET` branch ahead of its dictionary lookup, and `_detail_of` had the
+    matching one that dropped agent text a quiet observation could never carry. Both are dead
+    code the moment the member goes, and dead code in a total function is how the *next* kind
+    gets a branch nobody notices is unreachable. Driven through every member rather than
+    asserted structurally, because what has to hold is that the lookup does not raise.
+    """
+    from remote_agents.adapters.telegram.notifications import _sentence
+
+    for kind in ActivityKind:
+        sentence = _sentence(_activity(kind))
+        assert sentence and sentence.endswith(".")

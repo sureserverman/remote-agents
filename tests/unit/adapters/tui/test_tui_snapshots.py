@@ -376,7 +376,7 @@ def _activities() -> tuple[AgentActivity, ...]:
         ),
         AgentActivity(
             "deadbeef-0000-0000-0000-000000000000",
-            ActivityKind.QUIET,
+            ActivityKind.NEEDS_ANSWER,
             None,
             datetime.now(UTC),
             ActivityConfidence.INFERRED,

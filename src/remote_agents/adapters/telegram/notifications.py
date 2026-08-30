@@ -9,16 +9,19 @@ second borrow the grammar of the first.
 Two rules carry that, and both are structural rather than editorial:
 
 **An inferred observation says so, in its own sentence.** `ActivityConfidence.INFERRED` covers
-one guess -- a pane that stopped changing here -- and it is not worth telling the owner as a
-fact. The hedge is appended by the renderer, not left to whoever writes the next sentence, and
-that stays structural now that it fires for a single kind: it was written when a second guess
-existed, that guess was retired rather than hedged better, and the rule is what stops the next
-one arriving in the grammar of something the agent actually said.
+one guess -- a Codex pane title carrying the native approval marker (DEC-063) -- and it is not
+worth telling the owner as a fact. The hedge is appended by the renderer, not left to whoever
+writes the next sentence, and that stays structural now that it fires for a single kind: it has
+outlived two guesses already, an upstream idle timer and pane quiet, each retired rather than
+hedged better, and the rule is what stops the next one arriving in the grammar of something the
+agent actually said.
 
-**A quiet report never carries agent text.** Nothing said it. The classifier already sets
-`detail=None` for `QUIET`, and this drops it again regardless, because the failure mode is
-silent and specific: the last line of an idle screen rendered under the session's name reads
-exactly like a parting statement the agent chose to make.
+**An observation that carries no words of its own must not borrow any.** The rule was written
+for `quiet`, whose report was dropped again at `_detail_of` even though the classifier already
+set `detail=None`, because the failure mode is silent and specific: the last line of an idle
+screen rendered under the session's name reads exactly like a parting statement the agent chose
+to make. `quiet` was retired on 2026-08-30 and the rule was not -- `needs_answer` inferred from
+a title is content-free for the same reason, and the next such kind will be too.
 """
 
 from __future__ import annotations
@@ -249,32 +252,19 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
 def _sentence(activity: AgentActivity) -> str:
     if activity.kind is ActivityKind.NEEDS_ANSWER:
         return _WAITING
-    if activity.kind is ActivityKind.QUIET:
-        # What was observed, never what it implies. The service saw a pane stop changing; it
-        # did not see an agent finish, and the owner reading this on a phone will supply that
-        # conclusion themselves if the sentence lets them.
-        return f"No output since {_moment(activity)}."
     return _SENTENCES[activity.kind]
 
 
 def _detail_of(activity: AgentActivity) -> str | None:
-    """What the agent said, or nothing at all when nothing said it."""
-    return None if activity.kind is ActivityKind.QUIET else activity.detail
+    """What the agent said, or nothing at all when nothing said it.
 
-
-def _moment(activity: AgentActivity) -> str:
-    """The observation's instant, in one spelling.
-
-    Normalized to UTC before it is formatted. A hook payload carries whatever offset the
-    agent's host was in, and the pane watcher stamps UTC, so without this the same instant
-    reaches the owner as two different clock times depending on which source noticed it.
-
-    The minute is the whole precision on offer, and it is conservative in the direction that
-    matters: `observed_at` is the moment the quiet threshold was *crossed*, so the true silence
-    began `quiet_polls x poll_seconds` earlier. "No output since" this time is therefore true
-    and understated, which is the right way for a heuristic to be wrong.
+    A pass-through since 2026-08-30, and kept as a named function rather than inlined. It used
+    to drop `detail` for `QUIET` -- the one kind nothing said, where the last line of an idle
+    screen rendered under the session's name would have read exactly like a parting statement
+    the agent chose to make. The next inferred kind that carries no words of its own needs the
+    same guard, and a call site is a cheaper place to add it than a re-derivation.
     """
-    return activity.observed_at.astimezone(UTC).strftime("%H:%M UTC")
+    return activity.detail
 
 
 class StandingNotificationStore:
