@@ -12,3 +12,12 @@ project_page_size = 10
 # heuristic and is described to the owner as one.
 activity_poll_seconds = 30
 activity_quiet_polls = 3
+
+# The size of Claude's context window, in tokens. **This is your statement, not a measurement.**
+# Claude Code publishes no context ceiling anywhere this service can read -- a transcript records
+# what each turn used and never the window it used it out of, and the model name reads the same
+# for the 1M-context variant as for any other. So a session's context percentage can only come
+# from a number you state here. If it is wrong, every Claude row shows a confidently wrong
+# percentage and nothing else will say so; correct it here. Omit the key entirely and 1000000 is
+# assumed. Codex needs no equivalent: it writes its own window into its rollout.
+claude_context_window = 1000000

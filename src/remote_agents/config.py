@@ -48,6 +48,17 @@ class TelegramSecrets:
     owner_chat_id: int
 
 
+DEFAULT_CLAUDE_CONTEXT_WINDOW = 1_000_000
+"""The ceiling assumed when the owner has not stated one, in tokens.
+
+Owner-declared, never inferred (DEC-061). The transcript records what each turn *used* and never
+the window it used it out of, and `message.model` reads `claude-opus-5` even under the 1M-context
+variant -- checked against six transcripts on this host -- so the ceiling cannot be derived from
+anything the provider writes down. This value is the owner's own statement of their plan,
+restated here as the default and spelled out in the shipped example where they can correct it.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     dev_root: Path
@@ -58,6 +69,15 @@ class AppConfig:
     activity_poll_seconds: int
     activity_quiet_polls: int
 
+    claude_context_window: int = DEFAULT_CLAUDE_CONTEXT_WINDOW
+    """Defaulted on the type as well as in the schema, because it is optional in both.
+
+    Every other field here is required and stays that way: a caller that forgets one has a bug,
+    and the exact-key schema exists to say so. This one is the config's single declaration
+    rather than a knob, so a `AppConfig` built without it is a host that has stated nothing --
+    exactly what `load_config` produces from a file that states nothing, and the same figure.
+    """
+
 
 _TOP_LEVEL_KEYS = {"paths", "limits"}
 _PATH_KEYS = {"dev_root", "registry_path", "database_path"}
@@ -66,7 +86,31 @@ _LIMIT_KEYS = {
     "project_page_size",
     "activity_poll_seconds",
     "activity_quiet_polls",
+    "claude_context_window",
 }
+
+_OPTIONAL_LIMIT_KEYS = frozenset({"claude_context_window"})
+"""Keys the schema accepts but does not require, and the only ones in it.
+
+Every other key here is required on purpose: `_require_exact_keys` refuses a missing one so an
+operator's file cannot silently disagree with the service it configures, which is the whole
+point of an exact schema and the reason `activity_poll_seconds`' own absence test exists.
+
+This one is different in kind rather than in importance. It is a **declaration**, not a knob:
+Claude publishes no context ceiling anywhere a third party can read, so a percentage can only
+be rendered from a number the owner states. A host that has never stated one has an honest
+default; a host that has never stated a poll interval has a bug. Requiring it would also refuse
+every config already deployed, which is a schema change breaking the hosts it was written for.
+"""
+
+_CLAUDE_CONTEXT_BOUNDS = (1_000, 20_000_000)
+"""How far a stated ceiling may stray before it is refused rather than clamped.
+
+Wide, because which model the owner runs is not this project's business, and bounded anyway
+because a zero divides and a value that could only be a typo should fail at load rather than
+paint a confidently wrong percentage on every session row -- which is silent by construction,
+and the failure this stage's risk flag names.
+"""
 
 
 def describe_schema_drift(path: Path) -> dict[str, object]:
@@ -101,6 +145,14 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
         "missing": [],
         "invalid": [],
         "detail": None,
+        # The effective ceiling, and whether it was stated or defaulted. A *value* rather than a
+        # key name, which the rule below otherwise forbids -- permitted here because it is not
+        # anything the owner typed: it is an `int` that has already passed `_bounded_int`, or the
+        # module's own default. It is reported because a wrong ceiling is silent by construction,
+        # and this is the only one of its three warnings that reaches a host already deployed --
+        # the shipped example and the generated comment both only reach a config being written.
+        "claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW,
+        "claude_context_window_stated": False,
     }
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -115,11 +167,14 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
 
     unknown: set[str] = set()
     missing: set[str] = set()
-    for values, allowed in _schema_sections(raw):
+    for values, allowed, optional in _schema_sections(raw):
         unknown |= set(values) - allowed
-        missing |= allowed - set(values)
+        missing |= allowed - set(values) - optional
     report["unknown"] = sorted(unknown)
     report["missing"] = sorted(missing)
+    limits = raw.get("limits")
+    stated = isinstance(limits, dict) and "claude_context_window" in limits
+    report["claude_context_window_stated"] = stated
 
     # A file can be structurally complete and still refuse to load -- an out-of-bounds int, a
     # relative path, a token-shaped key. Those are the other two of the three ways
@@ -127,7 +182,9 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
     # `doctor` crashing on the other two. `load_config` remains the authority on all three;
     # this only asks it, and records the answer instead of propagating it.
     try:
-        load_config(path)
+        # The effective figure comes from the load rather than from the raw file, so it is the
+        # number the service will actually use -- bounds applied, default filled in.
+        report["claude_context_window"] = load_config(path).claude_context_window
     except ConfigError as error:
         report["detail"] = str(error)
         if not unknown and not missing:
@@ -153,15 +210,28 @@ def describe_schema_drift(path: Path) -> dict[str, object]:
     return report
 
 
-def _schema_sections(raw: object) -> list[tuple[Mapping[str, object], set[str]]]:
-    """Pair each present section of a raw TOML tree with the key set it is checked against."""
+def _schema_sections(
+    raw: object,
+) -> list[tuple[Mapping[str, object], set[str], frozenset[str]]]:
+    """Pair each present section with the key set it is checked against, and its optional keys.
+
+    The optional set rides along because drift is two questions, not one: a key outside
+    `allowed` is *unknown* whatever else is true, while a key inside it is only *missing* if the
+    schema actually requires it. Reporting `claude_context_window` as missing would tell every
+    host deployed before it existed that it had drifted from a schema it satisfies.
+    """
     if not isinstance(raw, dict):
         return []
-    sections: list[tuple[Mapping[str, object], set[str]]] = [(raw, _TOP_LEVEL_KEYS)]
-    for name, allowed in (("paths", _PATH_KEYS), ("limits", _LIMIT_KEYS)):
+    sections: list[tuple[Mapping[str, object], set[str], frozenset[str]]] = [
+        (raw, _TOP_LEVEL_KEYS, frozenset())
+    ]
+    for name, allowed, optional in (
+        ("paths", _PATH_KEYS, frozenset()),
+        ("limits", _LIMIT_KEYS, _OPTIONAL_LIMIT_KEYS),
+    ):
         section = raw.get(name)
         if isinstance(section, dict):
-            sections.append((section, allowed))
+            sections.append((section, allowed, optional))
     return sections
 
 
@@ -187,7 +257,7 @@ def load_config(path: Path) -> AppConfig:
     paths = _mapping(raw["paths"], "paths")
     limits = _mapping(raw["limits"], "limits")
     _require_exact_keys(paths, _PATH_KEYS, "paths")
-    _require_exact_keys(limits, _LIMIT_KEYS, "limits")
+    _require_exact_keys(limits, _LIMIT_KEYS, "limits", _OPTIONAL_LIMIT_KEYS)
     if any("token" in key.lower() or "secret" in key.lower() for key in _walk_keys(raw)):
         raise ConfigError("TOML must not contain tokens or secrets")
     dev_root = _absolute_directory(paths["dev_root"], "paths.dev_root")
@@ -207,6 +277,14 @@ def load_config(path: Path) -> AppConfig:
     activity_quiet_polls = _bounded_int(
         limits["activity_quiet_polls"], "limits.activity_quiet_polls", 2, 20
     )
+    # `.get`, because this is the one key the schema does not require. An absent one is the
+    # deployed shape on every host written before it existed, and the default is the owner's
+    # stated figure rather than anything read off a provider (DEC-061).
+    claude_context_window = _bounded_int(
+        limits.get("claude_context_window", DEFAULT_CLAUDE_CONTEXT_WINDOW),
+        "limits.claude_context_window",
+        *_CLAUDE_CONTEXT_BOUNDS,
+    )
     return AppConfig(
         dev_root,
         registry_path,
@@ -215,6 +293,7 @@ def load_config(path: Path) -> AppConfig:
         project_page_size,
         activity_poll_seconds,
         activity_quiet_polls,
+        claude_context_window,
     )
 
 
@@ -255,9 +334,14 @@ def _mapping(value: object, name: str) -> dict[str, object]:
     return value
 
 
-def _require_exact_keys(values: Mapping[str, object], allowed: set[str], name: str) -> None:
+def _require_exact_keys(
+    values: Mapping[str, object],
+    allowed: set[str],
+    name: str,
+    optional: frozenset[str] = frozenset(),
+) -> None:
     unknown = set(values) - allowed
-    missing = allowed - set(values)
+    missing = allowed - set(values) - optional
     if unknown or missing:
         raise ConfigError(f"{name} has unknown or missing keys: {sorted(unknown | missing)}")
 
@@ -302,7 +386,27 @@ DEFAULT_LIMITS: dict[str, int] = {
     "project_page_size": 10,
     "activity_poll_seconds": 30,
     "activity_quiet_polls": 3,
+    "claude_context_window": DEFAULT_CLAUDE_CONTEXT_WINDOW,
 }
+
+_LIMIT_COMMENTS: dict[str, str] = {
+    "claude_context_window": (
+        "# The size of Claude's context window, in tokens. **This is your statement, not a\n"
+        "# measurement.** Claude Code publishes no context ceiling anywhere this service can\n"
+        "# read, so a session's context percentage can only come from a number you state here.\n"
+        "# If it is wrong, every Claude row shows a confidently wrong percentage and nothing\n"
+        "# else will say so; correct it here. Codex needs no equivalent -- it writes its own\n"
+        "# window into its rollout."
+    ),
+}
+"""Prose the generated file carries, for the keys whose value is a *declaration*.
+
+The only commented key, and it earns the machinery: the rest of `DEFAULT_LIMITS` are knobs with
+safe defaults, while this one is the owner asserting a fact about their plan that nothing else
+can check. Raised by this task's Tier-1 review, which observed that the explanation existed only
+in `config/remote-agents.example.toml` -- a file this module's own docstring says is rendered
+and never copied, so it reaches nobody the onboarding path onboards.
+"""
 
 
 def render_config(
@@ -339,7 +443,7 @@ def render_config(
     }
     values = DEFAULT_LIMITS if limits is None else limits
     _require_exact_keys(paths, _PATH_KEYS, "generated paths")
-    _require_exact_keys(values, _LIMIT_KEYS, "generated limits")
+    _require_exact_keys(values, _LIMIT_KEYS, "generated limits", _OPTIONAL_LIMIT_KEYS)
     for key, value in paths.items():
         # **Values, not only key sets**, and the difference cost a second gate round. The first
         # version checked that every required key was present and nothing more, so
@@ -351,7 +455,14 @@ def render_config(
         if not value.is_absolute():
             raise ConfigError(f"generated paths.{key} must be an absolute path: {value}")
     rendered_paths = "\n".join(f"{key} = {_toml_string(paths[key])}" for key in sorted(paths))
-    rendered_limits = "\n".join(f"{key} = {values[key]:d}" for key in sorted(values))
+    # A blank line before a commented key and nowhere else: separating every key would make the
+    # file's own shape argue that each one needs reading, when only this one does.
+    rendered_limits = "\n".join(
+        f"\n{_LIMIT_COMMENTS[key]}\n{key} = {values[key]:d}"
+        if key in _LIMIT_COMMENTS
+        else f"{key} = {values[key]:d}"
+        for key in sorted(values)
+    )
     return f"[paths]\n{rendered_paths}\n\n[limits]\n{rendered_limits}\n"
 
 
