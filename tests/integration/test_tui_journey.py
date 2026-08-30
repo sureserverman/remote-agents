@@ -89,28 +89,25 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             for character in "brand-new":
                 await pilot.press(character)
             await settle_filter(pilot)
-            # Filter -> rows -> project -> chooser (resting on Launch) -> agent, and the
-            # agent choice arrives at the review.
+            # Filter -> rows -> project -> chooser (resting on Launch) -> the agent list,
+            # which is the commit position: choosing an agent here *is* the launch.
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            assert position(app) == "REVIEW"
-            # Both choices are the header's trail. The status line carried the label, which was
-            # the one part of the gathered selection the trail could not; with that gone the
-            # trail carries the whole selection and nothing is asserted here that the header
-            # does not already say.
+            assert position(app) == "PROFILES"
+            # The project is the header's trail. It carried the agent too while a position
+            # stood *after* the agent choice; the agent list stands before it, so what names
+            # the agent at this position is the row under the cursor.
             trail = app.screen.sub_title or ""
             assert "brand-new" in trail
-            assert "claude" in trail, (
-                f"the agent must survive in the trail at the commit point; trail was {trail!r}"
-            )
 
-            await pilot.press("up")
+            # Down, not up, and one press rather than two. The agent list rests on Back — it is
+            # a commit position, so DEC-007 forbids a repeated enter committing on it — and Down
+            # from the last row wraps to the first agent.
+            await pilot.press("down")
             await pilot.press("enter")
             await pilot.pause()
 

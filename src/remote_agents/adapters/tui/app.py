@@ -1412,7 +1412,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         try:
             # `nullcontext` when there is no body to cover. **Not reachable today**, and worth
             # saying so rather than inventing a scenario: the only caller is
-            # `ReviewScreen.choose`, reached from a row selection on that very screen, and
+            # `ProfilesScreen.choose`, reached from a row selection on that very screen, and
             # `self.body` is read synchronously before any await. Kept because `self.body`
             # answers `None` for reasons that have nothing to do with this call site — it is the
             # unchecked `cast` BL-021 recorded — so a second caller would get the honest answer

@@ -141,13 +141,16 @@ def _context(**overrides: object) -> TuiContext:
     return tui_context_for(**arguments)
 
 
-async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
-    """Two choices, not three: the agent choice is the arrival at the review."""
+async def _walk_to_the_agent_list(app: RemoteAgentsTui, pilot) -> None:
+    """One choice, not three: the agent list is where the launch is issued from now.
+
+    The flow lost its label step and then its review step, so choosing an agent *is* the
+    launch — which is why every caller below issues one by choosing `"claude"` rather than by
+    walking one further and choosing a `"launch"` row.
+    """
     await app.screen.choose("opaque-existing")
     await pilot.pause()
     await app.screen.choose("launch")
-    await pilot.pause()
-    await app.screen.choose("claude")
     await pilot.pause()
 
 
@@ -346,8 +349,8 @@ async def test_a_failed_launch_is_an_error_notification_rather_than_a_four_line_
 
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        await _walk_to_review(app, pilot)
-        await app.screen.choose("launch")
+        await _walk_to_the_agent_list(app, pilot)
+        await app.screen.choose("claude")
         await pilot.pause()
         errors = announcements(app, severity="error")
         status = _status(app)
@@ -357,7 +360,9 @@ async def test_a_failed_launch_is_an_error_notification_rather_than_a_four_line_
     assert any("broke its contract" in message for message in errors), errors
     assert "\n" not in status
     assert "broke its contract" not in status
-    assert rows[:1] == ["Launch"], "the review kept its rows, so the failure is retryable"
+    assert rows[:-1] == ["claude"] and rows[-1] == "Back", (
+        f"the agent list kept its rows, so the failure is retryable; it offered {rows}"
+    )
 
 
 async def test_a_notification_shows_markup_bearing_text_literally() -> None:
@@ -382,8 +387,8 @@ async def test_a_notification_shows_markup_bearing_text_literally() -> None:
     # needs the real widget, and the one that would otherwise assert over an empty query.
     async with app.run_test(size=(100, 40), notifications=True) as pilot:
         await pilot.pause()
-        await _walk_to_review(app, pilot)
-        await app.screen.choose("launch")
+        await _walk_to_the_agent_list(app, pilot)
+        await app.screen.choose("claude")
         # Two pauses: `notify` posts a message, and the handler schedules the rack's own
         # `show` with `call_later`, so the toast is not mounted until a second pass.
         await pilot.pause()
@@ -413,26 +418,24 @@ async def test_the_trail_grows_as_the_owner_walks_into_a_flow() -> None:
         trail = [breadcrumb(app)]
         await app.screen.choose("opaque-existing")
         await pilot.pause()
+        trail.append(breadcrumb(app))
         await app.screen.choose("launch")
         await pilot.pause()
         trail.append(breadcrumb(app))
-        await app.screen.choose("claude")
-        await pilot.pause()
-        trail.append(breadcrumb(app))
 
-    # Three positions, and the last of them is the review. It used to be four, and the
-    # fourth read `… › claude › Review` because the label step sat between the agent and the
-    # commit point and carried the agent into the trail itself.
+    # **The third entry repeating the second is the assertion, not a gap in it.** The flow was
+    # four positions, then three, and is now two: the label step went, and then the review step
+    # that had inherited the agent's name into the trail. What is left is the chooser, which
+    # names the project, and the agent list, which deliberately names *nothing* — its `crumb`
+    # yields "" whenever a chooser beneath it has already named the project, because repeating
+    # it would make the trail say the same thing twice in a row.
     #
-    # With that step gone the review names the agent, which is the same convention applied one
-    # position earlier: a crumb names the choice that led here. So the *word* "Review" leaves
-    # the trail and the *agent* stays in it — which is the half that matters, since a commit
-    # point that does not say which agent it is about to launch is the defect the label step's
-    # own docstring recorded being fixed for.
+    # So this pins two claims at once: a walk into a flow lengthens the trail, and the position
+    # that would have made it redundant does not.
     assert trail == [
         "Projects",
         "Projects › infra/existing",
-        "Projects › infra/existing › claude",
+        "Projects › infra/existing",
     ]
 
 
@@ -487,15 +490,19 @@ async def test_leaving_a_flow_shortens_the_trail_again() -> None:
         await pilot.pause()
         await app.screen.choose("launch")
         await pilot.pause()
-        await app.screen.choose("claude")
-        await pilot.pause()
         deep = breadcrumb(app)
+        # Two pops, and the count is the point rather than an accident: the agent list adds no
+        # crumb of its own (see `test_the_trail_grows_as_the_owner_walks_into_a_flow`), so the
+        # pop that shortens the *trail* is the one off the chooser. A single pop asserted here
+        # would compare a string to itself and pass on a surface whose trail never moved.
+        await app.action_back()
+        await pilot.pause()
         await app.action_back()
         await pilot.pause()
         back = breadcrumb(app)
 
-    assert deep == "Projects › infra/existing › claude"
-    assert back == "Projects › infra/existing"
+    assert deep == "Projects › infra/existing"
+    assert back == "Projects"
 
 
 async def test_a_failure_status_carries_its_severity_as_a_design_system_class() -> None:
@@ -616,8 +623,14 @@ async def test_the_severity_colour_comes_from_the_theme_and_changes_with_it() ->
     assert neutral_rgb != seen["textual-dark"], "a neutral status renders in the error colour"
 
 
-async def test_the_review_status_names_the_terminal_handover_it_is_about_to_do() -> None:
+async def test_the_agent_list_status_names_the_terminal_handover_it_is_about_to_do() -> None:
     """The surface's most irreversible act, said on the screen that commits to it.
+
+    **The screen that commits to it changed, and the sentence moved with the act rather than
+    dying with the position.** It was written for the launch review; that step guarded nothing
+    once the label had gone and was removed under DEC-033, which made the agent list the commit
+    position. A consequence this large stated on a screen the owner no longer passes through
+    would be no statement at all, so the claim below is unchanged and only its address moved.
 
     A ready launch **execs away** (DEC-023): `attach_to` replaces this process with the tmux
     client, so detaching later returns the owner to their shell rather than to this app. That is
@@ -640,11 +653,11 @@ async def test_the_review_status_names_the_terminal_handover_it_is_about_to_do()
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        await _walk_to_review(app, pilot)
-        assert position(app) == "REVIEW", f"the walk landed on {position(app)}"
+        await _walk_to_the_agent_list(app, pilot)
+        assert position(app) == "PROFILES", f"the walk landed on {position(app)}"
         said = _status(app)
         region = app.screen.query_one("#status", Static)
-        review_rgb = (region.styles.color.r, region.styles.color.g, region.styles.color.b)
+        instruction_rgb = (region.styles.color.r, region.styles.color.g, region.styles.color.b)
 
         # The same region, on the same screen, carrying a real condition. Read second so the
         # comparison is between two renders of one widget rather than between two screens.
@@ -660,7 +673,7 @@ async def test_the_review_status_names_the_terminal_handover_it_is_about_to_do()
     assert "label" not in lowered, (
         f"the review still mentions the label step that no longer exists: {said!r}"
     )
-    assert review_rgb != error_rgb, (
+    assert instruction_rgb != error_rgb, (
         "an instruction is rendering in the severity colour, which is what DEC-010 forbids"
     )
 

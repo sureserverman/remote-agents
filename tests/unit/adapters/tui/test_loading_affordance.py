@@ -358,7 +358,8 @@ async def test_every_flow_says_what_it_is_doing_while_it_does_it(flow: str) -> N
     """A line that was true a moment ago and is false now is worse than no line at all.
 
     The first version of this affordance covered the rows and left the status alone, arguing
-    it stayed readable underneath. What `ReviewScreen` was left saying is "Label: none. Launch,
+    it stayed readable underneath. What the launch commit position was left saying is "Label:
+    none. Launch,
     or go back." — an instruction to press a button that is at that moment covered and refusing
     input. A review caught it; this is what stops it coming back.
 

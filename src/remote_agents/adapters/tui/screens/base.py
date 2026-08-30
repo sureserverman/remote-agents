@@ -381,10 +381,15 @@ class ChoiceScreen(Screen[None]):
         gathered result from the review step one screen later. The thing worth protecting was
         never the widget's contents; it is work the owner cannot get back by pressing escape.
 
-        The example used to be the launch wizard's label, which illustrated it better than what
-        replaced it — but the label step itself is gone. That flow's review holds two list
-        selections now, re-pickable in two keystrokes, so it protects nothing and `ReviewScreen`
-        stopped overriding this. The class is still there; only the override left.
+        **The launch wizard used to be the example, and it has stopped being one entirely.**
+        Its label step illustrated this better than anything that replaced it, and when that
+        step went, the review left behind held two list selections re-pickable in two
+        keystrokes — so it protected nothing and stopped overriding this. That review has since
+        been removed too, and what inherited the launch, the agent list, holds no gathered work
+        at all: the project sits one screen below it, still drawn. The whole flow is now on the
+        default's side of this question, and `ProjectReviewScreen` is the one screen left
+        overriding it — a typed project name that `NameScreen.populate` clears is still work
+        escape cannot give back.
 
         So a screen that holds gathered state says so by overriding this, and the default
         answers for the ordinary case: an entry that is shown, non-empty, and a commitment. The
@@ -533,8 +538,9 @@ class ChoiceScreen(Screen[None]):
         **`doing` is required rather than optional, and that is the whole of the second
         half.** The first version covered the rows and left the status line alone, on the
         argument that it stayed readable underneath. A review pointed out what it was left
-        saying: `ReviewScreen`'s own line — "Label: none. Launch, or go back." at the time, and
-        a sentence about the terminal handover now — is an instruction about a button that is at
+        saying: the launch commit position's own line — "Label: none. Launch, or go back." at
+        the time, and a sentence about the terminal handover now, on the agent list that has
+        since inherited both the act and the sentence — is an instruction about a row that is at
         that moment covered and refusing input. A
         line that was true a moment ago and is false now is worse than the spinner alone,
         because the owner has no reason to doubt it. So the flow names what it is doing, and

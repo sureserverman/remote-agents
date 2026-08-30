@@ -156,7 +156,6 @@ def _arrangements():
         ResumeConversationsScreen,
         ResumeProfilesScreen,
         ResumeProjectsScreen,
-        ReviewScreen,
         SessionDetailScreen,
         SessionsPaneScreen,
         SessionsScreen,
@@ -173,7 +172,6 @@ def _arrangements():
         DashboardScreen: None,  # the resting position, already on the stack
         ProfilesScreen: ProfilesScreen,
         ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
-        ReviewScreen: ReviewScreen,
         AreasScreen: AreasScreen,
         NameScreen: lambda: NameScreen("infra"),
         ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),
@@ -507,8 +505,8 @@ async def test_a_flow_jump_still_works_when_the_entry_is_a_filter(binding: str) 
 
 
 @pytest.mark.parametrize("binding", ["ctrl+n", "ctrl+s", "ctrl+o"])
-async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> None:
-    """The launch review stopped protecting work, because its work stopped being unrecoverable.
+async def test_a_flow_jump_still_works_on_the_agent_list(binding: str) -> None:
+    """The launch flow stopped protecting work, because its work stopped being unrecoverable.
 
     It held a gathered selection *plus a typed label*, and the label was the part escape could
     not give back — the label entry cleared itself on the way in, so walking back lost it. With
@@ -528,9 +526,7 @@ async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> Non
         await pilot.pause()
         await app.screen.choose("launch")
         await pilot.pause()
-        await app.screen.choose("claude")
-        await pilot.pause()
-        assert app.screen.position == "REVIEW", f"the walk landed on {app.screen.position}"
+        assert app.screen.position == "PROFILES", f"the walk landed on {app.screen.position}"
 
         active = app.screen.active_bindings
         assert binding in active, f"{binding} is not offered on the review at all"
@@ -539,7 +535,7 @@ async def test_a_flow_jump_still_works_on_the_launch_review(binding: str) -> Non
         )
 
 
-async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_deliberate() -> None:
+async def test_quit_at_the_agent_list_leaves_on_the_first_press_and_that_is_deliberate() -> None:
     """The consequence of the narrowing that its own commit did not discuss, pinned so it is a
     decision rather than a side effect.
 
@@ -567,9 +563,7 @@ async def test_quit_at_the_launch_review_leaves_on_the_first_press_and_that_is_d
         await pilot.pause()
         await app.screen.choose("launch")
         await pilot.pause()
-        await app.screen.choose("claude")
-        await pilot.pause()
-        assert app.screen.position == "REVIEW"
+        assert app.screen.position == "PROFILES"
         assert not app.screen.work_in_flight, "the review is still protecting work"
 
         await pilot.press("ctrl+q")
@@ -663,7 +657,7 @@ def test_exactly_these_positions_protect_work_in_flight() -> None:
     assert actual == _PROTECTS_WORK
 
 
-async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselections() -> None:
+async def test_a_flow_jump_at_the_agent_list_leaves_and_the_cost_is_one_reselection() -> None:
     """The inverse of what this asserted, recorded as a deliberate change rather than deleted.
 
     **Its premise was the label, and the label is gone.** It read: project, then agent, then a
@@ -673,10 +667,12 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
     back to them. The protection was bought for the typed label sitting invisibly behind an
     empty entry.
 
-    With that step removed the review holds two list selections and nothing typed, so the jump
-    is allowed and this test records what it costs: the owner lands on the sessions list, and
-    getting back to a launch means re-picking a project and an agent — two selections from two
-    lists that are both still there. That is the same trade the project filter has always made.
+    **The cost this records has since fallen from two reselections to one, and that is the
+    review step going rather than the rule changing.** When the review held the gathered
+    project *and* agent, a jump away cost both. The agent list gathers only the project — the
+    agent choice *is* the launch now — so what a jump away costs is one selection from a list
+    that is still there. The jump is allowed for the same reason it always was: nothing typed
+    is in flight, which is the same trade the project filter has always made.
 
     Asserted rather than assumed, because it *is* a loss, just a small and recoverable one. If a
     future step puts typed work back into this flow, this test is where the argument has to be
@@ -689,17 +685,18 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
         await pilot.pause()
         await app.screen.choose("launch")
         await pilot.pause()
-        await app.screen.choose("claude")
-        await pilot.pause()
-        assert app.screen.position == "REVIEW"
-        assert app.selection.project is not None and app.selection.profile is not None
+        assert app.screen.position == "PROFILES"
+        # One gathered choice, not two: the agent is chosen by launching, so nothing about the
+        # agent is held here to be lost.
+        assert app.selection.project is not None
+        assert app.selection.profile is None
 
         await pilot.press("ctrl+s")
         await pilot.pause()
 
         assert app.screen.position == "SESSIONS", (
-            "the jump was refused at the review, which is the protection this step no longer "
-            "has anything to protect"
+            "the jump was refused at the agent list, which is the protection this step no "
+            "longer has anything to protect"
         )
         # The way back, and the whole reason the loss is acceptable: the resting position is one
         # escape away and both lists are intact.
@@ -713,18 +710,18 @@ async def test_a_flow_jump_at_the_review_now_leaves_and_the_cost_is_two_reselect
 
         # And the leg a Tier-2 review asked for: walk the recovery to its end rather than
         # stopping at "the list is still there". `ProjectsScreen.choose` builds a *fresh*
-        # `LaunchSelection` rather than patching the old one, so nothing from the abandoned pass
-        # can survive into the new review — provable from the source, and now demonstrated.
+        # `LaunchSelection` rather than patching the old one, so nothing from the abandoned
+        # pass can survive into the new one — provable from the source, and now demonstrated
+        # on the field that still exists to carry it.
         await app.screen.choose("opaque-existing")
         await pilot.pause()
         await app.screen.choose("launch")
         await pilot.pause()
-        await app.screen.choose("claude")
-        await pilot.pause()
-        assert app.screen.position == "REVIEW", "the recovery did not reach a fresh review"
+        assert app.screen.position == "PROFILES", "the recovery did not reach a fresh agent list"
         assert app.selection.project is not None
-        assert app.selection.profile is not None
-        assert app.selection.profile.profile_id == "claude"
+        assert app.selection.profile is None, (
+            "a profile survived from the abandoned pass into the fresh selection"
+        )
 
 
 async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:

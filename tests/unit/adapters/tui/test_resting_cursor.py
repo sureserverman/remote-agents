@@ -181,14 +181,22 @@ async def _drive_to_force_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
     return asyncio.create_task(app.screen.confirm_force())
 
 
-async def _drive_to_review(app: RemoteAgentsTui) -> None:
+async def _drive_to_the_agent_list(app: RemoteAgentsTui) -> None:
+    """The launch flow's commit position, which is the agent list now.
+
+    It used to be a review screen standing after this one, and this file had an entry for that
+    instead. The entry moved rather than going with it, for the reason the conversation-list
+    entry below records: **the property belongs to the act, not to the position that happened
+    to hold it.** Choosing a row here launches, so a repeated enter arriving on this list must
+    not commit — which is the whole of DEC-007's mitigation and the only thing standing between
+    a doubled keypress and an agent nobody chose.
+
+    One choice, not three. The flow lost its label step and then its review step.
+    """
     # Through each screen's own handler, so the cursor under test is the one the real
     # navigation leaves behind rather than one a directly-built screen happens to draw.
-    # Two choices, not three: the agent choice lands on the review directly since the launch
-    # flow lost its label step.
     await app.screen.choose("opaque-existing")
     await app.screen.choose("launch")
-    await app.screen.choose("claude")
 
 
 async def _drive_to_remote_control_confirm(app: RemoteAgentsTui) -> asyncio.Task[None]:
@@ -249,7 +257,7 @@ _RESTING = (
         "REMOTE_CONTROL_MODAL",
         id="remote-control-confirm",
     ),
-    pytest.param(_drive_to_review, "Back", "REVIEW", id="review"),
+    pytest.param(_drive_to_the_agent_list, "Back", "PROFILES", id="agent-list"),
     # The resume flow's commit position. Restored after the confirmation it used to sit on was
     # removed: the rows here lead nowhere else now, so the cursor must not rest on one.
     pytest.param(

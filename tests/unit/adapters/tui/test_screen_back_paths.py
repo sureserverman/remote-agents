@@ -47,7 +47,6 @@ from remote_agents.adapters.tui.screens import (
     ResumeConversationsScreen,
     ResumeProfilesScreen,
     ResumeProjectsScreen,
-    ReviewScreen,
     SessionDetailScreen,
     SessionsPaneScreen,
     SessionsScreen,
@@ -168,7 +167,6 @@ _RESOLVED = ResolvedConversation(_summary(), None)  # type: ignore[arg-type]
 _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     ProfilesScreen: ProfilesScreen,
     ProjectChooserScreen: lambda: ProjectChooserScreen(_PROJECT),
-    ReviewScreen: ReviewScreen,
     AreasScreen: AreasScreen,
     NameScreen: lambda: NameScreen("infra"),
     ProjectReviewScreen: lambda: ProjectReviewScreen("infra", "new-project"),

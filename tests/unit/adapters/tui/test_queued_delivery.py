@@ -319,8 +319,7 @@ async def test_two_queued_enters_on_an_agent_start_exactly_one_session() -> None
         reported = announcements(app, severity="error")
 
     assert launcher.issued == ["launch"], (
-        f"two queued enters on an agent issued {launcher.issued}; exactly one launch was "
-        f"required"
+        f"two queued enters on an agent issued {launcher.issued}; exactly one launch was required"
     )
     # Checked *after* the count, per the Stage 1 gate evaluator: with the order reversed, a
     # regression that issued one launch and also reported an error would fail here and read

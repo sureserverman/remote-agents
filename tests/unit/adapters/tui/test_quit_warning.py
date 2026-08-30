@@ -363,8 +363,9 @@ def test_quit_can_name_what_every_screen_would_discard(screen: type) -> None:
     quit warning reads both. `ChoiceScreen` documents in prose that overriding one means
     overriding the other; prose is not a check.
 
-    Before this existed, `ProjectReviewScreen` and `ReviewScreen` overrode `work_in_flight` to
-    `True` and inherited `work_at_risk`. That was correct — but only because `populate`
+    Before this existed, `ProjectReviewScreen` and the launch wizard's own review screen — since
+    removed, along with the position it named — both overrode `work_in_flight` to `True` and
+    inherited `work_at_risk`. That was correct — but only because `populate`
     happens to call `hide_entry()`, which clears the value the default would otherwise have
     quoted. Correct by an unenforced precondition is the shape DEC-009's own reasoning names
     as worth generalizing a check for: a screen that later grew a visible entry holding

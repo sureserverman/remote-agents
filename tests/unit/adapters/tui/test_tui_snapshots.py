@@ -146,7 +146,6 @@ _POSITIONS = (
     "FEED",
     "PROJECT_CHOOSER",
     "PROFILES",
-    "REVIEW",
     "AREAS",
     "NAME",
     "PROJECT_REVIEW",
@@ -511,7 +510,7 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         await app.push_screen(panes[step]())
         await pilot.pause()
         return None
-    if step in {"PROJECT_CHOOSER", "PROFILES", "REVIEW"}:
+    if step in {"PROJECT_CHOOSER", "PROFILES"}:
         # Through the screens' own handlers, so the baseline captures what the navigation
         # actually builds rather than a screen assembled directly by the test.
         await app.screen.choose("opaque-existing")
@@ -519,12 +518,6 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         if step == "PROJECT_CHOOSER":
             return None
         await app.screen.choose("launch")
-        await pilot.pause()
-        if step == "PROFILES":
-            return None
-        # Choosing the agent *is* the arrival at the review now; there is no entry to commit
-        # in between, and `ReviewScreen` has no `submit` to call.
-        await app.screen.choose("claude")
         await pilot.pause()
         return None
     if step in {"AREAS", "NAME", "PROJECT_REVIEW"}:
