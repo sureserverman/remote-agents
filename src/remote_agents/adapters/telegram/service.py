@@ -1395,6 +1395,13 @@ class PrivateBotBoundary:
         except Exception:
             logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
             return ""
+        if not lines:
+            # The heading is part of the block, so it goes when the block does. Emitting it
+            # unconditionally promised a block and delivered none -- reached whenever every
+            # agent answers with no windows, which is Claude's cache past its thirty-minute
+            # fence and a quiet codex, the same routine state the TUI pane's empty sentence
+            # exists for.
+            return ""
         # A heading, because the TUI pane has one and this is the same block. Without it the
         # empty branch reads "Nothing is running." straight into two agents' live percentages,
         # which is the adjacency this whole task exists to remove -- one screen down rather

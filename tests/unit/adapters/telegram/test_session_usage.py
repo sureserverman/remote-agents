@@ -218,3 +218,21 @@ async def test_a_limits_reader_that_raises_costs_the_block_and_not_the_screen() 
     # then rendered a diagnostic line in its place passed here -- proven by mutation.
     assert "Agent limits" not in rendered.text
     assert "limits" not in rendered.text.replace("Agent limits", "")
+
+
+@pytest.mark.asyncio
+async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
+    """The heading is part of the block, so it goes when the block does.
+
+    Reached whenever every agent answers with no windows -- Claude's borrowed cache past its
+    thirty-minute fence, codex quiet -- which is the same routine state the TUI pane's empty
+    sentence exists for. A bare "Agent limits" over nothing promises a block and delivers none,
+    and puts the two surfaces back into disagreement at the instant one of them says so.
+    """
+    text = (
+        await _account_boundary(
+            _limits_reader(AgentLimits(ProfileId("claude"), ()))
+        )._sessions_reply()
+    ).text
+
+    assert "Agent limits" not in text

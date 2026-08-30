@@ -10,9 +10,10 @@ still returns to it on Escape.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from backends import SessionUseCaseDouble, backend_for
 from textual.widgets import OptionList
 from tui_feedback import announcements
@@ -443,3 +444,45 @@ async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
         pane = screen.query_one("#limits-pane", OptionList)
         drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
         assert drawn == ["claude: 5h 2%"]
+
+
+@pytest.mark.parametrize("width", [60, 73, 74, 75, 86, 87, 100, 120])
+async def test_no_row_of_the_limits_pane_is_cut_off_at_any_width(width: int) -> None:
+    """The pane must be tall enough for what it actually wraps to, not for a chopped estimate.
+
+    `ceil(len(line) / width)` counts a character chop; the renderer word-wraps, which needs
+    *more* rows whenever a word straddles the boundary. The widths here are the ones a sweep
+    found losing a row with the content both providers really publish -- the reset clause is
+    what makes the lines long enough to matter, and the snapshot fixture happens not to carry
+    it. A lost row is unreachable rather than merely ugly: every option is disabled, so the
+    highlight never moves and nothing scrolls to it.
+    """
+    entries = (
+        AgentLimits(
+            ProfileId("claude"),
+            (
+                UsageWindow("5h", 4.0, resets_at=datetime.now(UTC) + timedelta(hours=2)),
+                UsageWindow("week", 49.0, resets_at=datetime.now(UTC) + timedelta(hours=2)),
+            ),
+            stale_source="status-line cache",
+        ),
+        AgentLimits(
+            ProfileId("codex"),
+            (UsageWindow("week", 61.0, resets_at=datetime.now(UTC) + timedelta(hours=2)),),
+        ),
+    )
+
+    async def reader() -> tuple[AgentLimits, ...]:
+        return entries
+
+    app = RemoteAgentsTui(_context(limits=reader))
+    # Tall enough that `max-height` is not what bounds the pane, so this measures the fit alone.
+    async with app.run_test(size=(width, 60)) as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        pane = app.screen.query_one("#limits-pane", OptionList)
+
+        assert pane.max_scroll_y == 0, (
+            f"at {width} columns the pane scrolls by {pane.max_scroll_y} row(s) that no key "
+            "can reach, because every option is disabled"
+        )

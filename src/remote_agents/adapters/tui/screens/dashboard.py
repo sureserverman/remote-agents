@@ -27,8 +27,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 from dataclasses import replace
-from math import ceil
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -424,7 +424,14 @@ def _fit_to_content(pane: OptionList, lines: Iterable[str]) -> None:
         width = pane.content_size.width
         if width <= 0:
             return
-        pane.styles.height = sum(max(1, ceil(len(line) / width)) for line in rows) + 2
+        # Rich's own wrapping, not a character chop. `ceil(len(line) / width)` divides as if
+        # text broke mid-word; the renderer breaks on words, which needs *more* rows whenever
+        # one straddles the boundary -- a sweep over widths 60..200 lost a row at four of them,
+        # always with the `(resets in ...)` clause both providers publish. A lost row here is
+        # unreachable rather than untidy: every option is disabled, so the highlight never
+        # moves and no key scrolls to it.
+        console = pane.app.console
+        pane.styles.height = sum(max(1, len(Text(line).wrap(console, width))) for line in rows) + 2
 
     # Deferred, because the first draw happens inside `populate()` -- before the pane has been
     # laid out, so its width is still 0 and a measurement taken there silently does nothing.
