@@ -834,12 +834,19 @@ class ChoiceScreen(Screen[None]):
 
         `highlight=None` means **rest the cursor on nothing** — draw no selection and leave the
         next arrow press to choose. It composes with `focus` rather than overriding it: the
-        keyboard still goes where `focus` says, and only the cursor is withheld. Exactly one
-        caller asks for it
-        (`SessionsScreen._draw_listing`, when the row the cursor was holding has left the
-        list), and the sessions positions are the only ones where it would be correct: they
-        carry per-row keys that mutate a session without asking, so a cursor moved by a
-        background refresh rather than by the owner is a hazard rather than a convenience.
+        keyboard still goes where `focus` says, and only the cursor is withheld.
+
+        **Three callers ask for it, and they share a predicate rather than a screen.** The rule
+        is *a repeated keypress must not commit what the owner did not choose*, so a position
+        rests on nothing exactly where the cursor would otherwise sit on something the next
+        enter would act on: `SessionsScreen._draw_listing` when the row the cursor held has left
+        the list, `SessionsScreen.redraw_after_failure` when a stop raised and the row it failed
+        on is still there, and `ProfilesScreen.render_profiles(resting=False)` after a launch
+        that failed, where the agent row the owner pressed is still under the cursor and
+        `_busy` has already been cleared. An earlier version of this paragraph said "exactly one
+        caller … and the sessions positions are the only ones where it would be correct"; the
+        second and third callers arrived in the same plan that wrote it.
+
         Every other position keeps `0`, because a list advertising "enter opens" with nothing
         highlighted makes its own keys silent no-ops for no benefit.
         """
@@ -1114,8 +1121,18 @@ class ChoiceScreen(Screen[None]):
         The default is the old literal, so every screen that was right stays byte-identical;
         `SessionsScreen` overrides it. Async because a listing has to re-read to redraw, and a
         hook that could not await would force the override back into the caller.
+
+        **The status sentence moved in here with the redraw, and for the same reason.** It was
+        written beside the caller as "Go back and open the session again to see its current
+        state." — true on a detail, where the redraw has left a lone `Back` row and there is
+        nothing else to do. On the *list* it tells the owner to go somewhere they already are,
+        about a session whose current state the re-read has just put back on screen. Telling
+        someone to navigate away from the position they are standing on is the defect ask 6 was
+        reported for, and it survived the gate because the tests assert the toast rather than
+        the status line. Found by the master close-out evaluator, driving both surfaces.
         """
         self.show_choices(((_BACK, "Back"),))
+        self.set_status("Go back and open the session again to see its current state.")
 
     async def after_command(self) -> None:
         """What this screen does once a command it asked for has landed.

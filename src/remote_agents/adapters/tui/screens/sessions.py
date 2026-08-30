@@ -150,9 +150,16 @@ class OpeningAction(Message):
 #: mistaken for a search. The projects pane cannot do this: its filter holds the keyboard by
 #: construction, which is why Stage 5's order toggle has to be a `ctrl+` key.
 #:
-#: Nothing here decides whether an action is *legal*. The key names it, the detail performs it
-#: through `choose`, and the policy re-checked at issue time is what refuses -- DEC-007's
-#: fourth mitigation. A key is only ever a faster way to reach a row that already exists.
+#: Nothing here decides whether an action is *legal*. The key names it, the policy re-checked at
+#: issue time is what refuses -- DEC-007's fourth mitigation -- and a key is only ever a faster
+#: way to reach something a row already offers.
+#:
+#: **Where it is performed depends on what the key is for, and that split is ask 6.** `a`, `i`
+#: and `r` open the detail and it performs them through `choose`. `s`, `c` and `f` act on *this*
+#: list: they used to push a detail nobody asked for and run the action there, which left the
+#: owner on a screen they had not chosen — and after a graceful stop that worked, on that
+#: screen's "That session is no longer available." above a lone Back row. See
+#: `action_row_action`, which carries the full account.
 #:
 #: That chain asks before `force` and before either Remote Control direction, and does **not**
 #: ask before Stop and close or Clean up. Stated precisely rather than as "the same
@@ -951,6 +958,12 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         """
         self._visit += 1
         await self.reload(rest_on_nothing=True)
+        # `reload` writes the listing's own status, which is the right one here: the rows are
+        # re-read and current, so what this position has to say is what it always says. The
+        # base class's "go back and open the session again" would be an instruction to leave a
+        # position the owner is already on, about a state now on screen — and on the console
+        # pane it would blank that pane's keymap line until the next tick.
+        self.set_status(self.listing_status.format(count=len(self._drawn)))
 
     async def confirm_force(self, session_value: str) -> None:
         """Re-read the record, ask the modal over this list, and issue only on a `True`.

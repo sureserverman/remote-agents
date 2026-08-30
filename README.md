@@ -226,7 +226,9 @@ replaces the screen with what it is waiting for and drops the keyboard until it 
 press cannot be repeated into a second launch.
 
 A session's detail also reports what its agent has spent: the context window it is currently
-carrying, and how much of the plan's rate-limit windows has gone. Both are read from the working
+carrying. **The rate-limit windows are not there**, and deliberately — they belong to the whole
+agent rather than to any one session, so they are reported once per agent instead: under the
+counts on the Sessions list in Telegram, and in the local terminal's own Agent limits pane. Both are read from the working
 files the provider itself writes — nothing is asked of the agent, and nothing leaves the host.
 The providers publish very different amounts, and the screen says which case it is in rather
 than filling a gap: codex reports its context against a stated window and both its rate limits;
@@ -473,7 +475,9 @@ and exits non-zero, so a started session is never lost.
 
 Ctrl+S lists the managed sessions. The list is the shared store's rather than this process's, so a
 session the bot launched, or one a previous run of this app started, is there too; each row names
-the session, its state, and how long ago it started. Readiness is refreshed once as the list opens,
+the session, its state, how long ago it started, and how full its context window is — a bar and a
+percentage where the provider states a ceiling, and the bare token count where it does not, which
+is the same rule the detail's own context line follows. Readiness is refreshed once as the list opens,
 for the reason the bot refreshes it: a launch that failed here may have become ready since, and a
 stale FAILED row sends the owner to fix something that already works. Ended sessions are left out,
 because the record is kept for audit but there is nothing left to reach.
@@ -505,10 +509,12 @@ Rename, `s` Stop and close, `c` Clean up, `f` Force stop, `m` Claude Remote Cont
 the detail itself, and on the console pane `p` returns the projects surface. They are bare
 letters because these two positions have no filter to type into.
 
-A key is only a faster way to reach a row that already exists. It names an action and the
-detail performs it through the same chain a pressed row uses, so the confirmations are
-unchanged: Force stop and both Remote Control directions still ask, and Stop and close and
-Clean up still do not — on this surface and in Telegram alike. A key is offered only where the
+A key is a faster way to reach what a row already offers, and **where it acts depends on what
+the key is for.** `a`, `i` and `r` open the session's detail and it performs them. `s`, `c` and
+`f` end a session, and they act on the list you pressed them on — no detail is opened, the other
+rows stay, and the outcome is said over the list. The confirmations are unchanged either way:
+Force stop and both Remote Control directions still ask, and Stop and close and Clean up still
+do not — on this surface and in Telegram alike. A key is offered only where the
 policy offers the action, so `s` is absent on a preserved row and `c` on a running one, rather
 than being present and inert.
 
@@ -529,7 +535,7 @@ only on a running Claude pane, offering the one direction its last observed stat
 exactly as Telegram does; the observation is stored with the session, so it holds across a restart
 and across the other surface. It and Force stop each move to a step of their own before anything
 is issued, with Cancel first and resting under the cursor, so going through with either means
-choosing a different row on purpose rather than repeating the keystroke that opened the detail.
+choosing a different row on purpose rather than repeating the keystroke that raised it.
 
 Ctrl+O resumes a saved conversation. It asks for the project, then the agent, offering only those
 whose provider reports itself resume-capable on this host; capability comes from the probe that

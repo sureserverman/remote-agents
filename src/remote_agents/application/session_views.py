@@ -217,11 +217,14 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
     reading as that session's spend. `limit_lines` renders them once per agent instead. A
     reading may still *carry* windows — the reader is free to — and this function ignores them.
 
-    A percentage is shown only where the provider stated the ceiling. Claude records what each
-    turn used and never the window it used it out of, so its line is a bare count; deriving the
-    ceiling from the model name would be this function guessing, and it would guess wrong the
-    first time the owner switched models mid-session — which is a thing Claude Code lets them
-    do.
+    A percentage is shown only where the ceiling is *known*, and there are two ways for it to
+    be. Codex states it, so its line carries one. Claude records what each turn used and never
+    the window it used it out of, so nothing can be derived from the transcript — deriving it
+    from the model name would be this function guessing, and it would guess wrong the first time
+    the owner switched models mid-session, which Claude Code lets them do. So Claude's line is a
+    bare count **unless the owner declares the ceiling in config**, in which case it is used and
+    stamped `declared` — see `_context_phrase`. A declared number is configuration, never an
+    inference (DEC-061).
     """
     if usage is None:
         return ("Usage: no conversation matched yet.",)

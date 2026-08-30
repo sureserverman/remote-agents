@@ -800,3 +800,41 @@ async def test_a_refusal_leaves_the_cursor_where_the_owner_put_it() -> None:
         f"a refusal moved the cursor from {chosen[:8]} to {landed and landed[:8]} — a live "
         f"session the owner never selected, with an unconfirmed stop key armed on it"
     )
+
+
+@pytest.mark.parametrize("action", ["graceful", "cleanup"])
+async def test_a_failed_stop_on_the_list_does_not_tell_the_owner_to_go_somewhere_they_are(
+    action: str,
+) -> None:
+    """The status after a failure is the position's own, not the detail's.
+
+    `tui.stop` wrote "Go back and open the session again to see its current state." beside its
+    redraw — true on a detail, where the redraw leaves a lone `Back` row and there genuinely is
+    nothing else to do. On the list it instructs the owner to navigate to where they already
+    are, about a session whose current state the re-read has just put back on screen; on the
+    console pane it also blanks that pane's keymap line until the next tick. Telling someone to
+    leave the position they are standing on is the defect ask 6 was reported for, and it
+    survived the gate because every test asserted the *toast* rather than the status line.
+
+    Found by the master close-out evaluator. The sentence now lives on
+    `ChoiceScreen.redraw_after_failure`, so the screen that owns the redraw owns the wording.
+    """
+    kept = SessionState.RUNNING if action == "graceful" else SessionState.PRESERVED
+    records = tuple(_record(kept) for _ in range(3))
+    launcher = _RecordingLauncher(records, error=RuntimeError("tmux server is gone"))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        await app.screen.action_row_action(action)
+        await pilot.pause()
+        said = _status(app)
+        reported = " ".join(announcements(app))
+
+    assert "go back" not in said.casefold(), (
+        f"the list told the owner to go back to the position they are on: {said!r}"
+    )
+    # The listing still describes itself, which is what the region is for — and the failure is
+    # still reported, in the toast, which is where a thing that just happened belongs.
+    assert "3" in said, f"the status stopped describing the listing: {said!r}"
+    assert "did not complete" in reported, f"the failure went unreported: {reported!r}"

@@ -61,10 +61,12 @@ tests in `tests/architecture/`.
 
 ## ARCH-B1 — one `Backend`, and both frontends receive it
 
-`application/backend.py: Backend` is a frozen, slotted dataclass carrying nine fields
+`application/backend.py: Backend` is a frozen, slotted dataclass carrying eleven fields
 (DEC-046):
 `sessions`, `projects`, `conversations`, `catalogue`, `refresh_catalogue`, `profiles`,
-`capture`, `activity_feed`, `max_label_length`. It is the whole set of use cases a frontend
+`capture`, `activity_feed`, `usage`, `limits`, `max_label_length`. (It read "nine" and omitted
+`usage` before `limits` was added beside it; a count in prose next to the list it counts is a
+second copy to keep agreeing, and this one had already drifted.) It is the whole set of use cases a frontend
 may drive. Before it, `bootstrap` composed the Telegram service and the local surface
 separately — two `SessionService` instances over one SQLite file, two catalogue providers,
 two profile probes — and only one of the two halves was typed at all: `PrivateBotBoundary`

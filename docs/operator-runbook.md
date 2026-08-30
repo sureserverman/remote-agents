@@ -584,6 +584,25 @@ rather than folded into a blanket confirmation.
 > tolerated rather than required, so no host has to be edited on account of the retirement. Leave
 > it or delete it; `doctor` reports neither as drift.
 >
+> **`claude_context_window` is optional, and stating it is what draws Claude's context bar.**
+> Added 2026-08-30 under `[limits]`. Claude publishes no context ceiling anywhere a third party
+> can read — the transcript records what each turn used and never the window it used it out of,
+> and the model name does not answer it either — so without this key a Claude session's row and
+> detail show a bare token count and no percentage, which is correct rather than degraded: a
+> reader may never invent a number a provider does not publish (DEC-061). Declare it and the
+> gauge gets a bar and a percentage, stamped as declared configuration rather than as something
+> measured:
+>
+> ```toml
+> [limits]
+> claude_context_window = 1000000
+> ```
+>
+> Optional like the retired key and unlike everything else in the table, so a config without it
+> loads unchanged. `remote-agents doctor --json` reports `config.claude_context_window_stated`,
+> which is how to tell "not declared" from "declared and wrong". Codex needs nothing here — it
+> states its own window, and its bar has always drawn.
+>
 > **`doctor` now catches this class before the restart does.** Run `remote-agents doctor --json`
 > against the deployed config first: it no longer raises on a config it cannot load, and reports
 > the drift under `config` — `missing` and `unknown` naming the keys, and `invalid` carrying the
@@ -1045,6 +1064,13 @@ uv run --locked remote-agents tui
     the agent list.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
+2b. Open the sessions list (Ctrl+S) and confirm each row carries a context gauge after its age —
+    a bar and a percentage for a codex session, and for a claude session the same only if
+    `claude_context_window` is declared, otherwise a bare token count. Then confirm `s` on a
+    running row acts **on that list**: no detail opens, the other rows stay, the stopped row
+    goes, the outcome is announced, and the cursor rests on nothing. Press `f` on another row
+    and confirm the modal opens over the list, that Escape returns to the list, and — this is
+    the one that regressed once — that the surface still answers keys afterwards.
 3. Confirm the agent list is the last thing asked — there is no label step and no review step —
    and that its breadcrumb names the project while its status line says a ready launch hands
    this terminal to the session's pane. Back is highlighted rather than an agent, so confirm a

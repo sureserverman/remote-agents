@@ -44,8 +44,16 @@ sweep rather than ship without it.
 accident (DEC-025).**
 
 If you are about to `await ask_to_confirm(...)` from anywhere that is not a screen's own
-handler — a worker, a timer, a background task, a message pump callback, a global binding —
-stop. That is the caller this paragraph exists to warn you about.
+handler — a worker, a timer, a background task, a message pump callback, a global binding, **or
+a screen's own binding action** — stop. That is the caller this paragraph exists to warn you
+about.
+
+**A screen binding is on that list and was not, and the omission cost an outage** (DEC-068). A
+binding declared on a screen looks like the screen's own code and is not: Textual dispatches a
+non-priority binding from `App._on_key` -> `_check_bindings` -> `run_action`, so it runs on the
+**App's** pump. Suspending there suspends the application. What to do instead is what
+`RowStopAction` and `OpeningAction` do — post a message to your own screen and raise the modal
+from that handler.
 
 Here is what will happen. `ask_to_confirm` pushes a modal and suspends your coroutine until
 the modal answers. Nothing guarantees the modal is answered: it can be popped for reasons that
@@ -54,11 +62,14 @@ path that resets the screen, a second entry point arriving mid-flight. When that
 `await` is never satisfied and never fails. It simply waits, holding whatever your caller was
 holding.
 
-The reason this has never bitten anyone is **not** that the code prevents it. It is that every
-confirmation in the tree today is asked from a screen handler, and a screen handler runs on the
-message pump — so while it is suspended, the pump is not delivering the events that would pop
-the modal out from under it. **The protection is a side effect of where the calls happen to be
-made from.** Move one call off the pump and the protection is gone, silently.
+**This has bitten, once, and the sentence here used to say it never had.** On 2026-08-30 a
+force confirmation was raised from a screen *binding* on the sessions list: the modal drew
+correctly and the application then stopped answering entirely — Escape did nothing, `ctrl+q`
+did nothing, and the process had to be killed. The protection is not that the code prevents it.
+It is that every confirmation asked from a screen *handler* runs on that screen's pump, so
+while it is suspended the pump is not delivering the events that would pop the modal out from
+under it. **The protection is a side effect of where the call is made from.** Move one call off
+the screen's pump and it is gone, silently.
 
 DEC-008 is why the obvious guard is absent: a destructive action deliberately does not pass
 `exclusive`, because a repeat must be dropped rather than cancel the action already in flight.
@@ -67,12 +78,18 @@ catch this for you — and DEC-025 declined a timeout on purpose, because a time
 confirmation can neither proceed (nobody confirmed) nor cancel (the owner may be mid-decision),
 which would replace a hang nobody has hit with an ambiguity everybody would.
 
-What does catch it is
+What catches *some* of it is
 `tests/architecture/test_confirmations_are_asked_from_screen_handlers.py`, which sweeps this
-package for any lexical path from one of those forbidden callers to `ask_to_confirm`. That is
-a check on the *rule*, not a guard on the *runtime*: it fails the suite when someone writes the
+package for any lexical path from one of those forbidden callers to `ask_to_confirm`. That is a
+check on the *rule*, not a guard on the *runtime*: it fails the suite when someone writes the
 bad caller, which is the one thing a paragraph on its own cannot do. It does not make the hang
 unreachable, and DEC-025 is explicit that it stays unreachable by convention.
+
+**It cannot catch the screen-binding case, and saying so is the point.** That sweep asserts the
+caller is a method on a class whose name ends in `Screen` — and the method that froze the app
+was one. Which pump a call arrives on is a property of its dynamic context, not of its lexical
+site, so no static check of call sites can decide it. The sweep still earns its place for
+workers, timers and app-level bindings; DEC-068 records the gap it leaves.
 
 **Both confirmations are modals now, and the Remote Control one changed shape to get here.**
 It used to be a three-row screen — Cancel, Enable, Disable — which is a *chooser*, not a

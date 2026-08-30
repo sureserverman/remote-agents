@@ -1043,9 +1043,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except Exception as error:
             _LOG.exception("remote control failed")
             # Same reason as the failed stop: do not leave the cursor resting on the
-            # button that just failed, or a second enter re-issues it as a blind retry.
+            # button that just failed, or a second enter re-issues it as a blind retry. The
+            # hook writes the status too, so this no longer states it — a second `set_status`
+            # here would overwrite whatever the screen decided was true of its own position.
             await screen.redraw_after_failure()
-            screen.set_status("Go back and open the session again to see its current state.")
             screen.announce(f"Remote Control was not changed: {error}")
             return
         else:
@@ -1081,9 +1082,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         DEC-007's fourth mitigation and it is why a stale row cannot issue a stale command.
 
         `screen` is whichever position asked, so a failure reports where the owner is looking.
-        Since the confirmation became a modal that is dismissed by the answer, that is the
-        session detail for every action including force — there is no confirmation screen
-        still on the stack by the time this runs.
+        Since the confirmation became a modal dismissed by the answer, no confirmation screen is
+        ever still on the stack by the time this runs.
+
+        **It is no longer the session detail for every action.** `s`, `c` and `f` are issued
+        from the sessions *list* now — that is ask 6 — so this method has two kinds of caller,
+        and what differs between them is where a failure should leave the owner. That is why
+        the redraw and its status line are the screen's own (`redraw_after_failure`) rather
+        than written here.
         """
         if self.busy:
             return
@@ -1135,8 +1141,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # Move the cursor off the confirm button before reporting. A failed force
             # leaves the owner resting on "Yes, force stop it", so without this a second
             # enter re-issues the kill as a retry nobody deliberately chose.
+            # The redraw *and* the sentence are the screen's, because the right one differs by
+            # position — see `ChoiceScreen.redraw_after_failure`. The toast is not: what failed
+            # and what to do about it is the same on every screen.
             await screen.redraw_after_failure()
-            screen.set_status("Go back and open the session again to see its current state.")
             screen.announce(
                 f"{_ACTION_LABELS[action]} did not complete: {error} "
                 "The session was left as it is; retry if you still want to."
@@ -1150,9 +1158,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             await screen.after_command()
             if failure is None:
                 # Said at all, because the bot has always said it and this surface never did.
-                # A graceful stop that works ends the session, so the redraw above replaces the
-                # detail with "That session is no longer available." — true, and identical to
-                # what the owner would see if the stop had never been issued. Telegram sends
+                # A graceful stop that works ends the session. On the detail the redraw then
+                # says "That session is no longer available." — true, and identical to what the
+                # owner would see if the stop had never been issued. On the list the row simply
+                # leaves and the cursor rests on nothing, which is why this sentence is said at
+                # all rather than left to the redraw to imply. Telegram sends
                 # "Stopped <session>"; DEC-007 wants the two to agree about what a stop did,
                 # and agreeing about the failures while disagreeing about the successes is
                 # half of a shared vocabulary. Found by the Stage 2 gate evaluator.
