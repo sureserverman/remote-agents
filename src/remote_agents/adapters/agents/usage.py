@@ -137,10 +137,21 @@ class ClaudeUsageReader:
         *,
         sessions_root: Path | None = None,
         limits_cache_root: Path = Path("/tmp/claude"),
+        context_window: int | None = None,
         now: object = None,
     ) -> None:
         self._sessions_root = sessions_root or Path.home() / ".claude" / "projects"
         self._limits_cache_root = limits_cache_root
+        self._context_window = context_window
+        """The ceiling the owner declared, or `None` on a host that has stated none.
+
+        Handed in rather than read here, because `config` is where the owner's statement lives
+        and `application/` may not import an adapter in either direction. `None` keeps the old
+        answer -- a bare count -- which is the honest render when nothing has been declared, and
+        is why this is optional rather than defaulted to the module's own number: a reader that
+        supplied its own ceiling would be inventing one, which DEC-061 forbids in exactly those
+        words.
+        """
         self._now = now
 
     def read(self, query: UsageQuery) -> AgentUsage | None:
@@ -152,7 +163,7 @@ class ClaudeUsageReader:
             # block now (Task 2.1), so a sessionless reading would produce a session line with
             # nothing in it instead of the sentence that invites the owner to look again.
             return None
-        context = _claude_context(transcript)
+        context = _claude_context(transcript, self._context_window)
         if context is None:
             # A transcript exists but carries no assistant turn to total yet -- the ordinary
             # state of a pane that was launched a moment ago and has been given its first
@@ -430,12 +441,14 @@ class ProfileUsageReaders:
     decoration on a screen whose real content is the session's state and its actions.
     """
 
-    def __init__(self, readers: Iterable[object] | None = None) -> None:
+    def __init__(
+        self, readers: Iterable[object] | None = None, *, context_window: int | None = None
+    ) -> None:
         resolved = tuple(
             readers
             if readers is not None
             else (
-                ClaudeUsageReader(),
+                ClaudeUsageReader(context_window=context_window),
                 CodexUsageReader(),
                 OpenCodeUsageReader(),
                 CursorUsageReader(),
@@ -502,7 +515,7 @@ class ProfileUsageReaders:
             return None
 
 
-def _claude_context(transcript: Path) -> ContextWindow | None:
+def _claude_context(transcript: Path, ceiling: int | None = None) -> ContextWindow | None:
     """Total the last main-thread assistant turn's usage, which is the context it was sent.
 
     Claude's `usage` block reports one turn's four token classes, and their sum is what the
@@ -535,7 +548,11 @@ def _claude_context(transcript: Path) -> ContextWindow | None:
             )
         )
     )
-    return ContextWindow(total) if total else None
+    # The ceiling is the owner's declaration, applied here and derived nowhere: there is no
+    # model name in this function's reach and that is deliberate, since `message.model` reads
+    # `claude-opus-5` for the 1M-context variant too and an inference from it would be wrong
+    # exactly when it mattered.
+    return ContextWindow(total, ceiling) if total else None
 
 
 def _is_claude_main_thread_usage(record: dict) -> bool:

@@ -929,7 +929,7 @@ def compose_backend(
     # One set of provider readers for both usage capabilities (DEC-046): the session read
     # and the account read consult the same files, so composing two sets would double the
     # probing a host does and let the two drift about which providers exist.
-    usage_readers = ProfileUsageReaders()
+    usage_readers = ProfileUsageReaders(context_window=config.claude_context_window)
     return Backend(
         sessions=SessionService(
             store if store is not None else SQLiteSessionStore(connection),

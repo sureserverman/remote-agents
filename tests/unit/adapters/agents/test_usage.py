@@ -1091,3 +1091,82 @@ def test_a_matched_transcript_with_no_turn_yet_is_not_reported_as_publishing_not
     _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
 
     assert _claude_reader(tmp_path, cache=cache).read(_query("claude", workspace)) is None
+
+
+# --- the declared Claude ceiling ----------------------------------------------------------
+
+
+def test_a_declared_ceiling_turns_claudes_bare_count_into_a_share(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """The owner's number, carried into the reading -- never derived from anything on disk.
+
+    `_claude_context` totals the four token classes and has no window to divide by, which is
+    why Claude's line was a bare count. The ceiling arrives from `config`, where the owner
+    stated it, and the reader applies it without inspecting a model name (DEC-061).
+    """
+    transcript = _written(
+        _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
+        [_claude_turn(248_449)],
+    )
+    _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
+
+    usage = ClaudeUsageReader(
+        sessions_root=tmp_path / "claude-projects",
+        limits_cache_root=tmp_path / "absent-cache",
+        context_window=1_000_000,
+    ).read(_query("claude", workspace))
+
+    assert usage is not None and usage.context is not None
+    assert usage.context.limit_tokens == 1_000_000
+    assert usage.context.used_fraction == pytest.approx(0.25, abs=0.01)
+
+
+def test_a_reader_given_no_ceiling_still_answers_a_bare_count(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Absent stays a first-class answer: no ceiling means no percentage, not a guessed one."""
+    transcript = _written(
+        _transcript_dir(tmp_path, workspace) / "11111111-1111-4111-8111-111111111111.jsonl",
+        [_claude_turn(1_000)],
+    )
+    _touch(transcript, LAUNCHED_AT + timedelta(minutes=5))
+
+    usage = _claude_reader(tmp_path).read(_query("claude", workspace))
+
+    assert usage is not None and usage.context is not None
+    assert usage.context.limit_tokens is None
+    assert usage.context.used_fraction is None
+
+
+def test_codex_still_takes_its_window_from_the_provider_not_the_config(
+    tmp_path: Path, workspace: Path
+) -> None:
+    """Codex publishes its own window, so a declared ceiling has no business reaching it.
+
+    The declaration exists because Claude publishes nothing. Applying it to a provider that
+    does would replace a measured number with a stated one, which is the inversion of the rule
+    it was added under.
+    """
+    _rollout(
+        tmp_path,
+        workspace,
+        "aaaaaaaa-0000-4000-8000-000000000000",
+        [_codex_token_count(last=24_349, window=258_400, primary=2.0, secondary=0.0)],
+    )
+
+    usage = CodexUsageReader(sessions_root=tmp_path / "codex-sessions").read(
+        _query("codex", workspace)
+    )
+
+    assert usage is not None and usage.context is not None
+    assert usage.context.limit_tokens == 258_400
+
+
+def test_the_default_reader_set_carries_the_ceiling_it_was_built_with() -> None:
+    """Composed once per process, so the figure a screen renders is the one the config states."""
+    readers = ProfileUsageReaders(context_window=123_456)
+
+    claude = next(r for r in readers._readers if isinstance(r, ClaudeUsageReader))
+
+    assert claude._context_window == 123_456

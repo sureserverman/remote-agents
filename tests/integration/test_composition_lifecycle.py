@@ -525,3 +525,39 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
         assert backend.usage is not None and backend.limits is not None
     finally:
         connection.close()
+
+
+def test_compose_backend_hands_the_readers_the_declared_ceiling(
+    composed_home, tmp_path, monkeypatch
+):
+    """The owner's number has to survive the whole way to the reader, or it renders nothing.
+
+    Wired here rather than read by the adapter, because `config` is where the declaration lives
+    and the composition root is the one place allowed to know both. A ceiling that stopped at
+    the config would leave every Claude row a bare count while the owner believed they had
+    stated one -- a failure with no error to notice.
+    """
+    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.sqlite.database import open_database
+    from remote_agents.bootstrap import compose_backend
+    from remote_agents.config import load_config
+    from remote_agents.production import ProductionPaths
+
+    seen = []
+
+    class _Recording(usage_module.ProfileUsageReaders):
+        def __init__(self, readers=None, *, context_window=None):
+            seen.append(context_window)
+            super().__init__(readers, context_window=context_window)
+
+    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Recording)
+
+    paths = ProductionPaths.for_home(composed_home)
+    config = load_config(_config_file(composed_home, paths))
+    connection = open_database(tmp_path / "sessions.sqlite3")
+    try:
+        compose_backend(config, connection, paths)
+
+        assert seen == [config.claude_context_window]
+    finally:
+        connection.close()
