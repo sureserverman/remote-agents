@@ -455,19 +455,32 @@ _ACTION_KEYS = (
     ("a", "attach"),
     ("i", "inspect"),
     ("r", "rename"),
-    ("s", "graceful"),
+    # `s` and `c` are deliberately **not** here any more: they act on the list they were
+    # pressed on rather than opening anything, which is ask 6, and
+    # `test_tui_stop.py` owns what they do instead. `f` stays for now — it still routes
+    # through the detail, because that is where its confirmation is raised until Task 2.2
+    # moves the modal onto the list's own handler under DEC-025.
     ("f", "force"),
 )
 
 
 @pytest.mark.parametrize(("key", "action"), _ACTION_KEYS)
-async def test_each_key_pushes_the_detail_carrying_its_action(key: str, action: str) -> None:
-    """DEC-007's control plane, one key deep instead of two.
+async def test_each_opening_key_pushes_the_detail_carrying_its_action(
+    key: str, action: str
+) -> None:
+    """DEC-007's control plane, one key deep instead of two — for the keys that *open* things.
 
     Each key names an action and hands it to `SessionDetailScreen`, which performs it through
     the chain it already has -- the same confirmations, refusals and guards a pressed row
     gets. The key itself decides nothing about whether the action is legal; that is the
     policy's answer, re-checked at issue time.
+
+    **This used to cover every row key, and covering `s` and `c` was the defect.** Pushing a
+    detail is right for a key that exists to open something and wrong for a key that ends a
+    session: the owner got a screen they had not asked for, and a graceful stop that worked
+    then redrew it as "That session is no longer available." above a lone `Back` row. The
+    parametrization shrank rather than the assertion loosening, so what is left still asserts
+    the exact push it always did.
     """
     opened: list[tuple[str, str | None]] = []
     app = SessionsPane(_context((_record(),)))

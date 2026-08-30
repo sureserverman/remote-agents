@@ -403,10 +403,28 @@ class _SessionActionKeys:
         return super().check_action(action, parameters)
 
     async def action_row_action(self, action: str) -> None:
-        """Open the highlighted session's detail, asking it to perform `action`.
+        """Do what the key names, on the list it was pressed on — or open what it opens.
 
-        The whole of what a key does. It carries no confirmation, no policy check and no
-        command of its own: those live on the detail, once, and this is an entry to them.
+        **The split is between keys that exist to open something and keys that end a
+        session.** `a`, `i` and `r` open the detail and ask it to perform the action, which is
+        what they are for. `s`, `c` and `f` act here: they used to route through
+        `tui.show_detail(session_value, action)` as well, which pushed a detail the owner had
+        not asked for, ran the action on it, and left them there — and since a graceful stop
+        that works ends the session, the detail's own re-read then rendered "That session is
+        no longer available." over a single `Back` row. That screen and that row are what the
+        owner reported.
+
+        **This is a change of where the chain is entered, not a second implementation of it**,
+        which is the highest-risk thing this could have been. `tui.stop` takes the screen that
+        asked, re-reads the record and re-checks the policy at issue time (DEC-007's fourth
+        mitigation), and calls `screen.after_command()` — whose implementation on this screen
+        is `on_reveal`, a re-read of the listing in place. Nothing here checks the policy, and
+        deliberately: an action the policy no longer allows is refused by the policy itself,
+        in its own words, rather than by a check kept here that could drift from it.
+
+        DEC-018 is untouched: neither `s` nor `c` gains a confirmation. Force still asks, and
+        still asks from the detail until Task 2.2 moves that modal onto this screen's own
+        handler — see the branch below for why it is excluded by name rather than by order.
         """
         session_value = self.highlighted_session()
         if session_value is None or self.tui.busy:
@@ -414,6 +432,16 @@ class _SessionActionKeys:
             # pressed row while a command is in flight. `dispatch_opening` checks it again once
             # the detail exists; this is the same refusal one step earlier, so the two entry
             # paths agree rather than relying on the pump staying serialized forever.
+            return
+        if action in ACTION_LABELS and action != FORCE:
+            # **`action != FORCE` is load-bearing here, exactly as it is in
+            # `SessionDetailScreen.choose`.** FORCE is a member of `ACTION_LABELS`, so without
+            # it this branch would reach `tui.stop` with no modal in between and one keypress
+            # would force-stop a session — DEC-018 permits an unconfirmed `s` and `c` and says
+            # nothing of the kind about force. Force keeps routing through the detail until
+            # Task 2.2 gives it a confirmation raised from this screen's own handler, which is
+            # what DEC-025 requires; until then the detail is where its modal is raised.
+            await self.tui.stop(action, session_value, self)
             return
         await self.tui.show_detail(session_value, action)
 

@@ -11,6 +11,7 @@ from stop_results import a_verified_force_stop
 from textual.widgets import OptionList
 from tui_feedback import announcements
 from tui_feedback import status as _status
+from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
@@ -489,3 +490,141 @@ async def test_a_session_value_in_non_canonical_uuid_form_is_refused_too() -> No
 
     assert launcher.issued == []
     assert not any("did not complete" in one for one in said), said
+
+
+# The stop keys, pressed on the list they were pressed on ------------------------
+#
+# Ask 6's first half. `action_row_action` routed **every** row key through
+# `tui.show_detail(session_value, action)`, which for `s`/`c`/`f` pushed a detail the owner
+# did not ask for, ran the action there, and left them on it — and a graceful stop that
+# works ends the session, so the detail's own re-read then rendered "That session is no
+# longer available." with a single Back row. That screen and that row are what the owner
+# reported. The chain itself is not rebuilt: `tui.stop` already takes the screen that asked,
+# re-reads, re-checks the policy at issue time (DEC-007) and calls `after_command()`, whose
+# implementation on the list is a re-read in place. Only the entry point moves.
+
+
+async def _sessions_list(app: RemoteAgentsTui, pilot, index: int = 0) -> None:
+    """Show the managed sessions and put the cursor on a row, as an owner's arrow key would."""
+    await app.show_sessions()
+    await pilot.pause()
+    app.screen.query_one("#choices", OptionList).highlighted = index
+    await pilot.pause()
+
+
+async def test_the_stop_key_acts_on_the_list_and_leaves_it_on_screen() -> None:
+    """`s` issues one graceful stop, and the owner is still looking at the list afterwards.
+
+    All four claims are asserted because dropping any one of them describes a surface that
+    still fails ask 6: a key that issued nothing, a key that issued twice, a key that stopped
+    the session and navigated away anyway, and a key that did it all in silence are four
+    different defects and only the conjunction is the behaviour asked for.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        step = position(app)
+        said = " ".join(announcements(app))
+
+    assert len(launcher.issued) == 1, f"the key issued {launcher.issued}"
+    assert isinstance(launcher.issued[0], GracefulStopCommand)
+    assert launcher.issued[0].session_id == record.session_id
+    assert step == "SESSIONS", f"the stop key navigated to {step} instead of acting in place"
+    assert "ended" in said, f"the outcome was not announced; the surface said {said!r}"
+
+
+async def test_the_cleanup_key_acts_on_the_list_from_a_preserved_row() -> None:
+    """`c`, on the state that offers it, behaves exactly as `s` does. DEC-018: neither asks."""
+    record = _record(SessionState.PRESERVED)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        await app.screen.action_row_action("cleanup")
+        await pilot.pause()
+        step = position(app)
+
+    assert len(launcher.issued) == 1, f"the key issued {launcher.issued}"
+    assert isinstance(launcher.issued[0], CleanupCommand)
+    assert step == "SESSIONS", f"the cleanup key navigated to {step} instead of acting in place"
+
+
+async def test_a_row_the_policy_no_longer_offers_is_refused_in_words_not_navigated() -> None:
+    """DEC-007's third mitigation, on the keys that end a session.
+
+    `check_action` answers from the row that was *drawn*, so a session that moved between the
+    redraw and the keypress still reaches the handler. What it must not do there is push a
+    detail: a detail is not a refusal, it is a refusal-shaped move — the same finding that was
+    already made against `m` on this screen, applied to the stop keys.
+
+    **STARTING, and the state matters.** The obvious fixture is ENDED — the policy offers it
+    nothing — but an ENDED session is not *listed*, so the key would return early on a row
+    that was never drawn and this test would assert a refusal that never happened. Measured
+    across every state: `starting` and `orphaned` are the two that are drawn and offer no
+    action at all. The row being on screen is asserted below rather than assumed, because that
+    is the whole premise of the test.
+    """
+    record = _record(SessionState.STARTING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        assert app.screen.highlighted_session() == str(record.session_id), (
+            "the row is not drawn, so this asserts nothing about what a key does to it"
+        )
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        step = position(app)
+        said = " ".join(announcements(app))
+
+    assert launcher.issued == [], f"an action the policy refuses was issued: {launcher.issued}"
+    assert step == "SESSIONS", f"the refusal navigated to {step}"
+    assert said.strip(), "the key refused silently, which is the complaint one step quieter"
+
+
+async def test_a_stop_key_pressed_while_a_command_is_in_flight_is_dropped() -> None:
+    """The guard `action_row_action` already had, kept where the action now happens.
+
+    Asserted through `tui.busy` rather than by racing two tasks: the flag is what both the
+    binding and `ChoiceScreen.on_option_list_option_selected` consult, so setting it is the
+    same condition a real in-flight command produces, without a second command to disentangle.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        app._busy = True
+        await app.screen.action_row_action("graceful")
+        await pilot.pause()
+        app._busy = False
+
+    assert launcher.issued == [], f"a key pressed during a command issued {launcher.issued}"
+
+
+@pytest.mark.parametrize("action", ["attach", "inspect", "rename"])
+async def test_the_opening_keys_still_open_their_screens(action: str) -> None:
+    """The other half of the split, and the reason this is not "the keys stopped navigating".
+
+    `a`, `i` and `r` exist *to* open something, so for them routing through the detail is
+    right and is untouched. Only the three keys that end a session moved.
+    """
+    record = _record(SessionState.RUNNING)
+    launcher = _RecordingLauncher((record,))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await _sessions_list(app, pilot)
+        await app.screen.action_row_action(action)
+        await pilot.pause()
+        step = position(app)
+
+    assert step != "SESSIONS", f"{action!r} was expected to open a screen and stayed on {step}"
