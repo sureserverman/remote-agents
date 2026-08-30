@@ -65,7 +65,7 @@ _LOG = logging.getLogger(__name__)
 _STAMP = re.compile(r"\d{8}T\d{12}Z")
 
 #: How many records one pass may take. The drain runs on the same event loop that long-polls
-#: Telegram and captures panes, so "however many are there" is not a bound: a service that was
+#: Telegram and reads pane titles, so "however many are there" is not a bound: a service that was
 #: down for a day, or a hook that fired on every tool call, would stall every other thing the
 #: loop owes the owner. What is left over is not lost -- the next pass takes it, seconds later.
 MAXIMUM_DRAIN = 200
@@ -79,9 +79,12 @@ _ABANDONED_TEMPORARY_SECONDS = 3600.0
 #: exists because the writer on the far side of the spool is not guaranteed to be that hook.
 MAXIMUM_RECORD_BYTES = 65_536
 
-#: How long one pane capture may take before it counts as a failed read. Generous for a
+#: How long one pane-title read may take before it counts as a failed read. Generous for a
 #: local tmux, and finite so a wedged server costs one pass rather than the whole watch.
-_CAPTURE_TIMEOUT_SECONDS = 15.0
+#: Named for a capture until 2026-08-30, when the digest watch that took one was retired --
+#: nothing in this module reads pane content now, and a constant naming a read that no longer
+#: happens is the kind of thing a reader trusts and a maintainer copies.
+_TITLE_TIMEOUT_SECONDS = 15.0
 
 # Observed in the managed Codex TUI while a native local approval is open.  The project name
 # after the separator varies, so the predicate admits that suffix while refusing ordinary pane
@@ -387,7 +390,7 @@ class CodexApprovalWatcher:
     ) -> None:
         self._store = store
         self._title = title
-        self._title_timeout = _CAPTURE_TIMEOUT_SECONDS
+        self._title_timeout = _TITLE_TIMEOUT_SECONDS
         self._now = now
         # A title is never stored: only whether the exact native Codex marker was present on
         # the last successful pass. A separate boolean presence set tells a first title read from

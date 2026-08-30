@@ -132,7 +132,7 @@ concurrent writer count safe (DEC-005 as corrected, below).
 Four of its keyword parameters exist so the caller can share objects it needs anyway rather
 than have them built twice: `projects` and `runtime` (the profile probe shells out once per
 profile, and the caller needs the terminal and gateway regardless), `store` (the service's
-reconciler and quiet watcher are meant to be looking at the same one), and `activity_feed`
+reconciler and approval watcher are meant to be looking at the same one), and `activity_feed`
 (its bound lives in the terminal package, and importing it here would make `serve` load the
 terminal library at composition time). Passing `projects` in does **not** skip a catalogue
 refresh — `compose_backend` always calls `refresh()`, so the backend's snapshot is its own.

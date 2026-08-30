@@ -951,8 +951,8 @@ async def test_closing_removes_the_continuation_rows(surface) -> None:
 
 @_SURFACES
 async def test_a_row_with_no_detail_toggles_without_emitting_an_empty_row(surface) -> None:
-    """QUIET carries no detail. Its row still answers Enter -- refusing would make the key
-    mean different things on different rows -- but it has nothing to show, and an empty
+    """An observation can carry no detail. Its row still answers Enter -- refusing would make
+    the key mean different things on different rows -- but it has nothing to show, and an empty
     continuation row would be a blank line the cursor skips over for no reason."""
 
     observations = (_activity(ActivityKind.COMPLETED, minutes_ago=1, detail=None),)

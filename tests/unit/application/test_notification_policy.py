@@ -5,12 +5,15 @@ functions they exercise; their bodies and the `_observed` fixture that feeds the
 not rewritten. What is new is the guards at the top -- the purity sweep, the clock sweep, and the
 sweep for the shape the limit rule cannot be expressed without (DEC-043).
 
-`_observed` derives `confidence` from the kind rather than taking it, and that is the fixture's
-one load-bearing detail: `QUIET` is the project's only inferred observation, and a flat
-`REPORTED` default here would stamp it wrongly. It is written this way because the Stage 1 gate's
-Tier-2 review found it written the other way -- the fixture had been rewritten while the move was
-being described as pure, and the cases could not see it, because they build *both* sides of every
-comparison with this helper and so drift together (DEC-019's recorded failure mode).
+`_observed` stamps `REPORTED`, and the history of that line is worth keeping. It derived
+`confidence` from the kind, because the one inferred observation the project had was the kind this
+fixture sampled everywhere; a flat default would have stamped it wrongly. That kind was retired on
+2026-08-30 and the derivation had nothing left to decide, so it became the flat default it once
+could not be. The original was written the careful way because an earlier Tier-2 review found it
+written the careless way -- the fixture had been rewritten while the move was being described as
+pure, and the cases could not see it, because they build *both* sides of every comparison with
+this helper and so drift together (DEC-019's recorded failure mode). Nothing here is inferred
+today; a case that needs an inferred observation must say so itself.
 """
 
 from __future__ import annotations
@@ -203,12 +206,14 @@ def test_the_same_kind_said_twice_is_one_sentence_carrying_the_newer_words() -> 
     assert [activity.detail for activity in groups[0].activities] == ["Pushed the branch."]
 
 
-def test_two_quiet_reports_collapse_even_though_neither_carries_any_agent_text() -> None:
-    """`QUIET` always carries `detail=None`, so a pair of `None`s is the real duplicate case.
+def test_two_observations_with_no_detail_still_collapse_on_kind() -> None:
+    """A pair of `None` details is the real duplicate case, and the easiest one to get wrong.
 
-    It is the one that matters for the profiles watched by their panes: they have no hooks, so
-    quiet is the only observation they ever produce, and a rule that treated "nothing said it"
-    as unmatchable would collapse nothing for exactly those sessions.
+    The identity is the kind (DEC-034); the detail is not part of it. A rule that reached for
+    the detail to decide whether two observations matched would collapse nothing at all for a
+    pair that carries none -- and every kind can arrive that way. An agent that finishes without
+    saying anything, and the Codex title edge, which is content-free by construction under
+    DEC-063, are both ordinary rather than edge cases.
     """
     groups = grouped_for_delivery(
         [
@@ -288,8 +293,8 @@ def test_the_cap_costs_the_session_that_filled_it() -> None:
 
     Delivery is per session and so is fairness -- grouping orders by first appearance precisely
     so a burst cannot starve a quiet session -- but retention used to be global and per
-    observation. Simulated then: five sessions reporting `QUIET` once against one session
-    emitting twenty-five records a pass ended with the queue holding only the loud session, and
+    observation. Simulated then: five sessions reporting once against one session emitting
+    twenty-five records a pass ended with the queue holding only the loud session, and
     the evicted reports were destroyed permanently, because the drain deletes a record before
     returning it and there is no second chance anywhere in the system.
     """

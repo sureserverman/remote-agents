@@ -258,13 +258,24 @@ def _sentence(activity: AgentActivity) -> str:
 def _detail_of(activity: AgentActivity) -> str | None:
     """What the agent said, or nothing at all when nothing said it.
 
-    A pass-through since 2026-08-30, and kept as a named function rather than inlined. It used
-    to drop `detail` for `QUIET` -- the one kind nothing said, where the last line of an idle
-    screen rendered under the session's name would have read exactly like a parting statement
-    the agent chose to make. The next inferred kind that carries no words of its own needs the
-    same guard, and a call site is a cheaper place to add it than a re-derivation.
+    **Keyed on confidence, not on a kind, and that is the correction.** This dropped `detail`
+    for one named kind until 2026-08-30, which made the guard structural for exactly as long as
+    that kind existed and convention-only the moment it was retired: the rule then rested
+    entirely on `observe_codex_action_required` remembering to pass `detail=None` at the source,
+    with nothing at the boundary that renders it. A second reviewer found the gap the same day
+    it was opened.
+
+    The rule the old branch was really enforcing is not about `quiet`. It is that **an
+    observation nothing reported must not arrive carrying words**, because the failure is silent
+    and specific: the last line of an idle screen, or a title, rendered under the session's name
+    reads exactly like a parting statement the agent chose to make. `ActivityConfidence.INFERRED`
+    is precisely the set that rule covers, so it is what this asks.
+
+    A future inferred kind that legitimately carries the agent's own words would need an
+    exception here, deliberately -- which is the right way round. Defaulting to drop costs such
+    a kind one edit in one place; defaulting to pass costs the owner a sentence they believe.
     """
-    return activity.detail
+    return None if activity.confidence is ActivityConfidence.INFERRED else activity.detail
 
 
 class StandingNotificationStore:

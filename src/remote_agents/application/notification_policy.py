@@ -83,9 +83,9 @@ def grouped_for_delivery(activities: Iterable[AgentActivity]) -> tuple[SessionGr
 
     **Within a session, a kind collapses to its newest observation.** A `Stop` hook fires per
     turn rather than per task, so an agent working through one long instruction reports
-    "finished" repeatedly and every report is true; the pane watch has the same shape, since
-    `QUIET` carries no agent text at all and two quiet spells in one pass are indistinguishable
-    here.
+    "finished" repeatedly and every report is true. The Codex title edge has the same shape for
+    the same reason: it carries no agent text, so two observations of it in one pass are
+    indistinguishable here and the newest is the whole of what the older one said.
 
     **The kind is the identity, and the detail is not part of it (DEC-034).** This is the
     owner's correction to the shape this had, and the reason is what a notification is *for*:

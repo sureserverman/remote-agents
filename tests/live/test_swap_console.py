@@ -174,7 +174,8 @@ async def test_the_swap_round_trip_leaves_both_sessions_alive_and_everything_hom
             "an exchange took a session with it"
         )
         # The agent is still the agent wherever it is being shown: the capture that feeds
-        # readiness, trust and quiet-watching reads it through the console (Sub-plan 1).
+        # readiness and trust reads it through the console (Sub-plan 1). It fed the pane-digest
+        # quiet watch too until that was retired on 2026-08-30.
         assert MARKER in await console.gateway.capture(agent_session)
         # And the copyable attach command names where the pane is being shown, not the window
         # it started in — the Stage 1 gate's carried obligation, proved against real hosting

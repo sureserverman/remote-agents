@@ -546,26 +546,40 @@ def test_the_watcher_computes_no_digest_and_asks_for_no_pane_capture() -> None:
     assert "capture" not in inspect.signature(CodexApprovalWatcher.__init__).parameters
 
 
-def test_the_narrowed_watcher_keeps_no_state_but_the_marker_edge() -> None:
+async def test_the_narrowed_watcher_keeps_no_state_but_the_marker_edge() -> None:
     """One boolean per session, and a presence set -- never a title (DEC-063).
 
     The old watcher carried a digest map beside this. What survives has to be checkable, so
     this asserts on the instance's own state rather than on behaviour: a title that reached an
     attribute would be terminal-content retention no test of the emitted activity would catch.
+
+    **It has to poll first, and the version of this written at Task 1.2 did not.** It built the
+    watcher, the store and the title callable and then inspected `__dict__` without ever
+    awaiting `poll()` -- so both assertions held trivially against any implementation, including
+    one that stashed the title verbatim. Two independent reviewers found it on the same day, and
+    both mutation-tested it: an added `self._leaked_titles[key] = title` inside `poll()` left it
+    green. A retention test that never runs the code that could retain is not a weak test, it is
+    not a test. Driven through the whole edge now -- a clear title, the marker, the marker again,
+    a clear -- so every branch that could write state has run before the state is read.
     """
     marker = "[ ! ] Action Required | multitor"
     record = _title_record()
+    titles = iter(("multitor", marker, marker, "multitor"))
 
     async def title(session_id: SessionId) -> str:
-        return marker
+        return next(titles)
 
     watcher = CodexApprovalWatcher(_TitleStore(record), title)
+    for _ in range(4):
+        await watcher.poll()
 
-    assert marker not in repr(watcher.__dict__)
-    assert not any(
-        isinstance(value, dict) and any(isinstance(item, str) for item in value.values())
-        for value in watcher.__dict__.values()
-    )
+    state = watcher.__dict__
+    assert marker not in repr(state), f"a title reached the watcher's state: {state}"
+    assert "multitor" not in repr(state), "a project name off a title is still title content"
+    # Positive half: it did not pass by holding nothing at all. The edge state exists and is
+    # the shape DEC-063 allows -- booleans keyed by session id, and a set of session ids.
+    assert watcher._action_required == {str(record.session_id): False}
+    assert watcher._title_observed == {str(record.session_id)}
 
 
 def _title_record() -> SessionRecord:

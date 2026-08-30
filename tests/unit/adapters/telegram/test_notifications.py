@@ -1308,3 +1308,44 @@ def test_the_bot_has_a_sentence_for_every_kind_and_none_it_cannot_reach() -> Non
     for kind in ActivityKind:
         sentence = _sentence(_activity(kind))
         assert sentence and sentence.endswith(".")
+
+
+def test_an_inferred_observation_never_renders_agent_text_even_if_one_carries_it() -> None:
+    """The regression test that was deleted with the kind it named, restored keyed on confidence.
+
+    `_detail_of` dropped `detail` for `QUIET`, and the case proving it went when the kind did --
+    leaving the rule resting on `observe_codex_action_required` passing `detail=None` at the
+    source, with nothing at the render boundary. A second reviewer found that gap the same day it
+    opened, which is the whole argument for testing the boundary rather than the source: the
+    source is one call site today and the boundary is where every future one arrives.
+
+    Constructed deliberately wrong -- an inferred `needs_answer` carrying words no inference
+    could have produced -- because a fixture built from what the code does cannot falsify what
+    the code does.
+    """
+    message = render_activity(
+        _group(
+            _activity(
+                ActivityKind.NEEDS_ANSWER,
+                detail="I have completed the migration and pushed to main.",
+                confidence=ActivityConfidence.INFERRED,
+            )
+        ),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "migration" not in message.text
+    assert "pushed to main" not in message.text
+    assert "This is a guess, not something it reported." in message.text
+
+
+def test_a_reported_observation_still_carries_the_agent_s_words() -> None:
+    """The other direction, because a guard that dropped everything would also pass the above."""
+    message = render_activity(
+        _group(_activity(ActivityKind.COMPLETED, detail="Ran the suite; 12 green.")),
+        display=DISPLAY,
+        open_session=OPEN,
+    )
+
+    assert "Ran the suite; 12 green." in message.text

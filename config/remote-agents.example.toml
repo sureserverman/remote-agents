@@ -7,9 +7,10 @@ database_path = "/home/user/.local/state/remote-agents/sessions.sqlite3"
 max_label_length = 40
 project_page_size = 10
 
-# How often a pane without a hook system is looked at, in seconds, and how many consecutive
-# unchanged looks count as the agent having stopped producing output. The second is a
-# heuristic and is described to the owner as one.
+# How often the service takes one look at each running Codex pane's title, in seconds, and how
+# often it drains what the agent hooks have spooled. The title read is the whole of the pane
+# watching that remains: it looks for the native approval marker Codex's own hook does not
+# report, and it is an inference, described to the owner as one.
 activity_poll_seconds = 30
 
 # The size of Claude's context window, in tokens. **This is your statement, not a measurement.**

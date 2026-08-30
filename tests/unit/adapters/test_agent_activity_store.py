@@ -106,3 +106,59 @@ def test_the_migration_count_is_pinned_by_hand() -> None:
     assertion an accidentally dropped migration cannot pass. Bump this — and only this —
     when adding a migration."""
     assert len(MIGRATIONS) == 10
+
+
+async def test_a_retired_kind_among_the_newest_rows_does_not_shorten_the_glance(store) -> None:
+    """`LIMIT n` then filter is not "the newest n", and the difference reaches the owner.
+
+    Written from the requirement rather than from the reader: a feed asking for `n` readable
+    observations must get `n` whenever the table holds that many, whatever unreadable rows sit
+    among them. The old reader asked SQL for exactly `n`, dropped the unreadable ones in Python,
+    and returned fewer — a glance that reads as "nothing else happened" rather than "something
+    was hidden", with nothing anywhere saying which.
+
+    Not a hypothetical cost of some future retirement. Retiring `quiet` on 2026-08-30 left 123
+    unreadable rows in the owner's own database, two of them inside the newest fifty, against a
+    feed that asks for twenty (`FEED_LIMIT`). The rows are written here as raw SQL because the
+    whole point is a kind this build can no longer construct.
+    """
+    for index in range(6):
+        await store.append(_activity(ActivityKind.COMPLETED, minutes_ago=20 - index))
+    # Three rows in a vocabulary this build no longer speaks, newer than everything above.
+    for index in range(3):
+        store._connection.execute(
+            "INSERT INTO agent_activity (session_id, kind, detail, confidence, observed_at)"
+            " VALUES (?, 'quiet', NULL, 'inferred', ?)",
+            ("01234567-89ab-cdef-0123-456789abcdef", datetime.now(UTC).isoformat()),
+        )
+    store._connection.commit()
+
+    recent = await store.recent(limit=5)
+
+    assert len(recent) == 5, (
+        f"the feed asked for 5 readable rows and got {len(recent)}; the retired rows took the "
+        "places of readable ones instead of being skipped past"
+    )
+    assert all(activity.kind is ActivityKind.COMPLETED for activity in recent)
+
+
+async def test_a_glance_still_ends_when_there_is_genuinely_less_to_show(store) -> None:
+    """The other direction: over-fetching must not invent rows or loop forever.
+
+    A table holding fewer readable observations than asked for returns what it has. Paired with
+    the case above because an over-fetch that satisfied it by scanning without bound would turn
+    one bad upgrade into a full table scan on every repaint — the feed redraws on a timer.
+    """
+    await store.append(_activity(ActivityKind.COMPLETED))
+    for _ in range(4):
+        store._connection.execute(
+            "INSERT INTO agent_activity (session_id, kind, detail, confidence, observed_at)"
+            " VALUES (?, 'quiet', NULL, 'inferred', ?)",
+            ("01234567-89ab-cdef-0123-456789abcdef", datetime.now(UTC).isoformat()),
+        )
+    store._connection.commit()
+
+    recent = await store.recent(limit=20)
+
+    assert len(recent) == 1
+    assert recent[0].kind is ActivityKind.COMPLETED
