@@ -38,6 +38,7 @@ class ConsolePaneSlot(Enum):
 
     PROJECTS = "surface"
     SESSIONS = "sessions"
+    LIMITS = "limits"
     FEED = "feed"
 
 

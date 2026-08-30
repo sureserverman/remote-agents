@@ -9,4 +9,4 @@ from __future__ import annotations
 #: imports Textual — and `serve` must never load the terminal library (a failure in it would
 #: then reach the bot). `panes.PANE_SURFACES` is keyed off this tuple rather than repeating
 #: it, so the parser's `choices` and the surfaces it routes to cannot drift apart.
-PANE_NAMES: tuple[str, ...] = ("projects", "sessions", "feed")
+PANE_NAMES: tuple[str, ...] = ("projects", "sessions", "limits", "feed")

@@ -133,7 +133,8 @@ def test_every_screen_has_answered_whether_it_can_be_empty(screen: type) -> None
 def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source() -> None:
     """Pins the split itself, so moving a screen between the two answers is a visible change.
 
-    **The set is six, and the plan said four.** The two it missed are the resume flow's
+    **The set is six, and the plan said four**; seven since the console gained a limits pane.
+    The two the plan missed are the resume flow's
     project and profile pickers, both declared `NEVER_EMPTY` on a stated precondition that
     nothing enforces — "reached only from a catalogue that had projects in it", and "the same
     curated list as the launch wizard's". A Tier-2 review found them, and the predicate that
@@ -144,8 +145,10 @@ def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source()
     `NEVER_EMPTY` while `ResumeProfilesScreen` — the same five, filtered by a probe DEC-002
     insists on asking — does not.
 
-    Updating this set is a deliberate act, which is the point of asserting it: a seventh
-    emptiable screen should have to be argued for here, not appear silently.
+    Updating this set is a deliberate act, which is the point of asserting it: a further
+    emptiable screen should have to be argued for here, not appear silently. `LimitsPaneScreen`
+    is the most recent, and it arrived through this test failing rather than through anyone
+    remembering the rule.
     """
     emptiable = {
         screen.__name__
@@ -156,13 +159,17 @@ def test_the_emptiable_positions_are_exactly_the_ones_reading_a_runtime_source()
     assert emptiable == {
         "DashboardScreen",
         "SessionsScreen",
-        # The console's three pane positions, added with the three-pane surface. Each reads
-        # a runtime-variable source, which is the predicate this set is derived from: the
-        # projects pane the catalogue, the sessions pane the store, the feed pane the
-        # durable observation table.
+        # The console's four pane positions. Each reads a runtime-variable source, which is
+        # the predicate this set is derived from: the projects pane the catalogue, the
+        # sessions pane the store, the feed pane the durable observation table, and the
+        # limits pane the providers' own files — which publish nothing at all on a host that
+        # has not run either agent, and stop answering for Claude once the borrowed cache is
+        # past its thirty-minute fence (DEC-061). That last one is the routine state rather
+        # than an exotic one, which is exactly why the pane declares a sentence for it.
         "ProjectsPaneScreen",
         "SessionsPaneScreen",
         "FeedScreen",
+        "LimitsPaneScreen",
         "ResumeConversationsScreen",
         "ResumeProjectsScreen",
         "ResumeProfilesScreen",

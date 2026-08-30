@@ -146,6 +146,7 @@ def _arrangements():
         FeedScreen,
         ForceConfirmModal,
         InspectScreen,
+        LimitsPaneScreen,
         NameScreen,
         ProfilesScreen,
         ProjectChooserScreen,
@@ -181,6 +182,7 @@ def _arrangements():
         # here is what their footer advertises, which is a property of the screen.
         ProjectsPaneScreen: ProjectsPaneScreen,
         SessionsPaneScreen: SessionsPaneScreen,
+        LimitsPaneScreen: LimitsPaneScreen,
         FeedScreen: FeedScreen,
         SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
         RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),

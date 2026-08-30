@@ -23,7 +23,7 @@ from remote_agents.adapters.tui import PANE_NAMES
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.model import AttachRequest
-from remote_agents.adapters.tui.screens.dashboard import ProjectsPaneScreen
+from remote_agents.adapters.tui.screens.dashboard import LimitsPaneScreen, ProjectsPaneScreen
 from remote_agents.adapters.tui.screens.feed import FeedScreen
 from remote_agents.adapters.tui.screens.sessions import SessionsPaneScreen
 
@@ -61,6 +61,20 @@ class SessionsPane(RemoteAgentsTui):
         return SessionsPaneScreen()
 
 
+class LimitsPane(RemoteAgentsTui):
+    """The right-middle pane: what each agent has spent against its plan, account-wide.
+
+    Read-only and flowless, like the feed beside it. Nothing here belongs to a session — that
+    is the whole point of the ask that produced it — so it offers no session action, and
+    inheriting the app-level flows would advertise "Add project" on a pane that reports usage.
+    """
+
+    flows = frozenset()
+
+    def get_default_screen(self) -> Screen[None]:
+        return LimitsPaneScreen()
+
+
 class FeedPane(RemoteAgentsTui):
     """The right-bottom pane: the durable notifications feed, newest first (DEC-037).
 
@@ -77,10 +91,11 @@ class FeedPane(RemoteAgentsTui):
 
 #: The console's panes, by the name `remote-agents pane <name>` takes. Keyed off `PANE_NAMES`
 #: rather than repeating it, so the parser's `choices` and the surfaces they route to cannot
-#: drift. Three names and three *distinct* surfaces: one class answering to three keys would
-#: route perfectly and render the same pane three times.
+#: drift. Four names and four *distinct* surfaces: one class answering to two keys would
+#: route perfectly and render the same pane twice. `strict=True` on the zip is what makes a
+#: name added here without a surface a `ValueError` at import rather than a missing pane.
 PANE_SURFACES: Mapping[str, type[RemoteAgentsTui]] = dict(
-    zip(PANE_NAMES, (ProjectsPane, SessionsPane, FeedPane), strict=True)
+    zip(PANE_NAMES, (ProjectsPane, SessionsPane, LimitsPane, FeedPane), strict=True)
 )
 
 

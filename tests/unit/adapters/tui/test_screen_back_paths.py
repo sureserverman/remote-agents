@@ -37,6 +37,7 @@ from remote_agents.adapters.tui.screens import (
     FeedScreen,
     ForceConfirmModal,
     InspectScreen,
+    LimitsPaneScreen,
     NameScreen,
     ProfilesScreen,
     ProjectChooserScreen,
@@ -176,6 +177,9 @@ _DIRECT: dict[type[Screen], Callable[[], Screen]] = {
     # is being proved is the same property: escape leaves it, and never off the stack.
     ProjectsPaneScreen: ProjectsPaneScreen,
     SessionsPaneScreen: SessionsPaneScreen,
+    # The console's fourth pane, and pushed for the same reason the other three are: each is
+    # the *resting* position of its own pane process, so this app can only reach it by push.
+    LimitsPaneScreen: LimitsPaneScreen,
     FeedScreen: FeedScreen,
     SessionDetailScreen: lambda: SessionDetailScreen(str(_SESSION_ID)),
     RenameScreen: lambda: RenameScreen(str(_SESSION_ID)),

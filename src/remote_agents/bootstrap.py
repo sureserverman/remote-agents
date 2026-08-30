@@ -1158,6 +1158,7 @@ def _console_composer(gateway=None, home: Path | None = None):
             for slot, name in (
                 (ConsolePaneSlot.PROJECTS, "projects"),
                 (ConsolePaneSlot.SESSIONS, "sessions"),
+                (ConsolePaneSlot.LIMITS, "limits"),
                 (ConsolePaneSlot.FEED, "feed"),
             )
         },

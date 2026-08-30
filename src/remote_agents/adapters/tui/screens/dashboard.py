@@ -78,6 +78,60 @@ _EMPTY_LIMITS_ROW = "limits:none"
 _LIMITS_ROW_PREFIX = "limits:"
 
 
+class LimitsRegion:
+    """The account-wide limits render, shared by the dashboard and the console's own pane.
+
+    A mixin rather than a base class, and for the reason `FeedRegion` next door gives: its two
+    users differ in what else they are — the dashboard is the projects position with regions
+    bolted on, and the limits pane is nothing else at all. What is shared is the *render*; what
+    each surface keeps is placement and chrome.
+
+    Written when the console gained a limits pane of its own. Before that the render lived as a
+    private method on `DashboardScreen`, which is exactly why the console had none: the pane is
+    composed by a screen only `remote-agents tui` mounts, and the console's three panes are
+    three separate processes that never mount it. Copying the method into a fourth would have
+    been the second renderer DEC-043 exists to prevent.
+    """
+
+    async def _reload_limits(self) -> None:
+        """Redraw the account-wide limits, or leave whatever is drawn exactly as it is.
+
+        Failure leaves the pane alone, which is the same contract `_reload_sessions_pane` and
+        `_reload_feed` state: the rows already drawn are stale, not wrong, and a background read
+        having a bad moment must never blank a pane the owner is reading.
+
+        The rows come from `limit_lines`, so this pane and the bot's block are one decision
+        rendered twice rather than two renderers that agree today (DEC-043). What stays here is
+        placement and the disabled-row rule -- the surface's half.
+        """
+        reader = self.services.backend.limits
+        if reader is None:
+            return
+        try:
+            entries = await reader()
+        except Exception:
+            _LOG.exception("the agent limits pane could not be reloaded")
+            return
+        lines = limit_lines(entries)
+        pane = self.query_one("#limits-pane", OptionList)
+        pane.clear_options()
+        if not lines:
+            # A *successful* read that found nothing is not the same event as a read that
+            # raised, and this used to treat them alike -- it returned early, leaving the last
+            # figures drawn. That is the routine state, not an exotic one: Claude's borrowed
+            # cache is fenced at thirty minutes, so half an hour of idleness pinned a stale
+            # percentage on screen permanently, countdown and all, with `(resets in 3h)` still
+            # reading 3h four hours later. Worse, the bot correctly dropped its block at the
+            # same instant, so the two surfaces asserted different things about one account --
+            # the exact divergence sharing `limit_lines` exists to prevent.
+            pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
+            _fit_to_content(pane, (NO_LIMITS,))
+            return
+        for index, line in enumerate(lines):
+            pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+        _fit_to_content(pane, lines)
+
+
 class ProjectsPaneScreen(ProjectsScreen):
     """The projects position with the chooser in front of the wizard — the console's left pane.
 
@@ -166,7 +220,116 @@ class ProjectsPaneScreen(ProjectsScreen):
         await self.advance_to(ProjectChooserScreen(project))
 
 
-class DashboardScreen(FeedRegion, ProjectsPaneScreen):
+class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
+    """The console's right-middle pane: the account's rate-limit windows and nothing else.
+
+    **This is the surface the owner's second ask actually named.** "Put them in the TUI too, on
+    the right, between the sessions and notifications panes, in their own pane" describes the
+    three-pane console — its right column *is* sessions over notifications — and the console is
+    what `remote-agents` runs with no arguments. The pane was first built on `DashboardScreen`,
+    which only `remote-agents tui` mounts, so the one arrangement the words map onto was the one
+    arrangement without it.
+
+    A `ChoiceScreen` for the reason `FeedScreen` is one: that is what carries this surface's
+    chrome — the status region, the never-empty stack guarantee, `check_action`, the breadcrumb
+    — and its choice list is composed and hidden, because `ChoiceScreen`'s machinery queries
+    `#filter`, `#choices` and `#output` by id and must find what it expects.
+
+    It offers no flow and takes no keys of its own. Every limit here is a *read*: nothing on
+    this pane mutates anything, which is why it is the one console pane that needs no
+    confirmation, no busy interlock and no policy.
+    """
+
+    #: This pane can be empty and says so in its own words (DEC-009) — a host whose providers
+    #: publish nothing, or a Claude cache past its staleness fence, is the routine state rather
+    #: than an exotic one.
+    empty_state = NO_LIMITS
+
+    position = "LIMITS_PANE"
+    can_refresh = True
+    crumb = "Agent limits"
+    status = "What each agent has spent against its plan, for the whole account."
+    read_failure_route = "Ctrl+R re-reads this screen."
+
+    #: The dashboard refreshes limits on a sixty-second timer; this pane keeps the same cadence
+    #: rather than a livelier one. The windows move on the hour, and every reader is a file the
+    #: provider was going to write anyway (DEC-061) — a faster tick would buy nothing and cost a
+    #: directory sweep per interval in a process that exists to be glanced at.
+    _LIMITS_AUTO_REFRESH = 60.0
+
+    DEFAULT_CSS = """
+    LimitsPaneScreen #filter { display: none; }
+    LimitsPaneScreen #choices { display: none; }
+    /* No `border` here: `OptionList` draws its own, which is where the pane's title chrome
+       comes from -- the same inheritance `FeedScreen` documents. `height: 1fr` rather than the
+       dashboard's `max-height: 40%`: there the pane shares a column with two others and must
+       not crowd them, here it *is* the pane. */
+    LimitsPaneScreen #limits-pane { height: 1fr; }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._timer = None
+
+    def compose(self) -> ComposeResult:
+        """The base body with the limits list in place of the choice list; same ids."""
+        yield Header()
+        with Vertical(id="body"):
+            yield Static(self.status, id="status", markup=False)
+            yield Input(placeholder="", id="filter")
+            yield OptionList(id="choices", markup=False)
+            # Seeded with its empty state at compose time for the reason `FeedScreen` gives:
+            # `_reload_limits` returns early when the capability is absent or the read raises,
+            # so an unseeded list would answer both with an empty box instead of the sentence
+            # DEC-009 requires this pane to declare.
+            pane = OptionList(
+                Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True),
+                id="limits-pane",
+                markup=False,
+            )
+            pane.border_title = "Agent limits"
+            yield pane
+            with VerticalScroll(id="output-pane"):
+                yield TextArea(
+                    "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
+                )
+        yield Footer()
+
+    async def populate(self) -> None:
+        self.hide_entry()
+        await self._reload_limits()
+        if self._timer is None:
+            self._timer = self.set_interval(self._LIMITS_AUTO_REFRESH, self._auto_reload)
+
+    async def on_reveal(self) -> None:
+        await self._reload_limits()
+
+    async def refresh_contents(self) -> None:
+        """Ctrl+R re-reads the providers' files, which is the whole of what this pane shows."""
+        await self._reload_limits()
+
+    async def _auto_reload(self) -> None:
+        """The interval's own call, guarded on still being the screen the owner is looking at.
+
+        `_reload_limits` is guarded against a failed read; this is guarded against a *pointless*
+        one. Without it a suspended pane keeps sweeping the providers' directories every minute
+        in a process nobody is looking at — the cost DEC-065 records paying by hand once the
+        timer moved off the screen that owned it.
+        """
+        if not self.showing:
+            return
+        await self._reload_limits()
+
+    def on_screen_suspend(self) -> None:
+        if self._timer is not None:
+            self._timer.pause()
+
+    def on_screen_resume(self) -> None:
+        if self._timer is not None:
+            self._timer.resume()
+
+
+class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
     """Three panes, one resting position; everything the projects picker was, plus sight."""
 
     draws_session_rows = True
@@ -332,44 +495,6 @@ class DashboardScreen(FeedRegion, ProjectsPaneScreen):
         if not self.showing or self.tui.busy or self._reloading_sessions:
             return
         await self._reload_sessions_pane()
-
-    async def _reload_limits(self) -> None:
-        """Redraw the account-wide limits, or leave whatever is drawn exactly as it is.
-
-        Failure leaves the pane alone, which is the same contract `_reload_sessions_pane` and
-        `_reload_feed` state: the rows already drawn are stale, not wrong, and a background read
-        having a bad moment must never blank a pane the owner is reading.
-
-        The rows come from `limit_lines`, so this pane and the bot's block are one decision
-        rendered twice rather than two renderers that agree today (DEC-043). What stays here is
-        placement and the disabled-row rule -- the surface's half.
-        """
-        reader = self.services.backend.limits
-        if reader is None:
-            return
-        try:
-            entries = await reader()
-        except Exception:
-            _LOG.exception("the agent limits pane could not be reloaded")
-            return
-        lines = limit_lines(entries)
-        pane = self.query_one("#limits-pane", OptionList)
-        pane.clear_options()
-        if not lines:
-            # A *successful* read that found nothing is not the same event as a read that
-            # raised, and this used to treat them alike -- it returned early, leaving the last
-            # figures drawn. That is the routine state, not an exotic one: Claude's borrowed
-            # cache is fenced at thirty minutes, so half an hour of idleness pinned a stale
-            # percentage on screen permanently, countdown and all, with `(resets in 3h)` still
-            # reading 3h four hours later. Worse, the bot correctly dropped its block at the
-            # same instant, so the two surfaces asserted different things about one account --
-            # the exact divergence sharing `limit_lines` exists to prevent.
-            pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
-            _fit_to_content(pane, (NO_LIMITS,))
-            return
-        for index, line in enumerate(lines):
-            pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
-        _fit_to_content(pane, lines)
 
     async def _reload_sessions_pane(self) -> tuple[SessionRecord, ...] | None:
         """Redraw the sessions pane from a fresh read, keeping the cursor on its row.

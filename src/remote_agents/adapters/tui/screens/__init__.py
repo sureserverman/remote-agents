@@ -25,6 +25,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 )
 from remote_agents.adapters.tui.screens.dashboard import (
     DashboardScreen,
+    LimitsPaneScreen,
     ProjectChooserScreen,
     ProjectsPaneScreen,
 )
@@ -62,6 +63,7 @@ ALL_SCREENS = (
     DashboardScreen,
     ProjectsPaneScreen,
     SessionsPaneScreen,
+    LimitsPaneScreen,
     FeedScreen,
     ProjectChooserScreen,
     ProfilesScreen,
@@ -87,6 +89,7 @@ __all__ = [
     "FeedScreen",
     "ForceConfirmModal",
     "InspectScreen",
+    "LimitsPaneScreen",
     "NameScreen",
     "OpeningAction",
     "ProfilesScreen",

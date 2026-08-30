@@ -65,12 +65,20 @@ class ConsolePane:
     adopts_the_created_pane: bool = False
 
 
-#: The console window, declared once. Projects left at ~60% of the width, sessions right-top
-#: at two thirds of the remaining height, feed right-bottom under it.
+#: The console window, declared once. Projects left at ~60% of the width, then the right-hand
+#: column top to bottom: sessions, agent limits, feed.
 #:
 #: The feed splits off the **sessions** pane rather than the projects pane, and that is not
 #: interchangeable: splitting the left one twice would put the feed underneath projects and
 #: leave the sessions list running the full height of the right-hand column.
+#:
+#: **Limits sits between sessions and the feed, which is the position the owner asked for in
+#: those words.** It splits off the *feed* rather than off sessions, with `before=True`: the
+#: feed is already the bottom of the column, so taking its space and landing above it puts the
+#: new pane in the middle without moving the two panes that were there. Splitting sessions
+#: instead would land it in the middle too and take the space from the list this console exists
+#: to keep in sight. 30% of the feed's share is about five rows at the console's usual height,
+#: which is what four readers plus a borrowed-cache stamp need.
 CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ConsolePane(
         ConsolePaneSlot.PROJECTS,
@@ -86,6 +94,9 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ),
     ConsolePane(ConsolePaneSlot.SESSIONS, ConsolePaneSlot.PROJECTS, vertical=False, percent=40),
     ConsolePane(ConsolePaneSlot.FEED, ConsolePaneSlot.SESSIONS, vertical=True, percent=33),
+    ConsolePane(
+        ConsolePaneSlot.LIMITS, ConsolePaneSlot.FEED, vertical=True, percent=30, before=True
+    ),
 )
 
 

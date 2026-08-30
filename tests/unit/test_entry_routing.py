@@ -106,8 +106,9 @@ def test_an_exec_that_cannot_run_leaves_the_owner_the_command(
 
 # --- `remote-agents pane <name>`: one surface per tmux pane (Sub-plan 3, Task 1.1) ---
 #
-# The console is three tmux panes and a Textual app cannot span panes, so the surface is
-# three processes rather than one app with three widgets. Routing is what this task owns:
+# The console is four tmux panes and a Textual app cannot span panes, so the surface is four
+# processes rather than one app with four widgets. It was three until the agent-limits pane
+# joined the right-hand column between sessions and the feed. Routing is what this task owns:
 # which name composes which surface, that an unknown name is refused before anything is
 # composed, and that adding the verb moved nothing that already routed.
 
@@ -115,10 +116,10 @@ def test_an_exec_that_cannot_run_leaves_the_owner_the_command(
 def test_each_pane_name_composes_its_own_surface() -> None:
     from remote_agents.adapters.tui.panes import PANE_SURFACES
 
-    assert set(PANE_SURFACES) == {"projects", "sessions", "feed"}
-    # Three names, three distinct surfaces — not one class answering to three keys, which
-    # would route correctly and render the same pane three times.
-    assert len(set(PANE_SURFACES.values())) == 3
+    assert set(PANE_SURFACES) == {"projects", "sessions", "limits", "feed"}
+    # Four names, four distinct surfaces — not one class answering to two keys, which would
+    # route correctly and render the same pane twice.
+    assert len(set(PANE_SURFACES.values())) == 4
 
 
 def test_the_pane_command_routes_the_name_it_was_given(monkeypatch: pytest.MonkeyPatch) -> None:

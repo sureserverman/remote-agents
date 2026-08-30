@@ -143,6 +143,7 @@ _POSITIONS = (
     # baseline would have covered one of the two renders while appearing to cover both.
     "PROJECTS",
     "SESSIONS_PANE",
+    "LIMITS_PANE",
     "FEED",
     "PROJECT_CHOOSER",
     "PROFILES",
@@ -492,12 +493,13 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
     """
     if step == "DASHBOARD":
         return None
-    if step in {"PROJECTS", "SESSIONS_PANE", "FEED"}:
+    if step in {"PROJECTS", "SESSIONS_PANE", "LIMITS_PANE", "FEED"}:
         # The console's pane positions, pushed. In production each is the *resting* screen of
         # its own pane process, which this app is not — what the baseline is for is the render,
         # and the render is a property of the screen.
         from remote_agents.adapters.tui.screens import (
             FeedScreen,
+            LimitsPaneScreen,
             ProjectsPaneScreen,
             SessionsPaneScreen,
         )
@@ -505,6 +507,7 @@ async def _drive(app: RemoteAgentsTui, pilot, step: str) -> asyncio.Task[None] |
         panes = {
             "PROJECTS": ProjectsPaneScreen,
             "SESSIONS_PANE": SessionsPaneScreen,
+            "LIMITS_PANE": LimitsPaneScreen,
             "FEED": FeedScreen,
         }
         await app.push_screen(panes[step]())
