@@ -212,16 +212,22 @@ class ServiceComposition:
     """None only in compositions that do not wire pane watching, which today means tests.
 
     Production always supplies one -- `_private_boundary` builds it unconditionally -- and it
-    simply has nothing to do on a pass where no hookless-profile session is running. The field
-    is optional so that every composition predating it still constructs.
+    simply has nothing to do on a pass where no Codex session is running. The field is optional
+    so that every composition predating it still constructs.
+
+    Named `quiet_watcher` until 2026-08-30, for the pane-digest watch retired with
+    `ActivityKind.QUIET`. `ServiceComposition` is constructed positionally in several places, so
+    the field name is what a reader consults to find out what this service observes; keeping the
+    old one would have gone on describing a mechanism that had been deleted.
     """
 
     activity_directory: Path | None = None
     """Where the agent hooks spool what they reported, or None when nothing spools.
 
     The second of the two activity sources, and the reason the periodic pass runs even for a
-    composition with no quiet watcher: a host running only Claude sessions has nothing to watch
-    a pane for and everything to deliver.
+    composition with no approval watcher: a host running only Claude sessions has no pane
+    anything here can observe -- `HOOK_EXCLUSIVE` and `UNOBSERVED` are both skipped -- and a
+    spool full of what those sessions reported.
     """
 
     activity_store: SQLiteActivityStore | None = None
@@ -271,10 +277,10 @@ async def _serve_with_reconciliation(
         # the classifier already refuses to report on.
         #
         # Either source is reason enough to run it. A host serving only Claude sessions has no
-        # pane to watch and a spool full of what those sessions reported, and gating the whole
-        # pass on the watcher would have delivered none of it.
+        # pane anything can observe and a spool full of what those sessions reported, and gating
+        # the whole pass on the watcher would have delivered none of it.
         periodic.append(
-            asyncio.create_task(_watch_quiet_periodically(composition, activity_interval))
+            asyncio.create_task(_watch_activity_periodically(composition, activity_interval))
         )
     try:
         await serve_runner(secrets, composition.boundary)
@@ -284,13 +290,13 @@ async def _serve_with_reconciliation(
         await asyncio.gather(*periodic, return_exceptions=True)
 
 
-async def _watch_quiet_periodically(composition: ServiceComposition, interval: float) -> None:
+async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:
     while True:
         await asyncio.sleep(interval)
-        await _watch_quiet_once(composition)
+        await _watch_activity_once(composition)
 
 
-async def _watch_quiet_once(composition: ServiceComposition) -> None:
+async def _watch_activity_once(composition: ServiceComposition) -> None:
     """One pass over both activity sources, delivered — and never raising.
 
     This loop runs beside the one that serves the owner, so a failure anywhere in it is logged
@@ -299,18 +305,18 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
     regardless of which of them noticed.
 
     Gathering them is also what lets the notifier group by session across both. Codex is a
-    hybrid source: a reported hook event suppresses only the matching current quiet spell, so
-    the sources can meet in a pass without producing a fact and a guess about the same stop.
-    One `deliver` call per source looks equivalent but quietly reintroduces two messages per
-    session per pass.
+    hybrid source: a permission the provider reported in this same pass wins over the title
+    edge, so the sources can meet in a pass without producing a fact and a guess about the same
+    wait. One `deliver` call per source looks equivalent but quietly reintroduces two messages
+    per session per pass.
 
     **Each source is guarded separately, and that is not tidiness.** `poll()` commits its own
-    dedup state as a side effect of deciding a pane has gone quiet -- it marks the spell
-    reported before the activity reaches anyone, and re-arms only when the pane changes again.
+    edge state as a side effect of deciding a marker just appeared -- it records the marker as
+    seen before the activity reaches anyone, and re-arms only when the title clears again.
     Under one shared `try`, a drain that raised after a successful poll discarded that already
-    committed observation, and the quiet spell was then never reportable at all. The failure is
+    committed observation, and that approval was then never reportable at all. The failure is
     invisible: nothing is lost that anything counts, and the owner simply never hears about an
-    agent that stopped.
+    agent waiting on them.
 
     `deliver` is called even when both sources yielded nothing, because it also drains the
     retry queue an earlier pass may have left behind; returning early on an empty list would
@@ -343,7 +349,7 @@ async def _watch_quiet_once(composition: ServiceComposition) -> None:
             )
             activities.extend(await composition.approval_watcher.poll())
         except Exception:
-            _LOG.exception("pane quiet watch failed")
+            _LOG.exception("the Codex approval watch failed")
     if composition.activity_store is not None:
         for activity in activities:
             try:
@@ -897,7 +903,7 @@ def compose_backend(
 
     **`projects` and `runtime` are parameters, not internals**, because the caller needs them
     anyway for the wiring this function deliberately does not do: the service needs the
-    terminal and the gateway for its reconciler, quiet watcher and console composer, and the
+    terminal and the gateway for its reconciler, approval watcher and console composer, and the
     surface needs the gateway for console hosting. Passing them in is what stops the profile
     probe — which shells out once per profile — from running twice in one process. Omitted,
     they are built here, which is what a test composing a bare backend wants.
@@ -909,7 +915,7 @@ def compose_backend(
     caller's snapshot.
 
     **`store` is a parameter for the same reason**: the service composition already builds
-    one for its reconciler and quiet watcher, and all three consumers are meant to be looking
+    one for its reconciler and approval watcher, and all three consumers are meant to be looking
     at the same store.
 
     **`activity_feed` is a parameter for a narrower reason:** the reader is bounded by
@@ -988,7 +994,7 @@ def _private_boundary(
     # on a host with no console at all, which is every host that has not run `remote-agents`.
     console = _console_composer(runtime.gateway, paths.home)
     # The one backend this process hands its frontend (ARCH-B1). `locks` and the console
-    # hide are the service's own wiring and go in here; the reconciler and quiet watcher
+    # hide are the service's own wiring and go in here; the reconciler and approval watcher
     # below are not the frontend's to drive and stay outside it (ARCH-B3).
     backend = compose_backend(
         config,
@@ -996,7 +1002,7 @@ def _private_boundary(
         paths,
         projects=projects,
         runtime=runtime,
-        # The same store the reconciler and quiet watcher below are given. Inert today --
+        # The same store the reconciler and approval watcher below are given. Inert today --
         # SQLiteSessionStore holds only its connection -- but two instances where there was
         # one stops being inert the moment it gains a cache or a statement pool, and this
         # composition is the one place all three consumers are meant to agree.

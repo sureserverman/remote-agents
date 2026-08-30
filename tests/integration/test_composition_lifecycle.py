@@ -620,3 +620,41 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
         assert seen == [{"context_window": None, "context_window_stated": False}]
     finally:
         connection.close()
+
+
+async def test_the_composition_names_the_watcher_for_what_it_watches() -> None:
+    """The composition no longer offers a field, a coroutine or a log line about pane quiet.
+
+    Named here rather than left to the grep in the Stage 1 gate because the failure this
+    prevents is not a stale identifier: `ServiceComposition` is constructed positionally in
+    seven places, so a field that keeps a retired name is the thing a reader consults to find
+    out what the service does, and it would go on describing a digest watch that was deleted.
+    The coroutine pair is the same argument one level down -- `_watch_quiet_once` is what an
+    operator greps for when the activity pass misbehaves.
+    """
+    from dataclasses import fields
+
+    from remote_agents import bootstrap
+
+    names = {field.name for field in fields(bootstrap.ServiceComposition)}
+    assert "approval_watcher" in names
+    assert "quiet_watcher" not in names
+    assert not hasattr(bootstrap, "_watch_quiet_once")
+    assert not hasattr(bootstrap, "_watch_quiet_periodically")
+    assert hasattr(bootstrap, "_watch_activity_once")
+    assert hasattr(bootstrap, "_watch_activity_periodically")
+
+
+async def test_a_claude_only_host_still_runs_its_activity_pass_with_no_watcher() -> None:
+    """The pass is gated on *either* source, and a spool alone has to be enough.
+
+    A host running only Claude sessions has no pane anything can observe -- `UNOBSERVED` and
+    `HOOK_EXCLUSIVE` are both skipped by the narrowed watcher -- and a spool full of what those
+    sessions reported. Gating the periodic task on the watcher would deliver none of it.
+    """
+    import inspect
+
+    from remote_agents import bootstrap
+
+    source = inspect.getsource(bootstrap._serve_with_reconciliation)
+    assert "composition.approval_watcher is not None or composition.activity_directory" in source

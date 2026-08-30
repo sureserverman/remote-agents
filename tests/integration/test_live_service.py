@@ -32,7 +32,7 @@ from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_
 from remote_agents.bootstrap import (
     ServiceComposition,
     _resolve_profile_executable,
-    _watch_quiet_once,
+    _watch_activity_once,
     main,
 )
 from remote_agents.config import ConfigError, TelegramSecrets
@@ -1456,13 +1456,13 @@ async def test_a_spooled_activity_is_delivered_once_and_leaves_no_file(
         boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
     )
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
     assert record.display.rendered in str(bot.sends[0]["text"])
     assert list(spool.glob("*.json")) == []
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
     assert len(bot.sends) == 1, "a second pass re-delivered an activity that was already sent"
 
 
@@ -1474,13 +1474,13 @@ async def test_a_restart_over_a_drained_spool_sends_no_notification(tmp_path) ->
     _spool(spool, str(record.session_id))
 
     first, first_bot = _notified(record)
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(first, _SilentTerminal(), _SilentReconciler(), activity_directory=spool)
     )
     assert len(first_bot.sends) == 1
 
     restarted, restarted_bot = _notified(record)
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             restarted, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1510,11 +1510,11 @@ async def test_everything_one_session_says_lands_in_that_session_s_one_message(
         boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
     )
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000009")
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
 
     assert len(bot.sends) - len(bot.deletes) == 1, "the second kind opened a second message"
     assert len(bot.deletes) == 1, "the message it replaced was left in the chat"
@@ -1534,10 +1534,10 @@ async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_p
         boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
     )
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
     assert bot.sends == [], "the double was supposed to refuse the first send"
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
     assert record.display.rendered in str(bot.sends[0]["text"])
@@ -1572,7 +1572,7 @@ async def test_a_session_the_owner_has_already_dealt_with_is_not_notified_about(
     spool = tmp_path / "activity"
     _spool(spool, str(record.session_id))
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1604,7 +1604,7 @@ async def test_only_an_actionable_report_about_a_live_session_reaches_the_owner(
     _spool(spool, str(finished.session_id), stamp="000003")
     _spool(spool, str(live.session_id), stamp="000004")
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1634,14 +1634,14 @@ async def test_a_session_that_stops_while_its_notification_waits_is_not_notified
         boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
     )
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
     assert bot.sends == [], "the double was supposed to refuse the first send"
 
     # The owner presses Stop while the activity is held for retry. Nothing re-drains it; the
     # only copy left is the one in the notifier's queue.
     boundary.backend.sessions.records = [replace(record, state=SessionState.STOP_REQUESTED)]
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
 
     assert bot.sends == []
 
@@ -1676,7 +1676,7 @@ async def test_a_watched_pane_reaches_the_owner_as_a_notification(tmp_path) -> N
             )
 
     watcher = _ApprovalWatcher()
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(boundary, _SilentTerminal(), _SilentReconciler(), watcher)
     )
 
@@ -1698,7 +1698,7 @@ async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tm
     spool = tmp_path / "activity"
     _spool(spool, str(record.session_id))
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1717,16 +1717,16 @@ async def test_a_notification_is_not_the_live_view_and_keeps_its_own_keyboard(tm
     )
 
 
-async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_computed(
+async def test_a_failing_drain_does_not_discard_a_watched_notification_already_computed(
     tmp_path, monkeypatch
 ) -> None:
     """The two sources are guarded separately because one of them commits before it returns.
 
-    `poll()` marks a quiet spell reported as it decides the pane went quiet, and re-arms only
-    when the pane changes again. Under one shared `try`, a drain that raised after a successful
-    poll threw that observation away with its dedup state already committed — so the spell
-    became unreportable, permanently, and nothing counted anything as lost. The owner simply
-    never hears that the agent stopped.
+    `poll()` records the approval marker as seen as it decides the marker just appeared, and
+    re-arms only when the title clears again. Under one shared `try`, a drain that raised after
+    a successful poll threw that observation away with its edge state already committed — so
+    that approval became unreportable, permanently, and nothing counted anything as lost. The
+    owner simply never hears that the agent is waiting on them.
     """
     record = _running()
     boundary, bot = _notified(record)
@@ -1751,7 +1751,7 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
 
     monkeypatch.setattr("remote_agents.bootstrap.drain_activity", _explode)
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary,
             _SilentTerminal(),
@@ -1761,8 +1761,8 @@ async def test_a_failing_drain_does_not_discard_a_quiet_notification_already_com
         )
     )
 
-    assert len(bot.sends) == 1, "the drain's failure took the quiet observation with it"
-    assert "No output since 14:05 UTC" in str(bot.sends[0]["text"])
+    assert len(bot.sends) == 1, "the drain's failure took the watcher's observation with it"
+    assert "waiting for an answer" in str(bot.sends[0]["text"]).lower()
 
 
 async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tmp_path) -> None:
@@ -1779,12 +1779,12 @@ async def test_a_pass_that_observes_nothing_still_retries_a_held_notification(tm
         boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
     )
 
-    await _watch_quiet_once(composition)
+    await _watch_activity_once(composition)
     assert bot.sends == []
     assert boundary.notifier.pending_count() == 1
 
-    # Nothing new to observe: the spool is empty and there is no quiet watcher.
-    await _watch_quiet_once(composition)
+    # Nothing new to observe: the spool is empty and there is no approval watcher.
+    await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
     assert boundary.notifier.pending_count() == 0
@@ -1931,7 +1931,7 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     _spool(spool, session_id, event="StopFailure", reason="rate_limit", stamp="000002")
     _spool(spool, session_id, event="Notification", reason="permission_prompt", stamp="000003")
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1967,7 +1967,7 @@ async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
         stamp="000004",
     )
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -1992,7 +1992,7 @@ async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> 
     for index in range(4):
         _spool(spool, str(record.session_id), stamp=f"00000{index}")
 
-    await _watch_quiet_once(
+    await _watch_activity_once(
         ServiceComposition(
             boundary, _SilentTerminal(), _SilentReconciler(), activity_directory=spool
         )
@@ -2029,7 +2029,7 @@ async def test_a_drained_observation_is_durable_before_it_is_delivered(tmp_path)
             activity_directory=spool,
             activity_store=store,
         )
-        await _watch_quiet_once(composition)
+        await _watch_activity_once(composition)
 
         recent = await store.recent(limit=10)
         assert len(recent) == 1
@@ -2050,7 +2050,7 @@ async def test_codex_permission_request_reaches_both_feed_and_notification(tmp_p
     connection = open_database(tmp_path / "codex.sqlite3")
     store = SQLiteActivityStore(connection)
     try:
-        await _watch_quiet_once(
+        await _watch_activity_once(
             ServiceComposition(
                 boundary,
                 _SilentTerminal(),
