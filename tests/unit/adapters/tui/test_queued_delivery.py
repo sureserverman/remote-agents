@@ -175,6 +175,21 @@ class _RecordingLauncher(SessionUseCaseDouble):
         return ResumeOutcome(_record(), created=True)
 
 
+class _FailingLauncher(_RecordingLauncher):
+    """Records every command, and answers that the session never became ready.
+
+    The distinction from `_RecordingLauncher` is the whole point of the test below.
+    `RemoteAgentsTui.launch` clears `_busy` in a `finally` and only ever sets `_leaving` on
+    the *success* path, so a launcher that succeeds exercises a guard a launcher that fails
+    does not have. Every queued-delivery test in this file used the succeeding double until a
+    Stage 1 gate review pointed that out.
+    """
+
+    async def launch(self, _command):
+        self.issued.append("launch")
+        return _record(SessionState.FAILED)
+
+
 class _UnusedCreator:
     """The project-creation service, which none of these flows may reach.
 
@@ -291,13 +306,21 @@ async def test_two_queued_enters_on_an_agent_start_exactly_one_session() -> None
     between a doubled keypress and two live agents in one project is whatever refuses the
     second selection.
 
-    **What refuses it is `_leaving`, and that is why removing the review did not reopen this.**
-    `RemoteAgentsTui.launch` clears `_busy` in a `finally` that runs before `self.exit(...)`,
-    and the screen that issued the launch does not leave the position on success — so the guard
-    the second dispatch meets cannot be `_busy`. `_leave` sets `_leaving`, `busy` reads
-    `self._busy or self._leaving`, and nothing clears it. That guard belongs to the app rather
-    than to any screen, which is precisely why the act could move between screens without the
-    protection moving with it. Observed before it existed: `['launch', 'launch']`.
+    **What refuses it on this path is `_leaving`** — `RemoteAgentsTui.launch` clears `_busy` in
+    a `finally` that runs before `self.exit(...)`, and the screen that issued the launch does
+    not leave the position on success, so the guard the second dispatch meets cannot be
+    `_busy`. `_leave` sets `_leaving`, `busy` reads `self._busy or self._leaving`, and nothing
+    clears it. That guard belongs to the app rather than to any screen, which is why the act
+    could move between screens without the protection moving with it. Observed before it
+    existed: `['launch', 'launch']`.
+
+    **"On this path" is doing real work in that sentence, and an earlier version of it did not
+    say so.** It read that `_leaving` "is why removing the review did not reopen this", full
+    stop — which is false for a launch that *fails*, since `_leaving` is only ever set on the
+    success path. This double answers `RUNNING`, so this test never reached that branch and the
+    claim went unchecked through two reviews.
+    `test_two_queued_enters_on_a_failed_launch_start_exactly_one_session` covers it, with a
+    double that fails.
 
     The error-toast assertion is not decoration. Without it this test would pass identically
     for a surface that issued one launch and then failed — the count assertion holds while the
@@ -440,3 +463,49 @@ async def test_quit_during_the_leaving_window_keeps_the_resumed_attach_request()
             f"quitting inside the leaving window replaced the resumed attach request with "
             f"{app.return_value!r}"
         )
+
+
+async def test_two_queued_enters_on_a_failed_launch_start_exactly_one_session() -> None:
+    """The half of BL-015 that `_leaving` never covered, and that three comments claimed it did.
+
+    **The guard the success path relies on does not exist on the failure path.**
+    `RemoteAgentsTui.launch` clears `_busy` in a `finally` that runs before its
+    `SessionState.FAILED` return, and `_leaving` is set only inside `_leave`, which a failure
+    never reaches. So the second selection of a queued pair meets an open guard, and the first
+    launch has already failed by then — leaving two live panes in one project, with two
+    distinct idempotency keys, so no backend can dedupe them. The toast the owner is reading
+    while it happens says "a second session will run alongside it".
+
+    **Not a regression, which is why it needed a test rather than a revert.** The same burst
+    against the review screen this flow used to end on issues `['launch', 'launch']` too — the
+    exposure predates the position moving, and both surfaces need one deliberate cursor move
+    off the resting row first. What changed is that the code and this file had begun asserting
+    the hole was closed.
+
+    What closes it is the invariant the cursor was already carrying: **a commit position
+    commits the row the cursor is on, and after a failed launch the cursor is on nothing.** The
+    failure re-render rests it on `None` (`show_choices(highlight=None)`), so every selection
+    queued against the fill that is now gone is refused by `ProfilesScreen.choose` — which is
+    what makes that re-render load-bearing rather than cosmetic.
+    """
+    launcher = _FailingLauncher()
+    app = RemoteAgentsTui(_context(launcher))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await _walk_to_the_agent_list(app, pilot)
+
+        _queue_two(app, "claude")
+        await pilot.pause()
+        await pilot.pause()
+        cursor = app.screen.query_one("#choices", OptionList).highlighted
+        reported = announcements(app, severity="error")
+
+    assert launcher.issued == ["launch"], (
+        f"two queued enters on a failing launch issued {launcher.issued}; exactly one was "
+        f"required, and each extra one is a live agent pane the owner never asked for"
+    )
+    # The cursor is the mechanism, so it is asserted rather than assumed: a regression that
+    # restored a resting row would re-open the hole while the count above still read one, on
+    # any run where the second event happened to lose the race.
+    assert cursor is None, f"the cursor rests on row {cursor} after a failed launch"
+    assert len(reported) == 1, f"one failure, {len(reported)} reports: {reported}"

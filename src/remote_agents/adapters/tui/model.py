@@ -59,8 +59,9 @@ class LaunchFailure:
     why, which they read once and are done with.
 
     Returned rather than rendered for the reason `launch` has always returned its message: a
-    failure has to leave the cursor somewhere deliberate, and only the review screen knows
-    where that is.
+    failure has to leave the cursor somewhere deliberate, and only the screen that issued the
+    launch knows where that is. That screen is the agent list now, and the indirection is what
+    let the act move to it without this type changing at all.
     """
 
     status: str

@@ -1389,12 +1389,13 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def launch(self) -> LaunchFailure | None:
         """Issue the gathered launch, and return what to say if it did not take.
 
-        Returning the message rather than rendering it keeps the screen that owns the
-        review in charge of its own rows: a failure has to leave the cursor somewhere
-        deliberate, and only the review screen knows where that is.
+        Returning the message rather than rendering it keeps the screen that issued the launch
+        in charge of its own rows: a failure has to leave the cursor somewhere deliberate, and
+        only that screen knows where that is. It was the launch review; it is the agent list
+        now, and this method did not have to change for the act to move.
 
         A `LaunchFailure` rather than a string since the status split: the two failures below
-        both have something the owner keeps and something they read once, and only the review
+        both have something the owner keeps and something they read once, and only the issuing
         screen can put the first of those anywhere.
         """
         project, profile = self.selection.project, self.selection.profile

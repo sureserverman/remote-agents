@@ -330,18 +330,21 @@ async def test_a_concurrent_second_launch_is_refused_by_the_handler_guard() -> N
     app = RemoteAgentsTui(_context(launcher))
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
+        # Two steps, not three. The launch flow's review position is gone, so the agent list
+        # is where the command is issued — and walking one step further would issue the launch
+        # *here*, on the slow double, blocking the walk itself rather than the two selections
+        # this test is about.
         await app.screen.choose("opaque-existing")
         await app.screen.choose("launch")
-        await app.screen.choose("claude")
         await pilot.pause()
-        first = asyncio.create_task(_select(app, "launch"))
+        first = asyncio.create_task(_select(app, "claude"))
         await asyncio.wait_for(launcher.started.wait(), timeout=5)
-        second = asyncio.create_task(_select(app, "launch"))
+        second = asyncio.create_task(_select(app, "claude"))
         await asyncio.sleep(0)
         launcher.release.set()
         await asyncio.gather(first, second)
         assert launcher.issued == ["launch"], (
-            f"two enters on Review issued {launcher.issued}; one launch was required"
+            f"two enters on the agent list issued {launcher.issued}; one launch was required"
         )
 
 

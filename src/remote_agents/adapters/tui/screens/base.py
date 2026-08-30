@@ -1122,16 +1122,23 @@ class ChoiceScreen(Screen[None]):
 class GatheredSelectionScreen(ChoiceScreen):
     """A review position whose work is a gathered selection rather than a typed entry.
 
-    The last screen of a flow — the launch review, the project review — holds everything the
-    owner chose across the screens behind it, and holds none of it in a widget. Its entry was
-    committed a screen ago and hidden, so the inherited `work_in_flight` would answer "nothing
-    in flight" while a whole flow's worth of choices sat one keystroke from being discarded
-    with no way back to them.
+    The last screen of such a flow holds everything the owner chose across the screens behind
+    it, and holds none of it in a widget. Its entry was committed a screen ago and hidden, so
+    the inherited `work_in_flight` would answer "nothing in flight" while a whole flow's worth
+    of choices sat one keystroke from being discarded with no way back to them.
 
-    Extracted because both screens had answered that identically, with the same two
-    properties and the same twelve-line argument copy-pasted between them — the shape
-    `_live_entry` was pulled out to avoid one layer down, and the Stage 2 gate's Tier-2 pass
-    named it here. Two near-identical bodies are two chances for a later edit to fix one and
+    **It has one subclass, `ProjectReviewScreen`, and that is the whole of the story rather
+    than an erosion of it.** This was extracted when *two* screens answered identically — the
+    project review and the launch review — with the same two properties and the same
+    twelve-line argument copy-pasted between them. The launch review has since been removed
+    outright: DEC-033 took the label step that gave it something to protect, and what was left
+    held two list selections that escape gives back in two keystrokes. So the class is down to
+    one subclass, which is one more than none, and it stays because the screen that needs it
+    needs it. `ProjectReviewScreen` holds a *typed* project name that `NameScreen.populate`
+    clears, so its work is still work escape cannot give back — which is the test of whether
+    this class is a principled distinction or a convenient one.
+
+    Two near-identical bodies are two chances for a later edit to fix one and
     miss the other, and the pair has to move together: `work_at_risk` is only correct for
     these screens *because* `work_in_flight` is unconditionally true, and a screen that
     changed one without the other would either warn about nothing or fail to warn at all.

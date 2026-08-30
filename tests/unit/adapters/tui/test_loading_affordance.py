@@ -211,12 +211,21 @@ def _context(launcher: _Launcher, creator: _Creator | None = None) -> TuiContext
     )
 
 
-async def _walk_to_review(app: RemoteAgentsTui, pilot) -> None:
+async def _walk_to_the_agent_list(app: RemoteAgentsTui, pilot) -> None:
+    """Stop on the agent list: choosing a row there is the launch, not a step toward it.
+
+    **This walk used to take one step more, and taking it here hung the suite outright.** The
+    launch flow ended on a review position and this helper walked onto it, leaving the launch
+    itself to `_issue`'s gated task. With the review removed, `choose("claude")` *is* the
+    launch — so the third step blocked on the gate this file deliberately holds open, inside
+    the walk, before `_issue` had created the task that releases it. Nothing timed out,
+    because the `wait_for` guards below are wrapped around `_opened` and `issued`, and neither
+    had been reached. The same shape as `_walk_to_the_conversation_list` beside it, which the
+    resume flow arrived at when *its* confirmation was removed.
+    """
     await app.screen.choose("opaque-existing")
     await pilot.pause()
     await app.screen.choose("launch")
-    await pilot.pause()
-    await app.screen.choose("claude")
     await pilot.pause()
 
 
@@ -242,7 +251,7 @@ async def _walk_to_new_project_review(app: RemoteAgentsTui, pilot) -> None:
 # One arrangement per flow. Each opens the gate by issuing the command, and the test drives
 # it the rest of the way; `walk` leaves the surface on the position the command is issued from.
 _FLOWS = {
-    "launch": (_walk_to_review, "launch"),
+    "launch": (_walk_to_the_agent_list, "claude"),
     "resume": (_walk_to_the_conversation_list, str(_REFERENCE)),
     "project-create": (_walk_to_new_project_review, "create"),
     "stop": (None, "graceful"),

@@ -539,18 +539,20 @@ async def test_quit_at_the_agent_list_leaves_on_the_first_press_and_that_is_deli
     """The consequence of the narrowing that its own commit did not discuss, pinned so it is a
     decision rather than a side effect.
 
-    Dropping `GatheredSelectionScreen` from the launch review disarms two things, not one. The
+    Dropping `GatheredSelectionScreen` from the launch review disarmed two things, not one. The
     flow-jump greying is the half that was reasoned about; `ctrl+q`'s arm-then-warn cycle reads
-    the *same* `work_in_flight` property, so it went quiet here too and nothing said so. A
+    the *same* `work_in_flight` property, so it went quiet there too and nothing said so. A
     Tier-2 review found the omission and was right to: undiscussed is undiscussed even when the
     outcome is correct.
 
-    It **is** correct, and for the reason the whole narrowing rests on. DEC-027's warning exists
-    for work the owner cannot get back — its own text is about "the owner's own unsaved text".
-    The launch review holds two list selections and nothing typed, so quitting costs two
-    re-picks from lists that are still there next launch. Warning about that would train the
-    owner to dismiss the warning, which is what makes the one guarding a typed project name
-    worth less.
+    **That review has since been removed altogether, and this test moved to the position that
+    inherited the launch rather than going with it** — the claim was always about the flow, not
+    about the screen. It **is** correct, and for the reason the whole narrowing rests on:
+    DEC-027's warning exists for work the owner cannot get back, and its own text is about "the
+    owner's own unsaved text". The agent list holds one list selection and nothing typed, so
+    quitting costs one re-pick from a list that is still there next launch. Warning about that
+    would train the owner to dismiss the warning, which is what makes the one guarding a typed
+    project name worth less.
 
     The control case is asserted alongside, because a test that only showed the absence could
     pass just as well if the warning had broken everywhere: the project review, which holds a
@@ -613,8 +615,10 @@ async def test_quit_still_warns_first_where_a_typed_name_is_at_risk() -> None:
 #: The positions that protect work, named rather than derived. `_WORK_SCREENS` is computed from
 #: the code, so a screen that stopped protecting its work would drop out of that parametrization
 #: and take its own coverage with it — the tests would shrink to fit the regression and stay
-#: green. Verified: deleting the review screens' override passed every case until this list
-#: existed. A literal is the only form that can fail.
+#: green. Verified: deleting the project review's override passed every case until this list
+#: existed. A literal is the only form that can fail. (It read "the review screens'", plural,
+#: while there were two; the launch review has since been removed and `ProjectReviewScreen` is
+#: the only one left overriding.)
 _PROTECTS_WORK = {
     "NameScreen",
     "RenameScreen",

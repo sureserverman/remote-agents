@@ -1045,12 +1045,12 @@ uv run --locked remote-agents tui
     the agent list.
 2. Confirm the agent list names each curated profile and the blocking reason beside any that is
    unavailable, and that selecting a blocked one is refused rather than launched.
-3. Confirm choosing the agent lands on Review directly — there is no label step — and that its
-   breadcrumb names the project and the agent while its status line says a ready launch hands
-   this terminal to the session's pane. Back is highlighted rather than Launch. Cancel returns
-   to the project list with no mutation; Back restores the agent choice.
-4. Launch, and confirm this terminal is replaced by the attach and the pane holds the chosen
-   agent. Detach with tmux's own binding — `Ctrl-b d` on a stock tmux, or `d` under whatever
+3. Confirm the agent list is the last thing asked — there is no label step and no review step —
+   and that its breadcrumb names the project while its status line says a ready launch hands
+   this terminal to the session's pane. Back is highlighted rather than an agent, so confirm a
+   stray enter leaves the flow rather than launching, and that one Down reaches the first agent.
+4. Choose an agent, and confirm this terminal is replaced by the attach and the pane holds the
+   chosen agent — with nothing asked between the choice and the pane. Detach with tmux's own binding — `Ctrl-b d` on a stock tmux, or `d` under whatever
    prefix `~/.tmux.conf` sets on this host, since this project ships no tmux configuration and
    sets no prefix. The session must survive the detach.
 5. In Telegram, open Sessions and confirm the session started from the terminal is listed,

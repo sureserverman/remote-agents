@@ -37,6 +37,7 @@ names them in the past tense and no code enforces either.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import cast
 
 from textual import events
 from textual.binding import Binding
@@ -293,8 +294,12 @@ class ProfilesScreen(ChoiceScreen):
       screen that commits to it. The wording covers both routes because `attach_to` has more
       than one: with `TMUX` set it refuses to nest and prints the command instead, and an
       `execvp` that raises does the same.
-    - **No repeated keypress commits here.** DEC-007's mitigation, and the reason the list
-      grows a Back row and rests on it — see `render_profiles`.
+    - **No repeated keypress commits here**, on either the success path or the failure path,
+      and the two are guarded by different things. DEC-007's mitigation is why the list grows a
+      Back row and rests on it (`render_profiles`); the app's `_leaving` flag is what refuses a
+      second selection once a launch has succeeded. Neither covers a launch that *failed* —
+      `_busy` is cleared before the FAILED return and `_leaving` is never set — so `choose`
+      refuses any selection arriving while the cursor rests on nothing.
     """
 
     #: The curated profile list is the host's own configuration; a host offering none could
@@ -375,6 +380,19 @@ class ProfilesScreen(ChoiceScreen):
             trailing=((_BACK, "Back"),),
         )
 
+    def _resting_on_nothing(self) -> bool:
+        """Whether the list is drawn with no row under the cursor.
+
+        Read from the widget rather than tracked in a flag, so it cannot disagree with what is
+        on screen. Answers `False` when the list has not been filled yet — a screen with no
+        `#choices` yet has nothing queued against it either, and raising `NoMatches` out of a
+        message handler would exit the app.
+        """
+        choices = self.query("#choices")
+        if not choices:
+            return False
+        return cast(OptionList, choices.first()).highlighted is None
+
     async def choose(self, key: str) -> None:
         if key == _BACK:
             # Kept beside the central `_BACK` branch in
@@ -382,6 +400,29 @@ class ProfilesScreen(ChoiceScreen):
             # reason that branch's own comment gives: `choose` is called directly, by tests
             # and by `after_command`, without passing through the handler at all.
             await self.tui.go_back()
+            return
+        if self._resting_on_nothing():
+            # **A commit position commits the row the cursor is on, and nothing else.**
+            #
+            # This is what makes the failure re-render below load-bearing rather than
+            # cosmetic. One terminal read can carry several Enters — key autorepeat, a double
+            # tap, buffered stdin over a laggy link — and the driver parses them into key
+            # events posted back to back, so every one of them is turned into its own
+            # selection *before* the first handler runs. Each selection carries the agent row
+            # it was built from, so moving the cursor does not disarm the ones already queued;
+            # only refusing them here does.
+            #
+            # The success path never needed this: `_leave` sets `_leaving`, `busy` reads it,
+            # and it is never cleared. The failure path has no such guard —
+            # `RemoteAgentsTui.launch` clears `_busy` in a `finally` that runs *before* its
+            # FAILED return — so the second of a queued pair met an open guard and launched a
+            # second agent into the same project, with a different idempotency key, while the
+            # owner was reading a toast about the first. Pinned by
+            # `test_two_queued_enters_on_a_failed_launch_start_exactly_one_session`.
+            #
+            # Deliberately *not* fixed by holding `_busy` open: that flag means "a command is
+            # in flight", and after a failed launch none is. The true statement is about the
+            # cursor, so that is what is checked.
             return
         profile = next((item for item in self.services.profiles if item.profile_id == key), None)
         if profile is None or not profile.available:
@@ -404,8 +445,12 @@ class ProfilesScreen(ChoiceScreen):
         # the same option for the same reason — a list whose keys act on a live session may
         # not have its cursor moved by anything but the owner.
         #
-        # It also resets this screen's status, which is why the failure's own status is set
-        # after.
+        # **It does not reset the status**, and the predecessor's comment here said it did.
+        # `render_review` called `set_status` as part of re-rendering; `render_profiles` does
+        # not, and neither does `show_choices`. Harmless today — the failure's own status is
+        # written on the next line either way — but it stated an ordering constraint that does
+        # not exist, which is the kind of thing a later reorder trusts. Found by the Stage 1
+        # gate's second review pass, which measured it rather than reading it.
         self.render_profiles(resting=False)
         # Deliberately *not* severity-coloured, and this is the closest call of the five sites
         # considered. `failure.status` is the half the owner may still need in a minute: the

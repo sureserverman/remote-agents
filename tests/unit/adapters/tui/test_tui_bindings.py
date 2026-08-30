@@ -88,21 +88,48 @@ def test_the_existing_bindings_keep_their_behavior() -> None:
 
 @pytest.mark.parametrize(
     "step_setup",
-    ["projects", "profiles", "review", "areas"],
+    ["projects", "chooser", "profiles", "areas"],
 )
 async def test_ctrl_s_opens_sessions_from_any_wizard_step(step_setup: str) -> None:
+    """Ctrl+S reaches the sessions list from every position the launch wizard has.
+
+    **Two of these cases were not reaching the positions they were named for, and the test was
+    green throughout.** `"profiles"` walked one `choose` and stopped — which reached the agent
+    list when it was written, and stopped doing so the day the Launch-or-Resume chooser was
+    inserted between them (DEC-033). `"review"` walked a second `choose("claude")` on top,
+    which is not a row the chooser offers, so it did nothing at all: both cases sat on
+    `PROJECT_CHOOSER`, testing it twice under two wrong names while the agent list — the
+    position with the most bindings of the three — went untested.
+
+    Neither was caused by removing the review position; the collapse predates it, and removing
+    the review is what made it visible, since `"review"` no longer names anything. Fixed by
+    walking each case to the position it claims **and asserting it arrived**: a parametrization
+    whose cases silently converge is one that reports four times the coverage it has, and the
+    assertion is the only part of this that a future insertion cannot quietly undo.
+    """
     launcher = _Listing((_record(),))
     app = RemoteAgentsTui(_context(launcher))
+    expected = {
+        "projects": "DASHBOARD",
+        "chooser": "PROJECT_CHOOSER",
+        "profiles": "PROFILES",
+        "areas": "AREAS",
+    }[step_setup]
 
     async with app.run_test() as pilot:
+        if step_setup in {"chooser", "profiles"}:
+            await app.screen.choose("opaque-existing")
+            await pilot.pause()
         if step_setup == "profiles":
-            await app.screen.choose("opaque-existing")
-        elif step_setup == "review":
-            await app.screen.choose("opaque-existing")
-            await app.screen.choose("claude")
+            await app.screen.choose("launch")
+            await pilot.pause()
         elif step_setup == "areas":
             await app.show_areas()
         await pilot.pause()
+        assert position(app) == expected, (
+            f"the {step_setup!r} setup reached {position(app)}, not {expected} — this case is "
+            f"not testing the step it is named for"
+        )
 
         await app.action_sessions()
         await pilot.pause()

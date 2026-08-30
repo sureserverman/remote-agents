@@ -413,11 +413,12 @@ ones and each row names its group. Choosing a project asks one question — laun
 or reopen a saved conversation — with the cursor resting on Launch, and Resume offered only on
 a host whose conversation service is wired. Launch opens the agent list, which names every
 curated profile and shows the blocking reason beside one that cannot be launched here; choosing
-a blocked one is refused rather than attempted. Choosing an agent goes straight to Review, with
-no name asked for on the way. Review carries the project and the agent in its breadcrumb and says what
-going through with it does: a ready launch hands this terminal to the session's pane, or prints
-how to reach it. It opens with Back highlighted rather than Launch, so a stray enter mutates
-nothing; Back restores the agent choice and Cancel returns to the project list. Escape is
+a blocked one is refused rather than attempted. Choosing an agent launches it, with no name
+asked for on the way and nothing asked afterwards. The agent list carries the project in its
+breadcrumb and says what going through with it does: a ready launch hands this terminal to the
+session's pane, or prints how to reach it. It opens with Back highlighted rather than an agent,
+so a stray enter mutates nothing and reaching an agent is one arrow key — the same shape, and
+the same cost, as choosing a conversation to resume. Escape is
 Back, Ctrl+R re-reads whatever the screen
 you are on shows without leaving it, Ctrl+N adds a project, Ctrl+S opens the managed sessions,
 Ctrl+O resumes a saved conversation, and Ctrl+Q quits.
@@ -427,15 +428,15 @@ something can be re-read, Back is absent at the project list because there is no
 it, and Resume is absent entirely on a host that wired no conversation service. While a flow
 holds work you would lose — a project name or a session name being typed, or the add-project
 review holding one already committed — the three keys that leave the flow are greyed rather
-than hidden, so a keystroke meant for somewhere else does not discard it. The launch review is
-deliberately not among them: it holds two list choices and nothing typed, so re-picking costs
-two keystrokes and greying the keys would be friction with nothing behind it. Ctrl+Q is deliberately
+than hidden, so a keystroke meant for somewhere else does not discard it. The launch flow is
+deliberately not among them: it holds one list choice and nothing typed, so re-picking costs
+one keystroke and greying the keys would be friction with nothing behind it. Ctrl+Q is deliberately
 not among them: quit means leave, and an app that refuses to close until an entry is cleared
 would be the worse answer. It does take unsaved work with it.
 
 The surface has three places to say something and each one says a different kind of thing. The
-header carries a breadcrumb — `Projects › infra/existing › claude` — which is where
-you are and what you chose to get there. Below it is a single line of status: what to do here,
+header carries a breadcrumb — `Projects › infra/existing` — which is where you are and what you
+chose to get there. Below it is a single line of status: what to do here,
 or the result you still need, such as the attach command for a session that did not come up.
 It is exactly one *sentence*, and its region is a fixed height — two rows, or three on the
 sessions positions, which carry a whole keymap there — so the list beneath it never moves as a
@@ -444,8 +445,8 @@ that did not happen — a stop that raised, an agent that cannot be launched, a 
 catalogue no longer has — is a notification in the corner instead, because it is about the
 action you just took rather than about the position you are standing on, which outlives it.
 
-A launch that raises, or one whose session never reaches readiness, returns to Review, reports
-the reason, and attaches to nothing. Where the session's pane may still exist, the attach
+A launch that raises, or one whose session never reaches readiness, leaves you on the agent
+list with the cursor resting on nothing, reports the reason, and attaches to nothing. Where the session's pane may still exist, the attach
 command that reaches it stays on the status line rather than expiring with the notification.
 
 Add Project is Ctrl+N. The area is a choice between the existing directories the server enumerates
