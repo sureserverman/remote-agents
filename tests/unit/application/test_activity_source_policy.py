@@ -1,4 +1,4 @@
-"""Provider activity evidence determines whether a pane is watched for quiet."""
+"""Provider activity evidence determines which panes are watched, and for what."""
 
 from __future__ import annotations
 
@@ -59,56 +59,6 @@ async def test_activity_source_policy_selects_the_right_quiet_watchers(
 
     assert await watcher.poll() == ()
     assert captures == expected_captures
-
-
-async def test_a_reported_hybrid_event_suppresses_only_its_current_quiet_spell() -> None:
-    record = _running_record("codex")
-    captures = iter(
-        (
-            "start",
-            "working",
-            "working",
-            "working",
-            "working again",
-            "working again",
-            "working again",
-        )
-    )
-
-    async def capture(session_id: SessionId) -> str:
-        assert session_id == record.session_id
-        return next(captures)
-
-    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2)
-
-    assert await watcher.poll() == ()  # baseline
-    assert await watcher.poll() == ()  # observed change arms this spell
-    watcher.mark_reported((str(record.session_id),))
-    assert await watcher.poll() == ()
-    assert await watcher.poll() == ()
-
-    assert await watcher.poll() == ()  # a new pane change re-arms quiet inference
-    assert await watcher.poll() == ()
-    (quiet,) = await watcher.poll()
-    assert quiet.session_id == str(record.session_id)
-
-
-async def test_a_reported_record_does_not_suppress_a_quiet_only_watch() -> None:
-    record = _running_record("opencode")
-    captures = iter(("start", "working", "working", "working", "working"))
-
-    async def capture(session_id: SessionId) -> str:
-        assert session_id == record.session_id
-        return next(captures)
-
-    watcher = PaneQuietWatcher(_RunningStore(record), capture, quiet_polls=2)
-
-    assert await watcher.poll() == ()
-    assert await watcher.poll() == ()
-    watcher.mark_reported((str(record.session_id),))
-    assert await watcher.poll() == ()
-    (quiet,) = await watcher.poll()
-    assert quiet.session_id == str(record.session_id)
 
 
 def test_codex_action_required_is_a_rising_edge_not_pane_text() -> None:
@@ -212,7 +162,16 @@ async def test_first_title_read_failure_keeps_recovered_marker_as_restart_baseli
     assert await watcher.poll() == ()
 
 
-async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_prompt() -> None:
+async def test_title_read_failure_clears_the_marker_without_reemitting_the_open_prompt() -> None:
+    """An unreadable title must not latch a stale positive marker, and must not re-announce.
+
+    The clearing half is what stops a marker read once and then never re-read from silencing
+    every later prompt for the life of the process. The silence half is the other side of the
+    same edge: an unavailable title is not evidence that a *new* prompt opened, so nothing is
+    emitted while it cannot be read. This used to end by proving the pane-digest fallback
+    stayed eligible through the outage; that fallback was retired on 2026-08-30, and what the
+    test is really pinning -- the edge state DEC-063 keeps -- is unchanged.
+    """
     record = _running_record("codex")
     titles: list[str | Exception] = [
         "multitor",
@@ -220,10 +179,9 @@ async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_pr
         RuntimeError("tmux unavailable"),
         RuntimeError("tmux unavailable"),
     ]
-    captures = iter(("start", "working", "working", "working"))
 
     async def capture(session_id: SessionId) -> str:
-        return next(captures)
+        return "working"
 
     async def action_required(session_id: SessionId) -> str:
         title = titles.pop(0)
@@ -237,8 +195,7 @@ async def test_title_read_failure_reenables_quiet_without_reemitting_the_open_pr
     (needs_answer,) = await watcher.poll()
     assert needs_answer.kind is ActivityKind.NEEDS_ANSWER
     assert await watcher.poll() == ()
-    (quiet,) = await watcher.poll()
-    assert quiet.kind is ActivityKind.QUIET
+    assert await watcher.poll() == ()
 
 
 async def test_title_recovery_rearms_the_generic_notice_after_an_unavailable_period() -> None:
