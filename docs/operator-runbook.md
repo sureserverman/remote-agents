@@ -555,28 +555,34 @@ rather than folded into a blanket confirmation.
 ## Agent activity notifications
 
 > **Upgrading an existing host: edit the config before you restart the service.** This feature
-> added two keys to `[limits]`, and `config.py` validates that table against an *exact* key set —
-> unknown keys **and** missing ones are refused. So a config written before this release makes the
-> new service exit 1 on startup, and `Restart=on-failure` turns that into a crash-loop:
+> added `activity_poll_seconds` to `[limits]`, and `config.py` validates that table against an
+> *exact* key set — unknown keys **and** missing ones are refused. So a config written before this
+> release makes the new service exit 1 on startup, and `Restart=on-failure` turns that into a
+> crash-loop:
 >
 > ```text
 > remote_agents.config.ConfigError: limits has unknown or missing keys:
-> ['activity_poll_seconds', 'activity_quiet_polls']
+> ['activity_poll_seconds']
 > ```
 >
-> Add both to `~/.config/remote-agents/config.toml` under `[limits]` first — the shipped defaults
-> are in `config/remote-agents.example.toml`:
+> Add it to `~/.config/remote-agents/config.toml` under `[limits]` first — the shipped default is
+> in `config/remote-agents.example.toml`:
 >
 > ```toml
 > activity_poll_seconds = 30
-> activity_quiet_polls = 3
 > ```
 >
-> They are deliberately required rather than defaulted, which is the same rule that rejects a
-> typo'd key: this file is small, exact and hand-edited, and a silently defaulted knob is one the
-> owner never learns they have. The cost is this upgrade step, and the error names both keys.
+> It is deliberately required rather than defaulted, which is the same rule that rejects a typo'd
+> key: this file is small, exact and hand-edited, and a silently defaulted knob is one the owner
+> never learns they have. The cost is this upgrade step, and the error names the key.
 > Found by the acceptance run on 2026-08-11 rather than by any test, because every test builds its
 > own config and so can never be out of date with the code.
+>
+> **`activity_quiet_polls` is retired and needs no action.** It was required alongside
+> `activity_poll_seconds` until 2026-08-30, when the pane-digest watch it paced was removed. A
+> config still carrying it loads and ignores it, and one without it loads too — the key is
+> tolerated rather than required, so no host has to be edited on account of the retirement. Leave
+> it or delete it; `doctor` reports neither as drift.
 >
 > **`doctor` now catches this class before the restart does.** Run `remote-agents doctor --json`
 > against the deployed config first: it no longer raises on a config it cannot load, and reports
@@ -597,10 +603,12 @@ hooks. Codex is hybrid: its `Stop` hook reports `completed`; when Codex emits it
 `PermissionRequest` hook reports `needs_answer`. Its native code-mode escalation currently skips
 that hook, so the service instead watches the managed pane's content-free `Action Required` title
 and emits one inferred `needs_answer` until that title clears. It never captures or retains the
-approval's command, prompt, path, or transcript, and Telegram remains observation-only. Pane quiet
-remains fallback until a report suppresses that spell. `opencode` and `cursor-agent` have only pane
-evidence. The hooks are not installed by the unit, by `serve`, or by `doctor`. Install them once per
-host:
+approval's command, prompt, path, or transcript, and Telegram remains observation-only. A
+provider-reported permission in the same pass wins over the title edge, so the two never describe
+one wait twice. `opencode` and `cursor-agent` report nothing at all: they publish no hooks and set
+no title marker, and the pane-digest fallback that was their only signal was retired on 2026-08-30
+for telling the owner nothing they could act on. The hooks are not installed by the unit, by
+`serve`, or by `doctor`. Install them once per host:
 
 ```bash
 uv run --locked remote-agents install-agent-hooks
@@ -847,9 +855,8 @@ notifications are still delivered and the menu simply stays where it was.
 | `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
 | `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
 | `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
-| `quiet` | "No output since 14:05 UTC." | this service watching the pane | inferred |
 
-The first four are the agent reporting on itself, and each carries at most one bounded, escaped
+All four are the agent reporting on itself, and each carries at most one bounded, escaped
 line of what it last said. Everything else those hook fields can carry — every other value of
 `error`, every other `notification_type` — is dropped rather than mapped to the nearest neighbour:
 reporting the wrong reason an agent stopped is worse than reporting nothing.
@@ -860,9 +867,10 @@ native code-mode command escalations do not. Their exact managed-pane title mark
 `[ ! ] Action Required | <project>`, is observed through tmux metadata only and becomes one
 inferred `needs_answer` on the transition into that state. The title is never retained, and it must
 clear before another such notification can be sent. If tmux title metadata is temporarily
-unavailable, quiet fallback remains eligible; the next readable active title re-arms one generic
-inferred notice rather than risking a new local approval being missed. It may therefore repeat an
-otherwise unchanged prompt after a title-read outage, without revealing what approval is needed.
+unavailable, the marker is cleared rather than left standing — nothing is emitted while it cannot
+be read, and the next readable active title re-arms one generic inferred notice rather than risking
+a new local approval being missed. It may therefore repeat an otherwise unchanged prompt after a
+title-read outage, without revealing what approval is needed.
 
 **A notification has to be worth acting on, and two kinds that once appeared here were not.** The
 bar is no longer only "does this say why the agent stopped" but "is there anything for the owner
@@ -905,22 +913,26 @@ sends, and the owner can press Stop while it waits. Declining to speak is logged
 `dropping an activity this service will not speak about`, which means a session this service can
 no longer identify at all.
 
-`quiet` appends one further sentence, "This is a guess, not something it reported." It is this
-service's own heuristic, and the only signal available for the three
-profiles with no hook system: the pane's captured output is digested each poll, and a digest that
-has not changed for the configured number of polls is reported once. It says what was observed —
-that no output has appeared since a given minute — and never that the agent finished, because the
-service did not see that. It carries no agent text at all, since nothing said anything; the last
-line of an idle screen rendered under a session's name reads exactly like a parting statement. A
-change must be seen before an absence of change means anything, so a restart does not report every
-idle pane on the host, and the report fires once per quiet spell, re-arming only when the pane
-changes again. The time in the sentence is the moment the threshold was crossed, so the true
-silence began `activity_quiet_polls × activity_poll_seconds` earlier — the sentence is true and
-understated, which is the right direction for a heuristic to be wrong in.
+An **inferred** observation appends one further sentence, "This is a guess, not something it
+reported." Exactly one signal is inferred today: the Codex `Action Required` title edge described
+above. Nothing said it — the escalation bypasses Codex's own `PermissionRequest` hook — so it is
+worth telling the owner and not worth telling them as a fact. The hedge is appended on the
+observation's *confidence* rather than on its kind, which is why it has now outlived two of its own
+subjects: an upstream idle timer this service no longer maps, and the pane-digest report retired
+on 2026-08-30. A future inferred signal is hedged by that rule rather than by whoever writes its
+wording.
 
-Both knobs live under `[limits]` in `~/.config/remote-agents/config.toml`. The shipped sample sets
-`activity_poll_seconds = 30` (bounded 5–600) and `activity_quiet_polls = 3` (bounded 2–20), so a
-pane goes quiet 90 seconds after its last change by default.
+**The pane-digest watch was retired on 2026-08-30.** It reported that a managed pane's captured
+output had stopped changing for a configured number of polls, and it was the only signal
+`opencode` and `cursor-agent` ever had. It went because it failed the "is there anything to do about it" bar in
+the same way `ended` did: a pane that has stopped changing belongs to an agent that has finished,
+an agent that is thinking, and an agent nobody has typed at since Tuesday, and the message could
+not tell them apart. Its config knob, `activity_quiet_polls`, is retired with it and is described
+under the upgrade note above.
+
+`activity_poll_seconds` lives under `[limits]` in `~/.config/remote-agents/config.toml`. The
+shipped sample sets it to `30` (bounded 5–600), which is how often the service reads the title of
+each running Codex pane and drains the hook spool.
 
 Separately, and not configurable, each kind of a session's news is rate-limited on its own — a
 `Stop` hook fires per turn rather than per task, so an agent working through a long instruction

@@ -1,4 +1,10 @@
-"""Current operator claims for the qualified Codex activity boundary."""
+"""Current operator claims for the qualified Codex activity boundary.
+
+"Current" is the whole scope. `docs/acceptance-*.md` are deliberately outside it: they are dated
+accounts of drills that happened, and one of them records observing the pane-quiet fallback on
+2026-08-29. Editing those to match today's code would falsify an observation, so this sweep reads
+only the documents that make claims in the present tense.
+"""
 
 from __future__ import annotations
 
@@ -37,3 +43,45 @@ def test_current_docs_describe_the_qualified_codex_activity_boundary() -> None:
         )
     )
     assert not re.search(obsolete_claim, current)
+
+
+def test_no_current_document_still_offers_the_retired_pane_quiet_fallback() -> None:
+    """The fallback was retired on 2026-08-30; a document still promising it is a false claim.
+
+    Swept as a whole-corpus regex rather than as a per-file assertion because the claim was
+    spread across three documents and two registers -- a feature paragraph, a kinds table, a
+    config upgrade note -- and the failure this closes is an operator reading one of them and
+    expecting notifications for `opencode` that can no longer arrive.
+
+    The dated acceptance records are excluded by construction: `_CURRENT_ACTIVITY_DOCS` and the
+    architecture document below are the documents that speak in the present tense.
+    """
+    swept = (*_CURRENT_ACTIVITY_DOCS, _ROOT / "docs" / "architecture.md")
+    retired = re.compile(r"gone quiet|pane[ -]quiet|quiet fallback|`quiet`", re.IGNORECASE)
+
+    offenders = [
+        f"{path.relative_to(_ROOT)}:{number}: {line.strip()}"
+        for path in swept
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if retired.search(line)
+    ]
+
+    assert offenders == [], (
+        "a current document still claims the pane-quiet fallback:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_retired_config_key_is_described_as_retired_rather_than_required() -> None:
+    """The upgrade note told operators to add a key that is now tolerated, not required.
+
+    That instruction was correct when written and is now the opposite of the truth: following it
+    adds a key the schema ignores, and an operator who reads only the old paragraph believes a
+    config without it will crash-loop. The runbook has to say which of the two it is.
+    """
+    runbook = (_ROOT / "docs" / "operator-runbook.md").read_text(encoding="utf-8")
+
+    assert "activity_quiet_polls" in runbook, "silence is not the same as saying it was retired"
+    assert "retired" in runbook.lower()
+    assert "activity_quiet_polls = 3" not in runbook, (
+        "the runbook still instructs the operator to add the retired key"
+    )

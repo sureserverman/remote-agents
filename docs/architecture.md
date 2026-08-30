@@ -145,7 +145,7 @@ composer.
 **`serve` owns**: the shared `SessionLocks` instance — constructed exactly once in
 `bootstrap._private_boundary` and handed to both `SessionService` and
 `ReconciliationService`, which is the whole of DEC-030's fix; the `ReconciliationService`
-itself, constructed in exactly one place in `src/`; the pane quiet watcher; and the durable
+itself, constructed in exactly one place in `src/`; the Codex approval watcher; and the durable
 Telegram stores (callbacks, chat-view anchors, standing notifications).
 
 `SessionService.__init__` still falls back to `locks or SessionLocks()`, so the local
@@ -241,7 +241,7 @@ diagnostics rather than surfaces, which is the line — `doctor --history` reads
 content* and is confined for that reason, in a comment that says so at `bootstrap.py:1285`.
 
 - **`remote-agents serve`** — one process. It holds one long-lived connection and runs the
-  Telegram bot, the reconciler, the pane quiet watcher and the activity poller over it.
+  Telegram bot, the reconciler, the Codex approval watcher and the activity poller over it.
 - **`remote-agents pane <name>`** — one process per console pane. `PANE_NAMES` is
   `("projects", "sessions", "feed")` and the parser's `choices` is keyed off it, so the count
   is three and cannot drift from `PANE_SURFACES`. A Textual app owns a terminal, so the
