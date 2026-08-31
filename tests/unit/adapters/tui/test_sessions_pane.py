@@ -227,7 +227,7 @@ async def test_the_console_capability_the_composition_wires_is_the_exchange() ->
     console reaches an agent through `ConsoleComposer.show`, and Sub-plan 3 wires that in
     place of the switch route.
     """
-    from remote_agents.bootstrap import _console_opener
+    from remote_agents.composition.tui import _console_opener
 
     class _Composer:
         def __init__(self) -> None:

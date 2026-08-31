@@ -223,7 +223,7 @@ def test_the_two_opaque_id_derivations_cannot_drift_apart() -> None:
     from pathlib import Path
 
     from remote_agents.application.project_catalog import _entry
-    from remote_agents.bootstrap import _opaque_id
+    from remote_agents.composition.backend import _opaque_id
 
     class _P:
         name = "demo"

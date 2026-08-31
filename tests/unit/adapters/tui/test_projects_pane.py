@@ -314,7 +314,7 @@ def test_the_composition_hands_the_recovery_report_over_instead_of_printing_it(c
     way the console opener's wiring is — and against the *stream*, because printing here is
     the exact defect: Textual takes the alternate screen microseconds later and erases it.
     """
-    from remote_agents.bootstrap import _console_notes
+    from remote_agents.composition.tui import _console_notes
 
     report = _recovered(moved=("a",), blocked=("b",))
     composer = _Settling(report)
@@ -334,7 +334,7 @@ def test_a_recovery_that_raises_leaves_the_surface_to_start_anyway(capsys) -> No
     of starting a degraded surface. The plan promised this guarantee and it was never built;
     a Tier-2 review found the gap.
     """
-    from remote_agents.bootstrap import _console_notes
+    from remote_agents.composition.tui import _console_notes
 
     composer = _Settling(error=RuntimeError("tmux went away mid-arrangement"))
     assert _console_notes(composer, "%7") is None

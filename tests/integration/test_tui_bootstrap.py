@@ -218,7 +218,7 @@ def test_both_surfaces_are_handed_the_same_profile_tuple(
     catch a `_narrow_profiles` wrong in the same way on both paths; the tri-state itself is
     pinned by its neighbour above, which drives one path end to end with a probe that fails.
     """
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
 
     config = load_config(_config_file(home, paths))

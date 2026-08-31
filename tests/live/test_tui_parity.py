@@ -54,7 +54,8 @@ from remote_agents.application.commands import ForceStopCommand, LaunchCommand
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import SessionService
 from remote_agents.application.session_views import with_project_names
-from remote_agents.bootstrap import ProjectCatalogueProvider, _local_runtime, local_context
+from remote_agents.composition.backend import ProjectCatalogueProvider
+from remote_agents.composition.tui import _local_runtime, local_context
 from remote_agents.config import load_config
 from remote_agents.domain.models import ProfileId, ProjectId, SessionRecord, SessionState
 from remote_agents.production import ProductionPaths

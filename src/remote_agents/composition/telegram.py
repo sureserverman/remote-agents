@@ -14,6 +14,7 @@ from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
 from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
 from remote_agents.composition.service import ServiceComposition
+from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import TelegramSecrets
 from remote_agents.production import ProductionPaths
 
@@ -21,11 +22,6 @@ from remote_agents.production import ProductionPaths
 def _private_boundary(
     config, connection, paths: ProductionPaths, secrets: TelegramSecrets
 ) -> ServiceComposition:
-    # Deferred: `_local_runtime` and `_console_composer` still live in `bootstrap` until the
-    # tui extraction, and module-scope imports of them would cycle (bootstrap imports this
-    # module).
-    from remote_agents.bootstrap import _console_composer, _local_runtime
-
     projects = ProjectCatalogueProvider(config.registry_path, config.dev_root)
     runtime = _local_runtime(config, paths, projects.paths)
     terminal = runtime.terminal

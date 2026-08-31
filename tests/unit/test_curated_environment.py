@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from remote_agents.bootstrap import _curated_environment
+from remote_agents.composition.tui import _curated_environment
 
 
 def test_a_composer_with_no_terminal_still_hands_the_agent_a_colour_capable_term() -> None:

@@ -39,9 +39,9 @@ from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.production import ProductionPaths
 
 if TYPE_CHECKING:
-    # Annotation only. `LocalRuntime` moves into composition with the tui extraction; until
-    # then a runtime import here would cycle back through `bootstrap`.
-    from remote_agents.bootstrap import LocalRuntime
+    # Annotation only at module scope: `composition.tui` imports this module, so the runtime
+    # import happens inside `compose_backend` instead.
+    from remote_agents.composition.tui import LocalRuntime
 
 _LOG = logging.getLogger(__name__)
 
@@ -250,9 +250,9 @@ def compose_backend(
     service load the terminal library at composition time — the exact property
     `local_context`'s docstring promises it does not.
     """
-    # Deferred: `_local_runtime` still lives in `bootstrap` until the tui extraction, and a
-    # module-scope import of it would cycle (bootstrap imports this module).
-    from remote_agents.bootstrap import _local_runtime
+    # Deferred: `composition.tui` imports this module for `compose_backend`, so the default
+    # runtime is imported at call time rather than at module scope.
+    from remote_agents.composition.tui import _local_runtime
 
     projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue

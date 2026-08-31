@@ -254,7 +254,7 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
     """
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.application.backend import Backend
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -295,7 +295,7 @@ def test_compose_backend_opens_no_connection_of_its_own(composed_home, tmp_path)
     connection and asserting the backend uses that object.
     """
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -322,7 +322,7 @@ async def test_a_leased_backend_holds_no_handle_between_operations(composed_home
     holding something it promised not to.
     """
     from remote_agents.adapters.sqlite.database import leased_connection, open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -356,7 +356,7 @@ async def test_a_long_lived_backend_keeps_the_one_handle_it_was_given(composed_h
     the strategy lives entirely in what the caller hands to `compose_backend`.
     """
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -511,7 +511,7 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
     """
     from remote_agents.adapters.agents import usage as usage_module
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -548,7 +548,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
     """
     from remote_agents.adapters.agents import usage as usage_module
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 
@@ -589,7 +589,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
     """
     from remote_agents.adapters.agents import usage as usage_module
     from remote_agents.adapters.sqlite.database import open_database
-    from remote_agents.bootstrap import compose_backend
+    from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
     from remote_agents.production import ProductionPaths
 

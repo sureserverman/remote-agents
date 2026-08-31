@@ -121,6 +121,16 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
             _compatibility("cursor-agent"),
         ),
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.tui.probe_profiles",
+        lambda *_args, **_kwargs: (
+            _compatibility("claude"),
+            _compatibility("claude-remote"),
+            _compatibility("codex"),
+            _compatibility("opencode"),
+            _compatibility("cursor-agent"),
+        ),
+    )
 
     assert main(["doctor", "--json"]) == 0
 
@@ -1832,6 +1842,10 @@ def _arrange_doctor(tmp_path, monkeypatch, config_text: str) -> None:
     )
     monkeypatch.setattr(
         "remote_agents.bootstrap.probe_profiles",
+        lambda *_args, **_kwargs: (_compatibility("claude"),),
+    )
+    monkeypatch.setattr(
+        "remote_agents.composition.tui.probe_profiles",
         lambda *_args, **_kwargs: (_compatibility("claude"),),
     )
 
