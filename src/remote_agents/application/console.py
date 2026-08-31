@@ -78,13 +78,15 @@ class ConsolePane:
 #: place for a third of the feed's rows -- and the feed only has a third of the column, so the
 #: pane the owner reads four short lines in came out four rows tall while the notifications
 #: under it lost a third of theirs. Probed on tmux 3.4 at 183x44: `-l 33%` off sessions then
-#: `-l 30%` off the feed gives 29/4/9 rows; 28% of what the feed left sessions gives 20/8/14.
+#: `-l 30%` off the feed gives 29/4/9 rows; 15% of what the feed left sessions gives 23/4/15.
 #:
-#: **Eight rows is the smallest the limits pane is worth**, and it is a count of what it draws
-#: rather than a share of anything: one status line, the list's two borders, and four rows
-#: inside them -- the production ceiling of readers, or two of them with a wrapped
-#: borrowed-cache stamp. It was ten until `LimitsPaneScreen` stopped composing the app header
-#: and footer, which is where the other two rows went; the pane holds exactly what it held.
+#: **Four rows is the pane, because four rows is the content.** It is a count of what the pane
+#: draws and nothing else: one row per reader, plus one for the wrap the borrowed-cache stamp
+#: takes at this width. It was ten, then eight, and both numbers were chrome -- the app header
+#: and footer went first (two rows), then the status region that restated the heading and the
+#: border that drew it (three more). Nothing was taken from what the pane *says*: it held four
+#: content rows at ten and it holds four at four. The rows the chrome was using are in the
+#: sessions list and the feed now.
 CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ConsolePane(
         ConsolePaneSlot.PROJECTS,
@@ -99,8 +101,8 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
         adopts_the_created_pane=True,
     ),
     ConsolePane(ConsolePaneSlot.SESSIONS, ConsolePaneSlot.PROJECTS, vertical=False, percent=40),
-    ConsolePane(ConsolePaneSlot.FEED, ConsolePaneSlot.SESSIONS, vertical=True, percent=33),
-    ConsolePane(ConsolePaneSlot.LIMITS, ConsolePaneSlot.SESSIONS, vertical=True, percent=28),
+    ConsolePane(ConsolePaneSlot.FEED, ConsolePaneSlot.SESSIONS, vertical=True, percent=35),
+    ConsolePane(ConsolePaneSlot.LIMITS, ConsolePaneSlot.SESSIONS, vertical=True, percent=15),
 )
 
 
@@ -114,11 +116,11 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
 #: (probed on 3.4). That is exactly how a console rebuilt with a limits pane came out with an
 #: even column -- `select-layout main-vertical` divides the right column evenly, only the feed
 #: was named, and naming the bottom pane changed nothing at all: 14/15/13 rows on a 44-row
-#: window, the limits pane as tall as the sessions list. Named top-down, it lands 20/8/14,
+#: window, the limits pane as tall as the sessions list. Named top-down, it lands 23/4/15,
 #: which is what a fresh build produces.
 CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = (
-    (ConsolePaneSlot.SESSIONS, 46),
-    (ConsolePaneSlot.FEED, 33),
+    (ConsolePaneSlot.SESSIONS, 53),
+    (ConsolePaneSlot.FEED, 35),
 )
 
 

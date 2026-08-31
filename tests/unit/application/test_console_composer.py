@@ -247,7 +247,7 @@ async def test_ensure_builds_three_panes_in_the_declared_proportions() -> None:
     splits = named(console, "split_console_pane")
     assert [(call[2], call[4], call[5]) for call in splits] == [
         (_PANE_COMMANDS[ConsolePaneSlot.SESSIONS], False, 40),
-        (_PANE_COMMANDS[ConsolePaneSlot.FEED], True, 33),
+        (_PANE_COMMANDS[ConsolePaneSlot.FEED], True, 35),
     ]
     # The feed splits off the *sessions* pane, not the projects pane: splitting the left one
     # again would put the feed under projects and leave the sessions pane full height.
@@ -259,9 +259,9 @@ async def test_the_limits_pane_is_a_band_off_the_sessions_pane_not_a_third_of_th
     """It sits between sessions and the feed either way; where its rows come from is the point.
 
     Split off the **feed** it took a third of a third: probed on tmux 3.4 at 183x44 the column
-    came out 29/4/9 rows -- four rows for a pane that draws a status line and a bordered list,
-    and a third off the notifications underneath for it. Off the sessions pane, after the feed
-    has already left, 28% lands 20/8/14.
+    came out 29/4/9 rows -- and a third off the notifications underneath for it. Off the
+    sessions pane, after the feed has already left, 15% lands 23/4/15: the same four content
+    rows, taken from the list that has rows to spare rather than from the feed.
     """
     console = RecordingConsole(exists=False)
     commands = {**_PANE_COMMANDS, ConsolePaneSlot.LIMITS: ("remote-agents", "pane", "limits")}
@@ -272,7 +272,7 @@ async def test_the_limits_pane_is_a_band_off_the_sessions_pane_not_a_third_of_th
     feed = next(call for call in splits if call[2] == _PANE_COMMANDS[ConsolePaneSlot.FEED])
     sessions = next(call for call in splits if call[2] == _PANE_COMMANDS[ConsolePaneSlot.SESSIONS])
     assert limits[1] == sessions[6], "the limits pane splits off the sessions pane"
-    assert (limits[4], limits[5]) == (True, 28)
+    assert (limits[4], limits[5]) == (True, 15)
     assert limits[7] is False, "after the sessions pane, which is what lands it above the feed"
     assert splits.index(feed) < splits.index(limits), "the feed leaves the column's share first"
 
@@ -450,7 +450,7 @@ async def test_a_rebuild_puts_the_window_back_in_its_declared_proportions() -> N
     # Top pane first, and the limits pane is not named at all: each resize takes its rows
     # from the panes below it, so what these two leave is what the pane between them gets.
     assert named(console, "normalize_console_layout") == [
-        ("normalize_console_layout", 60, (("%1", 46), ("%2", 33)))
+        ("normalize_console_layout", 60, (("%1", 53), ("%2", 35)))
     ]
 
 

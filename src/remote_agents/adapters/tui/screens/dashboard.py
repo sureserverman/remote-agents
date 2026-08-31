@@ -260,11 +260,22 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     DEFAULT_CSS = """
     LimitsPaneScreen #filter { display: none; }
     LimitsPaneScreen #choices { display: none; }
-    /* No `border` here: `OptionList` draws its own, which is where the pane's title chrome
-       comes from -- the same inheritance `FeedScreen` documents. `height: 1fr` rather than the
-       dashboard's `max-height: 40%`: there the pane shares a column with two others and must
-       not crowd them, here it *is* the pane. */
-    LimitsPaneScreen #limits-pane { height: 1fr; }
+    /* The status region is two rows fixed (`ChoiceScreen #status`, sized for a sentence that
+       wraps on a narrow terminal) and this pane's status never changes and is never written
+       to: `_reload_limits` reports a failed read to the log, and the empty read to the list
+       itself, so nothing here has ever put a word in it. Two rows to restate a heading, on a
+       pane whose content is two lines. */
+    LimitsPaneScreen #status { display: none; }
+    /* And no border, where every other list in this app has one. `OptionList` draws its own,
+       which is what carried "Agent limits" once the header went -- but a title costs two rows
+       here and the rows underneath it already begin `claude:` and `codex:`, which is the same
+       fact in the space it was already taking. The empty state says "No agent limits
+       reported.", so the pane names itself when it holds nothing too.
+
+       `height: 1fr` is only what the pane shows before its first measurement: `_fit_to_content`
+       overwrites it with the rows the content actually wraps to, and with no border to allow
+       for that is now the pane's whole height. */
+    LimitsPaneScreen #limits-pane { height: 1fr; border: none; }
     """
 
     def __init__(self) -> None:
@@ -601,7 +612,13 @@ def _fit_to_content(pane: OptionList, lines: Iterable[str]) -> None:
         # unreachable rather than untidy: every option is disabled, so the highlight never
         # moves and no key scrolls to it.
         console = pane.app.console
-        pane.styles.height = sum(max(1, len(Text(line).wrap(console, width))) for line in rows) + 2
+        rows_high = sum(max(1, len(Text(line).wrap(console, width))) for line in rows)
+        # The widget's own gutter, not a literal 2. It *was* a literal, and it meant "the
+        # border this list draws" -- true of both panes sharing this render until the console's
+        # dropped its border, where a hardcoded 2 would have left two blank rows inside a pane
+        # sized to have none. `gutter` is padding plus border plus scrollbars, which is exactly
+        # the height the wrapped rows do not get to use, asked of the widget that knows.
+        pane.styles.height = rows_high + pane.gutter.height
 
     # Deferred, because the first draw happens inside `populate()` -- before the pane has been
     # laid out, so its width is still 0 and a measurement taken there silently does nothing.

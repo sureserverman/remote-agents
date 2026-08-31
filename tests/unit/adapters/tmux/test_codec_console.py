@@ -103,13 +103,13 @@ def test_the_layout_resizes_the_right_column_in_the_order_it_is_given() -> None:
     **bottom** pane works against the pane above it instead -- so naming only the feed left the
     column at 14/15/13 and the sessions list two rows shorter than the pane beside it.
     """
-    argv = console_layout_args(60, (("%1", 46), ("%2", 33)))
+    argv = console_layout_args(60, (("%1", 53), ("%2", 35)))
 
     assert argv[0][:2] == ("set-window-option", "-t")
     assert argv[1][-1] == "main-vertical"
     assert argv[2:] == (
-        ("resize-pane", "-t", "%1", "-y", "46%"),
-        ("resize-pane", "-t", "%2", "-y", "33%"),
+        ("resize-pane", "-t", "%1", "-y", "53%"),
+        ("resize-pane", "-t", "%2", "-y", "35%"),
     )
 
 

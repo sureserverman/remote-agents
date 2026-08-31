@@ -215,7 +215,7 @@ async def test_the_reclaimed_console_is_put_back_in_its_declared_proportions() -
 
     await _composer(console).sync((_record(_A, SessionState.ENDED),))
 
-    assert console.normalized == [(60, (("%2", 46), ("%3", 33)))]
+    assert console.normalized == [(60, (("%2", 53), ("%3", 35)))]
 
 
 async def test_a_session_that_is_still_being_shown_is_left_completely_alone() -> None:
