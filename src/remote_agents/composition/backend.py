@@ -19,6 +19,7 @@ from remote_agents.adapters.agents.opencode_sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
 )
+from remote_agents.adapters.agents.registry import provider_descriptors
 from remote_agents.adapters.agents.usage import ProfileUsageReaders
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
@@ -33,7 +34,7 @@ from remote_agents.application.project_catalog import CatalogProject, build_cata
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.domain.profiles import ProfileCompatibility
+from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.production import ProductionPaths
@@ -116,7 +117,6 @@ def _resolved_project_path(path: Path) -> Path | None:
         return path.resolve(strict=True)
     except OSError:
         return None
-
 
 
 def _narrow_profiles(
@@ -266,6 +266,22 @@ def compose_backend(
     # exactly those words" -- was unreachable in production, and every Claude row on a host that
     # had declared nothing rendered a percentage against this project's assumption. On a 200k
     # plan that reads 68% for a context 340% full, with no tell on either surface.
+    # The registry is composed beside the hand-wiring before it replaces it (the cutover is
+    # its own change): building it here already fails loudly if the descriptor table and the
+    # curated provider set drift apart, without yet routing any capability through it.
+    descriptors = provider_descriptors(
+        claude_context_window=(
+            config.claude_context_window if config.claude_context_window_stated else None
+        ),
+        claude_context_window_stated=config.claude_context_window_stated,
+    )
+    registered = {str(descriptor.profile_id) for descriptor in descriptors}
+    curated = {definition.executable for definition in closed_profiles()}
+    if registered != curated:
+        raise ValueError(
+            f"provider registry names {sorted(registered)} but the curated set is "
+            f"{sorted(curated)}; the two tables must agree"
+        )
     usage_readers = ProfileUsageReaders(
         context_window=(
             config.claude_context_window if config.claude_context_window_stated else None
