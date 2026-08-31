@@ -11,7 +11,7 @@ here rather than in a CI file nobody in this repo has.
 
 from pathlib import Path
 
-from check_imports import find_violations
+from check_imports import find_violations, module_layer
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src"
 
@@ -150,3 +150,40 @@ def test_checker_names_its_composition_roots_rather_than_allowing_the_package_ro
 
     assert [violation.path.name for violation in violations] == ["helpers.py"]
     assert violations[0].reason == "forbidden from root"
+
+
+def test_checker_recognises_the_composition_package_as_a_composition_root(tmp_path: Path) -> None:
+    """A module inside `composition/` is a member of the closed root set (DEC-015).
+
+    The set widens from two named files to two named files plus one named package; it is
+    still membership by name, never "anything at the package root may compose".
+    """
+    source_root = tmp_path / "src"
+    write_module(
+        source_root,
+        "remote_agents/composition/backend.py",
+        "import remote_agents.adapters.sqlite.session_store\n"
+        "import remote_agents.application.commands\n",
+    )
+
+    assert module_layer(source_root / "remote_agents/composition/backend.py", source_root) == (
+        "bootstrap"
+    )
+    assert find_violations(source_root) == []
+
+
+def test_checker_rejects_an_unenumerated_package_importing_across_adapters(
+    tmp_path: Path,
+) -> None:
+    """A package outside the enumerated set gains nothing from the widening."""
+    source_root = tmp_path / "src"
+    write_module(
+        source_root,
+        "remote_agents/extras/glue.py",
+        "import remote_agents.adapters.tmux.gateway\n",
+    )
+
+    violations = find_violations(source_root)
+
+    assert len(violations) == 1
+    assert violations[0].reason == "forbidden from extras"

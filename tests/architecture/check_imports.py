@@ -25,6 +25,10 @@ DRIVER_ADAPTERS = frozenset({"telegram", "tui"})
 #: "anything at the package root may import adapters".
 COMPOSITION_ROOTS = frozenset({"bootstrap.py", "agent_event.py"})
 
+#: The packages allowed to wire adapters together, extending COMPOSITION_ROOTS by name.
+#: Same closed-set rule, one directory instead of one file (DEC-015).
+COMPOSITION_PACKAGES = frozenset({"composition"})
+
 
 @dataclass(frozen=True, slots=True)
 class Violation:
@@ -67,6 +71,8 @@ def module_layer(path: Path, source_root: Path) -> str:
     if parts[0] != PACKAGE_NAME or len(parts) < 3:
         composing = len(parts) == 2 and parts[1] in COMPOSITION_ROOTS
         return "bootstrap" if composing else "root"
+    if parts[1] in COMPOSITION_PACKAGES:
+        return "bootstrap"
     return parts[1]
 
 
@@ -101,7 +107,7 @@ def allowed_import(path: Path, source_root: Path, layer: str, imported: str) -> 
         )
     if layer == "bootstrap":
         return True
-    return True
+    return False
 
 
 def find_violations(source_root: Path) -> list[Violation]:
