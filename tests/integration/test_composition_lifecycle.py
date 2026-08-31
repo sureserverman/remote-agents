@@ -523,7 +523,7 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
             super().__init__(*args, **kwargs)
             built.append(self)
 
-    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Counted)
+    monkeypatch.setattr("remote_agents.adapters.agents.registry.ProfileUsageReaders", _Counted)
 
     paths = ProductionPaths.for_home(composed_home)
     config = load_config(_config_file(composed_home, paths))
@@ -555,15 +555,15 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
 
     seen = []
 
-    class _Recording(usage_module.ProfileUsageReaders):
-        def __init__(self, readers=None, **passed):
+    class _Recording(usage_module.ClaudeUsageReader):
+        def __init__(self, **passed):
             # `**passed` rather than a copied signature: a double that restates the real one
             # goes stale the moment an argument is added, and fails with a TypeError that reads
             # like a product bug rather than a test that was not updated.
             seen.append(passed)
-            super().__init__(readers, **passed)
+            super().__init__(**passed)
 
-    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Recording)
+    monkeypatch.setattr("remote_agents.adapters.agents.registry.ClaudeUsageReader", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config = load_config(_config_file(composed_home, paths))
@@ -596,12 +596,12 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
 
     seen = []
 
-    class _Recording(usage_module.ProfileUsageReaders):
-        def __init__(self, readers=None, **passed):
+    class _Recording(usage_module.ClaudeUsageReader):
+        def __init__(self, **passed):
             seen.append(passed)
-            super().__init__(readers, **passed)
+            super().__init__(**passed)
 
-    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Recording)
+    monkeypatch.setattr("remote_agents.adapters.agents.registry.ClaudeUsageReader", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config_path = _config_file(composed_home, paths)

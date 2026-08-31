@@ -12,14 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
-from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
-from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
-from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
-from remote_agents.adapters.agents.opencode_sessions import (
-    OpenCodeCliRunner,
-    OpenCodeSessionCatalogue,
-)
-from remote_agents.adapters.agents.registry import provider_descriptors
+from remote_agents.adapters.agents.registry import provider_descriptors, usage_readers
 from remote_agents.adapters.agents.usage import ProfileUsageReaders
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
@@ -33,7 +26,7 @@ from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
 from remote_agents.application.reconcile import SessionLocks
 from remote_agents.application.services import SessionService
-from remote_agents.domain.models import ProfileId, ProjectId, SessionId
+from remote_agents.domain.models import ProjectId, SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
@@ -257,18 +250,10 @@ def compose_backend(
     projects = projects or ProjectCatalogueProvider(config.registry_path, config.dev_root)
     catalogue = projects.refresh().catalogue
     runtime = runtime or _local_runtime(config, paths, projects.paths)
-    # One set of provider readers for both usage capabilities (DEC-046): the session read
-    # and the account read consult the same files, so composing two sets would double the
-    # probing a host does and let the two drift about which providers exist.
-    # The ceiling reaches the reader only when the owner stated it. Passing the default
-    # unconditionally meant `ClaudeUsageReader`'s careful bare-count path -- whose docstring
-    # says a reader supplying its own ceiling "would be inventing one, which DEC-061 forbids in
-    # exactly those words" -- was unreachable in production, and every Claude row on a host that
-    # had declared nothing rendered a percentage against this project's assumption. On a 200k
-    # plan that reads 68% for a context 340% full, with no tell on either surface.
-    # The registry is composed beside the hand-wiring before it replaces it (the cutover is
-    # its own change): building it here already fails loudly if the descriptor table and the
-    # curated provider set drift apart, without yet routing any capability through it.
+    # The registry is the one per-provider capability source (ARCH-04). The ceiling reaches
+    # Claude's reader only when the owner stated it (DEC-061 — a reader supplying its own
+    # ceiling would be inventing one; passing the default unconditionally once rendered every
+    # Claude row against this project's assumption, 68% shown for a context 340% full).
     descriptors = provider_descriptors(
         claude_context_window=(
             config.claude_context_window if config.claude_context_window_stated else None
@@ -282,12 +267,11 @@ def compose_backend(
             f"provider registry names {sorted(registered)} but the curated set is "
             f"{sorted(curated)}; the two tables must agree"
         )
-    usage_readers = ProfileUsageReaders(
-        context_window=(
-            config.claude_context_window if config.claude_context_window_stated else None
-        ),
-        context_window_stated=config.claude_context_window_stated,
-    )
+    # One set of provider readers for both usage capabilities (DEC-046): the session read
+    # and the account read consult the same files, so composing two sets would double the
+    # probing a host does and let the two drift about which providers exist. Folded from the
+    # descriptors, so the registry — not a second table — decides who answers.
+    provider_usage = usage_readers(descriptors)
     return Backend(
         sessions=SessionService(
             store if store is not None else SQLiteSessionStore(connection),
@@ -296,7 +280,7 @@ def compose_backend(
             hide_in_console=hide_in_console,
         ),
         projects=_project_creator(config),
-        conversations=_conversation_service(projects.paths),
+        conversations=_conversation_service(projects.paths, descriptors),
         catalogue=catalogue,
         refresh_catalogue=lambda: projects.refresh().catalogue,
         # The one narrowing, for both surfaces. `ProfileCompatibility.reason` answers two
@@ -309,26 +293,27 @@ def compose_backend(
         usage=_usage_reader(
             store if store is not None else SQLiteSessionStore(connection),
             projects.paths,
-            usage_readers,
+            provider_usage,
         ),
-        limits=_limits_reader(usage_readers),
+        limits=_limits_reader(provider_usage),
         max_label_length=config.max_label_length,
     )
 
 
-def _conversation_service(project_paths) -> ConversationService:
+def _conversation_service(project_paths, descriptors) -> ConversationService:
     """The one conversation composition both surfaces use.
 
     Kept in a single function so the terminal cannot drift onto a different catalogue set
     than the service, which would let a conversation be resumable from one surface only.
+    The per-provider sources come off the registry's descriptors (ARCH-04), so a provider
+    that declares no session source simply contributes no catalogue entry.
     """
     return ConversationService(
         ProfileConversationCatalogue(
             {
-                ProfileId("claude"): ClaudeSessionCatalogue(project_paths),
-                ProfileId("codex"): CodexSessionCatalogue(project_paths, CodexAppServerClient()),
-                ProfileId("opencode"): OpenCodeSessionCatalogue(project_paths, OpenCodeCliRunner()),
-                ProfileId("cursor-agent"): CursorSessionCatalogue(),
+                descriptor.profile_id: descriptor.sessions(project_paths)
+                for descriptor in descriptors
+                if descriptor.sessions is not None
             }
         )
     )
