@@ -13,7 +13,7 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.telegram.service import PrivateBotBoundary, build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.reconcile import ReconciliationService
-from remote_agents.bootstrap import ServiceComposition, _serve_with_reconciliation
+from remote_agents.composition.service import ServiceComposition, _serve_with_reconciliation
 from remote_agents.config import TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,

@@ -634,15 +634,15 @@ async def test_the_composition_names_the_watcher_for_what_it_watches() -> None:
     """
     from dataclasses import fields
 
-    from remote_agents import bootstrap
+    from remote_agents.composition import service
 
-    names = {field.name for field in fields(bootstrap.ServiceComposition)}
+    names = {field.name for field in fields(service.ServiceComposition)}
     assert "approval_watcher" in names
     assert "quiet_watcher" not in names
-    assert not hasattr(bootstrap, "_watch_quiet_once")
-    assert not hasattr(bootstrap, "_watch_quiet_periodically")
-    assert hasattr(bootstrap, "_watch_activity_once")
-    assert hasattr(bootstrap, "_watch_activity_periodically")
+    assert not hasattr(service, "_watch_quiet_once")
+    assert not hasattr(service, "_watch_quiet_periodically")
+    assert hasattr(service, "_watch_activity_once")
+    assert hasattr(service, "_watch_activity_periodically")
 
 
 async def test_a_claude_only_host_still_runs_its_activity_pass_with_no_watcher() -> None:
@@ -654,7 +654,7 @@ async def test_a_claude_only_host_still_runs_its_activity_pass_with_no_watcher()
     """
     import inspect
 
-    from remote_agents import bootstrap
+    from remote_agents.composition import service
 
-    source = inspect.getsource(bootstrap._serve_with_reconciliation)
+    source = inspect.getsource(service._serve_with_reconciliation)
     assert "composition.approval_watcher is not None or composition.activity_directory" in source

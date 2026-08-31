@@ -30,11 +30,10 @@ from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_actions import GRACEFUL_TIMEOUT, UNKNOWN_SESSION
 from remote_agents.bootstrap import (
-    ServiceComposition,
     _resolve_profile_executable,
-    _watch_activity_once,
     main,
 )
+from remote_agents.composition.service import ServiceComposition, _watch_activity_once
 from remote_agents.config import ConfigError, TelegramSecrets
 from remote_agents.domain.models import (
     ProfileId,
@@ -1749,7 +1748,7 @@ async def test_a_failing_drain_does_not_discard_a_watched_notification_already_c
     def _explode(_directory):
         raise RuntimeError("the spool could not be listed")
 
-    monkeypatch.setattr("remote_agents.bootstrap.drain_activity", _explode)
+    monkeypatch.setattr("remote_agents.composition.service.drain_activity", _explode)
 
     await _watch_activity_once(
         ServiceComposition(
