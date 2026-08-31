@@ -22,7 +22,9 @@ class FrontendDescriptor:
 
     wire: object | None
     """The surface's wiring entry point — a callable deferring its own heavy imports — or
-    None for a descriptor that only claims (tests fabricate these)."""
+    None for a descriptor that only claims (tests fabricate these). Composition today wires
+    each surface directly and consumes only the claim; `wire` is the declared seam it moves
+    to when frontends are composed from their descriptors."""
 
     required_capabilities: tuple[str, ...]
     """`Backend` field names this surface cannot start without. Validated at composition,

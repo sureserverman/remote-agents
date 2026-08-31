@@ -6,7 +6,14 @@ from remote_agents.ports.frontend_descriptor import FrontendDescriptor
 
 
 def _wire(*args: object, **kwargs: object) -> object:
-    """Defer the transport import so reading the descriptor never loads the Telegram library."""
+    """Defer the transport import so importing this package root alone stays light.
+
+    Light for *this module's* readers only: the serve path still loads the transport
+    through `composition.telegram` (and `bootstrap` imports `adapters.telegram.service` at
+    module scope), so nothing about the running service changes here. Composition today
+    wires `build_private_bot` directly; `wire` becomes the load-bearing entry point when
+    frontends are composed from their descriptors.
+    """
     from remote_agents.adapters.telegram.service import build_private_bot
 
     return build_private_bot(*args, **kwargs)

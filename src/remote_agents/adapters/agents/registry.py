@@ -30,6 +30,7 @@ from remote_agents.adapters.agents.opencode_sessions import (
 from remote_agents.adapters.agents.usage import (
     ClaudeUsageReader,
     CodexUsageReader,
+    CursorUsageReader,
     OpenCodeUsageReader,
     ProfileUsageReaders,
 )
@@ -92,6 +93,12 @@ def provider_descriptors(
         ProviderDescriptor(
             ProfileId("cursor-agent"),
             sessions=_cursor_sessions,
+            # Constant-empty, and deliberately not None: cursor answers "I publish nothing",
+            # which renders as "not reported by this agent". A None here would make every
+            # cursor session read "no conversation matched yet" — the temporary state — and
+            # DEC-061 requires those two never conflate (usage.py's CursorUsageReader
+            # docstring records the same warning).
+            usage=CursorUsageReader(),
         ),
     )
 
