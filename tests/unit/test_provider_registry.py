@@ -68,9 +68,7 @@ def test_the_fold_keeps_cursor_answering_rather_than_absent(tmp_path) -> None:
     from remote_agents.ports.agent_usage import UsageQuery
 
     readers = usage_readers(provider_descriptors())
-    answer = readers.read(
-        UsageQuery(ProfileId("cursor-agent"), tmp_path, datetime.now(UTC), None)
-    )
+    answer = readers.read(UsageQuery(ProfileId("cursor-agent"), tmp_path, datetime.now(UTC), None))
 
     assert answer is not None, "cursor must match a reader, not fall off the table"
     assert answer.is_empty
