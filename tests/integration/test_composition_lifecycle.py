@@ -522,7 +522,7 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
             super().__init__(*args, **kwargs)
             built.append(self)
 
-    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Counted)
+    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Counted)
 
     paths = ProductionPaths.for_home(composed_home)
     config = load_config(_config_file(composed_home, paths))
@@ -562,7 +562,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
             seen.append(passed)
             super().__init__(readers, **passed)
 
-    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Recording)
+    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config = load_config(_config_file(composed_home, paths))
@@ -600,7 +600,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
             seen.append(passed)
             super().__init__(readers, **passed)
 
-    monkeypatch.setattr("remote_agents.bootstrap.ProfileUsageReaders", _Recording)
+    monkeypatch.setattr("remote_agents.composition.backend.ProfileUsageReaders", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config_path = _config_file(composed_home, paths)

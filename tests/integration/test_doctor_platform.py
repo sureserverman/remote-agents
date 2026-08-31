@@ -89,8 +89,13 @@ def _arrange(tmp_path, monkeypatch, supervisor, *, liveness_exit_zero: bool) -> 
         "remote_agents.bootstrap.load_registry",
         lambda _path: SimpleNamespace(projects=(), error=None),
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.backend.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
     monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
-    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_a, **_k: ())
+    monkeypatch.setattr("remote_agents.composition.backend.discover_projects", lambda _path: ())
+    monkeypatch.setattr("remote_agents.composition.backend.build_catalogue", lambda *_a, **_k: ())
     monkeypatch.setattr(
         "remote_agents.bootstrap.probe_profiles",
         lambda *_a, **_k: tuple(

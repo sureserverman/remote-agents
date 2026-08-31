@@ -102,8 +102,15 @@ def test_doctor_uses_the_private_default_config_and_reports_operational_componen
         "remote_agents.bootstrap.load_registry",
         lambda _path: SimpleNamespace(projects=(), error=None),
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.backend.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
     monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
-    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr("remote_agents.composition.backend.discover_projects", lambda _path: ())
+    monkeypatch.setattr(
+        "remote_agents.composition.backend.build_catalogue", lambda *_args, **_kwargs: ()
+    )
     monkeypatch.setattr(
         "remote_agents.bootstrap.probe_profiles",
         lambda *_args, **_kwargs: (
@@ -1814,8 +1821,15 @@ def _arrange_doctor(tmp_path, monkeypatch, config_text: str) -> None:
         "remote_agents.bootstrap.load_registry",
         lambda _path: SimpleNamespace(projects=(), error=None),
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.backend.load_registry",
+        lambda _path: SimpleNamespace(projects=(), error=None),
+    )
     monkeypatch.setattr("remote_agents.bootstrap.discover_projects", lambda _path: ())
-    monkeypatch.setattr("remote_agents.bootstrap.build_catalogue", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr("remote_agents.composition.backend.discover_projects", lambda _path: ())
+    monkeypatch.setattr(
+        "remote_agents.composition.backend.build_catalogue", lambda *_args, **_kwargs: ()
+    )
     monkeypatch.setattr(
         "remote_agents.bootstrap.probe_profiles",
         lambda *_args, **_kwargs: (_compatibility("claude"),),
