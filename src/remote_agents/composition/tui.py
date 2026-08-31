@@ -20,8 +20,13 @@ from remote_agents.adapters.tmux.profiles import (
     probe_profiles,
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
+from remote_agents.adapters.tui import FRONTEND
 from remote_agents.application.console import RecoveryReport
-from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
+from remote_agents.composition.backend import (
+    ProjectCatalogueProvider,
+    compose_backend,
+    require_frontend_capabilities,
+)
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility, closed_profiles
 from remote_agents.production import ProductionPaths
@@ -299,14 +304,17 @@ def local_context(config, connection, paths: ProductionPaths):
     # (ARCH-B1, ARCH-B2). The console capabilities above are this surface's alone and stay
     # out of it (ARCH-B3); `hide_in_console` is not one of those -- the bot wires its own,
     # from a hide-only composer -- so it goes in as a parameter here.
-    backend = compose_backend(
-        config,
-        connection,
-        paths,
-        projects=projects,
-        runtime=runtime,
-        hide_in_console=hide_in_console,
-        activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+    backend = require_frontend_capabilities(
+        FRONTEND,
+        compose_backend(
+            config,
+            connection,
+            paths,
+            projects=projects,
+            runtime=runtime,
+            hide_in_console=hide_in_console,
+            activity_feed=lambda: SQLiteActivityStore(connection).recent(limit=FEED_LIMIT),
+        ),
     )
     return TuiContext(
         # The whole backend, as `_private_boundary` hands the bot the same object. What used

@@ -9,10 +9,15 @@ from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.adapters.sqlite.standing_notification_store import (
     SQLiteStandingNotificationStore,
 )
+from remote_agents.adapters.telegram import FRONTEND
 from remote_agents.adapters.telegram.service import build_private_bot
 from remote_agents.application.activity import CodexApprovalWatcher
 from remote_agents.application.reconcile import ReconciliationService, SessionLocks
-from remote_agents.composition.backend import ProjectCatalogueProvider, compose_backend
+from remote_agents.composition.backend import (
+    ProjectCatalogueProvider,
+    compose_backend,
+    require_frontend_capabilities,
+)
 from remote_agents.composition.service import ServiceComposition
 from remote_agents.composition.tui import _console_composer, _local_runtime
 from remote_agents.config import TelegramSecrets
@@ -46,19 +51,23 @@ def _private_boundary(
     # The one backend this process hands its frontend (ARCH-B1). `locks` and the console
     # hide are the service's own wiring and go in here; the reconciler and approval watcher
     # below are not the frontend's to drive and stay outside it (ARCH-B3).
-    backend = compose_backend(
-        config,
-        connection,
-        paths,
-        projects=projects,
-        runtime=runtime,
-        # The same store the reconciler and approval watcher below are given. Inert today --
-        # SQLiteSessionStore holds only its connection -- but two instances where there was
-        # one stops being inert the moment it gains a cache or a statement pool, and this
-        # composition is the one place all three consumers are meant to agree.
-        store=store,
-        locks=locks,
-        hide_in_console=console.hide,
+    backend = require_frontend_capabilities(
+        FRONTEND,
+        compose_backend(
+            config,
+            connection,
+            paths,
+            projects=projects,
+            runtime=runtime,
+            # The same store the reconciler and approval watcher below are given. Inert
+            # today -- SQLiteSessionStore holds only its connection -- but two instances
+            # where there was one stops being inert the moment it gains a cache or a
+            # statement pool, and this composition is the one place all three consumers are
+            # meant to agree.
+            store=store,
+            locks=locks,
+            hide_in_console=console.hide,
+        ),
     )
     return ServiceComposition(
         # The factory, not the class: it wires the stop controller, the live view and the

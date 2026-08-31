@@ -319,6 +319,29 @@ def _conversation_service(project_paths, descriptors) -> ConversationService:
     )
 
 
+def require_frontend_capabilities(descriptor, backend: Backend) -> Backend:
+    """Check a frontend's capability claim against what this host actually wired.
+
+    Failing here, at composition, is the claim's whole value: a surface handed a `Backend`
+    whose claimed capability is `None` would compose cleanly and fail on first use, which is
+    the drift `FrontendDescriptor.required_capabilities` exists to make impossible. An
+    unknown field name is refused for the same reason — a claim nothing validates is a
+    comment.
+    """
+    fields = Backend.__dataclass_fields__
+    for name in descriptor.required_capabilities:
+        if name not in fields:
+            raise ValueError(
+                f"frontend {descriptor.name!r} claims unknown Backend capability {name!r}"
+            )
+        if getattr(backend, name) is None:
+            raise ValueError(
+                f"frontend {descriptor.name!r} requires capability {name!r}, "
+                "but this host wired None"
+            )
+    return backend
+
+
 def _project_creator(config) -> ProjectCreationService:
     """Compose the one project-creation service every local surface shares."""
     return ProjectCreationService(
