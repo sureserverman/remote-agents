@@ -42,10 +42,14 @@ def test_local_context_composes_the_same_service_the_bot_composes() -> None:
     conversation service, however the one it has reaches it (DEC-019 — claim only what you
     check).
     """
-    tree = ast.parse(Path("src/remote_agents/bootstrap.py").read_text(encoding="utf-8"))
+    package = Path("src/remote_agents/composition")
+    trees = {
+        path.stem: ast.parse(path.read_text(encoding="utf-8"))
+        for path in sorted(package.glob("*.py"))
+    }
     composer = next(
         node
-        for node in tree.body
+        for node in trees["backend"].body
         if isinstance(node, ast.FunctionDef) and node.name == "compose_backend"
     )
 
@@ -59,7 +63,7 @@ def test_local_context_composes_the_same_service_the_bot_composes() -> None:
         ]
 
     for callee in ("ProfileConversationCatalogue", "_conversation_service"):
-        found = calls(tree, callee)
+        found = [call for tree in trees.values() for call in calls(tree, callee)]
         assert len(found) == 1, (
             f"{callee} is constructed {len(found)} times; the two surfaces must share one "
             "composition rather than each build their own"
@@ -79,12 +83,14 @@ def test_local_context_composes_the_same_service_the_bot_composes() -> None:
     # spelling that broke when the boundary started taking the whole backend. Asserted here
     # as the fact rather than the spelling: each composition calls `compose_backend` once
     # and passes the result to its frontend.
-    for name, frontend in (
-        ("_private_boundary", "build_private_bot"),
-        ("local_context", "TuiContext"),
+    for module, name, frontend in (
+        ("telegram", "_private_boundary", "build_private_bot"),
+        ("tui", "local_context", "TuiContext"),
     ):
         function = next(
-            node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name
+            node
+            for node in trees[module].body
+            if isinstance(node, ast.FunctionDef) and node.name == name
         )
         assert len(calls(function, "compose_backend")) == 1, (
             f"{name} does not compose exactly one backend"
@@ -103,9 +109,9 @@ def test_local_context_composes_the_same_service_the_bot_composes() -> None:
 
 def test_local_context_needs_no_telegram_secrets() -> None:
     """The terminal is documented to run on a host with no Telegram credentials."""
-    source = Path("src/remote_agents/bootstrap.py").read_text(encoding="utf-8")
+    source = Path("src/remote_agents/composition/tui.py").read_text(encoding="utf-8")
     start = source.index("def local_context(")
-    end = source.index("def _project_creator(")
+    end = source.index("def _profile_factory(")
     body = source[start:end]
     for forbidden in ("TelegramSecrets", "owner_user_id", "owner_chat_id", "bot_token"):
         assert forbidden not in body, f"local_context must not require {forbidden}"

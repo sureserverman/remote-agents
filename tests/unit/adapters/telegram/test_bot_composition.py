@@ -64,16 +64,17 @@ def test_post_init_builds_no_collaborator() -> None:
 
 def test_the_composition_root_goes_through_the_factory() -> None:
     """`bootstrap` must not construct the boundary raw — it would get an unwired one."""
-    tree = ast.parse((_SRC / "bootstrap.py").read_text())
+    roots = [_SRC / "bootstrap.py", *sorted((_SRC / "composition").glob("*.py"))]
     calls = [
         node.func.id
-        for node in ast.walk(tree)
+        for path in roots
+        for node in ast.walk(ast.parse(path.read_text()))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in {"PrivateBotBoundary", "build_private_bot"}
     ]
 
-    assert calls == ["build_private_bot"], f"bootstrap composes the bot as {calls}"
+    assert calls == ["build_private_bot"], f"the composition roots compose the bot as {calls}"
 
 
 def test_the_factory_wires_all_three_over_the_ports_the_boundary_got() -> None:
