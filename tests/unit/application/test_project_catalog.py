@@ -202,7 +202,7 @@ def test_rank_rejects_a_non_positive_half_life(tmp_path: Path) -> None:
 
 
 def test_the_two_opaque_id_derivations_cannot_drift_apart() -> None:
-    """`bootstrap._opaque_id` and `project_catalog._entry` derive the same key, separately.
+    """`backend._opaque_id` and `project_catalog._entry` derive the same key, separately.
 
     Neither calls the other: one hashes `str(path.resolve(strict=False))`, the other hashes
     `str(canonical)` where the caller already resolved. They agree today, and nothing made

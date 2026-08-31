@@ -264,8 +264,9 @@ def test_the_host_is_matched_to_its_own_supervisor(monkeypatch, platform, expect
     installed. The one place a decision is made is the one place worth pinning.
     """
     from remote_agents import bootstrap
+    from remote_agents.composition import onboarding
 
-    monkeypatch.setattr(bootstrap.sys, "platform", platform)
+    monkeypatch.setattr(onboarding.sys, "platform", platform)
 
     assert bootstrap._supervisor_for_host().kind is expected
 
@@ -278,6 +279,7 @@ def test_a_host_that_cannot_be_described_is_a_config_error_not_a_traceback(monke
     than as the handled bad-configuration path every other such answer travels.
     """
     from remote_agents import bootstrap
+    from remote_agents.composition import onboarding
     from remote_agents.config import ConfigError
 
     def _refuses(*_args, **_kwargs):
@@ -287,8 +289,8 @@ def test_a_host_that_cannot_be_described_is_a_config_error_not_a_traceback(monke
         # test is the *conversion*, not which input triggers it.
         raise ValueError("supervisor home must not contain a colon: /Users/a:b")
 
-    monkeypatch.setattr(bootstrap.sys, "platform", "darwin")
-    monkeypatch.setattr(bootstrap, "LaunchdSupervisor", _refuses)
+    monkeypatch.setattr(onboarding.sys, "platform", "darwin")
+    monkeypatch.setattr(onboarding, "LaunchdSupervisor", _refuses)
 
     with pytest.raises(ConfigError, match="cannot be described"):
         bootstrap._supervisor_for_host()
@@ -314,6 +316,10 @@ def test_doctor_reports_the_platform_it_is_on_beside_the_supervisor_that_answere
     _arrange(tmp_path, monkeypatch, supervisor, liveness_exit_zero=True)
     monkeypatch.setattr(
         "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+    monkeypatch.setattr(
+        "remote_agents.composition.onboarding._host_platform",
         lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
     )
 
@@ -349,6 +355,10 @@ def test_doctor_reports_a_mac_as_a_platform_and_never_as_a_fault(
     _arrange(tmp_path, monkeypatch, launchd, liveness_exit_zero=True)
     monkeypatch.setattr(
         "remote_agents.bootstrap._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
+    monkeypatch.setattr(
+        "remote_agents.composition.onboarding._host_platform",
         lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
     )
 
@@ -426,6 +436,10 @@ def test_doctor_reports_the_platform_even_when_the_config_will_not_load(
         "remote_agents.bootstrap._host_platform",
         lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.onboarding._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
 
     assert main(["doctor", "--json"]) == 1
 
@@ -455,11 +469,15 @@ def test_onboarding_reports_the_platform_even_when_the_config_will_not_load(
         "remote_agents.bootstrap._host_platform",
         lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
     )
+    monkeypatch.setattr(
+        "remote_agents.composition.onboarding._host_platform",
+        lambda: {"system": "Darwin", "release": "25.6.0", "machine": "arm64"},
+    )
 
-    from remote_agents import bootstrap
+    from remote_agents.composition import onboarding
 
     assert (
-        bootstrap._report_on_the_onboarded_host(_DoctorPaths(config), installed_daemon=False) == 1
+        onboarding._report_on_the_onboarded_host(_DoctorPaths(config), installed_daemon=False) == 1
     )
 
     report = json.loads(capsys.readouterr().out)

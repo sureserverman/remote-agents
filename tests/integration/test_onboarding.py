@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.bootstrap import detected_config
+from remote_agents.composition.onboarding import detected_config
 from remote_agents.config import ConfigError, describe_schema_drift, load_config, render_config
 from remote_agents.production import ProductionPaths
 
@@ -260,7 +260,7 @@ class TestWhereTheSecretComesFrom:
         return base | overrides
 
     def test_secret_values_are_read_from_the_environment_without_asking(self) -> None:
-        from remote_agents.bootstrap import onboarding_secrets
+        from remote_agents.composition.onboarding import onboarding_secrets
 
         def _must_not_ask(prompt: str) -> str:
             raise AssertionError(f"asked despite a complete environment: {prompt}")
@@ -279,7 +279,7 @@ class TestWhereTheSecretComesFrom:
 
     def test_secret_flags_win_over_the_environment(self, tmp_path: Path) -> None:
         """A flag is what the operator typed *this time*; an environment variable may be stale."""
-        from remote_agents.bootstrap import onboarding_secrets
+        from remote_agents.composition.onboarding import onboarding_secrets
 
         token_file = tmp_path / "token"
         token_file.write_text("9999999:zzzz\n", encoding="utf-8")
@@ -298,7 +298,7 @@ class TestWhereTheSecretComesFrom:
 
     def test_a_missing_secret_in_a_non_interactive_run_names_the_variable(self) -> None:
         """No terminal to ask is a refusal that says what to supply, not a prompt into the void."""
-        from remote_agents.bootstrap import onboarding_secrets
+        from remote_agents.composition.onboarding import onboarding_secrets
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES, ConfigError
 
         with pytest.raises(ConfigError) as raised:
@@ -323,7 +323,7 @@ class TestWhereTheSecretComesFrom:
         screen and in their terminal scrollback; rendering it in a confirmation afterwards would
         do the same a second time, which is the failure a `getpass` alone does not prevent.
         """
-        from remote_agents.bootstrap import onboarding_secrets
+        from remote_agents.composition.onboarding import onboarding_secrets
 
         visible: list[str] = []
         hidden: list[str] = []
@@ -356,7 +356,7 @@ class TestWhereTheSecretComesFrom:
         self,
     ) -> None:
         """An error path, which is where a credential is most likely to be rendered by accident."""
-        from remote_agents.bootstrap import onboarding_secrets
+        from remote_agents.composition.onboarding import onboarding_secrets
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES, ConfigError
 
         with pytest.raises(ConfigError) as raised:
@@ -741,6 +741,7 @@ class TestTheOnboardCommandInstallingTheDaemon:
 
     def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supervisor=None):
         from remote_agents import bootstrap
+        from remote_agents.composition import onboarding
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES
 
         home = tmp_path / "Users" / "tester"
@@ -748,16 +749,16 @@ class TestTheOnboardCommandInstallingTheDaemon:
         supervisor = supervisor or _FakeSupervisor(home)
         ran: list[tuple[str, ...]] = []
 
-        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
-        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
+        monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(onboarding, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
         # The probe itself is patched rather than its two effects, because this class is about
         # what the *command* does with a satisfied host -- Stage 1's own tests are where the
         # probe's answers are pinned, and reproducing them here would be a second copy of them.
         monkeypatch.setattr(
-            bootstrap,
+            onboarding,
             "_dependency_probe",
-            lambda: bootstrap.probe_dependencies(
+            lambda: onboarding.probe_dependencies(
                 ("tmux", "git"),
                 resolve=lambda name: Path("/usr/bin") / name,
                 run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
@@ -852,12 +853,12 @@ class TestTheOnboardCommandInstallingTheDaemon:
         what a script or a bootstrap installer reads -- and the three lines carrying it out of
         `install_daemon` are exactly the kind that look right and are never run.
         """
-        from remote_agents import bootstrap
         from remote_agents.bootstrap import main
+        from remote_agents.composition import onboarding
 
         home, supervisor, ran = self._arrange(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            bootstrap,
+            onboarding,
             "_run_command",
             lambda argv: ran.append(tuple(argv)) or (1 if argv[-1] == "install" else 0),
         )
@@ -894,6 +895,7 @@ class TestOnboardingEndsWithTheDoctor:
 
     def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, healthy: bool):
         from remote_agents import bootstrap
+        from remote_agents.composition import onboarding
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES
 
         home = tmp_path / "Users" / "tester"
@@ -915,13 +917,13 @@ class TestOnboardingEndsWithTheDoctor:
             },
         }
 
-        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
-        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(onboarding, "_run_command", lambda argv: 0)
         monkeypatch.setattr(
-            bootstrap,
+            onboarding,
             "_dependency_probe",
-            lambda: bootstrap.probe_dependencies(
+            lambda: onboarding.probe_dependencies(
                 ("tmux", "git"),
                 resolve=lambda name: Path("/usr/bin") / name,
                 run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
@@ -1046,19 +1048,19 @@ class TestWhatAFreshHostActuallyGets:
     """
 
     def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        from remote_agents import bootstrap
+        from remote_agents.composition import onboarding
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES
 
         home = tmp_path / "Users" / "tester"
         home.mkdir(parents=True)
         supervisor = _FakeSupervisor(home)
-        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
-        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(onboarding, "_run_command", lambda argv: 0)
         monkeypatch.setattr(
-            bootstrap,
+            onboarding,
             "_dependency_probe",
-            lambda: bootstrap.probe_dependencies(
+            lambda: onboarding.probe_dependencies(
                 ("tmux", "git"),
                 resolve=lambda name: Path("/usr/bin") / name,
                 run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
@@ -1485,20 +1487,21 @@ def test_an_install_followed_by_a_remove_leaves_the_private_tree_as_it_was_found
     """
     from remote_agents import bootstrap
     from remote_agents.bootstrap import main
+    from remote_agents.composition import onboarding
     from remote_agents.config import TELEGRAM_SECRET_VARIABLES
     from remote_agents.production import ProductionPaths
 
     home = tmp_path / "Users" / "tester"
     (home / "dev").mkdir(parents=True)
     supervisor = _FakeSupervisor(home)
-    monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-    monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
-    monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+    monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
+    monkeypatch.setattr(onboarding, "_run_command", lambda argv: 0)
     monkeypatch.setattr(bootstrap, "_doctor_report", lambda *_a, **_k: {"healthy": True})
     monkeypatch.setattr(
-        bootstrap,
+        onboarding,
         "_dependency_probe",
-        lambda: bootstrap.probe_dependencies(
+        lambda: onboarding.probe_dependencies(
             ("tmux", "git"),
             resolve=lambda name: Path("/usr/bin") / name,
             run_version=lambda argv: f"{Path(argv[0]).name} 9.9",
@@ -1545,14 +1548,14 @@ class TestAskingWhereTheDaemonDefinitionIs:
     """
 
     def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interpreter: str):
-        from remote_agents import bootstrap
         from remote_agents.adapters.supervisor.systemd import SystemdSupervisor
+        from remote_agents.composition import onboarding
 
         home = tmp_path / "home" / "tester"
         home.mkdir(parents=True)
         supervisor = SystemdSupervisor(interpreter=Path(interpreter), home=home)
-        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
         return home, supervisor
 
     def test_it_prints_exactly_one_path_and_that_path_is_the_definitions(
@@ -1584,10 +1587,11 @@ class TestAskingWhereTheDaemonDefinitionIs:
         would be running it on a host they are not ready to change.
         """
         from remote_agents import bootstrap
+        from remote_agents.composition import onboarding
 
         home, _supervisor = self._arrange(tmp_path, monkeypatch, "/opt/ra/bin/python3")
         ran: list[tuple[str, ...]] = []
-        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
+        monkeypatch.setattr(onboarding, "_run_command", lambda argv: ran.append(tuple(argv)) or 0)
 
         assert bootstrap.main(["onboard", "--print-daemon-path"]) == 0
 
@@ -1657,18 +1661,19 @@ class TestOnboardingsExitStatusCoversOnlyWhatOnboardingOwns:
 
     def _arrange(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report: dict):
         from remote_agents import bootstrap
+        from remote_agents.composition import onboarding
         from remote_agents.config import TELEGRAM_SECRET_VARIABLES
 
         home = tmp_path / "Users" / "tester"
         (home / "dev").mkdir(parents=True)
         supervisor = _FakeSupervisor(home)
-        monkeypatch.setattr(bootstrap.Path, "home", staticmethod(lambda: home))
-        monkeypatch.setattr(bootstrap, "_supervisor_for_host", lambda: supervisor)
-        monkeypatch.setattr(bootstrap, "_run_command", lambda argv: 0)
+        monkeypatch.setattr(onboarding.Path, "home", staticmethod(lambda: home))
+        monkeypatch.setattr(onboarding, "_supervisor_for_host", lambda: supervisor)
+        monkeypatch.setattr(onboarding, "_run_command", lambda argv: 0)
         monkeypatch.setattr(
-            bootstrap,
+            onboarding,
             "_dependency_probe",
-            lambda: bootstrap.probe_dependencies(
+            lambda: onboarding.probe_dependencies(
                 ("tmux", "git"),
                 resolve=lambda name: Path("/usr/bin") / name,
                 run_version=lambda argv: f"{Path(argv[0]).name} 9.9",

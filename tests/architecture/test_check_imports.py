@@ -172,6 +172,29 @@ def test_checker_recognises_the_composition_package_as_a_composition_root(tmp_pa
     assert find_violations(source_root) == []
 
 
+def test_the_composition_packages_module_list_is_pinned() -> None:
+    """The widened root set stays closed one level down: the package's members are named.
+
+    DEC-015's rule survives the widening only if "composition/ may compose" cannot quietly
+    become "anything dropped into composition/ may compose". A new module there is a
+    deliberate, reviewable act, recorded by updating this list.
+    """
+    from check_imports import COMPOSITION_PACKAGES
+
+    assert COMPOSITION_PACKAGES == frozenset({"composition"})
+    members = sorted(
+        path.name for path in (_SOURCE_ROOT / "remote_agents" / "composition").glob("*.py")
+    )
+    assert members == [
+        "__init__.py",
+        "backend.py",
+        "onboarding.py",
+        "service.py",
+        "telegram.py",
+        "tui.py",
+    ]
+
+
 def test_checker_rejects_an_unenumerated_package_importing_across_adapters(
     tmp_path: Path,
 ) -> None:

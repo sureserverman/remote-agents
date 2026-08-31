@@ -468,7 +468,8 @@ def test_the_bot_is_offered_the_narrowed_profiles_not_the_domain_ones(
     plausible-looking line that would have taken the local surface down on a probe that merely
     timed out, and this asserted nobody had written it.
 
-    Sub-plan 4 made that line the correct one. `bootstrap._narrow_profiles` narrows once, into
+    Sub-plan 4 made that line the correct one. `composition.backend._narrow_profiles`
+    narrows once, into
     `application.profiles.ProfileAvailability`, and both surfaces read `Backend.profiles` --
     so what this now asserts is that the narrowing still happens *before* the boundary, and
     that a future edit cannot quietly put the domain tuple back on the field. The assertion is

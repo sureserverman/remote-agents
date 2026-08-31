@@ -285,7 +285,9 @@ def test_the_projects_key_runs_this_interpreter_rather_than_a_name_on_path() -> 
     """A root binding that assumed a console script on PATH would work here and fail on pipx."""
     import sys
 
-    command = bootstrap._projects_command()
+    from remote_agents.composition import tui
+
+    command = tui._projects_command()
     assert command[0] == sys.executable
     assert command[1:] == ("-m", "remote_agents", "console", "projects")
 

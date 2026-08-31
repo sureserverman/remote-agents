@@ -230,7 +230,7 @@ async def test_a_wedged_lock_costs_one_record_not_the_whole_pass() -> None:
     `_has_settled` consults the lock only for STARTING and STOP_REQUESTED, so a RUNNING
     record is waved through and reaches the repair write, which takes the lock. If that
     acquisition were unbounded, a mutation wedged on a hung tmux call would block the pass
-    there -- and `bootstrap._reconcile_quietly` catches exceptions, not hangs, so nothing
+    there -- and `composition.service._reconcile_quietly` catches exceptions, not hangs, so nothing
     would log it, retry it, or recover short of a restart. The records *after* it in the loop
     are the real cost: an unrelated session left unrepaired indefinitely.
 
