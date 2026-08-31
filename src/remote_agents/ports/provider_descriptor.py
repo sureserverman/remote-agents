@@ -11,9 +11,12 @@ render honestly, never invent.
 The capability fields are loosely typed for the reason `Backend`'s are: naming the concrete
 reader and installer types here would pull adapter modules into the ports layer, which
 `tests/architecture/check_imports.py` forbids — ports may import only domain and ports. What
-actually rides in them today: `sessions` a provider conversation source, `usage` a reader
-shaped like `adapters.agents.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks` an
-installer shaped like `adapters.agents.hook_install`'s, `activity` an activity spool source.
+actually rides in them today: `sessions` a factory taking the live project-path mapping and
+returning the provider's conversation catalogue, `usage` a reader shaped like
+`adapters.agents.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks` the provider
+name `adapters.agents.hook_install` accepts (the per-provider hook configuration itself
+moves here with the provider verticals), `activity` a declared placeholder the verticals
+decide — `None` for all four providers until then.
 """
 
 from __future__ import annotations
@@ -36,14 +39,17 @@ class ProviderDescriptor:
     """The curated-agent profile this descriptor speaks for."""
 
     sessions: object | None = None
-    """The provider's conversation/session source, or None when it exposes none."""
+    """A factory over the live project-path mapping returning the provider's conversation
+    catalogue, or None when it exposes none."""
 
     usage: object | None = None
     """The provider's usage reader — read off its own files, per DEC-061 — or None when
     the provider publishes no usage at all. Absence is rendered, never estimated."""
 
     hooks: object | None = None
-    """The provider's hook installer, or None for a provider that takes no hooks."""
+    """The provider name `hook_install` accepts for this provider's hooks — the installer
+    configuration itself arrives with the verticals — or None for a provider that takes no
+    hooks."""
 
     activity: object | None = None
     """The provider's activity source, or None when it reports no activity events."""
