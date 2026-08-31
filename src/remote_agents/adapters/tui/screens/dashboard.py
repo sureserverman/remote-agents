@@ -272,8 +272,18 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
         self._timer = None
 
     def compose(self) -> ComposeResult:
-        """The base body with the limits list in place of the choice list; same ids."""
-        yield Header()
+        """The base body with the limits list in place of the list; same ids, no app chrome.
+
+        **No `Header` and no `Footer`, which every other position composes.** Both are
+        `ChoiceScreen`'s, inherited with the machinery this screen subclasses it for, and on a
+        pane that never navigates they draw two fixed lines: the header renders `crumb`, a
+        class constant here, over a title the pane beside it also shows -- and the list's own
+        border already says "Agent limits". The footer advertised `ctrl+q` and `ctrl+r`; both still
+        work, because they are the app's bindings and nothing here unbinds them, and the one
+        that matters is the one the status line already names when a read fails.
+
+        Two rows of a pane that holds four short lines, which is what they cost.
+        """
         with Vertical(id="body"):
             yield Static(self.status, id="status", markup=False)
             yield Input(placeholder="", id="filter")
@@ -293,7 +303,6 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
-        yield Footer()
 
     async def populate(self) -> None:
         self.hide_entry()

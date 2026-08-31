@@ -11,6 +11,7 @@ vocabulary is panes now: split them, mark them with what they are, exchange one 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -194,5 +195,5 @@ class ConsolePort(Protocol):
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...
 
     async def normalize_console_layout(
-        self, main_percent: int, minor_pane: str, minor_percent: int
+        self, main_percent: int, column: Sequence[tuple[str, int]]
     ) -> None: ...

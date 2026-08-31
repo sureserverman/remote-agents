@@ -20,6 +20,7 @@ import pytest
 
 from remote_agents.adapters.tmux.codec import (
     CONSOLE_SESSION_NAME,
+    console_layout_args,
     console_target,
     console_zoom_args,
     display_message_args,
@@ -90,3 +91,33 @@ def test_the_zoom_probe_asks_whether_anything_is_hiding_the_feed() -> None:
 
     assert argv[:4] == ("display-message", "-p", "-t", console_target())
     assert argv[4] == "#{window_zoomed_flag}|#{pane_id}"
+
+
+def test_the_layout_resizes_the_right_column_in_the_order_it_is_given() -> None:
+    """One resize per named pane, after the layout that flattened them, top pane first.
+
+    `select-layout main-vertical` divides the right column *evenly*, so every pane in it that
+    is not meant to be an even share has to be resized back. With the column three panes deep
+    that is more than one resize, and they are not commutative: probed on tmux 3.4 at 183x44,
+    a resize takes its rows from the panes below the one named, and a resize aimed at the
+    **bottom** pane works against the pane above it instead -- so naming only the feed left the
+    column at 14/15/13 and the sessions list two rows shorter than the pane beside it.
+    """
+    argv = console_layout_args(60, (("%1", 46), ("%2", 33)))
+
+    assert argv[0][:2] == ("set-window-option", "-t")
+    assert argv[1][-1] == "main-vertical"
+    assert argv[2:] == (
+        ("resize-pane", "-t", "%1", "-y", "46%"),
+        ("resize-pane", "-t", "%2", "-y", "33%"),
+    )
+
+
+def test_a_layout_column_takes_percentages_and_pane_ids_or_nothing() -> None:
+    with pytest.raises(ValueError):
+        console_layout_args(60, (("%1", 0),))
+    with pytest.raises(ValueError):
+        console_layout_args(60, (("%1", 100),))
+    with pytest.raises(ValueError):
+        console_layout_args(60, (("ra-console:", 41),))
+    assert console_layout_args(60, ())[2:] == (), "a column with nothing named resizes nothing"

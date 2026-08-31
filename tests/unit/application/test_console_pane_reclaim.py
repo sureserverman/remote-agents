@@ -68,7 +68,7 @@ class RecordingConsole:
         self.arrangement = arrangement
         self.swaps: list[tuple[str, str]] = []
         self.rejoined: list[tuple[str, str, bool, int, bool]] = []
-        self.normalized: list[tuple[int, str, int]] = []
+        self.normalized: list[tuple[int, tuple[tuple[str, int], ...]]] = []
 
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:
         return self.arrangement
@@ -143,10 +143,8 @@ class RecordingConsole:
             for pane in self.arrangement
         )
 
-    async def normalize_console_layout(
-        self, main_percent: int, minor_pane: str, minor_percent: int
-    ) -> None:
-        self.normalized.append((main_percent, minor_pane, minor_percent))
+    async def normalize_console_layout(self, main_percent: int, column) -> None:
+        self.normalized.append((main_percent, tuple(column)))
 
 
 def _composer(console: RecordingConsole) -> ConsoleComposer:
@@ -217,7 +215,7 @@ async def test_the_reclaimed_console_is_put_back_in_its_declared_proportions() -
 
     await _composer(console).sync((_record(_A, SessionState.ENDED),))
 
-    assert console.normalized == [(60, "%3", 33)]
+    assert console.normalized == [(60, (("%2", 46), ("%3", 33)))]
 
 
 async def test_a_session_that_is_still_being_shown_is_left_completely_alone() -> None:

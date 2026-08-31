@@ -116,10 +116,8 @@ class RecordingConsole:
         )
         return pane_id
 
-    async def normalize_console_layout(
-        self, main_percent: int, minor_pane: str, minor_percent: int
-    ) -> None:
-        self.calls.append(("normalize_console_layout", main_percent, minor_pane, minor_percent))
+    async def normalize_console_layout(self, main_percent: int, column) -> None:
+        self.calls.append(("normalize_console_layout", main_percent, tuple(column)))
         self._raise_if_armed()
 
     async def mark_console_slot(self, pane_id: str, slot) -> None:
@@ -206,13 +204,13 @@ def _three_pane_console() -> tuple[HostedPane, ...]:
     )
 
 
-def _composer(console: RecordingConsole) -> ConsoleComposer:
+def _composer(console: RecordingConsole, pane_commands=None) -> ConsoleComposer:
     return ConsoleComposer(
         console,
         ("remote-agents", "tui"),
         Path("/tmp"),
         projects_command=_PROJECTS_COMMAND,
-        pane_commands=_PANE_COMMANDS,
+        pane_commands=pane_commands or _PANE_COMMANDS,
     )
 
 
@@ -255,6 +253,28 @@ async def test_ensure_builds_three_panes_in_the_declared_proportions() -> None:
     # again would put the feed under projects and leave the sessions pane full height.
     assert splits[0][1] == "%0", "the sessions pane splits off the left slot"
     assert splits[1][1] == splits[0][6], "the feed splits off the pane sessions just made"
+
+
+async def test_the_limits_pane_is_a_band_off_the_sessions_pane_not_a_third_of_the_feed() -> None:
+    """It sits between sessions and the feed either way; where its rows come from is the point.
+
+    Split off the **feed** it took a third of a third: probed on tmux 3.4 at 183x44 the column
+    came out 29/4/9 rows -- four rows for a pane that draws a status line and a bordered list,
+    and a third off the notifications underneath for it. Off the sessions pane, after the feed
+    has already left, 28% lands 20/8/14.
+    """
+    console = RecordingConsole(exists=False)
+    commands = {**_PANE_COMMANDS, ConsolePaneSlot.LIMITS: ("remote-agents", "pane", "limits")}
+    await _composer(console, pane_commands=commands).ensure()
+
+    splits = named(console, "split_console_pane")
+    limits = next(call for call in splits if call[2] == commands[ConsolePaneSlot.LIMITS])
+    feed = next(call for call in splits if call[2] == _PANE_COMMANDS[ConsolePaneSlot.FEED])
+    sessions = next(call for call in splits if call[2] == _PANE_COMMANDS[ConsolePaneSlot.SESSIONS])
+    assert limits[1] == sessions[6], "the limits pane splits off the sessions pane"
+    assert (limits[4], limits[5]) == (True, 28)
+    assert limits[7] is False, "after the sessions pane, which is what lands it above the feed"
+    assert splits.index(feed) < splits.index(limits), "the feed leaves the column's share first"
 
 
 async def test_ensure_marks_every_pane_it_builds_with_the_slot_it_is() -> None:
@@ -427,8 +447,10 @@ async def test_a_rebuild_puts_the_window_back_in_its_declared_proportions() -> N
     console = RecordingConsole(arrangement=survivors)
     await _composer(console).ensure()
 
+    # Top pane first, and the limits pane is not named at all: each resize takes its rows
+    # from the panes below it, so what these two leave is what the pane between them gets.
     assert named(console, "normalize_console_layout") == [
-        ("normalize_console_layout", 60, "%2", 33)
+        ("normalize_console_layout", 60, (("%1", 46), ("%2", 33)))
     ]
 
 

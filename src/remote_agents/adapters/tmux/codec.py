@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -478,8 +479,8 @@ def console_slot_mark_args(
     )
 
 
-def console_layout_args(main_percent: int, minor_pane: str, minor_percent: int):
-    """Return the three argv suffixes that put the console window back in its proportions.
+def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):
+    """Return the argv suffixes that put the console window back in its proportions.
 
     Needed only after a **rebuild**, and only because a rebuilt pane inherits the shape of
     whatever it was split from rather than the shape it is meant to have. Measured on tmux
@@ -491,15 +492,35 @@ def console_layout_args(main_percent: int, minor_pane: str, minor_percent: int):
 
     So the tree is rebuilt rather than nudged. `main-vertical` is exactly this layout — one
     full-height pane on the left, the rest stacked on the right — and it divides the right
-    column *evenly*, which is why the feed is resized afterwards. Same probe, after both:
-    47x24, 32x16 and 32x7, which is what a fresh build produces.
+    column *evenly*, which is why `column` resizes it afterwards.
+
+    `column` is ordered, top pane first, and it names **fewer panes than the column holds**:
+    the last pane's height is what the named ones leave. That is not tidiness, it is what
+    `resize-pane -y` does. Probed on 3.4 at 183x44 against the three-pane column this console
+    now has (sessions, limits, feed), from an even 14/14/14:
+
+    - a resize of the **last** pane works against the pane *above* it, so feed → 33% is a
+      no-op at three panes and the column stays even. That is the defect this argument
+      replaces: with only the feed named, the limits pane kept a third of the column and the
+      sessions list was left with 14 rows out of 42.
+    - a resize of a pane that is *not* last takes its rows from the ones below, so sessions
+      → 41% then feed → 33% lands 18/10/14 — the same shape a fresh build produces, which is
+      the whole point of this call.
+
+    `-y` is a share of the **window** height, where a split's `-l` is a share of the pane
+    being split. The two numbers describing one pane are therefore different numbers.
     """
-    if not 1 <= main_percent <= 99 or not 1 <= minor_percent <= 99:
+    if not 1 <= main_percent <= 99:
+        raise ValueError("a console layout takes percentages strictly inside 0 and 100")
+    if any(not 1 <= percent <= 99 for _, percent in column):
         raise ValueError("a console layout takes percentages strictly inside 0 and 100")
     return (
         ("set-window-option", "-t", console_target(), "main-pane-width", f"{main_percent}%"),
         ("select-layout", "-t", console_target(), "main-vertical"),
-        ("resize-pane", "-t", exact_pane_target(minor_pane), "-y", f"{minor_percent}%"),
+        *(
+            ("resize-pane", "-t", exact_pane_target(pane_id), "-y", f"{percent}%")
+            for pane_id, percent in column
+        ),
     )
 
 

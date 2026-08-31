@@ -25,7 +25,7 @@ agent it is displaying with it (DEC-040's first accepted cost).
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,12 +73,18 @@ class ConsolePane:
 #: leave the sessions list running the full height of the right-hand column.
 #:
 #: **Limits sits between sessions and the feed, which is the position the owner asked for in
-#: those words.** It splits off the *feed* rather than off sessions, with `before=True`: the
-#: feed is already the bottom of the column, so taking its space and landing above it puts the
-#: new pane in the middle without moving the two panes that were there. Splitting sessions
-#: instead would land it in the middle too and take the space from the list this console exists
-#: to keep in sight. 30% of the feed's share is about five rows at the console's usual height,
-#: which is what four readers plus a borrowed-cache stamp need.
+#: those words.** It splits off the *sessions* pane, after the feed has already left it, so the
+#: new pane lands below sessions and above the feed. Splitting the **feed** put it in the same
+#: place for a third of the feed's rows -- and the feed only has a third of the column, so the
+#: pane the owner reads four short lines in came out four rows tall while the notifications
+#: under it lost a third of theirs. Probed on tmux 3.4 at 183x44: `-l 33%` off sessions then
+#: `-l 30%` off the feed gives 29/4/9 rows; 28% of what the feed left sessions gives 20/8/14.
+#:
+#: **Eight rows is the smallest the limits pane is worth**, and it is a count of what it draws
+#: rather than a share of anything: one status line, the list's two borders, and four rows
+#: inside them -- the production ceiling of readers, or two of them with a wrapped
+#: borrowed-cache stamp. It was ten until `LimitsPaneScreen` stopped composing the app header
+#: and footer, which is where the other two rows went; the pane holds exactly what it held.
 CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ConsolePane(
         ConsolePaneSlot.PROJECTS,
@@ -94,9 +100,25 @@ CONSOLE_LAYOUT: tuple[ConsolePane, ...] = (
     ),
     ConsolePane(ConsolePaneSlot.SESSIONS, ConsolePaneSlot.PROJECTS, vertical=False, percent=40),
     ConsolePane(ConsolePaneSlot.FEED, ConsolePaneSlot.SESSIONS, vertical=True, percent=33),
-    ConsolePane(
-        ConsolePaneSlot.LIMITS, ConsolePaneSlot.FEED, vertical=True, percent=30, before=True
-    ),
+    ConsolePane(ConsolePaneSlot.LIMITS, ConsolePaneSlot.SESSIONS, vertical=True, percent=28),
+)
+
+
+#: What the right-hand column is put back to after a **rebuild**, top pane first, as a share of
+#: the window height -- `resize-pane -y`'s unit, which is not the split's `-l` unit, so these
+#: numbers and `CONSOLE_LAYOUT`'s describe the same bands and cannot be swapped for each other.
+#:
+#: The limits pane is deliberately **absent**: the last pane named here takes its rows from the
+#: ones below it, so what the two named panes leave is what the limits pane gets, and a
+#: `resize-pane` aimed at the bottom pane of a column works against the pane *above* it instead
+#: (probed on 3.4). That is exactly how a console rebuilt with a limits pane came out with an
+#: even column -- `select-layout main-vertical` divides the right column evenly, only the feed
+#: was named, and naming the bottom pane changed nothing at all: 14/15/13 rows on a 44-row
+#: window, the limits pane as tall as the sessions list. Named top-down, it lands 20/8/14,
+#: which is what a fresh build produces.
+CONSOLE_COLUMN: tuple[tuple[ConsolePaneSlot, int], ...] = (
+    (ConsolePaneSlot.SESSIONS, 46),
+    (ConsolePaneSlot.FEED, 33),
 )
 
 
@@ -403,18 +425,12 @@ class ConsoleComposer:
         # resize the owner made on purpose, on a call that happens every time a second
         # terminal runs `remote-agents`.
         if rebuilt:
-            feed = by_slot.get(ConsolePaneSlot.FEED.value)
+            column = _column_resizes(by_slot.values())
             projects = next(
                 (spec for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS), None
             )
-            if feed is not None and feed.on_console and projects is not None:
-                await self._console.normalize_console_layout(
-                    projects.percent,
-                    feed.pane_id,
-                    next(
-                        spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.FEED
-                    ),
-                )
+            if column and projects is not None:
+                await self._console.normalize_console_layout(projects.percent, column)
         return tuple(
             f"the console has more than one {slot} pane; nothing here removes one, so kill "
             f"the console and run `remote-agents` again to rebuild it"
@@ -788,25 +804,17 @@ class ConsoleComposer:
         """Put the console window back in the proportions `CONSOLE_LAYOUT` declares.
 
         Reads the arrangement again rather than being handed one: the move above renumbered
-        the panes, and the feed's id is what the minor resize needs. A console with no feed
-        pane to resize is left alone -- the layout call would have nothing to point at, and a
-        console that short has a larger problem `recover` reports.
+        the panes, and the column's pane ids are what the resizes need. A console with none of
+        `CONSOLE_COLUMN`'s panes on it is left alone -- the layout call would have nothing to
+        point at, and a console that short has a larger problem `recover` reports.
         """
         arrangement = await self._console.pane_arrangement()
-        feed = next(
-            (
-                pane
-                for pane in arrangement
-                if pane.on_console and pane.console_slot == ConsolePaneSlot.FEED.value
-            ),
-            None,
-        )
-        if feed is None:
+        column = _column_resizes(arrangement)
+        if not column:
             return
         await self._console.normalize_console_layout(
             next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.PROJECTS),
-            feed.pane_id,
-            next(spec.percent for spec in CONSOLE_LAYOUT if spec.slot is ConsolePaneSlot.FEED),
+            column,
         )
 
     async def _adopt_surface(self) -> tuple[str, ...]:
@@ -1179,6 +1187,22 @@ def _slot_unwind(arrangement: tuple[HostedPane, ...]) -> tuple[_Unwind | None, t
         "console's left slot holds a pane of its own, so trading the surface back would exile "
         "that pane; nothing was moved. If the displayed agent was stopped by the other "
         "surface, the console is a pane short and needs restarting",
+    )
+
+
+def _column_resizes(arrangement: Iterable[HostedPane]) -> tuple[tuple[str, int], ...]:
+    """`CONSOLE_COLUMN`'s shares against the pane ids actually holding those slots, in order.
+
+    Order is the whole point and is `CONSOLE_COLUMN`'s, not the arrangement's: each resize
+    takes its rows from the panes *below* it, so a column resized bottom-up undoes itself.
+
+    A slot with no pane on the console is skipped rather than guessed at -- normalizing what is
+    there is right for the console that is one pane short, and the caller decides whether an
+    empty answer is worth a layout call at all.
+    """
+    by_slot = {pane.console_slot: pane.pane_id for pane in arrangement if pane.on_console}
+    return tuple(
+        (by_slot[slot.value], percent) for slot, percent in CONSOLE_COLUMN if slot.value in by_slot
     )
 
 

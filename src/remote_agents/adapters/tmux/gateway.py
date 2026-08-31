@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -502,15 +502,15 @@ class TmuxGateway:
         return pane_id
 
     async def normalize_console_layout(
-        self, main_percent: int, minor_pane: str, minor_percent: int
+        self, main_percent: int, column: Sequence[tuple[str, int]]
     ) -> None:
         """Put the console window back in its declared proportions after a rebuild.
 
-        Three calls rather than one because tmux has no single verb for it, and they are
+        Several calls rather than one because tmux has no single verb for it, and they are
         ordered: the main width is an option the layout *reads*, so it is set first, and the
-        minor pane is resized last because `select-layout` divides the right column evenly.
+        column is resized after it because `select-layout` divides the right column evenly.
         """
-        for arguments in console_layout_args(main_percent, minor_pane, minor_percent):
+        for arguments in console_layout_args(main_percent, column):
             await self._runner.run(*self._base_argv(), *arguments)
 
     async def rejoin_console_pane(

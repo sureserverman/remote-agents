@@ -766,3 +766,56 @@ async def test_refresh_does_not_discard_the_filter_the_owner_typed() -> None:
         assert app.screen.query_one("#filter", Input).has_focus, (
             "Refresh moved the keyboard off the filter the owner was using"
         )
+
+
+@pytest.mark.parametrize(
+    ("screen_type_name", "chrome"),
+    (
+        ("ProjectsPaneScreen", True),
+        ("SessionsPaneScreen", True),
+        ("LimitsPaneScreen", False),
+        ("FeedScreen", False),
+    ),
+)
+async def test_only_the_console_panes_that_navigate_draw_the_app_chrome(
+    screen_type_name: str, chrome: bool
+) -> None:
+    """The header and footer are for a surface that *moves*; two of these never do.
+
+    The projects and sessions panes push screens -- the launch wizard, a session's detail,
+    Rename, Output -- so the header's sub-title is the only thing saying where in that stack
+    the owner is, and the footer's keys change with it. `LimitsPaneScreen` and `FeedScreen`
+    are flowless: their `crumb` is a class constant, their list's border title already names
+    them, and the two rows are the whole difference between a pane that shows four readers and
+    one that shows six.
+
+    Asserted on the composed widgets rather than on `active_bindings`, because the keys are
+    deliberately *unchanged*: `ctrl+r` still re-reads these panes and `ctrl+q` still leaves
+    them. What went is the advertisement, and only a render can tell the two apart.
+    """
+    from textual.widgets import Footer, Header
+
+    from remote_agents.adapters.tui.screens import (
+        FeedScreen,
+        LimitsPaneScreen,
+        ProjectsPaneScreen,
+        SessionsPaneScreen,
+    )
+
+    screen_type = {
+        "ProjectsPaneScreen": ProjectsPaneScreen,
+        "SessionsPaneScreen": SessionsPaneScreen,
+        "LimitsPaneScreen": LimitsPaneScreen,
+        "FeedScreen": FeedScreen,
+    }[screen_type_name]
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(screen_type())
+        await pilot.pause()
+        drawn = (
+            bool(app.screen.query(Header)),
+            bool(app.screen.query(Footer)),
+        )
+
+    assert drawn == (chrome, chrome)
