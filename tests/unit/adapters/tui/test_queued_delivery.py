@@ -509,3 +509,51 @@ async def test_two_queued_enters_on_a_failed_launch_start_exactly_one_session() 
     # any run where the second event happened to lose the race.
     assert cursor is None, f"the cursor rests on row {cursor} after a failed launch"
     assert len(reported) == 1, f"one failure, {len(reported)} reports: {reported}"
+
+
+class _FailingResumer(_RecordingLauncher):
+    """Records every resume and answers that the session never became ready.
+
+    The distinction from `_RecordingLauncher` is what BL-036 turned on. `issue_resume` clears
+    `_busy` in a `finally` that runs *before* its `SessionState.FAILED` branch, and `_leaving`
+    is set only on the success path — so a double that succeeds exercises a guard a double that
+    fails does not have. Every resume test in this file used the succeeding one.
+    """
+
+    async def resume(self, _command):
+        self.issued.append("resume")
+        return ResumeOutcome(_record(SessionState.FAILED), created=True)
+
+
+async def test_two_queued_enters_on_a_failed_resume_start_exactly_one_session() -> None:
+    """BL-036, and the sibling of the launch half fixed one plan earlier.
+
+    Measured before the fix: `['resume', 'resume']`. **Worse than two launches**, which this
+    file's own resume test already says in as many words — two panes then write to one provider
+    conversation, where two launches merely give one project two agents.
+
+    What closes it is not a guard on this screen. A selection carries the `Option` it was built
+    from, so a burst delivered in one terminal read is a set of selections built against a fill
+    that no longer exists by the time the second is handled — the first has already re-rendered
+    the position. `ChoiceScreen.on_option_list_option_selected` drops those, which closes the
+    class rather than this instance: the launch half needed a cursor guard on `ProfilesScreen`
+    and this half could not reuse it, because the resume failure path leaves a lone `Back` row
+    and its cursor is never `None`. Two guards for one defect was the argument for fixing it
+    where the selection is dispatched.
+    """
+    launcher = _FailingResumer()
+    app = RemoteAgentsTui(_context(launcher, conversations=_Resolving()))
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(ResumeConversationsScreen(_PROJECT, "claude", _conversation_page()))
+        await settle(app, pilot)
+        assert position(app) == "RESUME_CONVERSATIONS", f"the push landed on {position(app)}"
+
+        _queue_two(app, str(_conversation().summary.reference))
+        await pilot.pause()
+        await pilot.pause()
+
+    assert launcher.issued == ["resume"], (
+        f"two queued enters on a failing resume issued {launcher.issued}; each extra one is a "
+        f"second pane writing to the same provider conversation"
+    )

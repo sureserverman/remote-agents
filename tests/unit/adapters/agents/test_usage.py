@@ -79,7 +79,35 @@ def _iso_in(**offset: int) -> str:
     )
 
 
-def _codex_token_count(*, last: int, window: int, primary: float, secondary: float) -> dict:
+def _codex_token_count(
+    *,
+    last: int,
+    window: int,
+    primary: float,
+    secondary: float,
+    base: datetime | None = None,
+) -> dict:
+    """One `token_count` record, with its reset instants relative to a stated clock.
+
+    **`base` is the clock the *reader* will be given, and passing it is not optional for a
+    test that fakes one.** The values are relative rather than the literals captured off a real
+    rollout, because a window whose reset has passed is deliberately dropped and frozen
+    literals would quietly turn every assertion here into that case — that is what the previous
+    version of this comment recorded, and it was right as far as it went.
+
+    What it missed is that "relative to now" is ambiguous once a test hands `CodexUsageReader`
+    a `now` of its own. This fixture used the *real* clock while such a test's reader used a
+    fake one, so the two drifted apart on their own schedule:
+    `test_an_idle_host_still_reports_the_window_that_is_still_open` fakes `LAUNCHED_AT + 4 days`
+    = 2026-08-31 06:00 UTC and asserts the 5h window has lapsed, which held only while the real
+    UTC clock was before 02:00 on that date. It passed for four days and began failing at
+    02:00 on the 31st, in the middle of an unrelated change — the exact failure this fixture's
+    own docstring warns about, reintroduced along the one axis it did not consider.
+
+    So: a test that fakes the reader's clock passes the same instant here. A test that lets the
+    reader use the real clock passes nothing and gets it.
+    """
+    at = datetime.now(UTC) if base is None else base
     return {
         "type": "event_msg",
         "payload": {
@@ -89,20 +117,17 @@ def _codex_token_count(*, last: int, window: int, primary: float, secondary: flo
                 "last_token_usage": {"total_tokens": last},
                 "model_context_window": window,
             },
-            # Unix seconds, which is the shape a live rollout carries. The *values* are
-            # relative to now rather than the captured literals, because a window whose reset
-            # has passed is deliberately dropped (see the lapsed-window test below) and a
-            # frozen literal would quietly turn every assertion here into that case instead.
+            # Unix seconds, which is the shape a live rollout carries.
             "rate_limits": {
                 "primary": {
                     "used_percent": primary,
                     "window_minutes": 300,
-                    "resets_at": _in(hours=4),
+                    "resets_at": int((at + timedelta(hours=4)).timestamp()),
                 },
                 "secondary": {
                     "used_percent": secondary,
                     "window_minutes": 10080,
-                    "resets_at": _in(days=5),
+                    "resets_at": int((at + timedelta(days=5)).timestamp()),
                 },
             },
         },
@@ -847,7 +872,11 @@ def test_a_long_running_session_is_still_the_newest_write(tmp_path: Path, worksp
         tmp_path,
         workspace,
         "bbbbbbbb-0000-4000-8000-000000000000",
-        [_codex_token_count(last=2_000, window=258_400, primary=34.0, secondary=61.0)],
+        [
+            _codex_token_count(
+                last=2_000, window=258_400, primary=34.0, secondary=61.0, base=LAUNCHED_AT
+            )
+        ],
         at=LAUNCHED_AT + timedelta(hours=2),
         started=LAUNCHED_AT - timedelta(days=2),
     )
@@ -868,11 +897,19 @@ def test_an_idle_host_still_reports_the_window_that_is_still_open(
     vanish from the block exactly as `cursor-agent` permanently does — and DEC-061 requires
     those two stay apart. The weekly window is still open and its figure is still on disk.
     """
+    # Written against `LAUNCHED_AT`, which is the clock the reader below is given — so the 5h
+    # window resets four hours after the rollout was written and the reader looks four days
+    # later. Both instants come from one clock, so the outcome cannot depend on when the suite
+    # happens to run. See `_codex_token_count`.
     _account_rollout(
         tmp_path,
         workspace,
         "aaaaaaaa-0000-4000-8000-000000000000",
-        [_codex_token_count(last=1_000, window=258_400, primary=5.0, secondary=61.0)],
+        [
+            _codex_token_count(
+                last=1_000, window=258_400, primary=5.0, secondary=61.0, base=LAUNCHED_AT
+            )
+        ],
         at=LAUNCHED_AT,
         started=LAUNCHED_AT,
     )
@@ -890,7 +927,9 @@ def test_an_account_reading_says_when_it_was_observed(tmp_path: Path, workspace:
     An mtime agrees with it today and is still a filesystem attribute that a copy, a restore or
     a backup tool can move. The record is what Codex itself wrote down.
     """
-    record = _codex_token_count(last=1_000, window=258_400, primary=5.0, secondary=61.0)
+    record = _codex_token_count(
+        last=1_000, window=258_400, primary=5.0, secondary=61.0, base=LAUNCHED_AT
+    )
     record["timestamp"] = "2026-08-27T06:30:00.500Z"
     _account_rollout(
         tmp_path, workspace, "aaaaaaaa-0000-4000-8000-000000000000", [record], at=LAUNCHED_AT
@@ -1013,7 +1052,11 @@ def test_a_session_running_since_the_measured_worst_case_is_still_reached(
         tmp_path,
         workspace,
         "aaaaaaaa-0000-4000-8000-000000000000",
-        [_codex_token_count(last=1_000, window=258_400, primary=34.0, secondary=61.0)],
+        [
+            _codex_token_count(
+                last=1_000, window=258_400, primary=34.0, secondary=61.0, base=LAUNCHED_AT
+            )
+        ],
         at=LAUNCHED_AT + timedelta(hours=2),
         started=LAUNCHED_AT - timedelta(days=8),
     )

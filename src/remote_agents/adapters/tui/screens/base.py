@@ -96,6 +96,32 @@ def _is_disabled(pane: OptionList, index: int) -> bool:
     return index < pane.option_count and pane.get_option_at_index(index).disabled
 
 
+def _is_from_a_replaced_fill(event: OptionList.OptionSelected) -> bool:
+    """Whether this selection names a row the list is no longer showing.
+
+    Identity, not equality, and not the key alone. `show_choices` clears and refills, building
+    fresh `Option` objects every time, so a row that is "still there" after a re-render is a
+    *different object* with the same id. Comparing ids would therefore accept a selection
+    queued against the previous fill; comparing objects is what distinguishes "this row" from
+    "a row that looks like it".
+
+    Answers `False` when the list cannot be consulted at all, which is the permissive
+    direction on purpose: this guard exists to drop a stale selection, and a screen whose list
+    has gone has bigger problems than an extra dispatch — every caller downstream re-checks
+    what it acts on anyway (DEC-007).
+    """
+    from textual.widgets.option_list import OptionDoesNotExist
+
+    key = event.option_id
+    if key is None:
+        return False
+    try:
+        return event.option_list.get_option(key) is not event.option
+    except OptionDoesNotExist:
+        # The row is gone outright — the clearest case of a fill that has been replaced.
+        return True
+
+
 class ChoiceScreen(Screen[None]):
     """A status line, an optional filter, a list of choices, and an output pane.
 
@@ -1071,6 +1097,27 @@ class ChoiceScreen(Screen[None]):
         # here means a row this app did not construct — refuse it rather than dispatch on it.
         key = event.option_id
         if key is None or self.tui.busy:
+            return
+        if _is_from_a_replaced_fill(event):
+            # **A selection built against a fill this list no longer holds is not acted on**
+            # (DEC-069). One terminal read can carry several Enters — autorepeat, a double tap,
+            # buffered stdin over a laggy link — and the driver turns *all* of them into
+            # selections before the first is handled. Each carries the `Option` it was built
+            # from, so by the time the second arrives the first has usually re-rendered the
+            # position and that object is gone from the list.
+            #
+            # What that was worth, measured: a resume whose session came back FAILED issued
+            # **two** resumes, and two panes writing to one provider conversation is worse than
+            # the two launches its sibling defect caused (BL-036). The launch half needed a
+            # cursor guard on `ProfilesScreen`; this half could not reuse it, because the resume
+            # failure path leaves a lone `Back` row and its cursor is never `None`. Two guards
+            # for one defect is what moved the fix here, where every selection is dispatched.
+            #
+            # Deliberately **not** a `busy` check: `busy` means "a command is in flight", and by
+            # the time these arrive none is — `issue_resume` and `launch` both clear it in a
+            # `finally` that runs before their FAILED branches. The true statement is about the
+            # rows, so that is what is checked.
+            _LOG.debug("a selection of %r was dropped: its row is not the one on screen now", key)
             return
         if key == _BACK:
             # **Handled here, once, because the failure paths render this row onto screens
