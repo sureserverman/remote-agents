@@ -59,7 +59,7 @@ class ConversationSummary:
     opaque key, `ProviderConversationId` is not a field here at all, and that boundary is
     enforced and covered by `tests/security/test_session_catalog.py`. `description` is a
     weaker claim and is now written as one: it is the owner's own last prompt or generated
-    title (`adapters/agents/claude_sessions.py` `_resume_description`), checked below only
+    title (`adapters/agents/claude/sessions.py` `_resume_description`), checked below only
     for length and printability and never for content, so it can carry a filesystem path
     the owner typed. Neither surface filters it: the terminal renders the whole string
     (`adapters/tui/model.py` `conversation_row`) and Telegram a 48-character prefix

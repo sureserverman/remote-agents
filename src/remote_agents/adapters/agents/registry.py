@@ -21,17 +21,17 @@ import sqlite3
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.sessions import ClaudeSessionCatalogue
 from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
-from remote_agents.adapters.agents.claude_sessions import ClaudeSessionCatalogue
+from remote_agents.adapters.agents.codex.sessions import CodexAppServerClient, CodexSessionCatalogue
 from remote_agents.adapters.agents.codex.usage import CodexUsageReader
-from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
+from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
 from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
-from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
-from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
-from remote_agents.adapters.agents.opencode_sessions import (
+from remote_agents.adapters.agents.opencode.sessions import (
     OpenCodeCliRunner,
     OpenCodeSessionCatalogue,
 )
+from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
 from remote_agents.domain.models import ProfileId, ProjectId
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
 from remote_agents.ports.provider_descriptor import ProviderDescriptor
