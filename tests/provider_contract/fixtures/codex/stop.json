@@ -1,0 +1,12 @@
+{
+  "_provenance": "Field vocabulary captured in docs/acceptance-2026-08-29-codex-activity-detail.md against codex-cli 0.151.0 (DEC-067); values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion, and the payload is deliberately over-filled with the fields the measurement showed are dangerous.",
+  "session_id": "provider-session-not-ours",
+  "turn_id": "turn-0",
+  "transcript_path": null,
+  "cwd": "/home/owner/secret-project",
+  "hook_event_name": "Stop",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "default",
+  "stop_hook_active": false,
+  "last_assistant_message": "Ran the suite and pushed the branch."
+}

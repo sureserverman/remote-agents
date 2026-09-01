@@ -1,0 +1,15 @@
+{
+  "_provenance": "Field vocabulary captured in docs/acceptance-2026-08-29-codex-activity-detail.md against codex-cli 0.151.0 (DEC-067); values are synthetic per GDEC-SEC-001, chosen so any leak is recognisable in an assertion, and the payload is deliberately over-filled with the fields the measurement showed are dangerous.",
+  "session_id": "provider-session-not-ours",
+  "turn_id": "turn-0",
+  "transcript_path": "/home/owner/.codex/sessions/rollout-secret.jsonl",
+  "cwd": "/home/owner/secret-project",
+  "hook_event_name": "PermissionRequest",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf /home/owner/secret-project",
+    "description": "Do you want to allow deleting /home/owner/secret-project?"
+  }
+}
