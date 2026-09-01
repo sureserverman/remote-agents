@@ -101,7 +101,13 @@ jobs:
         #
         # `-ra` (from `pyproject.toml`) prints the skip reasons, so a test that quietly stops
         # running on one OS shows up in the log instead of hiding inside a green check.
+        # `tests/provider_contract` and `tests/frontend_contract` joined with the
+        # registry-driven kit (DEC-059): the kit parametrizes over the live provider
+        # registry, so these trees are where a fifth provider's contract coverage appears
+        # with no test edit -- omitting them by path would un-cover exactly the tests that
+        # exist to cover what nobody remembered to write.
         run: >
           uv run --locked pytest
           tests/unit tests/integration tests/contract tests/architecture tests/security
+          tests/provider_contract tests/frontend_contract
           -m 'not requires_session' -q

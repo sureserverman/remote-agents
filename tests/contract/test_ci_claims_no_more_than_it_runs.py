@@ -71,6 +71,10 @@ EXPECTED_SUITES = (
     "tests/contract",
     "tests/architecture",
     "tests/security",
+    # The registry-driven kit trees (DEC-059: they enter by name, here and in ci.yml,
+    # so their omission could only ever be a decision, never an accident).
+    "tests/provider_contract",
+    "tests/frontend_contract",
 )
 
 MARKER = "requires_session"
