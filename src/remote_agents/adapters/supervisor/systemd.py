@@ -15,7 +15,7 @@ absolute rather than merely happening to be.
 spelled out would keep the same coupling with the indirection removed, and it is the half that
 was actually wrong: the venv is wherever the operator installed it, and a pipx or a relocated
 checkout was already outside what that line could describe. `Path(sys.executable)` is how this
-project names itself in files it writes (`hook_install.agent_event_command`,
+project names itself in files it writes (`registry.agent_event_command`,
 `bootstrap._projects_command`), and it is exact by construction -- the interpreter running the
 installer is the interpreter the console script belongs to.
 

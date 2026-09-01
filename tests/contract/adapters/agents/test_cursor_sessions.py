@@ -1,6 +1,6 @@
 import pytest
 
-from remote_agents.adapters.agents.cursor_sessions import CursorSessionCatalogue
+from remote_agents.adapters.agents.cursor.sessions import CursorSessionCatalogue
 from remote_agents.domain.models import ProfileId
 
 

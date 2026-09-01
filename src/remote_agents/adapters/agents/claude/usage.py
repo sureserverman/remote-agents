@@ -2,7 +2,8 @@
 
 The design record for the whole usage seam — what each provider publishes, the borrowed
 status-line cache's fencing, and the workspace-matching heuristic — lives in
-`adapters/agents/usage.py`'s module docstring until the flat modules are retired.
+`adapters/agents/registry.py`'s module docstring, moved there when the flat modules were
+retired.
 """
 
 from __future__ import annotations

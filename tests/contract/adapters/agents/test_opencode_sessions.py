@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.opencode_sessions import OpenCodeSessionCatalogue
+from remote_agents.adapters.agents.opencode.sessions import OpenCodeSessionCatalogue
 from remote_agents.domain.models import ProfileId, ProjectId
 
 

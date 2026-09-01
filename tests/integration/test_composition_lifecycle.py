@@ -510,7 +510,7 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
     check, and the property it named is the one DEC-046 is about: a host should probe for
     provider files once per process, not once per capability.
     """
-    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.agents import registry as registry_module
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
@@ -518,7 +518,7 @@ def test_compose_backend_builds_one_set_of_provider_readers(composed_home, tmp_p
 
     built = []
 
-    class _Counted(usage_module.ProfileUsageReaders):
+    class _Counted(registry_module.ProfileUsageReaders):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             built.append(self)
@@ -547,7 +547,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
     the config would leave every Claude row a bare count while the owner believed they had
     stated one -- a failure with no error to notice.
     """
-    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.agents import registry as registry_module
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
@@ -555,7 +555,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
 
     seen = []
 
-    class _Recording(usage_module.ClaudeUsageReader):
+    class _Recording(registry_module.ClaudeUsageReader):
         def __init__(self, **passed):
             # `**passed` rather than a copied signature: a double that restates the real one
             # goes stale the moment an argument is added, and fails with a TypeError that reads
@@ -588,7 +588,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
     either surface -- which is the invented number DEC-061 forbids, arriving through the config
     layer rather than through the reader.
     """
-    from remote_agents.adapters.agents import usage as usage_module
+    from remote_agents.adapters.agents import registry as registry_module
     from remote_agents.adapters.sqlite.database import open_database
     from remote_agents.composition.backend import compose_backend
     from remote_agents.config import load_config
@@ -596,7 +596,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
 
     seen = []
 
-    class _Recording(usage_module.ClaudeUsageReader):
+    class _Recording(registry_module.ClaudeUsageReader):
         def __init__(self, **passed):
             seen.append(passed)
             super().__init__(**passed)

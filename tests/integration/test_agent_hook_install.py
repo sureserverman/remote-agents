@@ -22,12 +22,13 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents import hook_install
-from remote_agents.adapters.agents.hook_install import (
-    INSTALLED_EVENTS,
-    RETIRED_EVENTS,
+from remote_agents.adapters.agents import registry as hook_install
+from remote_agents.adapters.agents.claude.hooks import INSTALLED_EVENTS, RETIRED_EVENTS
+from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
     _without_our_groups,
+)
+from remote_agents.adapters.agents.registry import (
     agent_event_command,
     install_agent_hooks,
     remove_agent_hooks,
@@ -173,7 +174,7 @@ def test_upgrading_removes_a_group_left_by_a_version_that_still_installed_it() -
         }
     }
 
-    from remote_agents.adapters.agents.hook_install import _CLAUDE
+    from remote_agents.adapters.agents.registry import _CLAUDE
 
     kept = _without_our_groups(lived_in, _CLAUDE)
 

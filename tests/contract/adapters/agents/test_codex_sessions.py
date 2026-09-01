@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.codex_sessions import CodexAppServerClient, CodexSessionCatalogue
+from remote_agents.adapters.agents.codex.sessions import CodexAppServerClient, CodexSessionCatalogue
 from remote_agents.domain.models import ProfileId, ProjectId
 
 

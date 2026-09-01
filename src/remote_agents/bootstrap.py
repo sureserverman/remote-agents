@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from remote_agents.adapters.agents.hook_install import (
+from remote_agents.adapters.agents.registry import (
     HookInstallError,
     default_settings_path,
     install_agent_hooks,

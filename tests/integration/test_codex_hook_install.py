@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.hook_install import (
+from remote_agents.adapters.agents.registry import (
     HookInstallError,
     default_settings_path,
     install_agent_hooks,
@@ -66,7 +66,7 @@ def test_codex_refuses_invalid_or_concurrently_changed_config(tmp_path: Path, mo
 
     path = _hooks_file(tmp_path)
     monkeypatch.setattr(
-        "remote_agents.adapters.agents.hook_install._refuse_if_changed_since_it_was_read",
+        "remote_agents.adapters.agents.registry._refuse_if_changed_since_it_was_read",
         lambda *args: (_ for _ in ()).throw(HookInstallError("changed")),
     )
     with pytest.raises(HookInstallError, match="changed"):

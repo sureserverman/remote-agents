@@ -19,14 +19,11 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.usage import (
-    _ACCOUNT_ROLLOUT_DAYS,
-    ClaudeUsageReader,
-    CodexUsageReader,
-    CursorUsageReader,
-    OpenCodeUsageReader,
-    ProfileUsageReaders,
-)
+from remote_agents.adapters.agents.claude.usage import ClaudeUsageReader
+from remote_agents.adapters.agents.codex.usage import _ACCOUNT_ROLLOUT_DAYS, CodexUsageReader
+from remote_agents.adapters.agents.cursor.usage import CursorUsageReader
+from remote_agents.adapters.agents.opencode.usage import OpenCodeUsageReader
+from remote_agents.adapters.agents.registry import ProfileUsageReaders
 from remote_agents.domain.models import ProfileId
 from remote_agents.domain.profiles import closed_profiles
 from remote_agents.ports.agent_usage import AgentLimits, UsageQuery, UsageWindow

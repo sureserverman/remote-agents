@@ -13,10 +13,10 @@ reader and installer types here would pull adapter modules into the ports layer,
 `tests/architecture/check_imports.py` forbids — ports may import only domain and ports. What
 actually rides in them today: `sessions` a factory taking the live project-path mapping and
 returning the provider's conversation catalogue, `usage` a reader shaped like
-`adapters.agents.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks` the provider
-name `adapters.agents.hook_install` accepts (the per-provider hook configuration itself
-moves here with the provider verticals), `activity` a declared placeholder the verticals
-decide — `None` for all four providers until then.
+`adapters.agents.<provider>.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks`
+the provider name the hook-install surface in `adapters.agents.registry` accepts (each
+vertical's `hooks.py` holds the configuration value), `activity` a declared placeholder —
+`None` for all four providers until a vertical wires one.
 """
 
 from __future__ import annotations
@@ -47,9 +47,9 @@ class ProviderDescriptor:
     the provider publishes no usage at all. Absence is rendered, never estimated."""
 
     hooks: object | None = None
-    """The provider name `hook_install` accepts for this provider's hooks — the installer
-    configuration itself arrives with the verticals — or None for a provider that takes no
-    hooks."""
+    """The provider name the hook-install surface accepts for this provider's hooks — the
+    configuration value lives in the vertical's `hooks.py` — or None for a provider that
+    takes no hooks."""
 
     activity: object | None = None
     """The provider's activity source, or None when it reports no activity events."""

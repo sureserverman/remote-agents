@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from remote_agents.adapters.agents.hook_install import INSTALLED_EVENTS, RETIRED_EVENTS
+from remote_agents.adapters.agents.claude.hooks import INSTALLED_EVENTS, RETIRED_EVENTS
 from remote_agents.adapters.supervisor.launchd import (
     INSTALLED_PLIST_PATHS,
     RETIRED_PLIST_PATHS,

@@ -116,7 +116,7 @@ work around it on the host either: the fix would be to edit a file the operator 
 think is wrong, after an upgrade that gave them no warning.
 
 So a key leaves the schema by moving here rather than by disappearing -- the shape
-`hook_install.RETIRED_EVENTS` already uses for an event that stops being installed, and what
+`claude.hooks.RETIRED_EVENTS` already uses for an event that stops being installed, and what
 DEC-051 decided for a signal that stops being produced. Tolerated when present, never required
 when absent, never read either way, and never generated into a new file. An entry stays until
 every host has rewritten its config; there is no way for this process to know when that is, and

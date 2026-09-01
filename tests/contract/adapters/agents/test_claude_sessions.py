@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from remote_agents.adapters.agents.claude_sessions import (
+from remote_agents.adapters.agents.claude.sessions import (
     ClaudeSessionCatalogue,
     _claude_project_directory,
 )

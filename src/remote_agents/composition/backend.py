@@ -12,8 +12,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from remote_agents.adapters.agents.catalogue import ProfileConversationCatalogue
-from remote_agents.adapters.agents.registry import provider_descriptors, usage_readers
-from remote_agents.adapters.agents.usage import ProfileUsageReaders
+from remote_agents.adapters.agents.registry import (
+    ProfileUsageReaders,
+    provider_descriptors,
+    usage_readers,
+)
 from remote_agents.adapters.projects.discovery import discover_projects
 from remote_agents.adapters.projects.registry import load_registry
 from remote_agents.adapters.projects.registry_writer import RegistryProjectRecorder

@@ -246,7 +246,7 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
 _STALE_READING_AGE = timedelta(minutes=30)
 """How old an account reading may be before a line says so.
 
-Deliberately the same span `adapters.agents.usage._STALE_LIMIT_AGE` discards a borrowed cache
+Deliberately the same span `adapters.agents.claude.usage._STALE_LIMIT_AGE` discards a borrowed cache
 after. The two do different things with it — that one withholds the figure, this one dates it —
 because the cases differ: a borrowed number this project cannot vouch for is better absent,
 while a provider's own number stays worth showing as long as it is labelled.
@@ -291,7 +291,8 @@ def _dated(observed_at: datetime | None) -> str:
     session, which makes an old reading ordinary rather than exceptional.
 
     Below the bound nothing is said, because a timestamp on a current number is noise. The
-    span matches the one `adapters.agents.usage` fences Claude's borrowed cache with, but it is
+    span matches the one `adapters.agents.claude.usage` fences Claude's borrowed cache
+    with, but it is
     a separate constant rather than a shared one — `application` may not import an adapter
     (ARCH-02), and the two do different things with the same number, so `_STALE_READING_AGE`
     states the agreement rather than inheriting it.

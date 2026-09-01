@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.agents.hook_install import install_agent_hooks
+from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.agent_activity import ActivityKind

@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from remote_agents.adapters.agents.hook_install import install_agent_hooks
+from remote_agents.adapters.agents.registry import install_agent_hooks
 from remote_agents.application.activity import drain_activity
 from remote_agents.bootstrap import main
 from remote_agents.ports.agent_activity import ActivityKind

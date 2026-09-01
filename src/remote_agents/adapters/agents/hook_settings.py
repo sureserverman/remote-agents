@@ -1,13 +1,14 @@
 """Provider-neutral settings-file machinery: read, validate, restyle, write atomically.
 
-Extracted from `hook_install.py` ahead of the provider split — shared machinery asked, not
-copied (the principle DEC-043's title records; the entry itself is about use-case decisions,
-and this extraction is the verticals plan's): what varies per
+Extracted from the retired `hook_install.py` ahead of the provider split — shared machinery
+asked, not copied (the principle DEC-043's title records; the entry itself is about use-case
+decisions, and this extraction is the verticals plan's): what varies per
 provider is *which* file and *which* events — the `_HookProvider` values — while everything
 here is about editing an operator's JSON settings file reversibly, whoever owns it. The
 formatting-recovery contract (`_detected_style`), the stale-read refusal and the atomic
-replace move whole; `hook_install.py`'s module docstring remains the design record for why
-each exists. Names keep their underscores because they moved, not changed.
+replace move whole; the retired installer's module docstring — the design record for
+why each refusal exists — is kept verbatim beside the install surface in `registry.py`.
+Names keep their underscores because they moved, not changed.
 """
 
 from __future__ import annotations

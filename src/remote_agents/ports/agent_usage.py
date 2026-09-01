@@ -112,7 +112,7 @@ class AgentUsage:
 
     Set only by a reader that fell back to something another program maintains — today just
     Claude's limits, which are read out of the status-line cache described in
-    `adapters.agents.usage`. Presentation says so out loud, because a number whose freshness
+    `adapters.agents.claude.usage`. Presentation says so out loud, because a number whose freshness
     depends on a script this project does not own must not be shown as though the service had
     measured it.
     """
@@ -179,7 +179,7 @@ class AgentLimits:
     """Where these came from when they did not come from the provider's own accounting.
 
     Set by Claude's reader alone, and for the reason `AgentUsage.stale_source` records: its
-    limits are borrowed from the status-line cache described in `adapters.agents.usage`, and
+    limits are borrowed from the status-line cache described in `adapters.agents.claude.usage`, and
     a figure whose freshness depends on a script this project does not own is never rendered
     as though the service had measured it.
     """
