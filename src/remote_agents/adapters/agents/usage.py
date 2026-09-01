@@ -56,7 +56,6 @@ from remote_agents.ports.agent_usage import (
 from remote_agents.ports.agent_usage_support import (
     _START_TOLERANCE,
     _TAIL_BYTES,
-    _escaped_workspace,
     _finite,
     _freshest_json,
     _instant,
@@ -507,6 +506,13 @@ class ProfileUsageReaders:
             return reader.read(query)  # type: ignore[attr-defined]
         except (OSError, ValueError, ArithmeticError, sqlite3.Error):
             return None
+
+
+def _escaped_workspace(workspace: Path) -> str:
+    # Claude Code's own on-disk convention: `~/.claude/projects/<cwd with "/" as "-">`.
+    # Deliberately beside the claude parsers rather than in the shared support module,
+    # which knows no provider.
+    return str(_resolved(workspace)).replace("/", "-")
 
 
 def _claude_context(

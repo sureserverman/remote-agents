@@ -183,10 +183,6 @@ def _safe_glob(directory: Path, pattern: str) -> tuple[Path, ...]:
         return ()
 
 
-def _escaped_workspace(workspace: Path) -> str:
-    return str(_resolved(workspace)).replace("/", "-")
-
-
 def _resolved(path: Path) -> Path:
     try:
         return path.resolve(strict=False)

@@ -173,7 +173,9 @@ def test_upgrading_removes_a_group_left_by_a_version_that_still_installed_it() -
         }
     }
 
-    kept = _without_our_groups(lived_in)
+    from remote_agents.adapters.agents.hook_install import _CLAUDE
+
+    kept = _without_our_groups(lived_in, _CLAUDE)
 
     assert kept["hooks"]["SessionEnd"] == [
         {"hooks": [{"type": "command", "command": 'bash "/home/tester/session-end.sh"'}]}

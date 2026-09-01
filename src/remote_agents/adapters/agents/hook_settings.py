@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import stat
 import tempfile
 from collections.abc import Iterator
@@ -21,6 +22,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from remote_agents.ports.private_directory import ancestors_writable_by_others
 
 
 class HookInstallError(Exception):
@@ -33,6 +36,14 @@ class _HookProvider:
     configuration_relative_path: Path
     installed_events: tuple[str, ...]
     retired_events: tuple[str, ...] = ()
+    flagless: bool = False
+    """Whether this provider's hook commands omit `--provider <name>`.
+
+    Claude's commands predate the option and stay flagless so a reinstall replaces the
+    existing entry instead of adding a second; every later provider carries the flag. Data
+    on the value rather than an identity check against the claude instance, so this shared
+    machinery names no provider (the instances live with the installer).
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,3 +244,254 @@ def _write_atomically(path: Path, content: bytes, mode: int) -> None:
             # temporary that has just been removed -- so this too is a refusal, not a crash.
             raise HookInstallError(f"cannot write {path}: {error}") from error
         raise
+
+
+# What identifies a group as ours: the argument tail, matched as parsed words rather than as
+# text. The interpreter in front of it may change -- a moved virtualenv should replace our
+# entry, not add a second -- so the tail is what is compared and the head is ignored.
+#
+# It is not a substring search. A command that merely mentions this pair -- an operator's own
+# hook echoing a reminder about it, a grep for it in an auditing script -- is somebody else's
+# hook, and removing it would be exactly the unrecoverable deletion this module refuses to
+# risk elsewhere. Matching parsed words means "mentions" and "runs" stop being the same thing.
+_COMMAND_TAIL = ("-m", "remote_agents", "agent-event")
+_ACTIVITY_DIRECTORY_OPTION = "--activity-dir"
+_PROVIDER_OPTION = "--provider"
+
+
+def _with_our_groups(
+    document: dict[str, Any], command: str, provider: _HookProvider
+) -> dict[str, Any]:
+    """Append one matcherless group per event, without disturbing any key's position."""
+    hooks = dict(document.get("hooks") or {})
+    for event in provider.installed_events:
+        group = {"hooks": [{"type": "command", "command": command}]}
+        # `or ()` rather than a `.get` default, because an explicit JSON null defeats the
+        # default and unpacking it raised out through the CLI as a traceback. Reading null as
+        # "no groups" is what the validator above already decided; the round-trip check then
+        # refuses the install anyway, since dropping our groups again would leave the key
+        # gone rather than null -- which is the same refusal an empty list gets, and the same
+        # message tells the operator to delete it. Same form as `_holds_our_groups`.
+        hooks[event] = [*(hooks.get(event) or ()), group]
+    return {**document, "hooks": hooks}
+
+
+def _without_our_groups(document: dict[str, Any], provider: _HookProvider) -> dict[str, Any]:
+    """Drop our groups, and the containers left holding nothing once they are gone.
+
+    Every other event, and every other group under the events we do install into, is copied
+    across untouched — including a group of somebody else's that happens to share
+    ``SessionEnd`` with ours, which is the case the operator's real file presents.
+    """
+    hooks = document.get("hooks")
+    if not isinstance(hooks, dict):
+        return document
+    remaining: dict[str, Any] = {}
+    # Now *or ever* — see `RETIRED_EVENTS`. Sweeping only what is currently installed is what
+    # would stand an event we dropped, in a file neither install nor uninstall would touch
+    # again.
+    ours = (*provider.installed_events, *provider.retired_events)
+    for event, groups in hooks.items():
+        if event not in ours or not isinstance(groups, list):
+            remaining[event] = groups
+            continue
+        kept = [group for group in groups if not _is_our_group(group, provider)]
+        if kept:
+            remaining[event] = kept
+    if remaining:
+        return {**document, "hooks": remaining}
+    return {key: value for key, value in document.items() if key != "hooks"}
+
+
+def _refuse_a_spool_others_can_reach(activity_directory: Path | None) -> None:
+    """Check the chosen spool before writing a command that will keep writing into it.
+
+    `--activity-dir` makes this location operator-supplied, and the guard on the other end
+    refuses to write *through* a planted link while deliberately leaving an existing
+    ancestor's mode alone. That leaves a precondition which was documented and unenforced:
+    under an ancestor others can write, the leaf can be unlinked and replaced with a link
+    between one hook firing and the next.
+
+    Refused here because this is the moment the path is chosen and the only one that can say
+    so out loud. The hook fires constantly and must stay silent, so a check there would turn
+    a misconfiguration into a spool that mysteriously stays empty forever.
+
+    Nothing is checked when the flag is absent: the default lives under the state directory
+    `ProductionPaths` already refuses to resolve through a symlink.
+    """
+    if activity_directory is None:
+        return
+    if not activity_directory.is_absolute():
+        # Refused before the mode check, because a relative path makes that check answer about
+        # the wrong directory rather than fail: it resolves against *this* process's working
+        # directory, while the path is embedded in the hook command verbatim and every Claude
+        # session resolves it against its own. One spool per project, none of them the one
+        # that was inspected, none of them the one the service drains -- and the check reports
+        # safe throughout, which is worse than never having run.
+        raise HookInstallError(
+            f"--activity-dir must be an absolute path; {activity_directory} would mean a "
+            "different directory in every project the agent runs in, and none of them the "
+            "one this service reads."
+        )
+    exposed = ancestors_writable_by_others(activity_directory)
+    if not exposed:
+        return
+    listed = ", ".join(str(parent) for parent in exposed)
+    raise HookInstallError(
+        f"refusing to install hooks that would spool into {activity_directory}, because "
+        f"another user can write to {listed}. Anything able to write there can replace the "
+        "spool with a link and read what your agents report. Choose a directory under your "
+        "own home, or set the sticky bit on it as /tmp has."
+    )
+
+
+def _foreign_variant_note(base: dict[str, Any], provider: _HookProvider) -> str:
+    """Name the events already running our subcommand in a form this installer will not manage.
+
+    Leaving such an entry alone is the right call and stays the right call -- it is a wrapper,
+    a hand-edit, or a future version, and removing it would be guessing about a command we did
+    not write. But the consequence of leaving it was invisible: install adds its own group
+    beside it, so the agent runs the hook twice for every one of those events, and `--remove`
+    later takes only ours and leaves theirs spooling with nothing left that knows how to
+    clean it up. Refusing outright would strand an operator who cannot install until they
+    edit a file by hand; saying nothing left them with duplicate notifications and no clue
+    where they came from. So it is reported, and the choice of what to do stays theirs.
+    """
+    hooks = base.get("hooks")
+    if not isinstance(hooks, dict):
+        return ""
+    events = [
+        event
+        for event in provider.installed_events
+        if any(_mentions_our_subcommand(group, provider) for group in hooks.get(event) or ())
+    ]
+    if not events:
+        return ""
+    return (
+        f". Note: {', '.join(events)} already runs this subcommand in a form this installer "
+        "does not recognise and will not touch, so the hook now runs twice for those events; "
+        "removing these hooks later will leave that entry in place"
+    )
+
+
+def _mentions_our_subcommand(group: Any, provider: _HookProvider) -> bool:
+    """Report a group running our subcommand that `_is_our_group` will not claim."""
+    if _is_our_group(group, provider) or not isinstance(group, dict):
+        return False
+    entries = group.get("hooks")
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("command"), str):
+            continue
+        try:
+            words = shlex.split(entry["command"])
+        except ValueError:
+            continue
+        # The parsed words, exactly as `_runs_our_command` reads them -- so a command that
+        # merely *mentions* the subcommand in an echo or a grep is no more a near-miss here
+        # than it is one there.
+        if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) != _COMMAND_TAIL:
+            continue
+        tail = words[1 + len(_COMMAND_TAIL) :]
+        prefix = [] if provider.flagless else [_PROVIDER_OPTION, provider.name]
+        if tail[: len(prefix)] == prefix:
+            return True
+    return False
+
+
+def _is_our_group(group: Any, provider: _HookProvider) -> bool:
+    """Recognise a group this installer wrote, and never a group that merely resembles one.
+
+    Every command in the group must be ours. A group an operator has hand-edited to run our
+    command beside one of their own is therefore left alone: failing to remove a hook is
+    recoverable, and deleting somebody else's is not.
+
+    The group must also carry nothing but ``hooks``. This installer writes matcherless groups
+    and adds no other key, so a group holding a ``matcher`` or a ``timeout`` is by
+    construction not one it wrote -- and claiming it deleted an operator's deliberate
+    narrowing on removal, or silently dropped it on reinstall, which is the same
+    unrecoverable outcome the paragraph above exists to prevent.
+    """
+    if not isinstance(group, dict) or set(group) != {"hooks"}:
+        return False
+    entries = group.get("hooks")
+    if not isinstance(entries, list) or not entries:
+        return False
+    return all(
+        isinstance(entry, dict)
+        and isinstance(entry.get("command"), str)
+        and _runs_our_command(entry["command"], provider)
+        for entry in entries
+    )
+
+
+def _runs_our_command(command: str, provider: _HookProvider) -> bool:
+    """Decide whether this command line is one this installer could have written.
+
+    Not "mentions our subcommand", and not "invokes it somehow" either. The words after the
+    interpreter must be our subcommand followed by nothing, or by the one option this
+    installer knows how to add. An invocation carrying some other flag is something else's --
+    a wrapper, a hand-edit, a future version -- and removing it would be guessing about a
+    command we did not write.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        # Unbalanced quoting. Not something this installer wrote, so not ours to touch.
+        return False
+    if tuple(words[1 : 1 + len(_COMMAND_TAIL)]) != _COMMAND_TAIL:
+        return False
+    rest = words[1 + len(_COMMAND_TAIL) :]
+    prefix = [] if provider.flagless else [_PROVIDER_OPTION, provider.name]
+    if rest[: len(prefix)] != prefix:
+        return False
+    remaining = rest[len(prefix) :]
+    return not remaining or (len(remaining) == 2 and remaining[0] == _ACTIVITY_DIRECTORY_OPTION)
+
+
+def _refuse_when_removal_would_not_restore(
+    settings: _Settings,
+    base: dict[str, Any],
+    installed: dict[str, Any],
+    provider: _HookProvider,
+) -> None:
+    """Run the removal now and refuse the install unless it lands back on the original bytes.
+
+    Two things can go wrong, and this catches both before anything is written. Removal might
+    not undo the install — and removal might not be faithful to what is already on disk. The
+    second is the reachable one: an empty ``"hooks": {}`` block is indistinguishable, once
+    installed into, from a file that never had the key, so removal cannot know whether to
+    leave it or delete it. Rather than pick and be wrong half the time, the install is
+    refused; deleting the empty block by hand makes it succeed and changes nothing else.
+    """
+    restored = settings.style.render(_without_our_groups(installed, provider))
+    # On a reinstall the bytes on disk already hold our previous groups, so they are not what
+    # removal must land on; the check that they were is the one the first install passed.
+    faithful = (
+        settings.content is None
+        or _holds_our_groups(settings.document, provider)
+        or settings.style.render(base) == settings.content
+    )
+    if restored != settings.style.render(base) or not faithful:
+        raise HookInstallError(
+            f"{settings.path} has been left untouched, because removing these hooks again "
+            "could not put it back exactly as it is now. An empty block is almost always the "
+            'cause: "hooks": {} and no "hooks" key at all mean the same thing but are '
+            "different text, so an uninstall cannot tell which one to leave behind. Delete "
+            "the empty block (or the empty list, or a null, under any of "
+            f"{', '.join((*provider.installed_events, *provider.retired_events))}) and run "
+            "this again — that changes nothing else about your settings."
+        )
+
+
+def _holds_our_groups(document: dict[str, Any], provider: _HookProvider) -> bool:
+    """Report whether a previous install is present, which is what makes this a reinstall."""
+    hooks = document.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    return any(
+        _is_our_group(group, provider)
+        for event in provider.installed_events
+        for group in hooks.get(event) or ()
+    )
