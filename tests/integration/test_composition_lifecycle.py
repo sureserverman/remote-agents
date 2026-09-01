@@ -563,7 +563,7 @@ def test_compose_backend_hands_the_readers_the_declared_ceiling(
             seen.append(passed)
             super().__init__(**passed)
 
-    monkeypatch.setattr("remote_agents.adapters.agents.registry.ClaudeUsageReader", _Recording)
+    monkeypatch.setattr("remote_agents.adapters.agents.claude.ClaudeUsageReader", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config = load_config(_config_file(composed_home, paths))
@@ -601,7 +601,7 @@ def test_an_unstated_ceiling_never_reaches_the_reader(composed_home, tmp_path, m
             seen.append(passed)
             super().__init__(**passed)
 
-    monkeypatch.setattr("remote_agents.adapters.agents.registry.ClaudeUsageReader", _Recording)
+    monkeypatch.setattr("remote_agents.adapters.agents.claude.ClaudeUsageReader", _Recording)
 
     paths = ProductionPaths.for_home(composed_home)
     config_path = _config_file(composed_home, paths)
