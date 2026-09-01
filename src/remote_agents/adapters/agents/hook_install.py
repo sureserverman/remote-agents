@@ -55,6 +55,18 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from remote_agents.adapters.agents.claude.hooks import (
+    INSTALLED_EVENTS as INSTALLED_EVENTS,
+)
+from remote_agents.adapters.agents.claude.hooks import (
+    PROVIDER as _CLAUDE,
+)
+from remote_agents.adapters.agents.claude.hooks import (
+    RETIRED_EVENTS as RETIRED_EVENTS,
+)
+from remote_agents.adapters.agents.codex.hooks import (
+    PROVIDER as _CODEX,
+)
 from remote_agents.adapters.agents.hook_settings import (
     HookInstallError,
     _foreign_variant_note,
@@ -68,35 +80,6 @@ from remote_agents.adapters.agents.hook_settings import (
     _write_atomically,
 )
 
-INSTALLED_EVENTS = ("Stop", "StopFailure", "Notification")
-
-RETIRED_EVENTS = ("SessionEnd",)
-"""Events this installer used to own and must still clean up after.
-
-**Without this, dropping an event strands it for ever.** `_without_our_groups` opens by
-skipping any event it does not own, so an event removed from `INSTALLED_EVENTS` stops being
-inspected at all -- and our group under it is copied across untouched by *both* the install
-path and the uninstall path, which share the predicate. The hook would go on firing on every
-host with none of this project's tooling able to remove it, and it could not be worked around
-by uninstalling first, because that would mean running the *old* uninstall before taking the
-upgrade.
-
-So the sweep is over what we own **now or ever did**, and an event leaves `INSTALLED_EVENTS`
-by moving here rather than by disappearing. An entry stays until every host has run the
-installer at least once since the event was dropped; there is no way for this process to know
-when that is, and the cost of keeping one is a dictionary lookup per install.
-
-`SessionEnd` was dropped 2026-08-23 (DEC-051): its record was spooled, read, deleted and then
-discarded at the mapping, because there is no `ActivityKind` for it -- `ended` was retired for
-reporting an exit the owner had just caused. It wrote a file per session end, in every Claude
-session on the machine, that nothing ever consumed.
-"""
-
-
-_CLAUDE = _HookProvider(
-    "claude", Path(".claude/settings.json"), INSTALLED_EVENTS, RETIRED_EVENTS, flagless=True
-)
-_CODEX = _HookProvider("codex", Path(".codex/hooks.json"), ("Stop", "PermissionRequest"))
 _PROVIDERS = {provider.name: provider for provider in (_CLAUDE, _CODEX)}
 
 
