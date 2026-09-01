@@ -50,6 +50,7 @@ from html import unescape
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
+from surfaces import surface_pairs
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import build_private_bot
@@ -184,10 +185,7 @@ async def _tui_said(record: SessionRecord, detail: str) -> str:
     return f"{status}\n{toasts}"
 
 
-SURFACES = (
-    ("telegram", _telegram_said),
-    ("tui", _tui_said),
-)
+SURFACES = surface_pairs(telegram=_telegram_said, tui=_tui_said)
 
 
 @pytest.mark.parametrize("detail", _CAUSES)
@@ -357,10 +355,7 @@ async def _tui_said_force(record: SessionRecord, detail: str) -> str:
     return f"{status}\n{toasts}"
 
 
-FORCE_SURFACES = (
-    ("telegram", _telegram_said_force),
-    ("tui", _tui_said_force),
-)
+FORCE_SURFACES = surface_pairs(telegram=_telegram_said_force, tui=_tui_said_force)
 
 
 @pytest.mark.parametrize("surface_name,said", FORCE_SURFACES)

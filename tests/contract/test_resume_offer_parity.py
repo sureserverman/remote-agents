@@ -50,6 +50,7 @@ from html import unescape
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
+from surfaces import surface_pairs
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import build_private_bot
@@ -216,9 +217,9 @@ async def _tui_said(summaries: tuple[ConversationSummary, ...]) -> str:
 #: in rendered`, which an unrelated failure like "This conversation cannot be listed" satisfies
 #: — `cannot` contains `no`. A test for a *message* has to name the message, or it is only
 #: testing that some text exists. Caught by the Stage 3 gate's Tier-2 re-review.
-SAYING_SURFACES = (
-    ("telegram", _telegram_said, "this agent has no resumable conversation for this project."),
-    ("tui", _tui_said, "no saved conversations for this agent and project."),
+SAYING_SURFACES = surface_pairs(
+    telegram=(_telegram_said, "this agent has no resumable conversation for this project."),
+    tui=(_tui_said, "no saved conversations for this agent and project."),
 )
 
 
@@ -254,10 +255,7 @@ async def test_a_page_filtered_empty_says_so_rather_than_inviting_a_choice(
     )
 
 
-SURFACES = (
-    ("telegram", _telegram_offers),
-    ("tui", _tui_offers),
-)
+SURFACES = surface_pairs(telegram=_telegram_offers, tui=_tui_offers)
 
 
 @pytest.mark.parametrize("surface_name,offers", SURFACES)

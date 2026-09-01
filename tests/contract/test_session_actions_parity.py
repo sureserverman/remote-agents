@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
+from surfaces import surface_pairs
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import build_private_bot
@@ -162,10 +163,7 @@ async def _tui_rendered_actions(record: SessionRecord) -> set[str]:
 
 # Both surfaces are pinned here. The parametrization is what makes adding a surface without
 # pinning it to the policy impossible to do quietly.
-SURFACES = (
-    ("telegram", _telegram_rendered_actions),
-    ("tui", _tui_rendered_actions),
-)
+SURFACES = surface_pairs(telegram=_telegram_rendered_actions, tui=_tui_rendered_actions)
 
 
 @pytest.mark.parametrize("surface_name,render", SURFACES)
