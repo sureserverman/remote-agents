@@ -1,5 +1,5 @@
 {
-  "_provenance": "Row vocabulary trimmed from opencode.db session/message rows observed on a real host on 2026-08-27 -- the same capture tests/unit/adapters/agents/test_usage.py's module header records; values synthetic per GDEC-SEC-001. Each entry under `messages` is one message-table `data` document: `tokens.total` is the accounting the reader answers, and `input`/`output`/`cache` ride along because a live row carries them and the reader must take the provider's own total rather than re-derive one. `tokenless` is the other observed shape: an assistant row whose document carries no `tokens` key at all.",
+  "_provenance": "Row vocabulary trimmed from opencode.db session/message rows observed on a real host on 2026-08-27 -- the same capture tests/unit/adapters/agents/test_usage.py's module header records; values synthetic per GDEC-SEC-001. Each entry under `messages` is one message-table `data` document: `tokens.total` is the accounting the reader answers, and `input`/`output`/`cache` ride along because a live row carries them and the reader must take the provider's own total rather than re-derive one. `tokenless` is the other observed shape: an assistant row whose document carries no `tokens` key at all. The parts deliberately do NOT sum to `total` (12952 stated, parts sum 12953): an implementation that re-derived the total from the parts would answer the wrong number and fail, which is what makes the taken-as-stated claim discriminating.",
   "session_id": "ses_provider_not_ours",
   "messages": {
     "counted": {
@@ -7,8 +7,11 @@
       "tokens": {
         "total": 12952,
         "input": 2191,
-        "output": 9,
-        "cache": {"read": 10752, "write": 0}
+        "output": 10,
+        "cache": {
+          "read": 10752,
+          "write": 0
+        }
       }
     },
     "tokenless": {
