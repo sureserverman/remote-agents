@@ -1,7 +1,10 @@
 """Provider-neutral helpers every usage reader shares: files, JSON, instants, windows.
 
 Extracted from `adapters/agents/usage.py` ahead of the provider split, so four verticals ask
-one module instead of carrying four copies (DEC-043). Nothing here knows a provider: these
+one module instead of carrying four copies — the asked-not-restated principle DEC-043's title
+records for shared use cases, applied here to shared helpers (the entry itself is about
+use-case decisions and per-surface wording; this extraction is sanctioned by the verticals
+plan, not by that entry's position). Nothing here knows a provider: these
 are filesystem sweeps that treat every failure as empty, JSON reads that answer `None`, and
 the one piece of window arithmetic (`_window`'s lapsed-window rule) that is about clocks
 rather than about any provider's file format. The names keep their underscores because they

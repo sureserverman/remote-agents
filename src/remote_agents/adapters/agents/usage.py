@@ -80,6 +80,7 @@ than taste: the host this was calibrated on held 289 rollouts whose greatest gap
 day and last write was eight days, and a session that old would have to be outlived by thirty
 distinct *later* start-days to fall out of range, which cannot happen inside eight.
 """
+
 _STALE_LIMIT_AGE = timedelta(minutes=30)
 """How old the borrowed status-line cache may be before its numbers stop being shown.
 
