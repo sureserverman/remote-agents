@@ -686,9 +686,13 @@ def test_the_sweep_reads_every_adapter_module() -> None:
     count while examining a sixth of the tree.
     """
     modules = _adapter_modules()
-    assert len(modules) >= 55, (
+    assert len(modules) >= 75, (
         f"the sweep found {len(modules)} adapter modules, fewer than expected — if adapters "
-        "were genuinely removed, lower this floor deliberately rather than by accident"
+        "were genuinely removed, lower this floor deliberately rather than by accident. "
+        "Recomputed 2026-09-01 after the provider-vertical moves: the filesystem held 81 "
+        "(`find src/remote_agents/adapters -name '*.py' | grep -v __pycache__ | wc -l`); "
+        "75 leaves slack for the flat shims Stage 3 deletes (four sessions shims, usage, "
+        "hook_install) without letting a broken sweep root pass"
     )
     packages = {module.split("/")[0] for module, _ in modules if "/" in module}
     assert packages == {
