@@ -3,7 +3,14 @@
 Contracts assert capability *behavior* — a factory that composes over any workspace
 mapping, a reader that answers rather than raises, a hook name the install surface
 resolves — never implementation addresses, so a provider may relocate internals freely.
-Everything runs against throwaway paths; no contract touches a real provider file.
+
+Hermeticity, stated precisely: every path a contract *chooses* is a throwaway. The usage
+read is driven against a tmp workspace whose escaped name can match nothing, so its answer
+is deterministic; `limits()` is deliberately NOT driven here, because the registry's
+production readers resolve their account files from host defaults and a contract exercising
+them would read the developer's real usage — that depth belongs to the per-provider quirks
+modules, which inject sandbox roots (the pattern `tests/unit/adapters/agents/test_usage.py`
+already uses).
 """
 
 from __future__ import annotations
@@ -13,7 +20,7 @@ from pathlib import Path
 
 from kit import drive_or_skip
 
-from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, UsageQuery
+from remote_agents.ports.agent_usage import AgentUsage, UsageQuery
 
 
 def test_sessions_contract(descriptor, tmp_path: Path) -> None:
@@ -33,9 +40,8 @@ def test_usage_contract(descriptor, tmp_path: Path) -> None:
     query = UsageQuery(descriptor.profile_id, tmp_path / "nowhere", datetime.now(UTC), None)
     answer = reader.read(query)
     assert answer is None or isinstance(answer, AgentUsage)
-    limits = reader.limits()
-    assert isinstance(limits, AgentLimits)
     assert descriptor.profile_id in reader.profiles
+    assert callable(reader.limits)  # driven with sandbox roots by the quirks modules only
 
 
 def test_hooks_contract(descriptor, tmp_path: Path) -> None:

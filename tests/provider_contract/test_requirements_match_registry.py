@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-from requirements import DECLARATIONS, Requirement
+from requirements import CONDITIONAL_CAPABILITIES, DECLARATIONS, Requirement
 
 from remote_agents.adapters.agents.registry import provider_descriptors
 from remote_agents.ports.provider_descriptor import ProviderDescriptor
@@ -31,6 +31,12 @@ def test_every_capability_has_exactly_one_declared_state(profile, capability, wi
         assert wired is not None, (
             f"{profile}.{capability} is declared supported but the registry wired None — "
             "the declaration invents a capability (DEC-061)"
+        )
+    if state is Requirement.CONDITIONAL:
+        assert capability in CONDITIONAL_CAPABILITIES, (
+            f"{profile}.{capability} declares CONDITIONAL, but only "
+            f"{sorted(CONDITIONAL_CAPABILITIES)} may — an unrestricted conditional is an "
+            "escape hatch from the supported/unsupported agreement (DEC-061)"
         )
     if state is Requirement.UNSUPPORTED:
         assert wired is None, (

@@ -1,10 +1,10 @@
 """Every kit skip is a declaration's doing — the reconciliation is derived, not eyeballed.
 
-The Stage 1 gate compares `pytest tests/provider_contract -rs -q | grep -c SKIPPED`
-against the number this test derives: one skip per UNSUPPORTED declaration plus one per
-CONDITIONAL declaration whose condition is unmet (the capability wired None). Deriving it
-here means the gate's grep has a computed sibling that fails when a declaration and the
-kit's skip behavior drift apart, instead of a human comparing two numbers once.
+One skip per UNSUPPORTED declaration plus one per CONDITIONAL declaration whose condition
+is unmet (the capability wired None). The Stage 1 gate performed the live reconciliation
+once — summed the run's SKIPPED report and compared it to this derivation (6 == 6) — and
+what stands guard afterwards is this pin: a declaration change moves the derived number and
+fails here, prompting the gate's summed-grep comparison to be re-run rather than trusted.
 """
 
 from __future__ import annotations

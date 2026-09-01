@@ -15,7 +15,8 @@ marker registration, and in `--collect-only -m requires_session`, and a reader c
 precisely what the badge is not covering.
 
 **What the flag does and does not do today, stated exactly, because the obvious reading is
-wrong.** CI's pytest command lists four paths, and `tests/live` -- where the only marked tests
+wrong.** CI's pytest command lists the EXPECTED_SUITES paths, and `tests/live` -- where the
+only marked tests
 live -- is not among them. So the marked set is already outside CI's reach by path, and
 removing `-m 'not requires_session'` from the workflow right now would change nothing.
 Measured:
@@ -36,7 +37,7 @@ What the arrangement actually buys, both of which are real:
     has no mechanical answer at all -- a reader has to know which directories were omitted and
     infer why, and "why" is the part no path list records.
   * **Prospective bite.** The flag is what excludes a session-dependent test that lands *inside*
-    one of the four listed trees, which is where such a test would naturally be written. Today
+    one of the listed trees, which is where such a test would naturally be written. Today
     that set is empty; the flag is the standing guard, not a currently-active filter.
 
 So the assertions below are scoped to what can actually fail. `test_the_marker_and_the_path_list_
@@ -100,7 +101,7 @@ def test_the_matrix_runs_on_both_supported_operating_systems() -> None:
     assert job["strategy"]["fail-fast"] is False
 
 
-def test_ci_runs_the_four_portable_suites() -> None:
+def test_ci_runs_the_expected_portable_suites() -> None:
     step = _pytest_step()
 
     for suite in EXPECTED_SUITES:

@@ -25,6 +25,12 @@ SUPPORTED = Requirement.SUPPORTED
 UNSUPPORTED = Requirement.UNSUPPORTED
 CONDITIONAL = Requirement.CONDITIONAL
 
+#: The capabilities CONDITIONAL may legally describe — a closed, pinned set, because an
+#: unrestricted CONDITIONAL is an escape hatch from the supported/unsupported agreement
+#: (declare a wired capability conditional and it silently stops being driven-or-refused).
+#: Growing this set is a reviewed act with a reason, exactly like growing an allowlist.
+CONDITIONAL_CAPABILITIES = frozenset({"activity"})
+
 #: profile id -> capability -> declared state, with the reason a skip will carry.
 #: `activity` is CONDITIONAL everywhere: the registry declares it a placeholder until a
 #: vertical wires one, so the kit neither drives nor mourns it — the condition is "a
