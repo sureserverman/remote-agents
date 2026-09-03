@@ -6,11 +6,11 @@ this machine runs, which no pane owns and no session identifies, so it gets its 
 rather than a session-shaped argument nobody could supply (DEC-070: one capability, one
 package, one descriptor field).
 
-The port declares three verbs and deliberately not a fourth. There is no `stop`: the Codex
-CLI's `remote-control stop` kills the daemon, and every TUI attached to it exits on
-disconnect -- so "turn Remote Control off" is `disable-remote-control`, which flips the
-preference and leaves the panes alive. A port that could express the destructive verb would
-invite an adapter to implement it.
+The port declares three verbs and deliberately not a fourth. Turning Remote Control off
+flips a preference; it does not tear the daemon down, because every pane attached to that
+daemon exits when it goes. A port that could express the destructive verb would invite an
+adapter to implement it, so the port cannot say it -- and the CLI spellings that could are
+adapter knowledge, named in exactly one module below this layer.
 """
 
 from __future__ import annotations
