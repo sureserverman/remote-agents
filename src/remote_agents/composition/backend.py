@@ -24,6 +24,7 @@ from remote_agents.adapters.projects.workspace import FilesystemProjectWorkspace
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
 from remote_agents.application.backend import Backend
 from remote_agents.application.conversations import ConversationService
+from remote_agents.application.host_remote_control import HostRemoteControlService
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import ProjectCreationService
 from remote_agents.application.project_catalog import CatalogProject, build_catalogue
@@ -275,12 +276,21 @@ def compose_backend(
     # probing a host does and let the two drift about which providers exist. Folded from the
     # descriptors, so the registry — not a second table — decides who answers.
     provider_usage = usage_readers(descriptors)
+    # One store and one lock set for the session use case and the host one, so a host toggle
+    # in flight is counted by the same drain that finishes a stop (DEC-046). Built here
+    # rather than defaulted inside each service, because two services defaulting
+    # independently is two drains and neither one covers the other.
+    backend_store = store if store is not None else SQLiteSessionStore(connection)
+    backend_locks = locks if locks is not None else SessionLocks()
     return Backend(
         sessions=SessionService(
-            store if store is not None else SQLiteSessionStore(connection),
+            backend_store,
             runtime.terminal,
-            locks=locks,
+            locks=backend_locks,
             hide_in_console=hide_in_console,
+        ),
+        host_remote_control=_host_remote_control(
+            descriptors, store=backend_store, locks=backend_locks
         ),
         projects=_project_creator(config),
         conversations=_conversation_service(projects.paths, descriptors),
@@ -293,14 +303,35 @@ def compose_backend(
         profiles=_narrow_profiles(runtime.compatibility),
         capture=runtime.terminal.capture,
         activity_feed=activity_feed,
-        usage=_usage_reader(
-            store if store is not None else SQLiteSessionStore(connection),
-            projects.paths,
-            provider_usage,
-        ),
+        usage=_usage_reader(backend_store, projects.paths, provider_usage),
         limits=_limits_reader(provider_usage),
         max_label_length=config.max_label_length,
     )
+
+
+def _host_remote_control(descriptors, *, store, locks):
+    """Build the one host-level Remote Control use case, or `None` when nobody declares one.
+
+    Folded from the descriptors for the reason `provider_usage` is (ARCH-04, DEC-046): the
+    registry decides who answers, not a second table here that could disagree with it.
+
+    **Exactly one owner, refused rather than tie-broken.** The subject of this capability is
+    the machine, so two providers declaring it is not something to merge -- it is a wiring
+    bug, and picking the first would make behaviour depend on registry iteration order,
+    which only diverges on the host where the order differs. Today codex is the only
+    declarer and this branch is unreachable; it exists so that the day a second one lands,
+    the composition says so instead of quietly choosing.
+    """
+    owners = [descriptor for descriptor in descriptors if descriptor.remote_control is not None]
+    if not owners:
+        return None
+    if len(owners) > 1:
+        raise ValueError(
+            "more than one provider declares a host-level remote control "
+            f"({sorted(str(owner.profile_id) for owner in owners)}); the subject is the "
+            "machine, so exactly one may own it"
+        )
+    return HostRemoteControlService(owners[0].remote_control, store, locks)
 
 
 def _conversation_service(project_paths, descriptors) -> ConversationService:

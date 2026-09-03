@@ -268,6 +268,10 @@ def test_compose_backend_builds_one_backend_from_the_real_helpers(composed_home,
         assert backend.sessions is not None, "no session lifecycle use case"
         assert backend.projects is not None, "no project creation use case"
         assert backend.conversations is not None, "no resume service"
+        assert backend.host_remote_control is not None, (
+            "no host remote control: codex declares the capability, so a real composition "
+            "must carry it -- a None here would render 'unavailable' on a host that has it"
+        )
         assert "existing" in {project.name for project in backend.catalogue}
         assert {str(profile.profile_id) for profile in backend.profiles} == {
             "claude",
@@ -659,3 +663,99 @@ async def test_a_claude_only_host_still_runs_its_activity_pass_with_no_watcher()
 
     source = inspect.getsource(service._serve_with_reconciliation)
     assert "composition.approval_watcher is not None or composition.activity_directory" in source
+
+
+def test_a_registry_declaring_no_host_remote_control_composes_none():
+    """Absence is representable, because a host whose providers wire none must say so.
+
+    The mirror of the assertion above, and the reason `Backend.host_remote_control` is
+    optional at all: `None` is what a frontend reads with `is None` to render "unavailable"
+    (DEC-061/067), so a composition that could not produce one would make that branch dead.
+    """
+    from remote_agents.composition.backend import _host_remote_control
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.ports.provider_descriptor import ProviderDescriptor
+
+    barren = (
+        ProviderDescriptor(ProfileId("claude")),
+        ProviderDescriptor(ProfileId("opencode")),
+    )
+    assert _host_remote_control(barren, store=object(), locks=object()) is None
+
+
+def test_exactly_one_descriptor_may_own_the_host_toggle():
+    """The subject is the machine, so two providers claiming it is a wiring bug, not a merge.
+
+    Refused rather than resolved by order: picking the first would make the composition's
+    behaviour depend on registry iteration order, which is exactly the kind of silent
+    tie-break that only shows up on the host where the order differs.
+    """
+    import pytest
+
+    from remote_agents.composition.backend import _host_remote_control
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.ports.provider_descriptor import ProviderDescriptor
+
+    doubled = (
+        ProviderDescriptor(ProfileId("codex"), remote_control=object()),
+        ProviderDescriptor(ProfileId("opencode"), remote_control=object()),
+    )
+    with pytest.raises(ValueError):
+        _host_remote_control(doubled, store=object(), locks=object())
+
+
+async def test_the_host_toggle_is_drained_by_the_same_locks_as_the_session_service():
+    """The composition's claim that both use cases share one drain, made checkable.
+
+    `compose_backend` passes one `SessionLocks` to `SessionService` and to the host toggle so
+    that a daemon enable in flight is counted by the same drain that finishes a stop. Nothing
+    asserted that before: handing the host service a fresh `SessionLocks()` passed every test
+    in this suite while quietly giving the process two drains, neither covering the other.
+    """
+    import asyncio
+
+    from remote_agents.application.host_remote_control import HostRemoteControlCommand
+    from remote_agents.application.reconcile import SessionLocks
+    from remote_agents.composition.backend import _host_remote_control
+    from remote_agents.domain.models import ProfileId
+    from remote_agents.domain.remote_control import (
+        HostConnection,
+        HostRemoteControlStatus,
+        RemoteControlState,
+    )
+    from remote_agents.ports.provider_descriptor import ProviderDescriptor
+
+    gate = asyncio.Event()
+
+    class BlockingControl:
+        async def set_state(self, desired):
+            await gate.wait()
+            return HostRemoteControlStatus.observed(
+                HostConnection.CONNECTED, server_name="Paisleys-Blender"
+            )
+
+    class Store:
+        async def claim_idempotency_key(self, key):
+            return True
+
+    locks = SessionLocks()
+    service = _host_remote_control(
+        (ProviderDescriptor(ProfileId("codex"), remote_control=BlockingControl()),),
+        store=Store(),
+        locks=locks,
+    )
+
+    task = asyncio.create_task(
+        service.set_state(HostRemoteControlCommand(RemoteControlState.ACTIVE, "key-1"))
+    )
+    await asyncio.sleep(0)
+    drain = asyncio.create_task(locks.drain())
+    await asyncio.sleep(0)
+
+    assert not drain.done(), (
+        "the drain finished while a host toggle was open, so the composition handed the "
+        "host use case a lock set the session service does not share"
+    )
+    gate.set()
+    await task
+    await drain

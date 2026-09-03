@@ -108,6 +108,28 @@ async def _serve_with_reconciliation(
         for task in periodic:
             task.cancel()
         await asyncio.gather(*periodic, return_exceptions=True)
+        await _close_host_remote_control(composition)
+
+
+async def _close_host_remote_control(composition: ServiceComposition) -> None:
+    """Reclaim the provider helper the host toggle may have started, and never raise here.
+
+    Codex's Remote Control adapter keeps one `codex app-server proxy` child from the first
+    status read onward. One per process, so this is orderly shutdown rather than a leak --
+    but shutdown is exactly where an unreclaimed child becomes someone's stray process.
+
+    Guarded on `is None` because a host whose providers declare no host-level toggle wires
+    none (DEC-061), and swallowed because a failure to tidy up must not be the last thing a
+    clean shutdown does.
+    """
+    control = getattr(composition.boundary, "backend", None)
+    control = getattr(control, "host_remote_control", None)
+    if control is None:
+        return
+    try:
+        await control.aclose()
+    except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
+        _LOG.debug("host remote control did not close cleanly", exc_info=True)
 
 
 async def _watch_activity_periodically(composition: ServiceComposition, interval: float) -> None:

@@ -163,6 +163,20 @@ class Backend:
     tail read, and neither frontend may block its event loop on the disk during a render.
     """
 
+    host_remote_control: object | None = None
+    """The one host-level action (`application.host_remote_control.HostRemoteControlService`).
+
+    Wired from whichever provider descriptor declares `remote_control`, and `None` when none
+    does. The twelfth field, and the first whose subject is the *machine* rather than a
+    session or a project: every capability above answers a question about something this
+    process manages, and this one answers a question about the computer it is running on.
+
+    Optional for the reason the rest are, and with a sharper consequence: a host whose
+    providers publish no host-level toggle renders "unavailable" from `is None`, and that
+    branch has to stay reachable or the honest answer becomes unrepresentable (DEC-061/067).
+
+    """
+
     max_label_length: int = MAX_LABEL_LENGTH
     """The host's configured bound, clamped by `config` to 1..40 and never looser than the
     domain's.

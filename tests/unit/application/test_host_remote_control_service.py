@@ -276,3 +276,26 @@ async def test_a_failed_pair_raises_rather_than_returning_a_hollow_code() -> Non
 
     with pytest.raises(ProtocolError):
         await service(control).pair(PairCommand("pair-1"))
+
+
+# ------------------------------------------------------------------------------- lifecycle
+
+
+async def test_closing_the_service_reclaims_what_the_boundary_opened() -> None:
+    """Codex's adapter keeps one `app-server proxy` child from the first status read on."""
+
+    class ClosableControl(FakeControl):
+        closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    control = ClosableControl()
+    await service(control).aclose()
+
+    assert control.closed is True
+
+
+async def test_closing_a_service_whose_port_opens_nothing_is_not_an_error() -> None:
+    """The port does not require `aclose`; a boundary that opens nothing has none."""
+    await service(FakeControl()).aclose()

@@ -133,6 +133,19 @@ class HostRemoteControlService:
         self._locks = locks
         self._host_lock = asyncio.Lock()
 
+    async def aclose(self) -> None:
+        """Reclaim whatever the provider boundary opened, if it can be reclaimed.
+
+        Codex's adapter keeps one `codex app-server proxy` child alive from the first
+        `status()` onward. That is one helper process per service, not one per call -- the
+        composition builds exactly one of these -- so this is orderly shutdown rather than a
+        leak being plugged. Tolerant of a port that has no `aclose`, because the protocol
+        does not require one: a provider whose boundary opens nothing has nothing to close.
+        """
+        close = getattr(self._control, "aclose", None)
+        if close is not None:
+            await close()
+
     async def status(self) -> HostRemoteControlStatus:
         """Read the host's Remote Control. Unlocked, unclaimed, and it never raises.
 

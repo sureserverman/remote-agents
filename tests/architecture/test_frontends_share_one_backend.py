@@ -503,8 +503,8 @@ def test_the_backend_capability_set_is_read_from_the_dataclass() -> None:
     without asking whether the attribute happens to exist.
     """
     fields = _backend_fields()
-    assert len(fields) == 11, (
-        f"`Backend` now declares {len(fields)} fields, not 11. That is fine — but it widens "
+    assert len(fields) == 12, (
+        f"`Backend` now declares {len(fields)} fields, not 12. That is fine — but it widens "
         "what Rule 2 forbids probing for, so confirm the new field is a capability an adapter "
         "should read as a declared field rather than discover."
     )

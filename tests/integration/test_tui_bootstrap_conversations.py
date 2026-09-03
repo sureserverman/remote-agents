@@ -210,6 +210,13 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # Neither surface renders it yet; both will. Composition is settled here, presentation
         # follows — the same order `capture` and `usage` each arrived in.
         "limits",
+        # The first capability whose subject is neither a session nor a project but the
+        # *machine*: Codex's Remote Control is a property of the shared app-server daemon
+        # this host runs. It sits here for the reason `limits` does -- the fact is the same
+        # fact whichever session is open, or none -- and it reaches the surfaces from the
+        # provider registry, so a host whose providers declare no host-level toggle carries
+        # a `None` both surfaces read as "unavailable" (DEC-061/067).
+        "host_remote_control",
         "max_label_length",
     }
 
