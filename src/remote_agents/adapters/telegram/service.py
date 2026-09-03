@@ -3163,6 +3163,8 @@ def _expiry_phrase(expires_at) -> str:
 
     local = expires_at.astimezone()
     remaining = expires_at - datetime.now(UTC)
+    # Floored, never rounded: a deadline that overstates the time left is the one
+    # direction that costs the owner something.
     minutes = int(remaining.total_seconds() // 60)
     clock = local.strftime("%H:%M %Z")
     if minutes < 1:

@@ -32,7 +32,7 @@ every one of them advertise an affordance it cannot perform.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from remote_agents.application.backend import Backend
 from remote_agents.application.errors import DuplicateCommandError
@@ -196,6 +196,8 @@ class FakeHostRemoteControl:
         self.claimed: set[str] = set()
         self.calls: list[str] = []
         self.pairing_code = "ZZZZ-9999"
+        #: How long the minted code has left. Settable, so a test can drive the expired arm.
+        self.expires_in_minutes = 5
         self.fail_with: Exception | None = None
 
     async def status(self):
@@ -219,9 +221,15 @@ class FakeHostRemoteControl:
         self._claim(command.idempotency_key)
         if self.fail_with is not None:
             raise self.fail_with
+        # Relative, like a real code, and NOT a fixed instant. It was
+        # `datetime(2026, 9, 3, 12, 0)`, which was comfortably in the future when it was
+        # written and an hour in the past by the time the plan's full clean pass ran -- so a
+        # test asserting the bot renders a deadline began failing for reasons that had
+        # nothing to do with the bot. A fixture whose meaning depends on when you run it is a
+        # fixture that will eventually be wrong.
         return PairingCode(
             code=self.pairing_code,
-            expires_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+            expires_at=datetime.now(UTC) + timedelta(minutes=self.expires_in_minutes),
         )
 
     async def aclose(self) -> None:

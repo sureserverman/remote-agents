@@ -477,3 +477,29 @@ async def test_pairing_on_a_host_with_no_toggle_says_it_is_unavailable() -> None
     bot.callbacks.bind_pending(CHAT, 1)
     reply = await bot._host_pair_reply("token", 1)
     assert "unavailable" in reply["text"].lower()
+
+
+async def test_the_deadline_is_a_duration_and_survives_being_run_tomorrow() -> None:
+    """A deadline the owner acts on, and a fixture that does not rot.
+
+    Both halves were learned the same way. The message gives minutes remaining rather than a
+    bare clock time because a pairing code lives minutes and "expires at 13:00:00 BST" makes a
+    reader do arithmetic; and the fake's expiry is relative because the first version pinned
+    an instant that was in the future when it was written and in the past when the plan's full
+    clean pass ran an hour later.
+    """
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    control.expires_in_minutes = 5
+    reply = await _pair(_bot(control))
+
+    # The form, not the arithmetic. The count floors rather than rounds, deliberately -- a
+    # deadline that overstates the time left is the one direction that costs the owner
+    # something -- so pinning an exact number here would be pinning the rounding rule twice.
+    assert "Valid for about" in reply["text"], reply["text"]
+    assert "more minutes, until" in reply["text"], reply["text"]
+
+    stale = FakeHostRemoteControl(HostConnection.CONNECTED)
+    stale.expires_in_minutes = -1
+    expired = await _pair(_bot(stale))
+
+    assert "expired" in expired["text"], "an already-dead code must say so, not count down"
