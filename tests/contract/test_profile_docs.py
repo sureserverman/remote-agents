@@ -63,4 +63,10 @@ def test_the_compatibility_document_names_the_install_this_feature_needs() -> No
 
     assert "standalone Codex install" in document
     assert "not the npm package" in document
-    assert "every reading is `unreachable`" in document
+    # The distinction, because the first version of this document got it wrong and this test
+    # pinned the error: only the verbs that *start* a daemon need the standalone install. The
+    # preference verbs work on either distribution, which is why the reading on such a host is
+    # `no daemon` rather than `unreachable`.
+    assert "verbs that *start* one" in document
+    assert "work on either\ndistribution" in document
+    assert "the reading is `no daemon`" in document

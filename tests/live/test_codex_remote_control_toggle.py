@@ -11,8 +11,13 @@ What it proves, in the order a doubting reader would want it:
 1. the reading before anything is done, recorded rather than assumed;
 2. that enabling reaches CONNECTED or CONNECTING, which is the relay round trip;
 3. that a managed `codex` pane launched *after* that reaches readiness;
-4. that the daemon lists a thread for that pane's workspace — the pane is daemon-backed and
-   therefore phone-visible, which is the launch-order rule's whole content;
+4. that the daemon is still answering while that pane runs. **This is weaker than the plan
+   asked for and weaker than it sounds.** The plan specified a `thread/list` for the project
+   cwd, which is what would actually show the pane is *daemon-backed* rather than embedded —
+   the launch-order rule's whole content. This asserts only that a daemon is up, and would
+   pass identically for an embedded pane. Recorded rather than quietly substituted: **the
+   launch-order rule is guarded by no test anywhere in this repository**, and it is a
+   documented accepted cost of DEC-071;
 5. that disabling reaches DISABLED;
 6. **that the pane is still alive and the daemon still answers** — the property the entire
    design is arranged around, and the one a `remote-control stop` implementation would fail;
@@ -124,7 +129,10 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
             launched = await terminal.launch(session_id, project_id, definition.profile_id)
             assert launched.live, launched.detail
 
-            # (4) The daemon knows about it, which is what "the phone can see it" means.
+            # (4) The daemon is still up. NOT that the pane is attached to it -- see the
+            # module docstring. Proving that needs `thread/list` for the project cwd
+            # through `app-server proxy`, which is what the plan specified and what this
+            # should become the first time this drill can actually run.
             listed = await runner.run((*REMOTE_CONTROL_ARGV["daemon_probe"],), timeout=15)
             assert listed.returncode == 0, (
                 "the daemon stopped answering while a managed pane was attached to it"

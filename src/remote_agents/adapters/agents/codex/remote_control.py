@@ -105,11 +105,18 @@ _ABSENT_DAEMON_SIGNATURE = "app-server-control.sock"
 #: matters here. Requiring the ENOENT cause makes the ambiguous failures raise instead.
 _ABSENT_DAEMON_CAUSES = ("No such file or directory", "os error 2")
 
-#: What `codex` says when the *installation* cannot run a daemon at all.
+#: What `codex` says when the *installation* cannot start a daemon.
 #:
-#: The whole daemon surface -- every verb, not just the enable -- requires OpenAI's standalone
-#: install at a fixed path, because that is where the daemon starts and updates app-server
-#: from. A host running the npm distribution answers every daemon command with this.
+#: Only the verbs that bring a daemon up -- `remote-control start` and `app-server daemon
+#: start` -- need OpenAI's standalone install at a fixed path, because that is where the
+#: daemon starts and updates app-server from. The preference verbs
+#: (`enable-remote-control` / `disable-remote-control`) work on either distribution.
+#:
+#: An earlier version of this comment, and the documentation written alongside it, claimed the
+#: whole daemon surface refused. Measured afterwards on this host: `disable-remote-control`
+#: exits 0 with JSON on the npm build. The check is applied to every command anyway -- it
+#: costs one substring test, and the classification belongs to the message rather than to the
+#: branch it was first seen in.
 #:
 #: Mapped to UNREACHABLE rather than ERRORED, which is where it landed first. ERRORED means
 #: the daemon answered and reported its own link broken; here there is no daemon and cannot be
@@ -135,6 +142,17 @@ _SERVER_NAME_MAX_BYTES = 256
 #: another, so it is short by construction. Generous against the real `XXXX-XXXX` shape
 #: without admitting a payload.
 _PAIRING_CODE_MAX_CHARACTERS = 64
+
+
+def _cannot_start_a_daemon(result: CommandResult) -> bool:
+    """Whether `codex` refused because this installation cannot bring a daemon up.
+
+    A reading, not a failure: there is no daemon and cannot be one, which is UNREACHABLE
+    rather than ERRORED. ERRORED means a daemon answered and reported its own link broken,
+    and telling that to an owner whose install simply cannot serve one is the "button that
+    could never explain itself" this feature exists to end.
+    """
+    return _UNSUPPORTED_INSTALL_SIGNATURE in result.stderr
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -319,12 +337,10 @@ class CodexRemoteControl:
             result = await self._runner.run(
                 REMOTE_CONTROL_ARGV["enable_when_running"], timeout=_ENABLE_TIMEOUT_SECONDS
             )
-        if _UNSUPPORTED_INSTALL_SIGNATURE in result.stderr:
-            # Not a failure of this host's Remote Control: a statement that this installation
-            # of codex has no daemon to control and cannot acquire one. Both surfaces render
-            # UNREACHABLE with a sentence naming the cause.
+        if _cannot_start_a_daemon(result):
             return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
-        # The daemon-scoped verb prints human-readable text only, so it never yields an
+        # The daemon-scoped verb answers with JSON about the *preference* it wrote, not
+        # about whether anything is serving it, so it never yields an
         # envelope; the re-read below is the whole answer in that branch.
         payload = self._payload(result.stdout) if result.returncode == 0 else None
         hint: HostRemoteControlStatus | None = None
@@ -352,10 +368,17 @@ class CodexRemoteControl:
         result = await self._runner.run(
             REMOTE_CONTROL_ARGV["disable"], timeout=_DISABLE_TIMEOUT_SECONDS
         )
+        if _cannot_start_a_daemon(result):
+            # Measured NOT to happen on the npm build, where this verb succeeds. Classified
+            # here anyway: the message means "no daemon can exist", whichever verb reports it.
+            return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
         if result.returncode != 0:
             return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
-        # Re-read rather than assert: the command prints human-readable text only, so the
-        # daemon itself is the only honest source for what the flip actually achieved.
+        # Re-read rather than trust this command's own answer. It does print JSON -- an
+        # earlier version of this comment said "human-readable text only", which was wrong --
+        # but what it reports is the *preference* it just wrote, and the reading both surfaces
+        # show is whether anything is serving that preference. On a host that cannot start a
+        # daemon those are different answers, and the daemon is the honest source.
         return await self.status()
 
     async def _no_daemon_is_listening(self) -> bool:

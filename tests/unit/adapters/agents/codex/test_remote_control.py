@@ -683,3 +683,37 @@ async def test_an_install_that_cannot_run_a_daemon_reads_as_unreachable() -> Non
     # And still nothing of what codex printed.
     assert "/home/user" not in repr(result)
     assert "standalone" not in repr(result)
+
+
+async def test_the_disable_verb_also_classifies_an_install_that_cannot_serve_a_daemon() -> None:
+    """Measured not to happen on the npm build, where `disable-remote-control` succeeds.
+
+    Pinned anyway, because the classification belongs to the message rather than to the branch
+    it was first seen in: the first version of this correction reached only `_enable`, and a
+    close-out review caught the asymmetry before anything shipped.
+    """
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["disable"]: CommandResult(
+                returncode=1,
+                stdout="",
+                stderr="Error: managed standalone Codex install not found at /x/codex",
+            )
+        }
+    )
+    rpc = FakeRpc(payload={"status": "connected"})
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.INACTIVE)
+
+    assert result.connection is HostConnection.UNREACHABLE
+    assert rpc.calls == [], "an install that cannot serve a daemon has nothing to re-read"
+
+
+def test_both_directions_share_one_classifier_for_that_message() -> None:
+    """One predicate, so the two verbs cannot drift about what the same message means."""
+    from remote_agents.adapters.agents.codex.remote_control import _cannot_start_a_daemon
+
+    unsupported = CommandResult(
+        returncode=1, stdout="", stderr="managed standalone Codex install not found at /x"
+    )
+    assert _cannot_start_a_daemon(unsupported) is True
+    assert _cannot_start_a_daemon(CommandResult(returncode=1, stdout="", stderr="boom")) is False

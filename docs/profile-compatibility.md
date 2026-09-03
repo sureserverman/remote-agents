@@ -105,15 +105,25 @@ the ChatGPT app gets control of this machine until it expires, and a phone that 
 access afterwards. Turning Codex Remote Control off is what ends that access. If you lose a
 code, mint another; the old one expires on its own.
 
-**It needs OpenAI's standalone Codex install, not the npm package.** Every verb on the daemon
-surface refuses without it — `Error: managed standalone Codex install not found at
-~/.codex/packages/standalone/current/codex` — because that fixed path is where the daemon
-starts and updates app-server from. `codex --version` and `codex remote-control --help` both
-succeed on the npm distribution regardless, so the absence shows up only when the toggle is
-pressed. On such a host every reading is `unreachable` and the toggle does nothing; that is
-the honest answer rather than a defect, and both surfaces say which of the two causes it is.
+**Starting the daemon needs OpenAI's standalone Codex install, not the npm package.** The
+verbs that *start* one — `codex remote-control start` and `codex app-server daemon start` —
+refuse without it (`Error: managed standalone Codex install not found at
+~/.codex/packages/standalone/current/codex`), because that fixed path is where the daemon
+starts and updates app-server from. The verbs that only flip the persisted preference,
+`app-server daemon enable-remote-control` and `disable-remote-control`, work on either
+distribution and answer with JSON.
+
+So on a host with the npm package: the reading is `no daemon`, because none is running and
+none can be started; pressing *off* succeeds and changes the stored preference; pressing *on*
+reads `unreachable`, which is the honest answer for an install that cannot bring a daemon up.
+The preference can be set, but nothing will ever serve it, so no phone can reach the machine.
+`codex --version` and `codex remote-control --help` both succeed regardless, which is why the
+absence shows up only when the toggle is pressed.
+
 Install the standalone distribution if you want this feature:
-`curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+`curl -fsSL https://chatgpt.com/codex/install.sh | sh`. Note it may place a `codex` on your
+`PATH` ahead of an npm one; check `command -v codex` afterwards if the npm build is the one
+you want launching sessions.
 
 **Six readings, and three of them are not "off".** `on`, `off`, `connecting`, `no daemon`,
 `link broken` and `unreachable`. `no daemon` means nothing is listening, so nothing can say

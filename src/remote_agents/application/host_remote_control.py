@@ -179,7 +179,7 @@ class HostRemoteControlService:
         is trying to issue -- the reason `trust_state` is unlocked too. Unclaimed because a
         read that burns an idempotency key would exhaust the key space by being looked at.
 
-        A `ProviderUnavailable` becomes ERRORED rather than propagating: this answer is rendered
+        A `ProviderUnavailable` becomes UNREACHABLE rather than propagating: this answer is rendered
         into a status line by surfaces that have one branch for a reading and none for a
         traceback, and "the daemon would not answer" IS a reading.
         """
