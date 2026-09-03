@@ -265,9 +265,13 @@ class CodexRemoteControl:
           brings one up. Any bootstrap it performs has nothing to stop, because we just
           established nothing is listening.
 
-        The destructive branch is therefore not merely unused; it is unreachable, because the
-        only state in which `bootstrap_locked` could stop something is the state in which this
-        method does not call it.
+        That makes the destructive branch **very nearly** unreachable, and the gap is worth
+        stating rather than rounding off: the probe and the start are two separate execs, so a
+        session launch landing between them can bring a backend up that the start then tears
+        down. One spawn wide, and reachable by the sequence these surfaces teach -- turn it on
+        with no daemon, then launch. Closing it needs a lock the `codex` CLI does not offer;
+        BL-037 carries the decision. What this rule removes is the far larger case, where the
+        branch was taken on *every* non-bootstrapped host, every time.
 
         Then report what the daemon says rather than what the CLI guessed.
 

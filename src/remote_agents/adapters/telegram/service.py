@@ -281,6 +281,14 @@ _PENDING_NOTICES = {
     CONFIRMED_FORCE: "Force stopping the session…",
     "launch.profile": "Launching — waiting for the agent to become ready…",
     "resume.confirm": "Resuming — waiting for the agent to become ready…",
+    # The slowest action in this bot, and it had no notice. Enabling probes the daemon (10 s
+    # ceiling), runs the enable (30 s, a relay round trip), then re-reads the daemon -- so the
+    # confirm screen could sit unchanged with its button still drawn for the better part of a
+    # minute, and a second press answered "that action has already run" for something still in
+    # flight. Also the difference between a failure the owner is told about and one that
+    # leaves the screen silently unchanged: `callback`'s `if pending is None: raise` costs the
+    # screen for actions absent from this table.
+    "host.remote.confirm": "Changing this machine's Remote Control — waiting for the daemon…",
 }
 """The actions that make the owner wait, and what to show them while they do.
 

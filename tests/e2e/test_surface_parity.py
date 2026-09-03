@@ -30,7 +30,11 @@ from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.screens.confirm import HostPairingCodeModal
+from remote_agents.adapters.tui.screens.confirm import (
+    HostPairingCodeModal,
+    HostRemoteControlConfirmModal,
+)
+from remote_agents.adapters.tui.screens.dashboard import HOST_REMOTE_CONTROL_KEY
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
@@ -336,22 +340,48 @@ async def _probe_resume(app, launcher, pilot) -> None:
 
 
 async def _probe_host_remote_control(app, launcher, pilot) -> None:
-    """The host toggle: the reading is drawn, and the key reaches a confirmation.
+    """The host toggle: the reading is drawn, and the real key reaches a confirmation.
 
     Driven from the dashboard rather than a session detail, because its subject is the
     machine -- there is no row to open first, which is the structural difference from
     `_probe_remote_control` above and the reason both are listed.
+
+    **It presses the key.** The first version asked the screen
+    `host_directions_offered(a status it built itself)`, which is the "ask the surface what it
+    would do" shape this file exists to avoid: deleting the binding, or stopping
+    `action_host_remote_control` from posting, left it green. This one goes through the
+    binding to a real modal, which is what "losing one names itself in the failure" means.
     """
     del launcher
     await pilot.pause()
-    rows = [
-        str(app.screen.query_one("#limits-pane", OptionList).get_option_at_index(index).prompt)
-        for index in range(app.screen.query_one("#limits-pane", OptionList).option_count)
-    ]
+    pane = app.screen.query_one("#limits-pane", OptionList)
+    rows = [str(pane.get_option_at_index(index).prompt) for index in range(pane.option_count)]
     assert any(HOST_REMOTE_CONTROL_TITLE in row for row in rows), rows
-    assert app.screen.host_directions_offered(
-        HostRemoteControlStatus.observed(HostConnection.CONNECTED, server_name=None)
-    )
+
+    pressing = asyncio.create_task(pilot.press(HOST_REMOTE_CONTROL_KEY))
+    dismissing = None
+    try:
+        for _ in range(200):
+            await pilot.pause()
+            if isinstance(app.screen, HostRemoteControlConfirmModal):
+                break
+        assert isinstance(app.screen, HostRemoteControlConfirmModal), (
+            "the host toggle key reached no confirmation"
+        )
+        dismissing = asyncio.create_task(pilot.press("escape"))
+        for _ in range(200):
+            await pilot.pause()
+            if not isinstance(app.screen, HostRemoteControlConfirmModal):
+                break
+        await asyncio.wait_for(asyncio.gather(pressing, dismissing), timeout=10)
+    finally:
+        for task in (pressing, dismissing):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(
+            *(task for task in (pressing, dismissing) if task is not None),
+            return_exceptions=True,
+        )
 
 
 async def _probe_host_pairing(app, launcher, pilot) -> None:
