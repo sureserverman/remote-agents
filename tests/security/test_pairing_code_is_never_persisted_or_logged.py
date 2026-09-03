@@ -357,7 +357,6 @@ async def test_the_bot_will_not_mint_against_a_reading_that_has_gone_stale() -> 
     CONNECTED screen would mint a live code on a host the policy says may not be paired.
     """
     from remote_agents.adapters.telegram.service import build_private_bot
-
     from remote_agents.domain.remote_control import HostConnection
 
     control, backend = _surface_backend()
