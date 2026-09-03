@@ -67,9 +67,7 @@ def test_a_status_whose_state_contradicts_its_connection_is_refused() -> None:
             if state is derived:
                 continue
             with pytest.raises(ValueError):
-                HostRemoteControlStatus(
-                    state=state, connection=connection, server_name=None
-                )
+                HostRemoteControlStatus(state=state, connection=connection, server_name=None)
 
 
 def test_the_agreeing_pair_constructs_directly() -> None:

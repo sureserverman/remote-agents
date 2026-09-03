@@ -1,0 +1,8 @@
+{
+  "mode": "daemon",
+  "status": "connecting",
+  "serverName": "Paisleys-Blender",
+  "environmentId": "env_recorded_fixture",
+  "timedOut": false,
+  "daemon": {"state": "AlreadyRunning"}
+}

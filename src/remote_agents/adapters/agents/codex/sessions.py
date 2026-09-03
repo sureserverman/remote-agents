@@ -51,6 +51,18 @@ class CodexAppServerClient:
             params["cursor"] = cursor
         return await self._protocol.request("thread/list", params)
 
+    async def aclose(self) -> None:
+        """Close the app-server session this client opened, if it opened one.
+
+        Added alongside the Remote Control adapter's own `aclose`, which is where the leak
+        was first noticed: both hold a `JsonRpcProcess` that spawns a `codex` child on first
+        request, and neither had any way for a caller to reclaim it. Tolerant of an injected
+        protocol with no `close`, so a test double needs no lifecycle.
+        """
+        close = getattr(self._protocol, "close", None)
+        if close is not None:
+            await close()
+
 
 class CodexSessionCatalogue:
     """Collect at most a fixed number of content-free local Codex thread records."""

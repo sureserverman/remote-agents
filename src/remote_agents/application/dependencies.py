@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 
 from remote_agents.ports.terminal_text import probe_version_line
 
@@ -97,10 +98,12 @@ def _require_package_names(names: Sequence[str]) -> tuple[str, ...]:
 
 #: How each requirement is asked. tmux answers `-V` and rejects `--version`, so the argument
 #: is per-name rather than the single `--version` the curated agent profiles all share.
-VERSION_ARGUMENTS: dict[str, tuple[str, ...]] = {
-    "tmux": ("-V",),
-    "git": ("--version",),
-}
+VERSION_ARGUMENTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "tmux": ("-V",),
+        "git": ("--version",),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
