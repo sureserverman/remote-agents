@@ -301,7 +301,13 @@ async def test_a_failed_mint_puts_nothing_in_the_bot_s_log(
         bot.callbacks.bind_pending(_CHAT, 1)
         reply = await bot._host_pair_reply(token, 1)
 
-    assert "Nothing changed" in reply["text"], "the failure path was not actually driven"
+    assert "no" in reply["text"].lower() and "pairing code" in reply["text"].lower(), (
+        "the failure path was not actually driven"
+    )
+    # It must NOT claim nothing happened: `pair` can fail after the relay minted a live code
+    # this process never rendered and cannot revoke, so "nothing changed" is the one sentence
+    # an owner could act wrongly on.
+    assert "expires on its own" in reply["text"]
     assert SECRET not in reply["text"]
     # `caplog.text` is the FORMATTED output, traceback included -- which is the whole point.
     assert SECRET not in caplog.text
@@ -386,3 +392,144 @@ def test_a_code_carrying_markup_cannot_crash_the_screen_that_shows_it() -> None:
     assert getattr(widget, "_render_markup", True) is False or widget._content_type != "markup", (
         "the one screen whose job is to show provider text renders it as markup"
     )
+
+
+# --- The one the "no keyboard" assertion could not see -----------------------------------
+
+
+async def test_the_live_view_never_re_sends_the_pairing_message_by_itself() -> None:
+    """`move_to_bottom` re-sends the last remembered screen with no press involved.
+
+    It runs once per activity-notification pass, to keep the menu reachable below whatever
+    notifications have arrived since. That is right for a menu and catastrophic for a
+    secret: the pairing reply was remembered like any other screen, so the next pass sent the
+    code again as a brand new message with its own push notification, under a line that said
+    "shown once" -- and again on every pass after that, for as long as it stayed the live
+    view. Reproduced end to end before the fix.
+
+    The existing assertion that the message carries no keyboard could not see this. It tests
+    the mechanism the author had in mind; the re-send path was never the keyboard.
+    """
+    from remote_agents.adapters.telegram.live_view import LiveView
+    from remote_agents.adapters.telegram.service import (
+        _UNREMEMBERED_ACTIONS,
+        build_private_bot,
+    )
+
+    class _Anchors:
+        def __init__(self) -> None:
+            self._anchor: int | None = 100
+
+        def anchor(self, _chat: int) -> int | None:
+            return self._anchor
+
+        def record_anchor(self, _chat: int, message_id: int) -> None:
+            self._anchor = message_id
+
+        def clear_anchor(self, _chat: int) -> None:
+            self._anchor = None
+
+    class _Bot:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        async def edit_message_text(self, **_kw: object) -> None:
+            return None
+
+        async def send_message(self, **kw: object):
+            self.sent.append(kw)
+
+            class _Message:
+                message_id = 200 + len(self.sent)
+
+            return _Message()
+
+        async def delete_message(self, **_kw: object) -> None:
+            return None
+
+    control, backend = _surface_backend()
+    boundary = build_private_bot(_OWNER, _CHAT, backend=backend)
+    screen = await boundary._host_remote_control_reply()
+    token = next(
+        button.callback_data for row in screen.keyboard for button in row if "Pair" in button.text
+    )
+    boundary.callbacks.bind_pending(_CHAT, 1)
+    reply = await boundary._host_pair_reply(token, 1)
+    assert SECRET in reply["text"], "a test that never rendered the secret proves nothing"
+
+    view = LiveView(chat_id=_CHAT, anchors=_Anchors(), callbacks=boundary.callbacks)
+    bot = _Bot()
+    # Driven through the SERVICE's own decision, not by handing `LiveView` the flag
+    # directly. An earlier version of this test passed `remember=False` itself, so
+    # deleting the service's choice to pass it left every assertion green -- the test
+    # proved `LiveView` could keep a secret while the code that must ask it to stopped
+    # asking.
+    boundary.view = view
+
+    class _Query:
+        def get_bot(self):
+            return bot
+
+    await boundary._render(
+        _Query(), reply, remember="host.remote.pair" not in _UNREMEMBERED_ACTIONS
+    )
+    await view.move_to_bottom(bot)  # one activity-notification pass
+
+    leaked = [message for message in bot.sent if SECRET in str(message.get("text", ""))]
+    assert not leaked, (
+        f"the live view re-sent the pairing code with no press: {len(leaked)} message(s)"
+    )
+
+
+async def test_a_remembered_screen_is_still_re_sent_so_the_guard_is_not_vacuous() -> None:
+    """The mechanism still works for the screens it exists for -- menus, not secrets."""
+    from remote_agents.adapters.telegram.live_view import LiveView
+    from remote_agents.adapters.telegram.service import build_private_bot
+
+    class _Anchors:
+        def anchor(self, _chat: int) -> int:
+            return 100
+
+        def record_anchor(self, _chat: int, _message_id: int) -> None:
+            return None
+
+        def clear_anchor(self, _chat: int) -> None:
+            return None
+
+    class _Bot:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        async def edit_message_text(self, **_kw: object) -> None:
+            return None
+
+        async def send_message(self, **kw: object):
+            self.sent.append(kw)
+
+            class _Message:
+                message_id = 201
+
+            return _Message()
+
+        async def delete_message(self, **_kw: object) -> None:
+            return None
+
+    _, backend = _surface_backend()
+    boundary = build_private_bot(_OWNER, _CHAT, backend=backend)
+    ordinary = await boundary._host_remote_control_reply()
+    view = LiveView(chat_id=_CHAT, anchors=_Anchors(), callbacks=boundary.callbacks)
+    bot = _Bot()
+
+    from remote_agents.adapters.telegram.service import _reply_arguments
+
+    await view.render(bot, _reply_arguments(ordinary), retire=True)
+    await view.move_to_bottom(bot)
+
+    assert bot.sent, "move_to_bottom stopped working for the screens it is for"
+
+
+def test_the_pairing_action_is_the_one_the_live_view_must_not_remember() -> None:
+    """Named in one place, so a second secret-bearing screen is a deliberate addition."""
+    from remote_agents.adapters.telegram.service import _UNREMEMBERED_ACTIONS
+
+    assert _UNREMEMBERED_ACTIONS == frozenset({"host.remote.pair"})

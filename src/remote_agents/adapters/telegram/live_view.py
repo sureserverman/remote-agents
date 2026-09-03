@@ -142,7 +142,14 @@ class LiveView:
         if message_id > 0:
             self._anchors.adopt_anchor(self._chat_id, message_id)
 
-    async def render(self, bot, arguments: dict[str, object], *, retire: bool = True) -> int:
+    async def render(
+        self,
+        bot,
+        arguments: dict[str, object],
+        *,
+        retire: bool = True,
+        remember: bool = True,
+    ) -> int:
         """Draw `arguments` as the chat's live view, and answer which message that is.
 
         `retire=False` draws a screen that does **not** take ownership of the message's
@@ -150,11 +157,29 @@ class LiveView:
         owner just pressed is still being processed, and it is one of the tokens a retiring
         render would discard. Pruning there kills the action mid-flight — the button
         resolves, the wait appears, and nothing happens.
+
+        `remember=False` draws a screen that retires tokens normally but is **never re-sent**
+        by `move_to_bottom`. Retiring and remembering used to be the same flag, and they are
+        different questions: one is about who owns the keyboard, the other about what this
+        object will put back at the bottom of the chat later, on its own, without a press.
+
+        They were separated because a screen exists whose entire content is a secret. The
+        pairing-code reply says "shown once", and with one flag it was remembered like any
+        other screen — so the next activity-notification pass re-sent it verbatim, as a brand
+        new message with its own push notification, for as long as it stayed the live view.
+        Reproduced end to end before this parameter existed. A screen that must never be
+        re-sent cannot express that through a flag that also means "keep your buttons".
         """
         # Remembered before the send, so a screen that is drawn and then fails to move is still
         # the screen this object believes it is showing.
         if retire:
-            self._last_arguments = arguments
+            if remember:
+                self._last_arguments = arguments
+            else:
+                # Forgotten rather than left stale: keeping the *previous* screen would let
+                # `move_to_bottom` resurrect something the owner has since navigated away
+                # from, and answering None is a state this class already handles.
+                self._last_arguments = None
         anchor = self._anchors.anchor(self._chat_id)
         if anchor is None:
             return await self._send(bot, arguments, retire=retire)

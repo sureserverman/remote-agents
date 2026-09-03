@@ -405,7 +405,8 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     reply = await _pair(_bot(control))
 
-    assert "ZZZZ-9999" in reply["text"]
+    text = reply["text"]
+    assert "ZZZZ-9999" in text
     # No *buttons*, which is the property that matters: an empty markup renders nothing, and
     # what must not be there is a control that could re-send the message. Every other screen
     # in this bot ends in the navigation bar; this one deliberately does not.
@@ -413,8 +414,16 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
     assert not markup.inline_keyboard, (
         f"a keyboard under a secret can re-send it: {markup.inline_keyboard}"
     )
-    assert "once" in reply["text"].lower()
-    assert "expires" in reply["text"].lower()
+    # Unforwardable and unsavable in the client, like a captured pane and for a stronger
+    # reason: a pane carries what an agent printed, this carries a key to the machine.
+    assert reply.get("protect_content") is True
+    # The four things the message has to teach, asserted as properties rather than as the
+    # sentences that carry them -- the wording was rewritten once already and the test that
+    # pinned its old words would have failed for a message that got *better*.
+    assert "control of this machine" in text, "the holder's power is not stated"
+    assert "Valid for about" in text, "no deadline the owner can act on"
+    assert "turn" in text and "off to end it" in text, "no way to end a pairing is named"
+    assert "Delete this message" in text, "the medium keeps it and the message must say so"
     assert control.calls.count("pair") == 1
 
 
@@ -457,7 +466,10 @@ async def test_a_failed_mint_says_so_without_repeating_what_the_provider_printed
 
     assert "ZZZZ-9999" not in reply["text"]
     assert ".codex" not in reply["text"]
-    assert "Nothing changed" in reply["text"]
+    # And it does not claim nothing happened: a mint can fail after the relay produced a live
+    # code this process never rendered and cannot revoke.
+    assert "expires on its own" in reply["text"]
+    assert "setting changed" in reply["text"]
 
 
 async def test_pairing_on_a_host_with_no_toggle_says_it_is_unavailable() -> None:

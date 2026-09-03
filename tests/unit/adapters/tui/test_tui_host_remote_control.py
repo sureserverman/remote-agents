@@ -39,7 +39,7 @@ from datetime import UTC, datetime
 
 import pytest
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
-from textual.widgets import OptionList
+from textual.widgets import OptionList, Static
 from tui_feedback import announcements
 from tui_feedback import status as _status
 
@@ -690,3 +690,124 @@ async def test_a_failed_pairing_says_so_without_repeating_what_failed() -> None:
         assert not isinstance(app.screen, HostPairingCodeModal)
         assert said, "a failure the owner is not told about is a surface that lied"
         assert "ZZZZ-9999" not in " ".join(said)
+
+
+# --- What the pane actually paints ------------------------------------------------------
+
+
+@pytest.mark.parametrize("width", [80, 100, 120], ids=lambda w: f"{w}col")
+async def test_no_two_readings_paint_alike_at_any_width_we_support(width: int) -> None:
+    """Distinctness *as painted*, which is a different claim from distinctness as computed.
+
+    `test_no_two_connections_render_alike` asserts on `host_remote_control_line`, a pure
+    function, and it passed while the pane showed two readings identically. `#limits-pane` is
+    `text-wrap: nowrap; text-overflow: ellipsis` and its content is 28 columns at an
+    80-column terminal, of which 23 are spent before the reading starts -- so ERRORED
+    ("on, but its connection is broken") and CONNECTING ("on, still connecting") both painted
+    as `Codex Remote Control · on, …`.
+
+    Two readings looking alike is bad; *which* two is worse. ERRORED means the daemon
+    answered and said its own link to the relay is broken, and it was painting as "on".
+
+    So this asserts on the truncation, at the widths a person actually runs. It is a
+    property of the words, so it is checked against the ellipsis rule rather than by
+    screenshotting six terminals: the pane's own CSS is what does the cutting.
+    """
+    from remote_agents.adapters.tui.screens.dashboard import _HOST_CONNECTION_WORDS
+
+    # 23 columns of title and separator, and one column for the ellipsis itself.
+    budget = width - 52 - 1 - len(f"{HOST_REMOTE_CONTROL_TITLE} · ")
+    painted: dict[str, HostConnection] = {}
+    for connection, word in _HOST_CONNECTION_WORDS.items():
+        visible = word if len(word) <= budget else word[:budget]
+        assert visible not in painted, (
+            f"at {width} columns {connection} and {painted[visible]} both paint as "
+            f"{visible!r} -- an owner cannot tell them apart"
+        )
+        painted[visible] = connection
+
+
+def test_no_reading_truncates_into_another_reading_s_word() -> None:
+    """The sharper half of the rule above: a prefix must not READ as a different state.
+
+    Distinctness alone would be satisfied by "on" and "on, broken" at a width that keeps
+    both -- but at a narrower one the second becomes "on, …", which a person reads as the
+    first. So no word may begin with another word.
+    """
+    from remote_agents.adapters.tui.screens.dashboard import _HOST_CONNECTION_WORDS
+
+    words = list(_HOST_CONNECTION_WORDS.items())
+    for connection, word in words:
+        for other, other_word in words:
+            if connection is other:
+                continue
+            assert not word.startswith(other_word), (
+                f"{connection}'s {word!r} truncates into {other}'s {other_word!r}"
+            )
+
+
+def test_every_reading_has_a_sentence_for_the_screens_that_have_room() -> None:
+    """The pane row cannot carry the nuance; the chooser can, and the bot already did."""
+    from remote_agents.adapters.tui.screens.dashboard import _HOST_CONNECTION_EXPLANATIONS
+
+    assert set(_HOST_CONNECTION_EXPLANATIONS) == set(HostConnection)
+    assert len(set(_HOST_CONNECTION_EXPLANATIONS.values())) == len(HostConnection)
+
+
+async def test_the_chooser_says_what_the_daemon_actually_reported() -> None:
+    """ERRORED is not "could not be read": the daemon answered, and said its link is broken."""
+    from remote_agents.adapters.tui.screens.dashboard import _HOST_CONNECTION_EXPLANATIONS
+
+    control = FakeHostRemoteControl(HostConnection.ERRORED)
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        asking = asyncio.create_task(app.screen.confirm_host_remote_control())
+        try:
+            await _until(
+                lambda: isinstance(app.screen, HostRemoteControlDirectionModal),
+                why="the chooser to open",
+            )
+            # `Static.render()` is what the widget hands the compositor, so this asserts on
+            # what was mounted rather than on a string rebuilt from the same tables the
+            # implementation reads.
+            shown = str(app.screen.query_one("#status", Static).render())
+            assert _HOST_CONNECTION_EXPLANATIONS[HostConnection.ERRORED] in shown
+            assert "could not be read" not in shown
+            await pilot.press("escape")
+            await _until(lambda: isinstance(app.screen, DashboardScreen), why="cancelling")
+        finally:
+            asking.cancel()
+            await asyncio.gather(asking, return_exceptions=True)
+
+
+def test_the_enable_confirmation_names_the_launch_order_rule() -> None:
+    """A pane started before the daemon is up stays invisible to the phone for its whole life.
+
+    The confirmation used to promise the phone could drive Codex sessions on this machine,
+    full stop -- which is false for every pane already running, and the owner has no other
+    way to find that out. It is the one screen they are guaranteed to read.
+    """
+    modal = HostRemoteControlConfirmModal.for_direction(RemoteControlState.ACTIVE)
+    # The instance's question, not the class default: `for_direction` passes it to the
+    # constructor, and the class attribute is the fallback for the registry sweep.
+    asked = modal._question.casefold()
+
+    assert "after" in asked, asked
+    assert "already running" in asked, asked
+
+
+def test_the_pairing_modal_cannot_be_photographed_by_the_command_palette() -> None:
+    """`ctrl+p` is a priority binding, so "any key dismisses it" never ran for it.
+
+    The palette opens over the live modal and offers Save Screenshot, which writes an SVG of
+    the visible screen -- pairing code included -- to disk. Bound at priority so the key
+    dismisses the code rather than photographing it.
+    """
+    keys = {
+        binding.key: binding
+        for binding in HostPairingCodeModal.BINDINGS  # type: ignore[attr-defined]
+    }
+    assert "ctrl+p" in keys, "the command palette can still open over a live secret"
+    assert keys["ctrl+p"].priority is True
+    assert keys["ctrl+p"].action == "dismiss_code"

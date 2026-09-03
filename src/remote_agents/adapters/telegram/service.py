@@ -397,8 +397,14 @@ press the toggle forever without ever being told that.
 
 _HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
     RemoteControlState.ACTIVE: (
-        "This enrols the whole machine with the relay, so a paired phone can drive every "
-        "codex session on it."
+        # The launch-order rule, stated where the owner is guaranteed to be looking. A
+        # managed codex pane started while the daemon is down is embedded and stays invisible
+        # to the phone for its whole life; one started afterwards lives in the daemon. This
+        # line used to promise "every codex session on it", which is false for every pane
+        # already running and gives the owner no way to find that out.
+        "This enrols the whole machine with the relay. codex sessions you start afterwards "
+        "can be driven from your phone; ones already running cannot, so restart them if you "
+        "need them reachable."
     ),
     RemoteControlState.INACTIVE: (
         "This unenrols the whole machine, so a paired phone stops reaching any codex session on it."
@@ -432,6 +438,15 @@ def unmarked(label: str) -> str:
     head, separator, rest = label.partition(" ")
     marks = {*_ACTION_EMOJI.values(), _INSPECT_EMOJI, _RENAME_EMOJI, _ATTACH_EMOJI, _REMOTE_EMOJI}
     return rest if separator and head in marks else label
+
+
+#: Screens the live view draws but must never put back at the bottom of the chat by itself.
+#:
+#: One member, and the rule is about content rather than about flow: `host.remote.pair`
+#: renders a live pairing secret, and `move_to_bottom` re-sends the last remembered screen
+#: once per notification pass with no press involved. Everything else here is a menu, and a
+#: menu is exactly what that mechanism exists to keep reachable.
+_UNREMEMBERED_ACTIONS = frozenset({"host.remote.pair"})
 
 
 @dataclass(slots=True)
@@ -995,6 +1010,12 @@ class PrivateBotBoundary:
                 # `retire=False`: the token being processed is bound to this very message,
                 # so a retiring render here would prune the action out from under itself.
                 await self._render(query, _reply_arguments(render_message(pending)), retire=False)
+            # A screen whose whole content is a secret is drawn but never remembered, so the
+            # live view cannot re-send it later on its own. `move_to_bottom` fires once per
+            # activity-notification pass and re-sends whatever was last remembered -- which,
+            # for the pairing reply, meant sending the code again as a brand new message with
+            # its own push notification, under a line that says "shown once". Reproduced
+            # before this branch existed.
             await self._render(
                 query,
                 await self._reply_for(
@@ -1003,6 +1024,7 @@ class PrivateBotBoundary:
                     token=query.data or "",
                     message_id=message_id,
                 ),
+                remember=state.action not in _UNREMEMBERED_ACTIONS,
             )
             if notified:
                 # The notification has been acted on, so it is an answered question of ours --
@@ -1040,7 +1062,14 @@ class PrivateBotBoundary:
                 ),
             )
 
-    async def _render(self, query, arguments: dict[str, object], *, retire: bool = True) -> None:
+    async def _render(
+        self,
+        query,
+        arguments: dict[str, object],
+        *,
+        retire: bool = True,
+        remember: bool = True,
+    ) -> None:
         """Draw a screen into this chat's live view, whichever message that currently is.
 
         Addressed by anchor rather than by the message the press came from. Those are the
@@ -1051,7 +1080,7 @@ class PrivateBotBoundary:
         `LiveView` owns the edit-then-prune-then-bind order and the no-op guard; what is
         left here is telling it which bot to speak through.
         """
-        await self.view.render(query.get_bot(), arguments, retire=retire)
+        await self.view.render(query.get_bot(), arguments, retire=retire, remember=remember)
 
     async def _reply_for(
         self, action: str, entity_id: str, *, token: str = "", message_id: int = 0
@@ -1993,11 +2022,12 @@ class PrivateBotBoundary:
             _LOG.error("a pairing code could not be minted: %s", type(error).__name__)
             return _reply_arguments(
                 self._message(
-                    f"No {escape(HOST_REMOTE_CONTROL_TITLE)} pairing code was produced. "
-                    "Nothing changed."
+                    f"No {escape(HOST_REMOTE_CONTROL_TITLE)} pairing code reached you. If "
+                    "one was minted before the failure it expires on its own; nothing about "
+                    "this machine's setting changed."
                 )
             )
-        expires = code.expires_at.astimezone().strftime("%H:%M:%S %Z")
+        expires = _expiry_phrase(code.expires_at)
         # `render_message` rather than `self._message`, which is the fourth screen in this
         # class to skip the navigation bar and the first to do so for a reason of its own.
         # The bar is a keyboard, and a keyboard under a message whose entire content is a
@@ -2009,10 +2039,18 @@ class PrivateBotBoundary:
             render_message(
                 f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)} pairing code</b>\n"
                 f"<code>{escape(code.code)}</code>\n\n"
-                f"Shown once. It expires at {escape(expires)}.\n"
-                "Type it into the ChatGPT app's manual pairing screen. "
-                "Anyone who has it can drive this machine until it expires."
-            )
+                "Anyone who types this into ChatGPT gets control of this machine: it can "
+                "read the files in every project a session is open in, and run commands "
+                "there. Do not forward it.\n"
+                f"{escape(expires)}. A phone that pairs keeps its access after that — turn "
+                f"{escape(HOST_REMOTE_CONTROL_TITLE)} off to end it.\n"
+                "<b>Delete this message once the phone is paired.</b> Telegram keeps it in "
+                "this chat, and on every device signed into this account, until you do."
+            ),
+            # Marked unforwardable like a captured pane, and for a stronger reason than the
+            # one that earned it there: a pane carries whatever an agent printed, and this
+            # carries a key to the machine.
+            protect_content=True,
         )
 
     async def _host_remote_block(self) -> str:
@@ -3072,8 +3110,15 @@ def _session_scope(entity_id: str) -> str:
     return entity_id
 
 
-def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
-    return {
+def _reply_arguments(
+    message: RenderedMessage, *, protect_content: bool = False
+) -> dict[str, object]:
+    """The Telegram call arguments for one rendered screen.
+
+    `protect_content` marks a message unforwardable and unsavable in the client. Off by
+    default because a menu is not a secret; set for the two sends whose content is one.
+    """
+    arguments: dict[str, object] = {
         "text": message.text,
         "parse_mode": ParseMode.HTML,
         # `uniform_keyboard` and not `message.keyboard`: the floor is presentation, applied at
@@ -3089,6 +3134,32 @@ def _reply_arguments(message: RenderedMessage) -> dict[str, object]:
             ]
         ),
     }
+    if protect_content:
+        arguments["protect_content"] = True
+    return arguments
+
+
+def _expiry_phrase(expires_at) -> str:
+    """When the code dies, as a duration first and a clock time second.
+
+    A duration because that is what the owner acts on -- a pairing code lives minutes, and
+    "expires at 13:00:00 BST" makes a reader do arithmetic against a wall clock. Seconds are
+    dropped for the same reason: nobody acts on the second.
+
+    The clock time is kept in the parenthetical for the case the message is read late, and it
+    carries its zone abbreviation because it is the *host's* zone -- this text is read on a
+    phone that may be somewhere else entirely.
+    """
+    from datetime import UTC, datetime
+
+    local = expires_at.astimezone()
+    remaining = expires_at - datetime.now(UTC)
+    minutes = int(remaining.total_seconds() // 60)
+    clock = local.strftime("%H:%M %Z")
+    if minutes < 1:
+        return f"It has expired, or is about to (it was good until {clock})"
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"Valid for about {minutes} more {unit}, until {clock}"
 
 
 def _page_number(value: str) -> int:

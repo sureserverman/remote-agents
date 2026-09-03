@@ -143,13 +143,24 @@ still stands at one -- see `action_show_projects_pane`, which records the same d
 #:
 #: The direction *labels* are not spelled here -- they are `HOST_REMOTE_CONTROL_LABELS`, and
 #: this table is about readings rather than about actions.
+#:
+#: **They are short because the pane truncates, and truncation is not a cosmetic failure
+#: here.** `#limits-pane` is `text-wrap: nowrap; text-overflow: ellipsis`, and its content is
+#: 28 columns at an 80-column terminal -- 23 of them spent before the reading begins. The
+#: first version of this table read "on, but its connection is broken" for ERRORED and "on,
+#: still connecting" for CONNECTING; both painted as `Codex Remote Control · on, …`, so the
+#: two were indistinguishable *and* the broken one read as "on". Measured at 80x24, not
+#: reasoned about. Every word here is now distinct within its first four characters, and none
+#: of them truncates into a different state's word. The nuance those long phrases carried
+#: moved to `_HOST_CONNECTION_EXPLANATIONS`, which is rendered where the owner acts rather
+#: than in a row that cannot hold it.
 _HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
     HostConnection.CONNECTED: "on",
-    HostConnection.CONNECTING: "on, still connecting",
     HostConnection.DISABLED: "off",
-    HostConnection.DAEMON_ABSENT: "daemon not running",
-    HostConnection.ERRORED: "on, but its connection is broken",
-    HostConnection.UNREACHABLE: "no answer from codex",
+    HostConnection.CONNECTING: "connecting",
+    HostConnection.DAEMON_ABSENT: "no daemon",
+    HostConnection.ERRORED: "link broken",
+    HostConnection.UNREACHABLE: "unreachable",
 }
 
 #: What to say when the policy opens *both* directions, keyed by the reading that opened them.
@@ -173,6 +184,32 @@ _HOST_AMBIGUOUS_REMEDY: dict[HostConnection, str] = {
 #: (DEC-009/DEC-061), so the line is drawn and says this rather than being left out -- a
 #: missing line is indistinguishable from a surface that forgot to draw one.
 _HOST_UNAVAILABLE = "unavailable"
+
+
+#: The sentence behind each reading, for the screens that have room for one.
+#:
+#: The pane row cannot hold this and must not try; the bot has carried an equivalent table
+#: since Task 3.2 and the terminal had nothing, which left a truncated row as the whole of
+#: what a terminal owner could learn. Rendered by the direction chooser, which is the screen
+#: an owner reaches precisely when the reading is one they cannot act on confidently.
+_HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
+    HostConnection.CONNECTED: ("This machine is enrolled and a paired phone can reach it."),
+    HostConnection.CONNECTING: (
+        "The setting has taken and the link to the relay is still settling."
+    ),
+    HostConnection.DISABLED: ("This machine is not enrolled, so no phone can reach it."),
+    HostConnection.DAEMON_ABSENT: (
+        "The codex daemon is not running, so nothing here can say whether this machine is "
+        "enrolled. The setting outlives the daemon, so this is not the same as off."
+    ),
+    HostConnection.ERRORED: (
+        "The daemon answered and reported that this machine is enrolled but its link to the "
+        "relay is broken."
+    ),
+    HostConnection.UNREACHABLE: (
+        "codex did not answer at all, so nothing was read. It may not be installed here."
+    ),
+}
 
 
 def host_remote_control_line(status: HostRemoteControlStatus | None) -> str:
@@ -873,7 +910,10 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                         f"{host_remote_control_line(status)}. {remedy}".strip(),
                         severity="warning",
                     )
-                picked = await self.tui.ask_for_host_direction(directions)
+                explanation = (
+                    _HOST_CONNECTION_EXPLANATIONS.get(status.connection, "") if status else ""
+                )
+                picked = await self.tui.ask_for_host_direction(directions, explanation)
                 if picked is None:
                     return
                 chosen = picked
@@ -958,6 +998,14 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             records = await self.tui.load_sessions()
         except Exception:
             _LOG.exception("the dashboard sessions pane could not be reloaded")
+            # The right column is refreshed anyway. This early return used to skip
+            # `_reload_limits`, which is the dashboard's only refresh path for the host
+            # Remote Control reading -- so while the session store was failing, the host line
+            # froze at its last value with nothing on screen saying so, and a toggle made
+            # from the phone could leave the terminal reading "on" indefinitely. The two
+            # reads answer different questions of different sources; one failing is not a
+            # reason to stop asking the other.
+            await self._reload_limits()
             return None
         finally:
             self._reloading_sessions = False

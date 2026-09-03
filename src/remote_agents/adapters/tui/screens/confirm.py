@@ -389,7 +389,13 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
         """
         label = HOST_REMOTE_CONTROL_LABELS[desired]
         effect = (
-            "Your phone can drive Codex sessions on this machine."
+            # The launch-order rule, in the one place an owner is guaranteed to read it. A
+            # managed codex pane started while the daemon is down is embedded and stays
+            # invisible to the phone for its whole life; one started after lives in the
+            # daemon. Saying "every Codex session" here -- which this line used to -- promises
+            # the owner something that is false for every pane already running.
+            "Codex sessions you start after this can be driven from your phone. "
+            "Ones already running cannot; restart them if you need them reachable."
             if desired is RemoteControlState.ACTIVE
             else "This machine stops answering the phone; sessions already running keep going."
         )
@@ -425,9 +431,17 @@ class HostRemoteControlDirectionModal(ModalScreen[RemoteControlState | None]):
 
     BINDINGS = [Binding("escape", "dismiss_direction", "Cancel", show=False)]
 
-    def __init__(self, directions: tuple[RemoteControlState, ...]) -> None:
+    def __init__(self, directions: tuple[RemoteControlState, ...], explanation: str = "") -> None:
         super().__init__()
         self._directions = directions
+        # The reading's own sentence, passed in rather than derived here: this class knows
+        # about directions, and which reading produced them is the dashboard's fact. It used
+        # to say "this machine's setting could not be read" for every case, which is wrong
+        # for ERRORED -- there the daemon answered, and what it said was that its own link is
+        # broken. Telling an owner their setting is unreadable when the daemon just told them
+        # it is enrolled is the sharper end of the same conflation this whole feature exists
+        # to stop making.
+        self._explanation = explanation
 
     def compose(self) -> ComposeResult:
         # `#dialog`, `#status` and `#choices` deliberately, not names of this modal's own:
@@ -435,9 +449,9 @@ class HostRemoteControlDirectionModal(ModalScreen[RemoteControlState | None]):
         # already read, and a modal that renamed them would be invisible to the checks that
         # matter most here. The note on `ConfirmScreen.compose` says so in those words.
         with Vertical(id="dialog"):
+            explained = self._explanation or "This machine's setting could not be read."
             yield Static(
-                f"{HOST_REMOTE_CONTROL_TITLE}: this machine's setting could not be read.\n"
-                "Choose the direction to assert.",
+                f"{HOST_REMOTE_CONTROL_TITLE}\n{explained}\nChoose the direction to assert.",
                 id="status",
                 markup=False,
             )
@@ -491,7 +505,17 @@ class HostPairingCodeModal(ModalScreen[None]):
     anyway since the old one is still live until it expires.
     """
 
-    BINDINGS = [Binding("escape", "dismiss_code", "Dismiss", show=False)]
+    BINDINGS = [
+        Binding("escape", "dismiss_code", "Dismiss", show=False),
+        # `ctrl+p` is Textual's command palette and it is a *priority* binding, so it is
+        # dispatched before this screen's `on_key` and the "any key dismisses it" defence
+        # never runs. The palette then opens over a modal that is still holding a live
+        # pairing code, and one of its own commands is Save Screenshot -- which writes an SVG
+        # of the visible screen to disk, code included. That is DEC-013 broken by a
+        # first-party affordance. Bound at priority here so the palette key dismisses the
+        # code instead of photographing it.
+        Binding("ctrl+p", "dismiss_code", "Dismiss", show=False, priority=True),
+    ]
 
     def __init__(self, code: PairingCode) -> None:
         super().__init__()

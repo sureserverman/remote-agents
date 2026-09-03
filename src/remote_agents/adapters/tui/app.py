@@ -1154,14 +1154,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             self._busy = False
 
     async def ask_for_host_direction(
-        self, directions: tuple[RemoteControlState, ...]
+        self, directions: tuple[RemoteControlState, ...], explanation: str = ""
     ) -> RemoteControlState | None:
         """Ask which direction, where the policy offered more than one.
 
         Beside `ask_to_confirm` and awaited the same way, because it has the same hazard:
         the caller is a screen handler on its own pump (DEC-068), never a binding body.
         """
-        return await self.push_screen_wait(HostRemoteControlDirectionModal(directions))
+        return await self.push_screen_wait(HostRemoteControlDirectionModal(directions, explanation))
 
     async def pair_host_remote_control(self, screen: DashboardScreen) -> None:
         """Mint one pairing code for one owner press and put it on screen once.
@@ -1196,8 +1196,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # A mint can fail *after* the relay produced a live code, so this is the one log
             # site in the surface where a provider exception could carry a working secret.
             _LOG.error("a pairing code could not be minted: %s", type(error).__name__)
+            # Not "nothing changed": `pair` can fail *after* the relay has already produced a
+            # live code, which this process then never rendered and cannot revoke. Telling
+            # the owner nothing happened would be the one sentence they could act wrongly on.
             screen.announce(
-                f"No {HOST_REMOTE_CONTROL_TITLE} pairing code was produced. Nothing changed."
+                f"No {HOST_REMOTE_CONTROL_TITLE} pairing code reached you. If one was minted "
+                "before the failure it expires on its own; the machine's setting is unchanged."
             )
             return
         finally:

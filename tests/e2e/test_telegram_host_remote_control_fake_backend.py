@@ -131,3 +131,43 @@ async def test_help_names_the_host_toggle_only_where_this_composition_wired_one(
 
     assert HOST_REMOTE_CONTROL_TITLE in wired_chat.bot_messages[0].text
     assert HOST_REMOTE_CONTROL_TITLE not in bare_chat.bot_messages[0].text
+
+
+async def test_a_pairing_code_is_never_put_back_at_the_bottom_of_the_chat() -> None:
+    """Driven through the real handler, so the SERVICE's decision is what is under test.
+
+    `LiveView.move_to_bottom` re-sends the last remembered screen once per
+    activity-notification pass, with no press involved -- that is how the menu stays
+    reachable below arriving notifications. The pairing reply was remembered like any other
+    screen, so a pass re-sent the live code as a brand new message with its own push
+    notification, under a line that said "shown once", and again on every pass after.
+
+    Two earlier versions of this test could not see it. One handed `LiveView` the flag
+    itself; the next computed the flag from the same constant the service reads. Both proved
+    the mechanism could keep a secret while leaving the code that must ask it to unguarded.
+    This one presses the real button through `boundary.callback` and then asks the real view
+    to move, which is the sequence a person and a notification actually produce.
+    """
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    boundary = _boundary(control)
+    chat = FakeChat()
+
+    await boundary.remote_command(chat.message_update("/remote"), None)
+    anchor = chat.bot_messages[0].message_id
+    await boundary.callback(chat.press(_button(chat.messages[anchor], "Pair a phone")), None)
+
+    shown = [message for message in chat.bot_messages if "ZZZZ-9999" in (message.text or "")]
+    assert shown, "the code was never rendered, so this test proves nothing"
+    identities = {message.message_id for message in shown}
+
+    await boundary.view.move_to_bottom(chat.bot)
+
+    # The *identity*, not the count. `move_to_bottom` sends and then deletes the old anchor,
+    # so a re-send leaves the chat holding the same number of messages -- but a different,
+    # newly delivered one, with its own push notification. Counting could never see that;
+    # the message id is what changes.
+    after = [message for message in chat.bot_messages if "ZZZZ-9999" in (message.text or "")]
+    assert {message.message_id for message in after} == identities, (
+        "the live view re-sent the pairing code as a new message, with no press: "
+        f"was {sorted(identities)}, now {sorted(m.message_id for m in after)}"
+    )
