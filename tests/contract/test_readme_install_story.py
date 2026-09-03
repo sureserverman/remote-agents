@@ -243,3 +243,42 @@ def test_the_runbook_pins_the_same_tag_the_installer_does() -> None:
         "bootstrap actually fetches."
     )
     assert stale, "the runbook no longer quotes a pinned tag in the form this test reads"
+
+
+def _readme_prose() -> str:
+    """The README as one line, so an assertion is about content and not about wrapping.
+
+    Every phrase below is a sentence an owner has to read; which column it happens to break
+    at is a property of the file, not of the claim.
+    """
+    return " ".join(Path("README.md").read_text(encoding="utf-8").split())
+
+
+def test_the_readme_makes_the_two_host_remote_control_keys_findable() -> None:
+    """They are `show=False`, so the footer never names them and the README is the only place.
+
+    Raised at the Stage 3 gate: an owner had no way to discover `h` or `P` short of reading
+    the source. A hidden key that nothing documents is a feature that does not exist.
+    """
+    readme = _readme_prose()
+
+    assert "`h` toggles it" in readme
+    assert "`P` mints a pairing code" in readme
+    assert "/remote" in readme
+
+
+def test_the_readme_carries_the_launch_order_rule_where_the_keys_are_named() -> None:
+    """The one rule an owner cannot recover from by trying again: the pane is invisible for
+    its whole life, so learning it afterwards costs them the session."""
+    readme = _readme_prose()
+
+    assert "started after Remote Control is on" in readme
+    assert "invisible for its whole life" in readme
+
+
+def test_the_readme_says_a_pairing_code_cannot_be_revoked_from_here() -> None:
+    """The other irreversible fact. "It expires" alone reads as "the problem times out"."""
+    readme = _readme_prose()
+
+    assert "nothing can revoke it from here" in readme
+    assert "keeps its access afterwards" in readme

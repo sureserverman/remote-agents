@@ -427,6 +427,31 @@ lands where `/sessions` lands.
     and leaves both directions offered: if its state is unknown, do not retry remotely; inspect
     and recover locally. Never share the resulting Remote Control URL or a pane capture outside
     the owner workflow.
+
+11a. **Codex Remote Control is a different thing with the same name, and it is host-level.**
+    It appears beside `Plan limits` on both surfaces rather than on a session, because it is a
+    setting on the shared `codex app-server` daemon this machine runs: on means this host is
+    enrolled with OpenAI's relay and a paired phone can drive the Codex sessions running here.
+    Toggle it with `h` in the terminal or `/remote` in Telegram; both confirm.
+
+    Verify the reading is one of the six words and that `no daemon` is not read as `off` — the
+    enrolment preference outlives the daemon, so a stopped daemon says nothing about whether
+    this host is enrolled. `off` is `codex app-server daemon disable-remote-control`, which
+    leaves the daemon and its panes alive; `codex remote-control stop` is never issued by this
+    service and should not be issued by hand while managed Codex panes are running, because
+    every TUI attached to that daemon exits when it goes.
+
+    **Only Codex sessions launched after the daemon is up are visible to the phone.** One
+    launched before runs an embedded server and cannot be moved into the daemon; restart it if
+    it needs to be reachable.
+
+    **Never share a pairing code, and never repeat one.** `Pair a phone` mints a short-lived
+    secret shown exactly once — a modal in the terminal, one unforwardable message in Telegram.
+    Anyone who has it gets control of this machine until it expires, a phone that pairs keeps
+    its access afterwards, and nothing in this service can revoke either. Delete the Telegram
+    message once the phone is paired; Telegram keeps it otherwise. If a code is lost or seen by
+    anyone else, turn Codex Remote Control off — that is the only lever here — and mint a new
+    one when you are ready.
 12. Open Resume for a project with prior Claude or Codex work. Its buttons show a bounded
     provider title or resume description when supplied, never a provider ID. Pressing one
     resumes it on that press — there is no review screen in front of it, exactly as there is

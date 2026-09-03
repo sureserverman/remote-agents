@@ -501,6 +501,30 @@ to agree. The stops share a single row under the read-only actions, which each g
 of their own: Telegram has no separator, so shape is the only thing distinguishing an action that
 ends a session from one that reads it.
 
+#### Codex Remote Control, for the whole machine
+
+Beside `Plan limits` the terminal shows this computer's Codex Remote Control — `on`, `off`,
+`connecting`, `no daemon`, `link broken` or `unreachable` — and `h` toggles it. Its subject is
+the machine rather than a row, which is why it sits with the host facts and not on the sessions
+list: turning it on enrols this host with OpenAI's relay so a paired phone can drive the Codex
+sessions running here.
+
+`P` mints a pairing code and shows it once, in a modal any key dismisses. Nothing stores it and
+nothing can revoke it from here, so treat it like a password: anyone who types it into the
+ChatGPT app gets control of this machine until it expires, and a phone that pairs keeps its
+access afterwards. Turning Codex Remote Control off is what ends that.
+
+**Codex sessions started after Remote Control is on are the ones your phone can see.** A pane
+launched while the daemon is down runs its own embedded server and stays invisible for its
+whole life; restart it if you need it reachable.
+
+In Telegram the same fact appears under `Plan limits` in `/sessions`, and `/remote` opens the
+toggle and the `Pair a phone` button. Both surfaces confirm the toggle and neither confirms the
+reading.
+
+The two keys are deliberately hidden from the footer, like `d`: the bar is shared with every
+inherited binding, and these act on the host rather than on whatever row the cursor is on.
+
 #### Keys on the sessions list
 
 Every action the detail offers also has a single key on the highlighted row, on both the full
