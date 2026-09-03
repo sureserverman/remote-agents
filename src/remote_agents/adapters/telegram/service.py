@@ -82,16 +82,24 @@ from remote_agents.application.session_actions import (
     explain_state,
     notifiable,
     pane_is_attachable,
+    remote_control_available,
     remote_control_directions,
     state_word,
     trust_available,
 )
 from remote_agents.application.session_views import (
-    limit_lines,
+    StateGroup,
+    group_counts,
+    group_emoji,
+    limit_rows,
     listed_sessions,
     only_listed,
     selectable_area,
+    session_identity,
+    session_lines,
     session_row,
+    session_row_parts,
+    state_emoji,
     usage_lines,
     with_project_names,
 )
@@ -110,10 +118,22 @@ from remote_agents.domain.models import (
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.domain.remote_control import RemoteControlState
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
+from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.callback_state import CallbackStatePort
 from remote_agents.ports.chat_view import ChatViewPort
 from remote_agents.ports.standing_notification import StandingNotificationPort
 from remote_agents.ports.terminal import TerminalTargetMissing
+
+__all__ = [
+    "PrivateBotBoundary",
+    "build_private_bot",
+    "run_private_bot",
+    "session_lines",
+    "session_row",
+]
+"""`session_row` and `session_lines` are re-exported, not used: `tests/contract/
+test_session_row_parity.py` imports both row renderers through this surface to assert that the
+bot has no copy of its own, and an import that is merely resolvable is the whole of that claim."""
 
 _BOT_DESCRIPTION = "Private control for curated local agent sessions."
 _BOT_SHORT_DESCRIPTION = "Private local agent-session control"
@@ -261,6 +281,59 @@ somewhere that is not about it, so a captured document would be retained on beha
 session the owner can no longer see. Unconfirmed `FORCE` is deliberately absent — it draws
 the confirmation, which *is* about that session.
 """
+
+
+_GROUP_TITLES: dict[StateGroup, str] = {
+    StateGroup.ACTIVE: "ACTIVE",
+    StateGroup.IN_TRANSITION: "IN TRANSITION",
+    StateGroup.NEEDS_ATTENTION: "NEEDS ATTENTION",
+    StateGroup.PRESERVED: "PRESERVED",
+}
+"""What each bucket is headed on the sessions list. The bucket is the shared decision
+(`session_views.StateGroup`); the heading is this surface's sentence (DEC-043)."""
+
+_ACTION_EMOJI: dict[str, str] = {
+    GRACEFUL: "\u23f9",  # ⏹
+    CLEANUP: "\U0001f9f9",  # 🧹
+    FORCE: "\u26d4",  # ⛔
+}
+"""The mark in front of each stop button. `ACTION_LABELS` stays the shared word; the mark is
+the bot's, because Telegram has no separator and shape plus a glyph is what tells a stop from a
+read on a keyboard. `action_button_label` is the one composer, and `unmarked` its inverse."""
+
+_INSPECT_EMOJI = "\U0001f4c4"  # 📄
+_RENAME_EMOJI = "\u270f\ufe0f"  # ✏️
+_ATTACH_EMOJI = "\U0001f4ce"  # 📎
+_REMOTE_EMOJI = "\U0001f4e1"  # 📡
+_BACK_TO_SESSIONS = "\u2039 Back to sessions"  # ‹ Back to sessions
+
+_REMOTE_CONTROL_WORDS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: "on",
+    RemoteControlState.INACTIVE: "off",
+}
+"""How the detail's `remote` fact line reads the last observation. Anything else is `unknown`."""
+
+
+_FACT_LABEL_WIDTH = 8
+"""`context`, `remote`, `pane` padded to eight columns, so the values in the detail's fact block
+start in one column."""
+
+
+def action_button_label(action: str) -> str:
+    """`⏹ Stop and close` -- the shared label behind this surface's mark."""
+    return f"{_ACTION_EMOJI[action]} {ACTION_LABELS[action]}"
+
+
+def unmarked(label: str) -> str:
+    """Recover the shared label from a button this surface marked, for anything decoding one.
+
+    The inverse of `action_button_label` and of the read-action marks, and safe on a label that
+    carries none: a mark is exactly one leading token followed by a space, and no shared label
+    begins with one.
+    """
+    head, separator, rest = label.partition(" ")
+    marks = {*_ACTION_EMOJI.values(), _INSPECT_EMOJI, _RENAME_EMOJI, _ATTACH_EMOJI, _REMOTE_EMOJI}
+    return rest if separator and head in marks else label
 
 
 @dataclass(slots=True)
@@ -1169,42 +1242,43 @@ class PrivateBotBoundary:
         )
 
     async def _sessions_reply(self, page: int = 1, *, notice: str | None = None) -> RenderedMessage:
-        """Render one page of managed sessions, newest page navigation last.
+        """Render one page of managed sessions: grouped, two lines a row, a picker per row.
 
         This list is unbounded in a way the project list is not — every launch adds a row
         and only reconciliation takes one away — so it pages for the same reason: a keyboard
         tall enough to push the message off the screen is unusable on a phone, and Telegram
         caps the buttons one keyboard may carry.
 
+        **The rows live in the message text, not on the buttons.** A keyboard button cannot
+        hold a newline, and the two-line row is the redesign's whole answer to a list nobody
+        could scan: the identity in bold on one line, the state, age and gauge in monospace
+        on the next. The buttons become short pickers -- `🟢 #7 remote-agents` -- in the same
+        order as the text, two to a row.
+
+        **Grouped by `StateGroup`, in its fixed order, and a bucket with nothing in it is not
+        drawn.** The grouping is the shared decision (`session_views.state_group`); the
+        headings are this surface's words. The header's emoji legend is the count: `Sessions
+        · 6  🟢 2 · 🟡 1 · 🔴 2 · ⚪ 1`, counted from the *whole* listing rather than the page,
+        and never from a second read -- two reads can disagree, because a session can end
+        between them. A bucket at zero is left out of the legend for the same reason it is
+        left out of the body.
+
         `notice` is the lead line an action that *ended somewhere else* leaves here — the
-        outcome of a stop, which now lands on this list rather than on a screen of its own.
+        outcome of a stop, which lands on this list rather than on a screen of its own.
         It is escaped because it carries wording derived from a `StopFailure`, and it is
         rendered above the heading rather than below it so the owner reads what happened
-        before they read the list it happened to.
+        before they read the list it happened to. It reaches the empty branch too.
 
-        It reaches the empty branch too. Stopping the last running session is exactly when
-        the list is empty, so a notice that only the populated branch rendered would be
-        dropped precisely when it mattered most.
+        **Budget.** Section headings, six two-line rows and the limits block come to roughly
+        700 UTF-16 units against `MAX_TELEGRAM_TEXT_UNITS`, so the page size stays at eight.
+        Every string here passes `escape()` and then `presenters._message` (DEC-014).
         """
         records = await self._listed_records()
-        # Counted from the records this list is about to page, never from a second read: two
-        # reads can disagree, because a session can end between them.
-        #
-        # The **total** is carried as well as the two states, and that is not decoration.
-        # `_records` filters only ENDED, so a row can be STARTING, STOP_REQUESTED, FAILED or
-        # ORPHANED — none of which is RUNNING or PRESERVED. Home showed the same two numbers
-        # and got away with it by rendering them on a different screen from the rows; putting
-        # them directly above the list is exactly what turns an incomplete count into a
-        # visible contradiction. Four adopted-orphan rows under "0 active · 0 preserved" says
-        # nothing is happening above a row the domain describes as frequently a live agent
-        # this database lost. With the total present the arithmetic is checkable — a reader
-        # can see that some rows are in neither bucket and read each row's own state word to
-        # find out which.
-        counts = (
-            f" · {len(records)} total"
-            f" · {sum(record.state is SessionState.RUNNING for record in records)} active"
-            f" · {sum(record.state is SessionState.PRESERVED for record in records)} preserved"
+        counts = group_counts(records)
+        legend = " · ".join(
+            f"{group_emoji(group)} {count}" for group, count in counts.items() if count
         )
+        heading_counts = f" · {len(records)}" + (f"  {legend}" if legend else "")
         # Read once, above the branch, because both branches render it. The empty branch needs
         # it for the reason `notice` already reaches there: stopping the last session is exactly
         # when this list is empty, and an agent's weekly limit does not stop existing because
@@ -1216,7 +1290,8 @@ class PrivateBotBoundary:
             # bar now carries the identical destination on the very next row, and a button
             # duplicating the one directly beneath it reads as a bug.
             return self._message(
-                f"{self._notice_line(notice)}<b>Sessions</b>{counts}\nNothing is running.{spent}"
+                f"{self._notice_line(notice)}<b>Sessions</b>{heading_counts}\n"
+                f"Nothing is running.{spent}"
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -1225,15 +1300,34 @@ class PrivateBotBoundary:
         # remembering the request rather than the render would send Back somewhere emptier.
         self._sessions_page = index
         start = (index - 1) * self.session_page_size
-        buttons = [
-            (
-                Button(
-                    session_row(record),
-                    self._callback("session.detail", str(record.session_id)),
-                ),
-            )
-            for record in records[start : start + self.session_page_size]
-        ]
+        shown = records[start : start + self.session_page_size]
+        sections: list[str] = []
+        pickers: list[Button] = []
+        for group in StateGroup:
+            members = [record for record in shown if session_row_parts(record).group is group]
+            if not members:
+                continue
+            lines = [f"{group_emoji(group)} <b>{_GROUP_TITLES[group]}</b>"]
+            for record in members:
+                context = await self._context_for(record)
+                parts = session_row_parts(record, context)
+                _first, second = session_lines(record, context)
+                # The sequence sits *outside* the bold, so the eye lands on the name and
+                # finds the number beside it, and the state line is monospace so the gauges
+                # of neighbouring rows line up.
+                lines.append(
+                    f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
+                    f"<code>{escape(second)}</code>"
+                )
+                pickers.append(
+                    Button(
+                        f"{state_emoji(record.state)} #{parts.sequence} "
+                        f"{record.display.project_slug}",
+                        self._callback("session.detail", str(record.session_id)),
+                    )
+                )
+            sections.append("\n".join(lines))
+        buttons = list(_button_rows(tuple(pickers), 2))
         navigation = []
         if index > 1:
             navigation.append(Button("Previous", self._callback("sessions.page", str(index - 1))))
@@ -1241,10 +1335,31 @@ class PrivateBotBoundary:
             navigation.append(Button("Next", self._callback("sessions.page", str(index + 1))))
         if navigation:
             buttons.append(tuple(navigation))
+        title = "Sessions" if page_count == 1 else f"Sessions {index}/{page_count}"
+        body = "\n\n".join(sections)
         return self._message(
-            f"{self._notice_line(notice)}<b>Sessions {index}/{page_count}</b>{counts}{spent}",
+            f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}",
             tuple(buttons),
         )
+
+    async def _context_for(self, record: SessionRecord) -> ContextWindow | None:
+        """One RUNNING session's context window for its row gauge, or nothing at all.
+
+        Read only for a RUNNING row -- `session_row_parts` draws no gauge for any other state,
+        so a read there would be a provider sweep for a figure nobody renders. The broad
+        `except` is `_usage_lines`'s trade: the gauge is a decoration on a list whose real
+        content is the way into each session, and a provider that changed its file format must
+        not cost the owner the list. Reads are not cached here; a page holds at most eight rows
+        and the bot draws this screen on a press, never on a timer.
+        """
+        if self.backend.usage is None or record.state is not SessionState.RUNNING:
+            return None
+        try:
+            usage = await self.backend.usage(record.session_id)
+        except Exception:
+            logging.getLogger(__name__).debug("usage read failed", exc_info=True)
+            return None
+        return None if usage is None else usage.context
 
     @staticmethod
     def _notice_line(notice: str | None) -> str:
@@ -1277,13 +1392,14 @@ class PrivateBotBoundary:
             return self._message(
                 "That session is no longer available.",
                 back=self._sessions_back(),
+                back_label=_BACK_TO_SESSIONS,
             )
         # **These read-only rows are the surfaces' one deliberate divergence, and the four
         # axes are written down here so nobody has to re-derive them from a diff again.**
         # Against `adapters/tui/screens/sessions.py: detail_entries`:
         #
-        #   1. order — here Inspect, Rename, [Copy attach]; there [Copy attach], [Inspect],
-        #      Rename;
+        #   1. order — here Inspect, Rename, [Copy attach], Remote Control; there [Copy
+        #      attach], [Inspect], Rename, Remote Control;
         #   2. Inspect is unconditional here and gated on `backend.capture is not None`
         #      there;
         #   3. Copy attach is gated on `_attach_row_is_offered` here and unconditional
@@ -1300,16 +1416,39 @@ class PrivateBotBoundary:
         # is a functionality change. Owner's decision, 2026-08-22, recorded in the
         # shared-use-cases sub-plan under Task 2.3; a later stage that wants one assembler has
         # to parameterize exactly these four axes.
-        buttons = [
-            (Button("Inspect", self._callback("session.inspect", session_value)),),
-            # A full-width row of its own, like every other read-only action: renaming changes
-            # what the session is called and nothing about what it is doing.
-            (Button("Rename", self._callback("session.rename", session_value)),),
+        #
+        # **Shape, since the redesign: read-only actions pair up, stops keep their own row.**
+        # Inspect and Rename share the first row; Copy attach and the Remote Control direction
+        # share the second, each present only where its gate says so. The marks in front of
+        # the labels are this surface's (`_ACTION_EMOJI` and friends); the words stay shared.
+        reads: list[Button] = [
+            Button(f"{_INSPECT_EMOJI} Inspect", self._callback("session.inspect", session_value)),
+            # Renaming changes what the session is called and nothing about what it is doing,
+            # so it sits with the reads.
+            Button(f"{_RENAME_EMOJI} Rename", self._callback("session.rename", session_value)),
         ]
-        if await self._attach_row_is_offered(record):
-            buttons.append(
-                (Button("Copy attach", self._callback("session.attach", session_value)),)
+        buttons: list[tuple[Button, ...]] = [tuple(reads)]
+        attachable = await self._attach_row_is_offered(record)
+        second: list[Button] = []
+        if attachable:
+            second.append(
+                Button(
+                    f"{_ATTACH_EMOJI} Copy attach",
+                    self._callback("session.attach", session_value),
+                )
             )
+        # One button per direction the policy still offers -- which is one once this
+        # session's state has been observed, and both only while it is unknown. Half of the
+        # old pair was always a no-op, on the deepest screen the bot has.
+        for direction in remote_control_directions(record, record.remote_control_state):
+            second.append(
+                Button(
+                    f"{_REMOTE_EMOJI} {REMOTE_CONTROL_LABELS[direction]}",
+                    self._callback("remote.control", f"{session_value}|{direction.value}"),
+                )
+            )
+        if second:
+            buttons.append(tuple(second))
         if await self._awaiting_trust(record):
             buttons.append(
                 (
@@ -1322,29 +1461,11 @@ class PrivateBotBoundary:
                     ),
                 )
             )
-        # One row per direction the policy still offers -- which is one row once this
-        # session's state has been observed, and both only while it is unknown. Half of the
-        # old pair was always a no-op, on the deepest screen the bot has.
-        for direction in remote_control_directions(record, record.remote_control_state):
-            buttons.append(
-                (
-                    Button(
-                        REMOTE_CONTROL_LABELS[direction],
-                        self._callback("remote.control", f"{session_value}|{direction.value}"),
-                    ),
-                )
-            )
-        # The stops share one row while every read-only action above gets a full-width row
-        # of its own. Telegram has no separator, so shape is the only signal available, and
-        # the actions that end a session should not look like the ones that read it — a
-        # graceful stop is one tap from discarding the pane's output. No state offers more
-        # than two stops, so the row stays legible.
-        #
-        # Shape is no longer *only* this: the navigation bar is a second multi-button row on
-        # this screen. It does not collide, because it is three wide where the stops are two
-        # and because a full-width Back sits between them — but the distinction is now
-        # two-wide-versus-three rather than one-row-versus-the-rest, which is a narrower
-        # margin than this comment used to be able to assume.
+        # The stops share one row of their own. Telegram has no separator, so shape and the
+        # mark are the only signals available, and the actions that end a session should not
+        # look like the ones that read it — a graceful stop is one tap from discarding the
+        # pane's output. No state offers more than two stops, so the row stays legible; force
+        # is last because `available_actions` puts it last.
         stops: list[Button] = []
         for action in available_actions(record.state, record.orphan_provenance):
             token = self.stops.offer(
@@ -1357,33 +1478,56 @@ class PrivateBotBoundary:
                 self.owner_chat_id,
             )
             if token is not None:
-                stops.append(Button(ACTION_LABELS[action], token))
+                stops.append(Button(action_button_label(action), token))
         if stops:
             buttons.append(tuple(stops))
-        # Below the state, not above it: what a session *is* comes first, and what it has spent
-        # is context for a reader who has already read that. Escaped like every other line here
-        # even though `usage_lines` composes only digits and fixed words — the escape is a
-        # property of this boundary (DEC-014), not a judgement about each string's provenance.
-        spent = "".join(f"\n{escape(line)}" for line in await self._usage_lines(record))
+        # The status line replaces `State: running`: the same mark the list uses, the shared
+        # state word, the short age. Then the explanation, unchanged. Then the fact block --
+        # `<code>` lines with the label padded to eight so the values align, and a line is
+        # drawn only where it has something to say. Escaped like every other line here even
+        # where the value is digits and fixed words — the escape is a property of this
+        # boundary (DEC-014), not a judgement about each string's provenance.
+        parts = session_row_parts(record)
+        facts: list[tuple[str, str]] = []
+        for value in await self._usage_lines(record):
+            facts.append(("context", value))
+        if remote_control_available(record):
+            facts.append(
+                (
+                    "remote",
+                    "Remote Control "
+                    + _REMOTE_CONTROL_WORDS.get(record.remote_control_state, "unknown"),
+                )
+            )
+        if attachable:
+            facts.append(("pane", "attachable"))
+        fact_lines = "".join(
+            f"\n<code>{label.ljust(_FACT_LABEL_WIDTH)} {escape(value)}</code>"
+            for label, value in facts
+        )
         return self._message(
-            f"<b>{escape(record.display.rendered)}</b>\n"
-            f"State: {record.state.value}\n"
+            f"<b>{escape(parts.identity)}</b> #{parts.sequence}\n"
+            f"<code>{state_emoji(record.state)} {escape(parts.state)} · {parts.age}</code>\n"
             f"{_state_explanation(record.state, record.orphan_provenance)}"
-            f"{spent}",
+            f"{fact_lines}",
             tuple(buttons),
             back=self._sessions_back(),
+            back_label=_BACK_TO_SESSIONS,
         )
 
     async def _limit_block(self) -> str:
-        """Each installed agent's rate-limit windows, under the counts and above the rows.
+        """Each installed agent's rate-limit windows, as a monospace block under the rows.
 
-        Under the counts because it is the same kind of statement they are — something true of
-        this screen as a whole rather than of any row on it — and that placement is what stops a
-        window reading as the spend of whichever session it happens to sit beside, which is the
-        report this task exists to answer.
+        Last on the screen and separated by a blank line, because it is a statement about the
+        account rather than about any row — the placement that stops a window reading as the
+        spend of whichever session it happens to sit beside, which is the report this block
+        exists to answer. Agent names are padded to the longest profile id plus two inside
+        `<code>`, so the percentages line up; a stale reading says so (`· as of 2h ago`) and a
+        borrowed one names its source (`· via …`, DEC-061). Reset countdowns are the local
+        surface's; the phone gets the share.
 
-        Escaped here rather than in `limit_lines`, which returns plain strings and takes no view
-        on either surface's markup (DEC-043, DEC-014). The broad `except` is `_usage_lines`'s
+        Escaped here rather than in `limit_rows`, which returns parts and takes no view on
+        either surface's markup (DEC-043, DEC-014). The broad `except` is `_usage_lines`'s
         trade made again one screen up, and it matters more here: this block sits on the screen
         that is the only way to reach a session at all, so a provider that changed its file
         format under an upgrade must not be able to cost the owner the list.
@@ -1391,23 +1535,29 @@ class PrivateBotBoundary:
         if self.backend.limits is None:
             return ""
         try:
-            lines = limit_lines(await self.backend.limits())
+            rows = limit_rows(await self.backend.limits())
         except Exception:
             logging.getLogger(__name__).debug("account limits read failed", exc_info=True)
             return ""
-        if not lines:
+        if not rows:
             # The heading is part of the block, so it goes when the block does. Emitting it
             # unconditionally promised a block and delivered none -- reached whenever every
             # agent answers with no windows, which is Claude's cache past its thirty-minute
             # fence and a quiet codex, the same routine state the TUI pane's empty sentence
             # exists for.
             return ""
-        # A heading, because the TUI pane has one and this is the same block. Without it the
-        # empty branch reads "Nothing is running." straight into two agents' live percentages,
-        # which is the adjacency this whole task exists to remove -- one screen down rather
-        # than one row down. Bold to match the screen's own heading, which is the only markup
-        # this block carries.
-        return "".join(["\n<b>Agent limits</b>", *(f"\n{escape(line)}" for line in lines)])
+        width = max(len(row.profile) for row in rows) + 2
+        lines = []
+        for row in rows:
+            pieces = [f"{window.label} {window.percent}%" for window in row.windows]
+            if row.borrowed is not None:
+                pieces.append(f"via {row.borrowed}")
+            if row.stale_for is not None:
+                pieces.append(f"as of {row.stale_for} ago")
+            lines.append(
+                f"<code>{escape(row.profile.ljust(width))}{escape(' · '.join(pieces))}</code>"
+            )
+        return "\n\n<b>Plan limits</b>\n" + "\n".join(lines)
 
     async def _usage_lines(self, record: SessionRecord) -> tuple[str, ...]:
         """Ask the provider what this session has spent, and never let the answer cost a screen.
@@ -2043,7 +2193,9 @@ class PrivateBotBoundary:
                 # forbidden-name sweep could not see it: it greps for `def ` names, and this
                 # was an inlined copy with no definition to find.
                 (named,) = with_project_names((record,), self.catalogue)
-                return named.display.rendered
+                # The compact identity the redesign gives every two-line row, with the
+                # sequence outside it -- the notification renders both on one plain line.
+                return f"{session_identity(named)} #{named.display.sequence}"
         return None
 
     def _projects_reply(
@@ -2284,6 +2436,7 @@ class PrivateBotBoundary:
         keyboard: tuple[tuple[Button, ...], ...] = (),
         *,
         back: str | None = None,
+        back_label: str = "Back",
     ) -> RenderedMessage:
         """Render one screen and close it with Back, then the fixed navigation bar.
 
@@ -2319,7 +2472,9 @@ class PrivateBotBoundary:
         """
         rows: list[tuple[Button, ...]] = []
         if back is not None:
-            rows.append((Button("Back", back),))
+            # `back_label` names the parent where a screen wants to -- the session detail says
+            # `‹ Back to sessions` -- and stays the bare word everywhere a parent is obvious.
+            rows.append((Button(back_label, back),))
         # Resume is absent rather than disabled on a host that wired no conversation
         # service: Telegram has no disabled state, and a button that answers "unavailable"
         # is a worse answer than no button.

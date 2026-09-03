@@ -149,7 +149,7 @@ def test_a_need_for_an_answer_is_stated_plainly_because_the_agent_asked() -> Non
         open_session=OPEN,
     )
 
-    assert "The agent is waiting for an answer." in message.text
+    assert "❓ <b>Waiting for an answer</b>" in message.text
     assert "may be waiting" not in message.text
     assert "not something it reported" not in message.text
 
@@ -438,9 +438,9 @@ def test_an_output_ceiling_is_not_worded_as_a_usage_limit() -> None:
         _group(_activity(ActivityKind.OUTPUT_LIMIT)), display=DISPLAY, open_session=OPEN
     )
 
-    assert "usage limit" in usage.text
+    assert "Hit a usage limit" in usage.text
     assert "usage limit" not in output.text
-    assert "output length limit" in output.text
+    assert "Hit its output ceiling" in output.text
 
 
 def test_text_no_encoder_can_carry_is_replaced_rather_than_raising() -> None:
@@ -619,11 +619,14 @@ def test_a_session_with_several_things_to_say_gets_one_message_saying_all_of_the
     )
 
     body = message.text.split("\n")
-    assert body[0] == f"<b>{DISPLAY}</b>"
-    assert len(body) == 4, "one header line and one line per observation"
-    assert "finished its work" in body[1] and "Ran the suite." in body[1]
-    assert "waiting for an answer" in body[2] and "Overwrite config.toml?" in body[2]
-    assert "usage limit" in body[3]
+    # The headline is the newest observation's; the identity follows it on its own line; then
+    # one bulleted line per observation, its own headline words with the detail folded on.
+    assert body[0].startswith("✅ <b>Finished its work</b> · ")
+    assert body[1] == DISPLAY
+    assert len(body) == 5, "a headline, the identity, and one line per observation"
+    assert "Finished its work" in body[2] and "Ran the suite." in body[2]
+    assert "Waiting for an answer" in body[3] and "Overwrite config.toml?" in body[3]
+    assert "Hit a usage limit" in body[4]
     assert len(message.keyboard[0]) == 1
 
 
@@ -640,7 +643,10 @@ def test_a_lone_observation_still_reads_exactly_as_it_always_has() -> None:
         open_session=OPEN,
     )
 
-    assert message.text == f"<b>{DISPLAY}</b>\nThe agent has finished its work.\nRan the suite."
+    headline, identity, quoted = message.text.split("\n")
+    assert headline.startswith("✅ <b>Finished its work</b> · ")
+    assert identity == DISPLAY
+    assert quoted == "<blockquote>Ran the suite.</blockquote>"
 
 
 def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -> None:
@@ -657,7 +663,9 @@ def test_a_session_that_said_more_than_a_message_can_hold_says_how_much_more() -
     )
 
     body = message.text.split("\n")
-    assert len(body) == 7, "a header, five observations, and the count of what is missing"
+    assert len(body) == 8, (
+        "a headline, the identity, five observations, and the count of what is missing"
+    )
     assert "2 earlier" in body[-1]
     assert "Step 6." in message.text, "the newest observation is spelled out, not counted"
     assert "Step 0." not in message.text, "the stalest is what the counter stands for"
@@ -1294,20 +1302,21 @@ async def test_the_queue_full_warning_names_the_session_that_paid(caplog) -> Non
     )
 
 
-def test_the_bot_has_a_sentence_for_every_kind_and_none_it_cannot_reach() -> None:
+def test_the_bot_has_a_headline_for_every_kind_and_none_it_cannot_reach() -> None:
     """Every surviving kind renders, and nothing renders a kind that no longer exists.
 
     `_sentence` had a `QUIET` branch ahead of its dictionary lookup, and `_detail_of` had the
     matching one that dropped agent text a quiet observation could never carry. Both are dead
     code the moment the member goes, and dead code in a total function is how the *next* kind
     gets a branch nobody notices is unreachable. Driven through every member rather than
-    asserted structurally, because what has to hold is that the lookup does not raise.
+    asserted structurally, because what has to hold is that the lookup does not raise. The
+    sentences became headlines (`kind_headline`) in the redesign; the claim is the same.
     """
-    from remote_agents.adapters.telegram.notifications import _sentence
+    from remote_agents.adapters.telegram.notifications import kind_headline
 
-    for kind in ActivityKind:
-        sentence = _sentence(_activity(kind))
-        assert sentence and sentence.endswith(".")
+    headlines = {kind_headline(kind) for kind in ActivityKind}
+    assert len(headlines) == len(ActivityKind), "two kinds share a headline"
+    assert all(headline and not headline.endswith(".") for headline in headlines)
 
 
 def test_an_inferred_observation_never_renders_agent_text_even_if_one_carries_it() -> None:

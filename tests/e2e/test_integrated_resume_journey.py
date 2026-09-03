@@ -13,7 +13,7 @@ from test_terminal_launch import STARTUP_BUDGET
 
 from remote_agents.adapters.sqlite.database import open_database
 from remote_agents.adapters.sqlite.session_store import SQLiteSessionStore
-from remote_agents.adapters.telegram.service import build_private_bot
+from remote_agents.adapters.telegram.service import build_private_bot, unmarked
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, LaunchProfile, TmuxTerminal
 from remote_agents.application.conversations import ConversationService
@@ -126,7 +126,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
             button.callback_data
             for row in detail.keyboard
             for button in row
-            if button.text == ACTION_LABELS[GRACEFUL]
+            if unmarked(button.text) == ACTION_LABELS[GRACEFUL]
         )
         boundary.callbacks.bind_pending(11, 1)
         outcome = await boundary._stop_reply("graceful", graceful, 1)
@@ -138,7 +138,7 @@ async def test_integrated_resume_journey_uses_real_sqlite_and_an_isolated_tmux_s
         boundary.callbacks.bind_pending(11, 1)
         detail = await boundary._detail_reply(str(record.session_id), 1)
         labels = [button.text for row in detail.keyboard for button in row]
-        assert labels == ["Back", "Sessions", "Launch", "Resume"]
+        assert labels == ["‹ Back to sessions", "Sessions", "Launch", "Resume"]
     finally:
         for record in await service.list_sessions():
             try:

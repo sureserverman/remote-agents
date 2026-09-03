@@ -24,6 +24,7 @@ from remote_agents.adapters.telegram.service import (
     _sync_owner_metadata,
     audit_bot_metadata,
     build_private_bot,
+    unmarked,
 )
 from remote_agents.adapters.telegram.stops import CONFIRMED_FORCE
 from remote_agents.application.profiles import ProfileAvailability
@@ -152,10 +153,7 @@ async def test_private_bot_boundary_renders_and_refreshes_only_issued_owner_call
 
     await boundary.start(update, None)
 
-    assert (
-        message.replies[0]["text"]
-        == "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
-    )
+    assert message.replies[0]["text"] == "<b>Sessions</b> · 0\nNothing is running."
     launch = _button(message.replies[0], "Launch")
     callback = _Callback(launch)
     await boundary.callback(_trusted_update(callback=callback), None)
@@ -268,7 +266,7 @@ async def test_private_bot_boundary_hides_ended_history_from_sessions_list() -> 
     reply = await boundary._sessions_reply()
 
     labels = tuple(unpadded(button.text) for row in reply.keyboard for button in row)
-    assert labels[0].startswith("Demo · codex · regular · #1 · active · running · ")
+    assert labels[0] == "🟢 #1 Demo", labels
     assert labels[1:] == ("Sessions", "Launch")
     assert "ended" not in labels
 
@@ -331,9 +329,7 @@ async def test_owner_commands_render_only_the_private_chat_surface() -> None:
     await boundary.help_command(_trusted_update(message=help_message), None)
 
     assert launch.replies[0]["text"] == "<b>Projects 1/1</b>\nSelect a project to launch."
-    assert sessions.replies[0]["text"] == (
-        "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
-    )
+    assert sessions.replies[0]["text"] == ("<b>Sessions</b> · 0\nNothing is running.")
     # The empty list no longer carries its own Launch: the bar carries that destination on
     # the row directly beneath, and a button duplicating its neighbour reads as a bug.
     assert [
@@ -366,7 +362,7 @@ async def test_inspection_sends_the_existing_oversized_output_as_a_utf8_attachme
         button.callback_data
         for row in detail.keyboard
         for button in row
-        if unpadded(button.text) == "Inspect"
+        if unpadded(button.text).endswith("Inspect")
     )
     callback = _Callback(inspect)
 
@@ -402,7 +398,7 @@ async def test_inspecting_a_pane_that_died_since_the_view_was_drawn_answers_the_
         button.callback_data
         for row in detail.keyboard
         for button in row
-        if unpadded(button.text) == "Inspect"
+        if unpadded(button.text).endswith("Inspect")
     )
     callback = _Callback(inspect)
 
@@ -974,10 +970,12 @@ async def test_session_detail_offers_a_way_back_and_keeps_the_stops_on_their_own
 
     detail = await boundary._detail_reply(str(running.session_id))
 
-    rows = [[unpadded(button.text) for button in row] for row in detail.keyboard]
-    assert rows[0] == ["Inspect"]
+    # `unmarked` takes the bot's own marks off (`📄 Inspect` → `Inspect`); the shape is what is
+    # asserted: reads paired on their row, stops on their own, then the way back, then the bar.
+    rows = [[unmarked(unpadded(button.text)) for button in row] for row in detail.keyboard]
+    assert rows[0] == ["Inspect", "Rename"]
     assert rows[-3] == ["Stop and close", "Force stop"]
-    assert rows[-2] == ["Back"]
+    assert rows[-2] == ["‹ Back to sessions"]
     assert rows[-1] == ["Sessions", "Launch"]
 
 
@@ -1013,7 +1011,7 @@ async def test_a_refresh_token_drawn_before_the_button_was_removed_still_answers
     reply = await boundary._reply_for("nav.refresh", "home")
 
     assert "Sessions" in str(reply["text"])
-    assert "1 active" in str(reply["text"])
+    assert "🟢 1" in str(reply["text"])
 
 
 @pytest.mark.asyncio
@@ -1043,7 +1041,10 @@ async def test_back_from_a_session_detail_returns_to_the_page_it_was_opened_from
     detail = await boundary._detail_reply(opened.entity_id)
 
     back = next(
-        button for row_ in detail.keyboard for button in row_ if unpadded(button.text) == "Back"
+        button
+        for row_ in detail.keyboard
+        for button in row_
+        if unpadded(button.text) == "‹ Back to sessions"
     )
     boundary.callbacks.bind_pending(11, 1)
     state = boundary.callbacks.resolve(back.callback_data, owner_id=7, chat_id=11, message_id=1)
@@ -1069,7 +1070,8 @@ async def test_the_sessions_list_pages_instead_of_growing_past_the_message() -> 
 
     assert first.text.startswith("<b>Sessions 1/3</b> · ")
     assert [unpadded(button.text) for button in first.keyboard[-2]] == ["Next"]
-    assert len(first.keyboard) == 4 + 2
+    # Four pickers two to a row, then Previous/Next, then the bar.
+    assert len(first.keyboard) == 2 + 2
     assert last.text.startswith("<b>Sessions 3/3</b> · ")
     assert [unpadded(button.text) for button in last.keyboard[-2]] == ["Previous"]
     # A page number past the end clamps rather than rendering an empty list.
@@ -1137,14 +1139,14 @@ async def test_a_graceful_stop_that_times_out_reports_the_session_as_still_runni
     # still listed precisely because the stop did not take, so the row the owner needs to act
     # on is already under the notice — which is what the "Open session" button was for, and
     # why this keyboard no longer carries it or the Back that led out of that dead end.
-    assert "Sessions 1/1" in reply["text"]
+    assert "<b>Sessions</b> · 1  🟢 1" in reply["text"]
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]
     assert labels[-2:] == ["Sessions", "Launch"]
     assert "Back" not in labels
     assert "Open session" not in labels
-    assert labels[0].startswith("Demo"), "the session that would not stop is on the list"
+    assert labels[0].endswith(" Demo"), "the session that would not stop is on the list"
 
 
 def test_only_the_actions_that_make_the_owner_wait_get_a_pending_notice() -> None:
@@ -1325,14 +1327,23 @@ async def test_the_force_confirmation_button_survives_the_render_that_drew_it() 
     assert launcher.stopped == ["force"], "the confirmed force never reached the application"
 
 
+def _named(record) -> str:
+    """How a notification names a session since the redesign: the compact identity and `#n`."""
+    from remote_agents.application.session_views import session_identity
+
+    return f"{session_identity(record)} #{record.display.sequence}"
+
+
 def _button(reply: dict[str, object], text: str) -> str:
     # Marker-stripped: a bar button carries "• " exactly when the owner is inside that flow,
     # which after /start lands on the sessions list is the common case rather than the rare one.
+    # Mark-tolerant too: an action button carries the bot's own mark (`📄 Inspect`).
+    buttons = [button for row in reply["reply_markup"].inline_keyboard for button in row]
+    for button in buttons:
+        if unpadded(button.text).removeprefix("• ") == text:
+            return button.callback_data
     return next(
-        button.callback_data
-        for row in reply["reply_markup"].inline_keyboard
-        for button in row
-        if unpadded(button.text).removeprefix("• ") == text
+        button.callback_data for button in buttons if unpadded(button.text).endswith(f" {text}")
     )
 
 
@@ -1343,7 +1354,7 @@ def _edited_button(callback: _Callback, index: int, *, text: str | None = None) 
             button.callback_data
             for row in keyboard
             for button in row
-            if unpadded(button.text) == text
+            if unmarked(unpadded(button.text)) == text
         )
     return keyboard[index][0].callback_data
 
@@ -1475,7 +1486,7 @@ async def test_a_spooled_activity_is_delivered_once_and_leaves_no_file(
     await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
-    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert _named(record) in str(bot.sends[0]["text"])
     assert list(spool.glob("*.json")) == []
 
     await _watch_activity_once(composition)
@@ -1535,7 +1546,7 @@ async def test_everything_one_session_says_lands_in_that_session_s_one_message(
     assert len(bot.sends) - len(bot.deletes) == 1, "the second kind opened a second message"
     assert len(bot.deletes) == 1, "the message it replaced was left in the chat"
     replacement = str(bot.sends[-1]["text"])
-    assert "finished its work" in replacement
+    assert "Finished its work" in replacement
     assert "usage limit" in replacement, "the different kind is in there"
 
 
@@ -1556,7 +1567,7 @@ async def test_a_notification_whose_send_fails_is_retried_on_the_next_pass(tmp_p
     await _watch_activity_once(composition)
 
     assert len(bot.sends) == 1
-    assert record.display.rendered in str(bot.sends[0]["text"])
+    assert _named(record) in str(bot.sends[0]["text"])
 
 
 @pytest.mark.parametrize(
@@ -1627,8 +1638,8 @@ async def test_only_an_actionable_report_about_a_live_session_reaches_the_owner(
     )
 
     assert len(bot.sends) == 1, "only the Stop from the running session is worth sending"
-    assert live.display.rendered in str(bot.sends[0]["text"])
-    assert "finished its work" in str(bot.sends[0]["text"])
+    assert _named(live) in str(bot.sends[0]["text"])
+    assert "Finished its work" in str(bot.sends[0]["text"])
     assert list(spool.iterdir()) == [], "a dropped record is still drained off disk"
 
 
@@ -1968,10 +1979,10 @@ async def test_one_session_saying_several_things_in_a_pass_gets_one_message(tmp_
     assert len(bot.sends) == 1, "three observations, one session, one message"
     text = str(bot.sends[0]["text"])
     assert text.count("•") == 3
-    assert record.display.rendered in text
-    assert "finished its work" in text
+    assert _named(record) in text
+    assert "Finished its work" in text
     assert "usage limit" in text
-    assert "waiting for an answer" in text
+    assert "Waiting for an answer" in text
 
 
 async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
@@ -2002,7 +2013,9 @@ async def test_two_sessions_in_one_pass_get_one_message_each(tmp_path) -> None:
     )
 
     assert len(bot.sends) == 2, "four observations, two sessions, two messages"
-    named = {str(send["text"]).split("\n")[0] for send in bot.sends}
+    # The second line: the headline leads and can be the same kind for both sessions; the
+    # identity beneath it is what names the session.
+    named = {str(send["text"]).split("\n")[1] for send in bot.sends}
     assert len(named) == 2, "each message is headed by its own session"
     for send in bot.sends:
         assert str(send["text"]).count("•") == 2, "each session's own two, and no one else's"
@@ -2028,7 +2041,7 @@ async def test_the_same_thing_said_twice_in_one_pass_is_shown_once(tmp_path) -> 
 
     assert len(bot.sends) == 1
     text = str(bot.sends[0]["text"])
-    assert text.count("finished its work") == 1, "four identical reports are one line"
+    assert text.count("Finished its work") == 1, "four identical reports are one line"
     assert "•" not in text, "one surviving observation renders in the ungrouped shape"
 
 

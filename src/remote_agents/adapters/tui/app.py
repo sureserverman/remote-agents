@@ -12,8 +12,10 @@ from typing import TypeVar
 from textual import events, work
 from textual.app import App, ScreenStackError
 from textual.binding import Binding
+from textual.content import Content
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
+from textual.theme import Theme
 from textual.timer import Timer
 from textual.worker import WorkerCancelled, WorkerFailed
 
@@ -33,7 +35,9 @@ from remote_agents.adapters.tui.preferences import (
     ALPHABETICAL,
     RECENCY,
     read_project_order,
+    read_theme,
     write_project_order,
+    write_theme,
 )
 from remote_agents.adapters.tui.screens import (
     ALL_SCREENS,
@@ -48,6 +52,7 @@ from remote_agents.adapters.tui.screens.base import ChoiceScreen
 from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
+from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.commands import (
     LaunchCommand,
     RemoteControlCommand,
@@ -56,8 +61,9 @@ from remote_agents.application.commands import (
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import (
     CatalogProject,
+    last_used_by_project,
     order_alphabetically,
-    rank_if_usage_is_reported,
+    rank_by_recent_use,
 )
 from remote_agents.application.session_actions import (
     ACTION_LABELS as _ACTION_LABELS,
@@ -68,7 +74,6 @@ from remote_agents.application.session_actions import (
     remote_control_available,
 )
 from remote_agents.application.session_views import (
-    context_gauge,
     listed_sessions,
     only_listed,
     with_project_names,
@@ -138,17 +143,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # `height: auto` and stretched a two-row dialog down the whole terminal. The rule was
     # always about the body every position renders; this says so.
     CSS = """
-    Screen { layout: vertical; }
+    Screen { layout: vertical; background: $background; }
     #body { height: 1fr; }
     ChoiceScreen #status { height: 2; padding: 0 1; text-overflow: ellipsis; color: $foreground; }
-    /* Three rows on the sessions positions alone, because they are the only ones carrying a
-       whole keymap in this region: seven row keys, two navigation keys and the count. Measured
-       at 60 columns before the rule was written — two rows hold about 114 characters and drop
-       the remainder with no ellipsis at all, so the previous 112-character pane status was one
-       key away from losing "m remote" with nothing on screen to say it had. Three rows hold
-       about 171. The type selector matches `SessionsPaneScreen` too, Textual's type names
-       including base classes; the pane pays one row of its list for it. */
-    SessionsScreen #status { height: 3; }
+    /* The hint row under the status: what the keys do here, muted, and absent when a screen
+       has nothing to hint. Facts on the line above, hints on this one -- the redesign's split
+       of the region that used to carry both in one voice. Its own widget rather than a second
+       line of `#status`, because that region's one-line contract (see `set_status`) is what
+       keeps the rows beneath it still, and the attach command it sometimes has to hold wraps
+       across both of its rows at 80 columns. */
+    ChoiceScreen #hint { height: 1; padding: 0 1; color: $text-muted; text-overflow: ellipsis; }
+    ChoiceScreen #hint.-empty { display: none; }
     /* Severity from the design system, so it resolves per theme rather than assuming a dark
        one — and always as the *second* signal: every caller that sets a severity has already
        said what went wrong in words, because a reader under NO_COLOR gets the words only. */
@@ -159,6 +164,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
        the design system, not a grey literal — and it is the *second* signal here too: the
        row is a disabled `Option`, so it is unselectable whatever the palette does. */
     ChoiceScreen OptionList > .option-list--option-disabled { color: $text-muted; }
+    /* The highlighted row sits on `$selection`, a variable this surface's two themes define
+       and `get_theme_variable_defaults` backstops for every other theme. The cursor is the
+       band; the row's own colours stay, which is what lets a preserved row read muted under
+       the cursor too. */
+    ChoiceScreen OptionList > .option-list--option-highlighted { background: $selection; }
+    /* The filter as a flat bar: no box, a rule beneath, the surface's own ground. Two rows
+       high because the rule is the second of them. */
+    ChoiceScreen #filter {
+        height: 2; padding: 0 1; background: $surface;
+        border: none; border-bottom: solid $secondary;
+    }
+    ChoiceScreen #filter:focus { border-bottom: solid $primary; }
+    /* Pane borders and their titles: every list this surface frames is framed the same way,
+       the title in `$primary` bold and the hints after it muted (markup in the title itself). */
+    ChoiceScreen OptionList { border-title-color: $primary; border-title-style: bold; }
 
     /* Which of the two bodies a screen shows is a *state*, declared once here, rather than
        four imperative `display =` assignments spread across `on_mount`, `show_output` and
@@ -195,7 +215,8 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     #: Shown in the header, with each screen's breadcrumb as the sub-title beside it. Set
     #: rather than left to default: `App.title` falls back to the class name, so the header
     #: read "RemoteAgentsTui" — the one string on screen that named an implementation detail.
-    TITLE = "Remote Agents"
+    #: Lower-case and hyphenated since the redesign: it is the command's own name.
+    TITLE = "remote-agents"
     #: The system commands stay — Textual's own (theme, quit, keys, maximize, screenshot) and
     #: none of them touches a session. `NavigationCommands` adds this app's three flow jumps
     #: and nothing else; DEC-007 is why, and `screens/palette.py` carries the argument.
@@ -204,20 +225,21 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     # the ones that would do nothing here. The tooltips say what the key does *to the thing
     # the owner is looking at*, because the labels alone were ambiguous in the one way that
     # mattered: "Refresh" gave no hint that it used to abandon the position it was pressed on.
+    # Lower-case descriptions: the footer reads `esc back · ^r refresh …` as one quiet line.
     BINDINGS = [
-        Binding("escape", "back", "Back", tooltip="Return to the position you came from"),
+        Binding("escape", "back", "back", tooltip="Return to the position you came from"),
         Binding(
             "ctrl+r",
             "refresh",
-            "Refresh",
+            "refresh",
             tooltip="Re-read what this screen shows, without leaving it",
         ),
-        Binding("ctrl+n", "add_project", "Add project", tooltip="Register a new project directory"),
-        Binding("ctrl+s", "sessions", "Sessions", tooltip="Every managed session on this host"),
+        Binding("ctrl+n", "add_project", "add project", tooltip="Register a new project directory"),
+        Binding("ctrl+s", "sessions", "sessions", tooltip="Every managed session on this host"),
         Binding(
-            "ctrl+o", "resume", "Resume", tooltip="Reopen a saved conversation as a new session"
+            "ctrl+o", "resume", "resume", tooltip="Reopen a saved conversation as a new session"
         ),
-        Binding("ctrl+q", "quit", "Quit", tooltip="Leave the terminal surface"),
+        Binding("ctrl+q", "quit", "quit", tooltip="Leave the terminal surface"),
     ]
 
     #: Which app-level flows this surface offers, by action name.
@@ -240,6 +262,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def __init__(self, context: TuiContext) -> None:
         super().__init__()
         self._services = context
+        # The two relay themes, registered before the theme is chosen so the choice can name
+        # one. Read from the preference file with the same total read the project order gets:
+        # an unknown or unreadable value is the default, never an `InvalidThemeError` here.
+        for theme in THEMES:
+            self.register_theme(theme)
+        self.theme = read_theme(context.preferences_path)
+        #: When each project was last launched, by opaque id, from the same usage read that
+        #: ranks the catalogue. Read for the projects pane's age column and for nothing else.
+        self._project_last_used: dict[str, datetime] = {}
         #: The catalogue exactly as it was read, before either order is applied. Held apart
         #: from `_catalogue` so a switch re-orders the *snapshot* rather than the list it is
         #: looking at: `rank_by_recent_use` is a stable sort, so ranking an already
@@ -277,6 +308,34 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         #: The (position, work) the quit warning was last given for — see `action_quit`. Keyed
         #: to the work so that typing more re-arms it rather than leaving on a stale yes.
         self._quit_armed: tuple[str, str] | None = None
+
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Backstop the two variables this surface's CSS names and Textual's themes do not.
+
+        `$selection` and `$text-dim` are the relay themes' own. A built-in theme picked from the
+        palette -- or the one the snapshot suite pins -- would otherwise fail to resolve every
+        rule that names them, at stylesheet parse time, which takes the app down. Neutral greys
+        rather than a relay value, so a foreign theme is not quietly given one palette's accent.
+        """
+        return {**super().get_theme_variable_defaults(), **VARIABLE_DEFAULTS}
+
+    def format_title(self, title: str, sub_title: str) -> Content:
+        """The header: the app's name in `$primary` bold, the breadcrumb beside it muted.
+
+        Textual's own version dims the sub-title and leaves the title in the header's colour.
+        The breadcrumb is the owner's position and the name is a constant, so the weights are
+        the redesign's: the name reads as a mark, the trail as a hint. Both pieces are literal
+        `Content` -- the breadcrumb carries a session's owner-typed label, which must never be
+        parsed as markup (`test_row_markup.py` drives exactly that string through here).
+        """
+        name = Content.assemble((title, "$primary bold"))
+        if not sub_title:
+            return name
+        return Content.assemble(name, ("  ", None), (sub_title, "$text-muted"))
+
+    def _remember_theme(self, theme: Theme) -> None:
+        """Write the chosen theme beside the project order, or forget it (`write_theme`)."""
+        write_theme(self._services.preferences_path, theme.name)
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Ask the position on screen whether one of *these* bindings applies to it.
@@ -322,6 +381,9 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         self._context_timer = self.set_interval(
             CONTEXT_AUTO_REFRESH, self._refresh_context_windows_tick
         )
+        # The palette's theme command is the switch; this is what makes the switch stick. The
+        # signal fires on every change, and `write_theme` keeps only the two relay names.
+        self.theme_changed_signal.subscribe(self, self._remember_theme)
 
     def get_default_screen(self) -> Screen[None]:
         """The project list, installed as the bottom of the stack rather than pushed.
@@ -349,6 +411,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     def project_order(self) -> str:
         """Which order the projects list is drawn in — one of `preferences.PROJECT_ORDERS`."""
         return self._project_order
+
+    @property
+    def project_last_used(self) -> dict[str, datetime]:
+        """When each project was last launched, by opaque id, from the last ordering read."""
+        return self._project_last_used
 
     async def ensure_catalogue_ordered(self) -> None:
         """Apply the chosen order to the snapshot this process started with, exactly once.
@@ -407,11 +474,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         absent, which is the same answer a host with no launch history gets.
         """
         try:
+            # One usage read serves both the ranking and the pane's last-launch column, so the
+            # two cannot describe different reads. A host with no session use case reports no
+            # usage: the unranked catalogue and an empty column are the honest answers, which
+            # is the same rule `rank_if_usage_is_reported` states for the bot.
+            sessions = self._services.backend.sessions
+            usage = () if sessions is None else tuple(await sessions.project_usage())
+            self._project_last_used = last_used_by_project(usage)
             if self._project_order == ALPHABETICAL:
                 return order_alphabetically(catalogue)
-            return await rank_if_usage_is_reported(
-                catalogue, self._services.backend.sessions, datetime.now(UTC)
-            )
+            return rank_by_recent_use(catalogue, usage, datetime.now(UTC))
         except Exception:
             _LOG.exception("ordering the project catalogue failed")
             return catalogue
@@ -1324,15 +1396,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         except ScreenStackError:
             return False
 
-    def context_gauge_for(self, session_id: object) -> str:
-        """The gauge suffix for one row, or nothing at all when there is no reading.
+    def context_window_for(self, session_id: object) -> ContextWindow | None:
+        """The last context reading for one row, or nothing at all when there is none.
 
         Nothing, deliberately: an absent reading is not a zero one, and a row is not the place
-        to explain the difference -- the session detail already words both absences. A row that
-        rendered an empty bar for an unread session would assert a fullness nobody measured.
+        to explain the difference -- the session detail already words both absences. The row
+        renderer (`session_views.session_row_parts`) draws its dash for `None` and a bar only
+        for a running session whose ceiling is known.
         """
-        window = self._context_windows.get(str(session_id))
-        return "" if window is None else f"  {context_gauge(window)}"
+        return self._context_windows.get(str(session_id))
 
     async def refresh_context_windows(self, records: Iterable[SessionRecord]) -> None:
         """Re-read every listed session's context, off the repaint path.

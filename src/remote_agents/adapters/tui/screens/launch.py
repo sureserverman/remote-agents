@@ -46,19 +46,31 @@ from textual.widgets import Input, OptionList
 
 from remote_agents.adapters.tui.model import _BACK, LaunchSelection
 from remote_agents.adapters.tui.preferences import ALPHABETICAL, RECENCY
+from remote_agents.adapters.tui.rows import project_row_content
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
 )
 from remote_agents.application.project_catalog import search_catalogue
 
-#: What the status line says about each order. The sentence names the order the list is in
-#: *and* the key, because the key is the only way to discover it and the footer's "Reorder"
-#: does not say what the other order would be.
+#: What the status line says about each order, on the positions that describe the list in
+#: their status (the dashboard puts the sessions' counts there instead). The sentence names the
+#: order the list is in *and* the key, because the key is the only way to discover it.
 _ORDER_SENTENCE = {
-    RECENCY: "most recently used first. Type to filter, ctrl+t for alphabetical.",
-    ALPHABETICAL: "in alphabetical order. Type to filter, ctrl+t for most recently used.",
+    RECENCY: "most recently used first. / filters, o for alphabetical.",
+    ALPHABETICAL: "in alphabetical order. / filters, o for most recently used.",
 }
+
+#: The pane title's hint for each order -- `Projects · recent first · o toggles order`.
+_ORDER_TITLE = {
+    RECENCY: "recent first",
+    ALPHABETICAL: "a–z",
+}
+
+PROJECTS_HINT = "enter choose · / filter · o order"
+"""The keymap under the status on the projects positions."""
+
+PROJECTS_PLACEHOLDER = "/ filter projects"
 
 #: How long the filter waits for the typing to stop before it re-searches the catalogue.
 #: Every keystroke used to run `search_catalogue` over the whole catalogue and rebuild every
@@ -78,18 +90,27 @@ class ProjectsScreen(ChoiceScreen):
     empty_state = "No project matches that filter."
 
     position = "PROJECTS"
-    filter_placeholder = "Filter projects"
+    filter_placeholder = PROJECTS_PLACEHOLDER
     can_refresh = True
     crumb = "Projects"
 
+    DEFAULT_CSS = """
+    ProjectsScreen #choices {
+        border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    """
+
     BINDINGS = [
-        # `ctrl+t` rather than a bare letter: `render_projects` focuses the filter, so this
-        # pane holds the keyboard in an `Input` by construction and a plain `t` would be
-        # *typed* rather than bound. `ctrl+o` was the other instinct and is already Resume.
-        #
-        # A screen binding, not an app-level one: it means something only where a project
-        # list is drawn, and `ChoiceScreen.check_action` answers only for the app's six.
-        Binding("ctrl+t", "toggle_project_order", "Reorder"),
+        # Bare letters, which the redesign made affordable here: the keyboard now rests on the
+        # *rows*, and `/` is how the owner reaches the filter -- so `o` is a key, not a typed
+        # character, until they have pressed `/`, after which `Input` takes every printable key
+        # first and `o` is once more a letter. `ctrl+t` stays as the hidden alias that works
+        # from inside the filter too. Screen bindings, not app-level ones: they mean something
+        # only where a project list is drawn. Hidden from the footer; the pane title carries
+        # them, which is where they are true.
+        Binding("slash", "focus_filter", "filter", show=False),
+        Binding("o", "toggle_project_order", "order", show=False),
+        Binding("ctrl+t", "toggle_project_order", "order", show=False),
     ]
 
     async def populate(self) -> None:
@@ -140,29 +161,82 @@ class ProjectsScreen(ChoiceScreen):
         self.render_projects(query, keep_focus=True)
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
-        """Draw the catalogue, filtered by whatever is typed in the filter input."""
+        """Draw the catalogue, filtered by whatever is typed in the filter input.
+
+        **The keyboard rests on the rows, and `/` takes it to the filter** -- the redesign's
+        arrangement, and a reversal of the one before it, which focused the filter on every
+        render so typing filtered at once. That is what made every bare letter unavailable as a
+        key here; with the rows holding the keyboard, `o` toggles the order and `/` is one
+        keystroke from filtering, which is what the pane title and the hint row advertise.
+
+        Two columns: the name, and the project's last-launch age against the right edge, muted,
+        from the same usage read that ordered the list (`RemoteAgentsTui.project_last_used`).
+        Laid out to the pane's measured width, so the rows are redrawn on resize.
+        """
         if not self.showing:
             return
         catalogue = self.tui.catalogue
         projects = search_catalogue(catalogue, query) if query else catalogue
         entry = self.query_one("#filter", Input)
         entry.display = True
-        entry.placeholder = "Filter projects"
-        # The active order is named in words and the region takes no severity: DEC-010 is
-        # explicit that colour is a second signal and never the only one, and an order is a
-        # fact about the list rather than a condition to report.
-        order = _ORDER_SENTENCE[self.tui.project_order]
-        self.set_status(f"Choose a project — {len(projects)} available, {order}")
+        entry.placeholder = PROJECTS_PLACEHOLDER
+        choices = self.query_one("#choices", OptionList)
+        choices.border_title = (
+            f"Projects[$text-muted] · {_ORDER_TITLE[self.tui.project_order]} · o toggles order[/]"
+        )
+        width = choices.content_size.width or None
+        last_used = self.tui.project_last_used
+        self._describe_projects(len(projects))
         self.show_choices(
             tuple(
-                (project.opaque_id, f"{project.area}/{project.name}  [{project.group}]")
+                (
+                    project.opaque_id,
+                    project_row_content(project.name, last_used.get(project.opaque_id), width),
+                )
                 for project in projects
             ),
-            focus=False,
+            focus=not keep_focus,
         )
         if not keep_focus:
             entry.value = ""
-            entry.focus()
+
+    def _describe_projects(self, count: int) -> None:
+        """The status and hint for a position whose whole content is the project list.
+
+        The active order is named in words and the region takes no severity: DEC-010 is
+        explicit that colour is a second signal and never the only one, and an order is a
+        fact about the list rather than a condition to report. `DashboardScreen` overrides
+        this to say nothing -- its status carries the sessions' counts.
+        """
+        order = _ORDER_SENTENCE[self.tui.project_order]
+        self.set_status(f"Choose a project — {count} available, {order}", hint=PROJECTS_HINT)
+
+    def action_focus_filter(self) -> None:
+        """`/`: hand the keyboard to the filter. Enter, down or escape hand it back."""
+        self.query_one("#filter", Input).focus()
+
+    def key_escape(self, event: events.Key) -> None:
+        """Escape inside the filter returns to the rows, keeping the query.
+
+        Only while the entry holds the keyboard: everywhere else escape is the app's `back`,
+        which this handler must not swallow. Guarded exactly as `key_down` is.
+        """
+        entry = self.query_one("#filter", Input)
+        if not entry.has_focus:
+            return
+        event.stop()
+        event.prevent_default()
+        self._flush_filter()
+        self._enter_results()
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Lay the two columns out again for the new width, keeping query and keyboard."""
+        if not self.showing:
+            return
+        found = self.query("#filter")
+        if not found:
+            return
+        self.render_projects(found.first(Input).value, keep_focus=True)
 
     async def action_toggle_project_order(self) -> None:
         """Swap the order, keep the query, and say which order is now in force.

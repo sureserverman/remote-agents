@@ -233,7 +233,7 @@ async def test_a_clean_stop_lands_on_list_naming_what_ended() -> None:
 
     assert rendered.text.startswith("Stopped Demo · Claude · regular · #1\n")
     assert "The session has ended." in rendered.text
-    empty_list = "<b>Sessions</b> · 0 total · 0 active · 0 preserved\nNothing is running."
+    empty_list = "<b>Sessions</b> · 0\nNothing is running."
     assert empty_list in rendered.text
     assert "Back" not in _labels(rendered), "the list is the destination, not a stop on the way"
 
@@ -257,7 +257,9 @@ async def test_a_graceful_timeout_lands_on_list_with_its_words_unchanged() -> No
     assert rendered.text.startswith("Demo · Claude · regular · #1 is still running\n")
     assert escape(failure.summary) in rendered.text
     assert escape(failure.remedy) in rendered.text
-    assert "Sessions 1/1" in rendered.text, "it did not take, so the session is still on the list"
+    assert "<b>Sessions</b> · 1  🟢 1" in rendered.text, (
+        "it did not take, so the session is still on the list"
+    )
     assert "Back" not in _labels(rendered)
 
 
@@ -328,7 +330,7 @@ async def test_every_stop_action_lands_on_list_with_its_own_lead_line(action, le
     assert ended_alone.text.startswith(f"{lead}\n")
     assert "Nothing is running." in ended_alone.text
     assert with_survivor.text.startswith(f"{lead}\n")
-    assert "Sessions 1/1" in with_survivor.text
+    assert "<b>Sessions</b> · 1  🟢 1" in with_survivor.text
     assert "Back" not in _labels(ended_alone)
     assert "Back" not in _labels(with_survivor)
 
@@ -382,7 +384,7 @@ async def test_a_stop_refused_because_the_session_moved_on_lands_on_list() -> No
     assert launcher.stopped == [], "a refused stop dispatches nothing"
     assert reply["text"].startswith("That session moved on before this could run")
     assert "Open the list again" not in reply["text"]
-    assert "Sessions 1/1" in reply["text"]
+    assert "<b>Sessions</b> · 1  ⚪ 1" in reply["text"]
     labels = [
         unpadded(button.text) for row in reply["reply_markup"].inline_keyboard for button in row
     ]

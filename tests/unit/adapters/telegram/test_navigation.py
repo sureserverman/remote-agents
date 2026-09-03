@@ -164,6 +164,11 @@ def _button(message, label: str) -> str:
     for button in buttons:
         if unpadded(button.text).removeprefix("• ").startswith(label):
             return button.callback_data
+    # A session picker reads `🟢 #7 Demo` and an action button `📄 Inspect` since the redesign:
+    # the label a test names is the *last* token, behind a mark it did not write.
+    for button in buttons:
+        if unpadded(button.text).endswith(f" {label}"):
+            return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 
@@ -262,7 +267,7 @@ async def test_the_navigation_bar_keeps_back_on_its_own_row_above_it() -> None:
 
     rows = _rows(chat.messages[anchor])
     assert _unmarked(rows[-1]) == ["Sessions", "Launch", "Resume"]
-    assert rows[-2] == ["Back"]
+    assert rows[-2] == ["‹ Back to sessions"]
 
 
 @pytest.mark.asyncio
@@ -498,29 +503,34 @@ async def test_the_sessions_counts_lead_the_list_that_owns_them() -> None:
 
     rendered = await boundary._sessions_reply()
 
-    assert "2 active" in rendered.text
-    assert "1 preserved" in rendered.text
+    # The emoji legend is the count: two active, one preserved, and no bucket in between.
+    assert "<b>Sessions</b> · 3  🟢 2 · ⚪ 1" in rendered.text
 
 
 @pytest.mark.asyncio
 async def test_the_sessions_counts_are_still_rendered_when_nothing_is_running() -> None:
-    """Both zero rather than absent: a line that appears and disappears is a line the owner
-    has to re-find, and the empty list is exactly when they are looking for it."""
+    """The total stays even at zero: a line that appears and disappears is a line the owner
+    has to re-find, and the empty list is exactly when they are looking for it. The emoji
+    legend is the per-bucket count and an empty bucket is left out of it, so at zero the
+    header is the total alone."""
     boundary = _sessions_counts_boundary([])
 
     rendered = await boundary._sessions_reply()
 
-    assert "0 active" in rendered.text
-    assert "0 preserved" in rendered.text
+    assert rendered.text.startswith("<b>Sessions</b> · 0\n")
     assert "Nothing is running." in rendered.text
 
 
 @pytest.mark.asyncio
 async def test_the_sessions_counts_reconcile_with_the_rows_they_sit_above() -> None:
-    """A row can be STARTING, STOP_REQUESTED, FAILED or ORPHANED — in neither named bucket.
-    Home showed the same two numbers and got away with it by being a different screen from
-    the rows; directly above the list, "0 active · 0 preserved" over four rows is a
-    contradiction. The total is what makes the arithmetic checkable."""
+    """Every listed state lands in one of four buckets, and the legend counts each bucket.
+
+    The old two-word header ("0 active · 0 preserved") had no place for STARTING,
+    STOP_REQUESTED, FAILED or ORPHANED, so four such rows sat under a header that said nothing
+    was happening. The redesign's buckets cover every listed state -- these four are two in
+    transition and two needing attention -- and the rows are headed by the same buckets, so the
+    arithmetic is checkable against the sections themselves.
+    """
     boundary = _sessions_counts_boundary(
         [
             SessionState.ORPHANED,
@@ -532,9 +542,11 @@ async def test_the_sessions_counts_reconcile_with_the_rows_they_sit_above() -> N
 
     rendered = await boundary._sessions_reply()
 
-    assert "4 total" in rendered.text
-    assert "0 active" in rendered.text
-    assert len(rendered.keyboard) - 1 == 4, "one row per session, plus the bar"
+    assert "<b>Sessions</b> · 4  🟡 2 · 🔴 2" in rendered.text
+    assert "🟢" not in rendered.text.split("\n")[0], "an empty bucket is not in the legend"
+    assert "<b>IN TRANSITION</b>" in rendered.text and "<b>NEEDS ATTENTION</b>" in rendered.text
+    # Two pickers to a row, plus the bar.
+    assert sum(len(row) for row in rendered.keyboard[:-1]) == 4, "one picker per session"
 
 
 @pytest.mark.asyncio
@@ -547,8 +559,8 @@ async def test_the_sessions_counts_come_from_the_records_the_list_pages() -> Non
     second_page = await boundary._sessions_reply(2)
 
     # Counts are of the whole list, not of the page — the page shows 5 of them.
-    assert "12 active" in second_page.text
-    assert "Sessions 2/3" in second_page.text
+    assert "<b>Sessions 2/3</b> · 12  🟢 12" in second_page.text
+    assert second_page.text.count("<code>running") == 5
 
 
 def _picker_boundary(*, creator: object | None) -> PrivateBotBoundary:
@@ -608,7 +620,7 @@ async def test_start_lands_on_sessions_whatever_is_running() -> None:
         await boundary.start(chat.message_update("/start"), None)
 
         shown = chat.messages[chat.bot_messages[0].message_id]
-        assert "Sessions" in shown.text and "active" in shown.text, shown.text
+        assert shown.text.startswith("<b>Sessions</b> · "), shown.text
         assert _rows(shown)[-1][0] == "• Sessions"
 
 

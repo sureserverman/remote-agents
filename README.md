@@ -228,7 +228,7 @@ press cannot be repeated into a second launch.
 A session's detail also reports what its agent has spent: the context window it is currently
 carrying. **The rate-limit windows are not there**, and deliberately — they belong to the whole
 agent rather than to any one session, so they are reported once per agent instead: under the
-counts on the Sessions list in Telegram, and in the local terminal's own Agent limits pane. Both are read from the working
+counts on the Sessions list in Telegram, and in the local terminal's own Plan limits pane. Both are read from the working
 files the provider itself writes — nothing is asked of the agent, and nothing leaves the host.
 The providers publish very different amounts, and the screen says which case it is in rather
 than filling a gap: codex reports its context against a stated window and both its rate limits;

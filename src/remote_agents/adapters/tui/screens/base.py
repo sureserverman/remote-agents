@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 
 from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.notifications import SeverityLevel
 from textual.screen import Screen
 from textual.validation import ValidationResult, Validator
@@ -231,6 +232,9 @@ class ChoiceScreen(Screen[None]):
             # unbalanced bracket in either raised `MarkupError` — text this app echoes from
             # another program could take down the screen showing it.
             yield Static(self.status, id="status", markup=False)
+            # The hint row: what the keys do here, muted, under the facts. Hidden by the
+            # `-empty` class until a screen gives it words (`set_hint`).
+            yield Static("", id="hint", classes="-empty", markup=False)
             yield Input(placeholder=self.filter_placeholder or "", id="filter")
             # `markup=False` because row text is displayed, never interpreted. Three sources
             # reach the rows that console markup would otherwise consume or act on: the
@@ -708,8 +712,23 @@ class ChoiceScreen(Screen[None]):
         """
         self.sub_title = self.breadcrumb
 
-    def set_status(self, text: str, *, severity: SeverityLevel = "information") -> None:
+    def set_status(
+        self,
+        text: str | Content,
+        *,
+        severity: SeverityLevel = "information",
+        hint: str | None = None,
+    ) -> None:
         """Say, in one line, what to do here or what just happened.
+
+        `text` may be a `Content` since the redesign, so a status can colour a glyph through a
+        theme variable (`● 2 running`, the dot in `$success`) -- the words stay the signal and
+        the colour the second one. It is never parsed as markup either way: a string reaches the
+        `markup=False` widget as itself, and a `Content` is already literal.
+
+        `hint` writes the muted row beneath (`set_hint`); left `None`, that row is untouched, so
+        a status that changes often -- `awaiting`'s "Reading…" and its restore -- does not blink
+        the keymap under it.
 
         One line is a *contract*, not a suggestion the CSS enforces: `#status` is one line
         high, so a second line is not clipped visibly, it is invisible. The first line is
@@ -742,12 +761,31 @@ class ChoiceScreen(Screen[None]):
         """
         if not self.showing:
             return
-        if "\n" in text:
-            _LOG.warning("a multi-line status was truncated to its first line: %r", text)
-            text = text.split("\n", 1)[0]
+        plain = text if isinstance(text, str) else text.plain
+        if "\n" in plain:
+            _LOG.warning("a multi-line status was truncated to its first line: %r", plain)
+            text = plain.split("\n", 1)[0]
         region = self.query_one("#status", Static)
         region.set_class(severity == "error", "-error")
         region.set_class(severity == "warning", "-warning")
+        region.update(text)
+        if hint is not None:
+            self.set_hint(hint)
+
+    def set_hint(self, text: str) -> None:
+        """Put the keymap -- or nothing -- on the muted row beneath the status.
+
+        One line, like the status, and for the same reason: the row is fixed-height so the list
+        beneath never moves. An empty hint hides the row rather than leaving a blank one, so a
+        screen with nothing to hint gives the rows the line back.
+        """
+        if not self.showing:
+            return
+        if "\n" in text:
+            _LOG.warning("a multi-line hint was truncated to its first line: %r", text)
+            text = text.split("\n", 1)[0]
+        region = self.query_one("#hint", Static)
+        region.set_class(not text, "-empty")
         region.update(text)
 
     async def refuse(
@@ -804,7 +842,9 @@ class ChoiceScreen(Screen[None]):
         self.tui.announce(message, severity=severity)
 
     @staticmethod
-    def _unique_by_key(entries: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    def _unique_by_key(
+        entries: tuple[tuple[str, str | Content], ...],
+    ) -> tuple[tuple[str, str | Content], ...]:
         """Drop a repeated key, keeping the first, so a duplicate cannot take the screen down.
 
         `OptionList.add_options` raises `DuplicateID` when two options in one batch share an
@@ -830,7 +870,7 @@ class ChoiceScreen(Screen[None]):
         being able to find, and a silent dedup would hide it exactly as the crash would.
         """
         seen: set[str] = set()
-        unique: list[tuple[str, str]] = []
+        unique: list[tuple[str, str | Content]] = []
         for key, text in entries:
             if key in seen:
                 _LOG.warning("dropped a repeated row key from the surface: %r", key)
@@ -841,11 +881,11 @@ class ChoiceScreen(Screen[None]):
 
     def show_choices(
         self,
-        entries: tuple[tuple[str, str], ...],
+        entries: tuple[tuple[str, str | Content], ...],
         *,
         focus: bool = True,
         highlight: int | None = 0,
-        trailing: tuple[tuple[str, str], ...] = (),
+        trailing: tuple[tuple[str, str | Content], ...] = (),
     ) -> None:
         """Render the choices, and take the keyboard only when the list is the next decision.
 
@@ -926,7 +966,7 @@ class ChoiceScreen(Screen[None]):
             choices.highlighted = None
             if focus:
                 choices.focus()
-        elif entries and focus:
+        elif entries:
             resting = min(highlight, len(entries) - 1)
             # Set twice, deliberately. Here, so the cursor is correct the instant this
             # returns — a keypress arriving before the next refresh must still land on the
@@ -934,8 +974,16 @@ class ChoiceScreen(Screen[None]):
             # rows this replaced, `add_options` populates the option list synchronously, so
             # this assignment alone already both decides the enter and draws the cursor:
             # `render_line` compares `self.highlighted` against the row it is painting.
+            #
+            # **Set whether or not this fill takes the keyboard**, for the reason the `None`
+            # branch above gives: `clear_options` resets `highlighted`, so a refill asked to
+            # keep the cursor on row *n* while the keyboard was elsewhere used to lose the
+            # cursor outright -- reached the moment a resize redraw landed before the first
+            # fill's `focus()` had taken effect, which left the list with no cursor and every
+            # row key inert until an arrow press. The `focus` flag decides the keyboard only.
             choices.highlighted = resting
-            choices.focus()
+            if focus:
+                choices.focus()
             # And again after the refresh, for what this assignment cannot do yet: the widget
             # may still have no `scrollable_content_region` (it is un-hidden a few lines above,
             # and a fresh screen has not laid out), so `watch_highlighted`'s

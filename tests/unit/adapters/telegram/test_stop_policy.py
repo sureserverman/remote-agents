@@ -66,6 +66,10 @@ def _row_button(message, label: str) -> str:
     for button in buttons:
         if button.text.removeprefix("\u2022 ").startswith(label):
             return button.callback_data
+    # A session picker reads `🟢 #7 Demo` since the redesign; the label is its last token.
+    for button in buttons:
+        if button.text.endswith(f" {label}"):
+            return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 

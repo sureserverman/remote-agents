@@ -14,12 +14,12 @@ def _soon(**offset: int) -> datetime:
 
 def test_an_unmatched_session_is_told_it_may_yet_match() -> None:
     """An agent that has not written its first turn has no file to find, and that resolves."""
-    assert usage_lines(None) == ("Usage: no conversation matched yet.",)
+    assert usage_lines(None) == ("no conversation matched yet",)
 
 
 def test_a_provider_that_publishes_nothing_is_not_told_to_wait() -> None:
     """cursor-agent will never write this down, so `yet` would be a promise nothing keeps."""
-    assert usage_lines(AgentUsage()) == ("Usage: not reported by this agent.",)
+    assert usage_lines(AgentUsage()) == ("not reported by this agent",)
 
 
 def test_the_two_absences_are_worded_differently() -> None:
@@ -30,12 +30,12 @@ def test_the_two_absences_are_worded_differently() -> None:
 def test_a_context_with_a_stated_ceiling_carries_a_percentage() -> None:
     usage = AgentUsage(context=ContextWindow(24_349, 258_400))
 
-    assert usage_lines(usage) == ("Context: 24.3k of 258k · 9%",)
+    assert usage_lines(usage) == ("█░░░░░░░ 9% · 24.3k / 258k",)
 
 
 def test_a_context_with_no_stated_ceiling_is_a_bare_count() -> None:
     """Deriving the ceiling from a model name would guess, and guess wrong on a model switch."""
-    assert usage_lines(AgentUsage(context=ContextWindow(185_296))) == ("Context: 185k",)
+    assert usage_lines(AgentUsage(context=ContextWindow(185_296))) == ("185k",)
 
 
 def test_a_session_line_never_carries_the_plans_limits() -> None:
@@ -51,14 +51,14 @@ def test_a_session_line_never_carries_the_plans_limits() -> None:
         stale_source="status-line cache",
     )
 
-    assert usage_lines(usage) == ("Context: 24.3k of 258k · 9%",)
+    assert usage_lines(usage) == ("█░░░░░░░ 9% · 24.3k / 258k",)
 
 
 def test_windows_on_a_session_reading_are_ignored_rather_than_rendered() -> None:
     """A reader may still carry them; this function stopped being the place they are shown."""
     assert usage_lines(
         AgentUsage(context=ContextWindow(1_000), windows=(UsageWindow("5h", 2.0),))
-    ) == ("Context: 1.0k",)
+    ) == ("1.0k",)
 
 
 def test_nothing_here_escapes_or_measures_anything() -> None:
@@ -91,6 +91,6 @@ def test_a_declared_ceiling_says_it_was_declared() -> None:
     declared = AgentUsage(context=ContextWindow(556_000, 1_000_000, limit_declared=True))
     measured = AgentUsage(context=ContextWindow(184_000, 258_400))
 
-    assert usage_lines(declared) == ("Context: 556k of 1.0M declared · 56%",)
-    assert usage_lines(measured) == ("Context: 184k of 258k · 71%",)
+    assert usage_lines(declared) == ("█████░░░ 56% · 556k / 1.0M declared",)
+    assert usage_lines(measured) == ("██████░░ 71% · 184k / 258k",)
     assert "declared" not in usage_lines(measured)[0]

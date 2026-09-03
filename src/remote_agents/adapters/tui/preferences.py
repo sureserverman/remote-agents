@@ -11,6 +11,9 @@ It lives in `adapters/tui` rather than `application` because it is this surface'
 the bot has one order by decision, and there is no shared rule here to promote (DEC-043
 governs the *ordering*, which `application/project_catalog.py` owns; this file only
 remembers which of the two the owner picked).
+
+Two keys since the 2026-09-02 redesign: `project_order` and `theme`. One file, one reader, one
+writer that keeps whatever key it is not changing.
 """
 
 from __future__ import annotations
@@ -36,13 +39,20 @@ PROJECT_ORDERS = (RECENCY, ALPHABETICAL)
 #: order is the default).
 DEFAULT_PROJECT_ORDER = RECENCY
 
-_KEY = "project_order"
+_ORDER_KEY = "project_order"
+_THEME_KEY = "theme"
+
+#: The theme names this file will remember. Imported from `theme.py` would be the obvious
+#: spelling; it is restated here so a preference module stays importable without Textual,
+#: which `theme.py` needs -- and a test pins the two tuples equal.
+THEMES = ("relay-night", "relay-day")
+DEFAULT_THEME = "relay-night"
 
 
-def read_project_order(path: Path | None) -> str:
-    """Return the remembered order, or the default for every way that can fail."""
+def _read_all(path: Path | None) -> dict[str, object]:
+    """The whole preference file as a dict, or an empty one for every way that can fail."""
     if path is None:
-        return DEFAULT_PROJECT_ORDER
+        return {}
     try:
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -57,28 +67,67 @@ def read_project_order(path: Path | None) -> str:
         # `bootstrap._load_private_telegram_secrets` and `session_runner.load_intent` all
         # carry the same handler and the same note. Found by this stage's Tier-2 review,
         # reproduced against a file of raw bytes.
-        return DEFAULT_PROJECT_ORDER
+        return {}
     try:
         stored = json.loads(raw)
     except (ValueError, UnicodeDecodeError):
-        return DEFAULT_PROJECT_ORDER
-    if not isinstance(stored, dict):
-        return DEFAULT_PROJECT_ORDER
-    order = stored.get(_KEY)
+        return {}
+    return stored if isinstance(stored, dict) else {}
+
+
+def read_project_order(path: Path | None) -> str:
+    """Return the remembered order, or the default for every way that can fail."""
+    order = _read_all(path).get(_ORDER_KEY)
     # `in PROJECT_ORDERS` is the type check as well as the value check: a non-string cannot
     # be a member, so a future version's unknown order and a number both land on the default.
     return order if order in PROJECT_ORDERS else DEFAULT_PROJECT_ORDER
 
 
+def read_theme(path: Path | None) -> str:
+    """Return the remembered theme, or `relay-night` for every way that can fail.
+
+    The same total read `read_project_order` makes, for the same reason: a preference is never
+    a reason the surface will not start. An unknown name -- a theme a later version knew, or a
+    built-in the owner picked once -- lands on the default rather than on an `InvalidThemeError`
+    out of the constructor.
+    """
+    theme = _read_all(path).get(_THEME_KEY)
+    return theme if theme in THEMES else DEFAULT_THEME
+
+
 def write_project_order(path: Path | None, order: str) -> None:
     """Record the chosen order owner-only, and never raise for failing to."""
-    if path is None:
-        return
     if order not in PROJECT_ORDERS:
         # The reader forgives an unknown value; the writer must not be what creates one.
         _LOG.warning("refusing to store an unknown project order: %r", order)
         return
-    payload = json.dumps({_KEY: order})
+    _write_key(path, _ORDER_KEY, order)
+
+
+def write_theme(path: Path | None, theme: str) -> None:
+    """Record the chosen theme owner-only, and never raise for failing to.
+
+    Only the two relay themes are stored. The palette offers Textual's built-ins too, and one
+    of those is used for as long as the process lives and then forgotten -- a preference file
+    naming a theme the reader does not accept would be a file the reader always ignores.
+    """
+    if theme not in THEMES:
+        _LOG.debug("not storing a theme this surface does not remember: %r", theme)
+        return
+    _write_key(path, _THEME_KEY, theme)
+
+
+def _write_key(path: Path | None, key: str, value: str) -> None:
+    """Rewrite the file with one key changed and every other key kept.
+
+    Read-modify-write rather than a bare dump, since the file gained a second key: writing the
+    theme must not forget the order, and the reverse.
+    """
+    if path is None:
+        return
+    stored = _read_all(path)
+    stored[key] = value
+    payload = json.dumps(stored)
     # Written beside the target and renamed over it, rather than truncated in place. The
     # reader forgives a zero-length file, so an interrupted in-place write cost only a
     # forgotten preference -- but `os.replace` is atomic on the same filesystem and removes
@@ -98,7 +147,7 @@ def write_project_order(path: Path | None, order: str) -> None:
         # what repairs one an earlier version -- or an operator -- left readable.
         os.replace(scratch, path)
     except OSError:
-        _LOG.warning("could not save the project order to %s", path, exc_info=True)
+        _LOG.warning("could not save the preference %s to %s", key, path, exc_info=True)
         # A scratch file left behind is a file the next write cannot create, so the failure
         # would be permanent rather than transient.
         with contextlib.suppress(OSError):

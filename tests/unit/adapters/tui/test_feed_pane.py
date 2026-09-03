@@ -111,7 +111,9 @@ async def test_the_feed_renders_newest_first_from_the_capability(surface) -> Non
         )
 
     app = surface(_context(feed))
-    async with app.run_test() as pilot:
+    # Wide enough for the dashboard's feed region to show a detail: the region is a third of
+    # a column, and the row keeps the identity before the agent's words when it has to choose.
+    async with app.run_test(size=(200, 40)) as pilot:
         await pilot.pause()
         text = _feed_text(app)
         assert "May I push?" in text
@@ -145,7 +147,7 @@ async def test_hostile_text_is_rendered_inert(surface) -> None:
         )
 
     app = surface(_context(feed))
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(200, 40)) as pilot:
         await pilot.pause()
         text = _feed_text(app)
         assert "[link=" in text, "markup must be displayed, never interpreted"
@@ -194,7 +196,7 @@ async def test_flash_fires_once_per_new_observation_batch_and_never_on_first_loa
         await app.screen._reload_feed()
         await pilot.pause()
         assert len(flashes) == 1
-        assert "waiting for an answer" in flashes[0]
+        assert "needs answer" in flashes[0]
 
         await app.screen._reload_feed()
         await pilot.pause()
@@ -465,13 +467,13 @@ async def test_a_row_names_the_project_agent_and_sequence_it_belongs_to(surface)
 
     context, _sessions = _index_context(feed, (_session_record(session),))
     app = surface(context)
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
         row = _feed_rows(app)[0]
         assert "existing" in row, row
         assert "codex" in row, row
         assert "#4" in row, row
-        assert "waiting for an answer" in row, row
+        assert "needs answer" in row, row
         assert "opaque-existing" not in row, "the row must name the project, not its hash"
 
 
@@ -495,7 +497,10 @@ async def test_a_long_detail_is_ellipsised_rather_than_wrapped(surface) -> None:
         pane = _feed_pane(app)
         rows = _feed_rows(app)
         assert len(rows) == 1, "one observation must occupy exactly one option"
-        assert rows[0].endswith("…"), rows[0][-40:]
+        # Cut with an ellipsis, and the age still drawn after the cut: the detail is the
+        # flexible cell and the age column sits against the right edge.
+        assert "…" in rows[0], rows[0][-40:]
+        assert rows[0].rstrip().endswith("1m"), rows[0][-40:]
         assert len(rows[0]) < 400
 
         # Asserted on the widget's own geometry, which is the direct form of "one
@@ -656,10 +661,11 @@ async def test_the_console_feed_pane_holds_the_keyboard_on_arrival() -> None:
         assert pane.highlighted == 1, "Down must move the cursor without a Tab first"
 
 
-async def test_the_dashboard_leaves_the_keyboard_in_its_filter() -> None:
-    """The other half of the rule above, so a later change cannot quietly take the filter's
-    keyboard away in the name of making the feed focusable."""
-    from textual.widgets import Input
+async def test_the_dashboard_keeps_the_keyboard_on_its_project_rows() -> None:
+    """The other half of the rule above, so a later change cannot quietly take the projects
+    list's keyboard away in the name of making the feed focusable. The rows hold it since the
+    redesign (`/` reaches the filter); the feed is still Tabs away by design."""
+    from textual.widgets import OptionList
 
     async def feed():
         return (_activity(ActivityKind.COMPLETED, minutes_ago=1),)
@@ -667,8 +673,8 @@ async def test_the_dashboard_leaves_the_keyboard_in_its_filter() -> None:
     app = RemoteAgentsTui(_context(feed))
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert isinstance(app.focused, Input), (
-            f"the dashboard filter lost the keyboard to {app.focused!r}"
+        assert isinstance(app.focused, OptionList) and app.focused.id == "choices", (
+            f"the dashboard's project rows lost the keyboard to {app.focused!r}"
         )
 
 

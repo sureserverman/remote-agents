@@ -74,7 +74,7 @@ async def test_copy_attach_requires_live_matching_project_and_profile_evidence()
 
     detail = await boundary._detail_reply(str(session_id))
     attach = next(
-        button for row in detail.keyboard for button in row if button.text == "Copy attach"
+        button for row in detail.keyboard for button in row if button.text.endswith("Copy attach")
     )
     response = await boundary._attach_reply(str(session_id))
 
@@ -129,7 +129,9 @@ async def test_a_preserved_pane_is_offered_a_read_only_attach() -> None:
     detail = await boundary._detail_reply(str(session_id))
     response = await boundary._attach_reply(str(session_id))
 
-    assert "Copy attach" in [button.text for row in detail.keyboard for button in row], (
+    assert "Copy attach" in [
+        button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row
+    ], (
         "a preserved pane's output is the thing PRESERVED exists to keep, and the row for it "
         "was hidden"
     )
@@ -153,7 +155,9 @@ async def test_copy_attach_is_hidden_when_the_pane_is_not_currently_live() -> No
 
     detail = await boundary._detail_reply(str(session_id))
 
-    assert "Copy attach" not in [button.text for row in detail.keyboard for button in row]
+    assert "Copy attach" not in [
+        button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row
+    ]
 
 
 async def test_a_pane_owned_by_another_project_is_refused_on_the_row_and_on_the_reply() -> None:
@@ -196,7 +200,9 @@ async def test_a_pane_owned_by_another_project_is_refused_on_the_row_and_on_the_
     detail = await boundary._detail_reply(str(session_id))
     response = await boundary._attach_reply(str(session_id))
 
-    assert "Copy attach" not in [button.text for row in detail.keyboard for button in row]
+    assert "Copy attach" not in [
+        button.text.split(" ", 1)[-1] for row in detail.keyboard for button in row
+    ]
     assert response.text == (
         "Copy Attach is unavailable: this session has no pane on this host any more."
     )

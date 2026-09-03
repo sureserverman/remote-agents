@@ -102,6 +102,22 @@ def _rows(app: RemoteAgentsTui) -> list[str]:
     return [str(option.prompt) for option in app.screen.query_one("#choices", OptionList).options]
 
 
+def _names(app: RemoteAgentsTui) -> list[str]:
+    """The project each row names -- its first token -- on the two-column projects list.
+
+    The redesign's row is the project's name padded out to a last-launch age against the right
+    edge, so the whole string depends on the pane's width; the name is what a test is about.
+    """
+    return [row.split()[0] for row in _rows(app)]
+
+
+async def _type_filter(pilot, text: str) -> None:
+    """`/` to reach the filter (the keyboard rests on the rows), then the characters."""
+    await pilot.press("slash")
+    for character in text:
+        await pilot.press(character)
+
+
 def _keys(app: RemoteAgentsTui) -> list[str]:
     return [option.id for option in app.screen.query_one("#choices", OptionList).options]
 
@@ -119,13 +135,13 @@ async def _choose(app: RemoteAgentsTui, pilot, key: str) -> None:
     await pilot.pause()
 
 
-async def test_the_project_list_shows_registered_before_unregistered_with_its_group() -> None:
+async def test_the_project_list_shows_registered_before_unregistered() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test():
-        rows = _rows(app)
+        names = _names(app)
 
-    assert rows == ["infra/existing  [Registered]", "dev-area/other-thing  [Unregistered]"]
+    assert names == ["existing", "other-thing"]
 
 
 async def test_typing_filters_the_project_list_one_character_at_a_time() -> None:
@@ -133,14 +149,13 @@ async def test_typing_filters_the_project_list_one_character_at_a_time() -> None
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        for character in "other":
-            await pilot.press(character)
+        await _type_filter(pilot, "other")
         await settle_filter(pilot)
         typed = app.screen.query_one("#filter").value
-        rows = _rows(app)
+        names = _names(app)
 
     assert typed == "other"
-    assert rows == ["dev-area/other-thing  [Unregistered]"]
+    assert names == ["other-thing"]
 
 
 async def test_the_agent_list_names_every_curated_profile_with_its_blocking_reason() -> None:
@@ -456,10 +471,10 @@ async def test_a_created_project_is_selectable_without_leaving_the_app() -> None
         await pilot.pause()
         await app.screen.choose("create")
         await pilot.pause()
-        rows = _rows(app)
+        names = _names(app)
 
     assert creator.commands == [CreateProjectCommand("infra", "brand-new")]
-    assert rows == ["infra/brand-new  [Registered]"]
+    assert names == ["brand-new"]
 
 
 async def test_a_refused_creation_is_reported_and_leaves_the_catalogue_alone() -> None:
@@ -488,9 +503,9 @@ async def test_refresh_re_reads_a_project_another_process_created() -> None:
     async with app.run_test() as pilot:
         await app.action_refresh()
         await pilot.pause()
-        rows = _rows(app)
+        names = _names(app)
 
-    assert "infra/cli-made  [Registered]" in rows
+    assert "cli-made" in names
 
 
 def test_label_normalisation_collapses_whitespace_and_bounds_length() -> None:
@@ -516,10 +531,7 @@ async def test_the_keyboard_can_drive_a_launch_without_touching_a_private_method
     app = RemoteAgentsTui(_context(sessions=launcher))
 
     async with app.run_test() as pilot:
-        # Filter -> rows, then the project. Two enters, because the keyboard starts in the
-        # filter and the first enter is what moves it into the list.
-        await pilot.press("enter")
-        await pilot.pause()
+        # The keyboard rests on the rows since the redesign, so one enter chooses the project.
         await pilot.press("enter")
         await pilot.pause()
         # The chooser sits between the project and the agents now; its cursor rests on
@@ -547,13 +559,18 @@ async def test_every_choice_list_hands_the_keyboard_to_the_list() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        assert app.screen.query_one("#filter").has_focus, "the project filter opens focused"
-
-        await pilot.press("enter")
-        await pilot.pause()
         choices = app.screen.query_one("#choices")
         assert choices.has_focus and choices.highlighted == 0, (
-            "leaving the filter must hand the keyboard to the rows, resting on the first"
+            "the project list opens with the keyboard on its rows, resting on the first"
+        )
+
+        await pilot.press("slash")
+        await pilot.pause()
+        assert app.screen.query_one("#filter").has_focus, "`/` hands the keyboard to the filter"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert choices.has_focus and choices.highlighted == 0, (
+            "leaving the filter must hand the keyboard back to the rows, resting on the first"
         )
 
         await pilot.press("enter")
@@ -598,7 +615,7 @@ async def test_the_refresh_binding_re_reads_the_catalogue() -> None:
         await pilot.press("ctrl+r")
         await pilot.pause()
 
-        assert _rows(app) == ["infra/cli-made  [Registered]"]
+        assert _names(app) == ["cli-made"]
 
 
 async def test_typing_a_new_project_name_reviews_it_before_creating_anything() -> None:
@@ -688,23 +705,22 @@ async def test_back_out_of_the_add_project_flow_stops_at_every_position() -> Non
 
         await app.action_back()
         await pilot.pause()
-        assert _rows(app) == [
-            "infra/existing  [Registered]",
-            "dev-area/other-thing  [Unregistered]",
-        ]
+        assert _names(app) == ["existing", "other-thing"]
 
     assert creator.commands == [], "walking back out must create nothing"
 
 
-async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_keyboard() -> None:
-    """Backing out of any flow lands on a clean list with the keyboard where typing works.
+async def test_returning_to_the_project_list_clears_the_filter_and_rests_on_the_rows() -> None:
+    """Backing out of any flow lands on a clean list with the keyboard on the rows.
 
     The sixth of this stage's navigation changes, and the only one that was a *regression*
     rather than a deliberate simplification. The chain this replaces reached the project list
-    through a method that cleared the filter and refocused it, so every back path landed on a
-    fresh list. A bare pop returned the owner to a filtered list with focus still on the rows
-    — where keystrokes are swallowed by the option list instead of filtering, and only Tab or
-    Ctrl+R recovers.
+    through a method that cleared the filter, so every back path landed on a fresh list. A
+    bare pop returned the owner to a filtered list -- narrowed by a query they had finished
+    with, with no sign of it.
+
+    Since the redesign the keyboard rests on the rows and `/` reaches the filter, so what a
+    return has to restore is the *unfiltered* list with its cursor on the first row.
 
     Driven through a real flow and real keys rather than by calling the reveal hook, because
     the failure was about *focus*, and a private-method test cannot see focus.
@@ -712,10 +728,9 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        for character in "other":
-            await pilot.press(character)
+        await _type_filter(pilot, "other")
         await settle_filter(pilot)
-        assert _rows(app) == ["dev-area/other-thing  [Unregistered]"], "expected a filtered list"
+        assert _names(app) == ["other-thing"], "expected a filtered list"
 
         await pilot.press("enter")
         await pilot.pause()
@@ -732,14 +747,12 @@ async def test_returning_to_the_project_list_clears_the_filter_and_takes_the_key
         await pilot.pause()
 
         entry = app.screen.query_one("#filter")
+        choices = app.screen.query_one("#choices", OptionList)
         assert entry.value == "", "the filter kept its text, so the list is still filtered"
-        assert entry.has_focus, (
-            "the keyboard stayed on the rows, where typing is swallowed rather than filtering"
+        assert choices.has_focus and choices.highlighted == 0, (
+            "the keyboard must rest on the rows with the cursor on the first"
         )
-        assert _rows(app) == [
-            "infra/existing  [Registered]",
-            "dev-area/other-thing  [Unregistered]",
-        ]
+        assert _names(app) == ["existing", "other-thing"]
 
 
 async def test_an_area_the_identity_rule_rejects_is_never_offered() -> None:
@@ -825,10 +838,10 @@ async def test_four_characters_in_quick_succession_search_the_catalogue_once(mon
             app.screen.on_input_changed(Input.Changed(entry, typed))
         await settle_filter(pilot)
         searched = list(calls)
-        rows = _rows(app)
+        names = _names(app)
 
     assert searched == ["othe"], f"expected one search for the settled query, got {searched}"
-    assert rows == ["dev-area/other-thing  [Unregistered]"]
+    assert names == ["other-thing"]
 
 
 async def test_typing_with_real_keys_searches_fewer_times_than_it_has_characters(
@@ -855,15 +868,14 @@ async def test_typing_with_real_keys_searches_fewer_times_than_it_has_characters
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        for character in "other":
-            await pilot.press(character)
+        await _type_filter(pilot, "other")
         await settle_filter(pilot)
         searched = list(calls)
-        rows = _rows(app)
+        names = _names(app)
 
     assert len(searched) < 5, f"one search per keystroke survived: {searched}"
     assert searched[-1] == "other", f"the settled query was not the last one typed: {searched}"
-    assert rows == ["dev-area/other-thing  [Unregistered]"]
+    assert names == ["other-thing"]
 
 
 async def test_down_arrow_moves_from_the_filter_into_the_results() -> None:
@@ -871,6 +883,8 @@ async def test_down_arrow_moves_from_the_filter_into_the_results() -> None:
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
+        await pilot.press("slash")
+        await pilot.pause()
         assert app.screen.query_one("#filter").has_focus
 
         await pilot.press("down")
@@ -893,16 +907,15 @@ async def test_down_arrow_enters_the_filtered_rows_and_not_the_stale_ones() -> N
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        for character in "other":
-            await pilot.press(character)
+        await _type_filter(pilot, "other")
         await pilot.press("down")
         await pilot.pause()
-        rows = _rows(app)
+        names = _names(app)
         choices = app.screen.query_one("#choices", OptionList)
-        resting = str(choices.get_option_at_index(choices.highlighted).prompt)
+        resting = str(choices.get_option_at_index(choices.highlighted).prompt).split()[0]
 
-    assert rows == ["dev-area/other-thing  [Unregistered]"], "the pending filter was not applied"
-    assert resting == "dev-area/other-thing  [Unregistered]"
+    assert names == ["other-thing"], "the pending filter was not applied"
+    assert resting == "other-thing"
 
 
 async def test_leaving_the_filter_with_enter_also_applies_a_pending_search() -> None:
@@ -910,14 +923,13 @@ async def test_leaving_the_filter_with_enter_also_applies_a_pending_search() -> 
     app = RemoteAgentsTui(_context())
 
     async with app.run_test() as pilot:
-        for character in "other":
-            await pilot.press(character)
+        await _type_filter(pilot, "other")
         await pilot.press("enter")
         await pilot.pause()
-        rows = _rows(app)
+        names = _names(app)
         focused_rows = app.screen.query_one("#choices").has_focus
 
-    assert rows == ["dev-area/other-thing  [Unregistered]"]
+    assert names == ["other-thing"]
     assert focused_rows
 
 

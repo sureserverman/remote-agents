@@ -40,8 +40,9 @@ import pytest
 # paths are kept deliberately: they are what a surface would have to stop offering before it
 # could hold its own copy again, so importing them here still asserts something -- just not
 # what the assertions below appear to assert. See the module docstring.
+from remote_agents.adapters.telegram.service import session_lines as _session_lines_label
 from remote_agents.adapters.telegram.service import session_row as _session_row_label
-from remote_agents.adapters.tui.model import session_row
+from remote_agents.adapters.tui.model import session_lines, session_row
 from remote_agents.application.session_actions import state_word
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -123,3 +124,13 @@ def test_both_surfaces_agree_for_every_state(state) -> None:
     record = _record(state)
 
     assert session_row(record) == _session_row_label(record)
+
+
+@pytest.mark.parametrize(("provenance", "expected"), _ORPHAN_CASES)
+def test_both_surfaces_render_the_same_two_line_row(provenance, expected) -> None:
+    """The 2026-09-02 redesign's row, pinned the way `session_row` is: both import paths reach
+    `application/session_views.session_lines`, and the second line carries the state word."""
+    record = _record(SessionState.ORPHANED, provenance)
+
+    assert session_lines(record) == _session_lines_label(record)
+    assert session_lines(record)[1].startswith(f"{expected} · ")

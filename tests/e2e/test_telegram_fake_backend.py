@@ -262,7 +262,7 @@ async def test_rename_applies_the_new_name_and_redraws_the_detail() -> None:
 
     assert launcher.renames == ["release review"], "collapsed whitespace, one call"
     assert "release review" in chat.messages[anchor].text
-    assert "Rename" in [
+    assert "✏️ Rename" in [
         unpadded(button.text)
         for row in chat.messages[anchor].reply_markup.inline_keyboard
         for button in row
@@ -297,7 +297,7 @@ async def test_rename_skipped_leaves_the_session_exactly_as_it_was() -> None:
     await boundary.text(chat.message_update("Skip"), None)
 
     assert launcher.renames == [], "Skip must not reach the store at all"
-    assert "Rename" in [
+    assert "✏️ Rename" in [
         unpadded(button.text)
         for row in chat.messages[anchor].reply_markup.inline_keyboard
         for button in row
@@ -358,6 +358,20 @@ def _button(message, label: str) -> str:
     for button in buttons:
         if unpadded(button.text).removeprefix("• ").startswith(label):
             return button.callback_data
+    # A session picker reads `🟢 #7 Demo` and an action button `📄 Inspect` since the redesign:
+    # the label a test names is the last token, behind a mark it did not write.
+    for button in buttons:
+        if unpadded(button.text).endswith(f" {label}"):
+            return button.callback_data
+    # A session picker reads `🟢 #7 Demo` since the redesign, and the tests that name a row by
+    # its rendered identity (`Demo · Claude · regular · #1`) still find it: the picker ends with
+    # the sequence and the project the identity begins with.
+    parts = label.split(" · ")
+    sequence = next((part for part in parts if part.startswith("#")), None)
+    if sequence is not None:
+        for button in buttons:
+            if unpadded(button.text).endswith(f" {sequence} {parts[0]}"):
+                return button.callback_data
     raise AssertionError(f"no {label!r} button in {message.text!r}")
 
 
@@ -782,7 +796,7 @@ async def test_a_launch_that_raises_lands_on_the_list_like_a_stop_does() -> None
 
     screen = chat.messages[anchor]
     assert screen.text.startswith("That action did not complete")
-    assert "Sessions 1/1" in screen.text, "it landed on the list, not on a dead end"
+    assert "<b>Sessions</b> · 1  🟢 1" in screen.text, "it landed on the list, not on a dead end"
     labels = [
         unpadded(button.text) for row in screen.reply_markup.inline_keyboard for button in row
     ]
@@ -825,7 +839,9 @@ async def test_a_stop_that_raises_lands_on_the_list_rather_than_a_dead_end() -> 
     screen = chat.messages[anchor]
     assert screen.text.startswith("That action did not complete")
     assert "Open it again" not in screen.text
-    assert "Sessions 1/1" in screen.text, "it landed on the list, which still holds the session"
+    assert "<b>Sessions</b> · 1  🟢 1" in screen.text, (
+        "it landed on the list, which still holds the session"
+    )
     labels = [
         unpadded(button.text) for row in screen.reply_markup.inline_keyboard for button in row
     ]
@@ -1210,7 +1226,7 @@ async def test_a_notification_stands_beside_the_live_view_rather_than_replacing_
     anchor = boundary.view.anchor()
     assert notification != anchor, "the notification took over the live view"
     assert "Sessions" in chat.messages[anchor].text
-    assert "The agent has finished its work." in chat.messages[notification].text
+    assert "✅ <b>Finished its work</b>" in chat.messages[notification].text
     assert len(chat.bot_messages) == 2, chat.transcript()
 
 
@@ -1230,7 +1246,7 @@ async def test_navigating_the_live_view_leaves_the_notification_in_the_chat() ->
     await boundary.callback(chat.press(_button(chat.messages[anchor], "Sessions")), None)
 
     assert notification in chat.messages, chat.transcript()
-    assert "The agent has finished its work." in chat.messages[notification].text
+    assert "✅ <b>Finished its work</b>" in chat.messages[notification].text
     assert (
         boundary.callbacks.resolve(open_session, owner_id=7, chat_id=11, message_id=notification)
         is not None
@@ -1260,8 +1276,8 @@ async def test_the_notification_button_opens_the_session_and_consumes_the_notifi
 
     assert press.callback_query.answers == [None], "the button was refused"
     anchor = boundary.view.anchor()
-    assert "Demo · Claude · regular · #1" in chat.messages[anchor].text
-    assert "Rename" in [
+    assert "<b>Demo · Claude</b> #1" in chat.messages[anchor].text
+    assert "✏️ Rename" in [
         unpadded(button.text)
         for row in chat.messages[anchor].reply_markup.inline_keyboard
         for button in row
@@ -1342,7 +1358,7 @@ async def test_the_menu_stays_at_the_bottom_as_one_session_keeps_reporting() -> 
     )
     assert "run 2" in notification.text, "the newest report is on it"
     assert "run 0" not in notification.text, "just the last of them, not a pile of them"
-    assert notification.text.count("finished its work") == 1, (
+    assert notification.text.count("Finished its work") == 1, (
         "one sentence, however many turns said it"
     )
     assert any(
@@ -1398,7 +1414,7 @@ async def test_a_notification_button_still_resolves_after_a_re_composition(tmp_p
     assert press.callback_query.answers == [None], (
         "the restarted service refused a notification it had sent"
     )
-    assert "Demo · Claude · regular · #1" in chat.messages[after.view.anchor()].text
+    assert "<b>Demo · Claude</b> #1" in chat.messages[after.view.anchor()].text
     assert notification not in chat.messages, (
         "the restarted service resolved the button but did not consume the notification"
     )
@@ -1446,7 +1462,7 @@ async def test_a_notification_press_does_not_make_it_the_live_view(tmp_path) -> 
     assert notification not in chat.messages, "the notification should have been consumed"
     # The detail was drawn into a message of its own rather than over the notification: had the
     # notification been adopted, discarding it afterwards would have deleted the live view too.
-    assert "Demo · Claude · regular · #1" in chat.messages[boundary.view.anchor()].text
+    assert "<b>Demo · Claude</b> #1" in chat.messages[boundary.view.anchor()].text
 
 
 @pytest.mark.asyncio

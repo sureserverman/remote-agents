@@ -102,6 +102,17 @@ def rank_by_recent_use(
     return tuple(sorted(catalogue, key=lambda project: -scores.get(project.opaque_id, 0.0)))
 
 
+def last_used_by_project(usage: Iterable[ProjectUsage]) -> dict[str, datetime]:
+    """When each project was last launched, keyed the way a catalogue row is (`opaque_id`).
+
+    The local surface's projects pane shows a last-launch age beside every name, and it draws
+    that from the same `project_usage` read that ranks the list -- so the age column and the
+    order can never describe two different reads. Pure, like `rank_by_recent_use` beside it: a
+    dict from the rows handed in, and nothing read.
+    """
+    return {str(entry.project_id): entry.last_used_at for entry in usage}
+
+
 def order_alphabetically(catalogue: Iterable[CatalogProject]) -> tuple[CatalogProject, ...]:
     """Order by area then name, case-insensitively, and invent no second tie-break.
 

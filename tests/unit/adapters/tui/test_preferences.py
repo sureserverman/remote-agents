@@ -243,3 +243,59 @@ def test_a_failed_write_does_not_poison_the_next_one(tmp_path: Path) -> None:
     write_project_order(path, ALPHABETICAL)
 
     assert read_project_order(path) == ALPHABETICAL
+
+
+# The theme, beside the order --------------------------------------------------------------------
+
+
+def test_the_default_theme_is_relay_night() -> None:
+    from remote_agents.adapters.tui.preferences import DEFAULT_THEME, read_theme
+
+    assert DEFAULT_THEME == "relay-night"
+    assert read_theme(None) == "relay-night"
+
+
+def test_a_written_theme_reads_back_and_keeps_the_order(tmp_path: Path) -> None:
+    """One file, two keys: writing either must not forget the other."""
+    from remote_agents.adapters.tui.preferences import read_theme, write_theme
+
+    path = tmp_path / "preferences.json"
+    write_project_order(path, ALPHABETICAL)
+    write_theme(path, "relay-day")
+
+    assert read_theme(path) == "relay-day"
+    assert read_project_order(path) == ALPHABETICAL
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "project_order": ALPHABETICAL,
+        "theme": "relay-day",
+    }
+
+
+def test_a_theme_this_surface_does_not_remember_is_not_stored(tmp_path: Path) -> None:
+    """The palette offers Textual's built-ins too; they are used for the process and forgotten,
+    because a stored name the reader ignores is a preference that never takes."""
+    from remote_agents.adapters.tui.preferences import read_theme, write_theme
+
+    path = tmp_path / "preferences.json"
+    write_theme(path, "relay-day")
+    write_theme(path, "textual-dark")
+
+    assert read_theme(path) == "relay-day"
+
+
+def test_an_unknown_stored_theme_reads_back_as_the_default(tmp_path: Path) -> None:
+    from remote_agents.adapters.tui.preferences import read_theme
+
+    path = tmp_path / "preferences.json"
+    path.write_text(json.dumps({"theme": "solarized"}), encoding="utf-8")
+
+    assert read_theme(path) == "relay-night"
+
+
+def test_the_preference_names_match_the_registered_themes() -> None:
+    """`preferences.py` restates the two names so it needs no Textual import; this pins them."""
+    from remote_agents.adapters.tui.preferences import THEMES
+    from remote_agents.adapters.tui.theme import RELAY_THEMES
+    from remote_agents.adapters.tui.theme import THEMES as REGISTERED
+
+    assert THEMES == RELAY_THEMES == tuple(theme.name for theme in REGISTERED)

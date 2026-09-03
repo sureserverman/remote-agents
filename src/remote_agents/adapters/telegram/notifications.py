@@ -8,7 +8,7 @@ second borrow the grammar of the first.
 
 Two rules carry that, and both are structural rather than editorial:
 
-**An inferred observation says so, in its own sentence.** `ActivityConfidence.INFERRED` covers
+**An inferred observation says so, in its own line.** `ActivityConfidence.INFERRED` covers
 one guess -- a Codex pane title carrying the native approval marker (DEC-063) -- and it is not
 worth telling the owner as a fact. The hedge is appended by the renderer, not left to whoever
 writes the next sentence, and that stays structural now that it fires for a single kind: it has
@@ -63,6 +63,7 @@ from remote_agents.application.notification_policy import (
 from remote_agents.application.notification_policy import (
     refused as refused_too_often,
 )
+from remote_agents.application.relative_time import age_short
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
     ActivityConfidence,
@@ -99,36 +100,38 @@ this module to build the notifier, so the constant has to live on this side of i
 _HEDGE = "This is a guess, not something it reported."
 """Appended to every inferred observation, and to no reported one."""
 
-_SENTENCES = {
-    ActivityKind.COMPLETED: "The agent has finished its work.",
-    ActivityKind.LIMIT_REACHED: "The agent stopped after reaching a usage limit.",
-    ActivityKind.OUTPUT_LIMIT: "The agent stopped at its output length limit for one reply.",
+_HEADLINES: dict[ActivityKind, str] = {
+    ActivityKind.NEEDS_ANSWER: "Waiting for an answer",
+    ActivityKind.COMPLETED: "Finished its work",
+    ActivityKind.LIMIT_REACHED: "Hit a usage limit",
+    ActivityKind.OUTPUT_LIMIT: "Hit its output ceiling",
+}
+"""One headline per kind, the redesign's first line: what happened, with the subject dropped.
+
+These replaced four sentences ("The agent has finished its work.") on 2026-09-02. The subject
+was being said twice -- the identity is the very next line -- and a sentence is not scannable on
+a phone at the size a headline is. Title-cased and bare, with the mark in front from `_KIND_EMOJI`
+and the observation's age behind. The sentences' one structural job survives them: every kind
+still has a distinct headline, and the test that asserts the table covers the enum exactly
+still does.
+"""
+
+_KIND_EMOJI: dict[ActivityKind, str] = {
+    ActivityKind.NEEDS_ANSWER: "\u2753",  # ❓
+    ActivityKind.COMPLETED: "\u2705",  # ✅
+    ActivityKind.LIMIT_REACHED: "\u26fd",  # ⛽
+    ActivityKind.OUTPUT_LIMIT: "\U0001f4cf",  # 📏
 }
 
-_WAITING = "The agent is waiting for an answer."
-"""The one sentence `NEEDS_ANSWER` has, whether it was reported or inferred.
 
-There were two, chosen by confidence, and the weaker of them -- "may be waiting" -- existed for
-an upstream idle timer that is no longer mapped at all. What replaced the pair is a division of
-labour rather than a claim that every source now reports: **the sentence says what was observed,
-and the hedge says how well it is known.** A `needs_answer` reaching here is an agent asking
-permission, an agent saying it needs input, or -- since DEC-063 -- a Codex pane title carrying
-the native approval marker, which nothing said at all. The first two are the agent's own claim;
-the third is this service's, and `_HEDGE` is what tells them apart. One sentence for all three is
-correct precisely because the confidence carries the difference.
+def kind_headline(kind: ActivityKind) -> str:
+    """`❓ Waiting for an answer` -- the mark and the headline, before the age is appended.
 
-This docstring claimed the opposite until 2026-08-30 -- "now that every source of it is the
-agent's own report" -- which stopped being true the day DEC-063 added the title edge, and sat two
-paragraphs below a module docstring that said so. Found by the sub-plan close-out review, in prose
-this sub-plan had edited without reading downward.
+    The one place the two are joined, so the grouped shape and the lone shape cannot start
+    marking a kind differently. Plain text; the bolding is `activity_text`'s.
+    """
+    return f"{_KIND_EMOJI[kind]} {_HEADLINES[kind]}"
 
-"An agent asking permission" is spelled the long way round on purpose: upstream calls that case
-`permission_` followed by the word for a question put to a terminal, and
-`check_telegram_actions.py` rejects that bare substring anywhere in this package, because a
-Telegram adapter that can put a question into a pane is the surface that audit exists to keep
-closed. The check cannot tell prose from code, and it is right not to try: a term that has to
-be spelled around in a comment is a term nobody adds to a call site by accident.
-"""
 
 # The UTF-16 budget, the escape-then-fit routine and the callback shape are imported from
 # `presenters` rather than copied, private names and all: an escaper and a budget that exist
@@ -182,26 +185,28 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     exist before the token does. Nothing about the wording depends on the button, which is
     what makes that order available at all.
 
-    **A lone observation reads exactly as it always did**, sentence then detail on its own
-    line, and only a group of two or more takes bullets with the detail folded onto the
-    sentence's line. Two shapes is a real cost and it buys the two things that matter. Almost
-    every notification carries one observation, so a bullet in front of a single sentence would
-    be clutter added to the common case for the sake of the rare one. And in a group the fold
-    is not cosmetic: with each detail on its own line, three observations produce six lines
-    with nothing saying which text belongs to which sentence, and the owner attributes the
-    agent's words to the wrong event.
+    **The shape, since the redesign:** a bold headline for the newest observation with its mark
+    in front and its age behind (`❓ <b>Waiting for an answer</b> · 2m`), then the session's
+    compact identity on a plain line, then what the agent said in a `<blockquote>`. Bot API 7.0
+    introduced the block quote; the pinned `python-telegram-bot` speaks it, and a client too old
+    to draw one shows the text unquoted rather than refusing the message.
 
-    **The budget is spent outward from the observations.** The old order -- bound the detail,
-    then fit the name into what was left -- was sufficient for exactly one observation and is
-    not any more: the application layer caps each detail at `MAXIMUM_DETAIL_CHARACTERS`, but
-    escaping can quintuple a character (`&` becomes `&amp;`), so five capped details can reach
-    six thousand UTF-16 units against a ceiling of 4096, with no single one of them at fault.
-    Telegram refuses the send outright, so the failure mode is a notification that never
-    arrives. So the details share what is left after the sentences, the hedge and a reserved
-    slot for the name, and the name is fitted last into whatever remains -- a long name
-    truncates itself rather than deleting what an agent said, which is the right way round,
-    since the name carries an owner-supplied label and the observations are what the message
-    exists to deliver.
+    **A group of two or more keeps that shape and lists its members underneath.** The headline
+    is the newest observation's; each member gets a bullet with its own headline words and its
+    detail folded onto the line. A lone observation gets no bullet, because almost every
+    notification carries one observation and a bullet in front of it would be clutter added to
+    the common case for the sake of the rare one -- and in a group the fold is not cosmetic:
+    with each detail on its own line, three observations produce six lines with nothing saying
+    which text belongs to which headline.
+
+    **The budget is spent outward from the observations.** The application layer caps each
+    detail at `MAXIMUM_DETAIL_CHARACTERS`, but escaping can quintuple a character (`&` becomes
+    `&amp;`), so five capped details can reach six thousand UTF-16 units against a ceiling of
+    4096, and Telegram refuses the send outright. So the details share what is left after the
+    headline, the identity's reserved slot, the bullets and the trailers, and the identity is
+    fitted last into whatever remains -- a long name truncates itself rather than deleting what
+    an agent said, which is the right way round, since the name carries an owner-supplied label
+    and the observations are what the message exists to deliver.
 
     **One hedge covers the group.** Repeated per line it would read as emphasis -- as though
     the service were less sure this time -- when it is saying the same structural thing about
@@ -210,16 +215,20 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
     shown = shown_in_message(group, limit=_MAXIMUM_LINES_PER_MESSAGE)
     hidden = len(group.activities) - len(shown)
     bulleted = len(shown) > 1
+    newest = shown[0]
 
-    sentences = [_sentence(activity) for activity in shown]
+    headline = (
+        f"{_KIND_EMOJI[newest.kind]} <b>{_HEADLINES[newest.kind]}</b>"
+        f" · {age_short(newest.observed_at)}"
+    )
     details = [_detail_of(activity) for activity in shown]
     hedged = any(activity.confidence is ActivityConfidence.INFERRED for activity in shown)
 
     trailers = ([f"and {hidden} earlier."] if hidden else []) + ([_HEDGE] if hedged else [])
     # Measured with the details empty, because they are the only part with a budget to
     # negotiate; everything else in the message is ours and fixed.
-    spent = _utf16_units("<b></b>\n" + "\n".join(_lines(sentences, [None] * len(shown), bulleted)))
-    spent += _utf16_units("\n" + "\n".join(trailers)) if trailers else 0
+    fixed = "\n".join([headline, "", *_lines(shown, [None] * len(shown), bulleted), *trailers])
+    spent = _utf16_units(fixed)
     share = (MAX_TELEGRAM_TEXT_UNITS - _RESERVED_NAME_UNITS - spent) // max(
         1, sum(1 for detail in details if detail)
     )
@@ -228,18 +237,23 @@ def activity_text(group: SessionGroup, *, display: str) -> str:
         _bounded_escaped(detail, min(_MAXIMUM_DETAIL_UNITS, share)) if detail else None
         for detail in details
     ]
-    body = "\n".join(_lines(sentences, bounded, bulleted) + trailers)
-    name = _bounded_escaped(display, MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"<b></b>\n{body}"))
-    return f"<b>{name}</b>\n{body}"
+    body = "\n".join(_lines(shown, bounded, bulleted) + trailers)
+    room = MAX_TELEGRAM_TEXT_UNITS - _utf16_units(f"{headline}\n\n{body}")
+    name = _bounded_escaped(display, room)
+    return "\n".join(line for line in (headline, name, body) if line)
 
 
-def _lines(sentences: list[str], details: list[str | None], bulleted: bool) -> list[str]:
-    """One line per observation when they must be told apart, two when there is only one."""
+def _lines(
+    shown: tuple[AgentActivity, ...], details: list[str | None], bulleted: bool
+) -> list[str]:
+    """The quoted detail when there is one observation; one bulleted line per observation when
+    they must be told apart. A detail is already escaped by the time it reaches here."""
     if not bulleted:
-        return [sentences[0]] + ([details[0]] if details and details[0] else [])
+        detail = details[0] if details else None
+        return [f"<blockquote>{detail}</blockquote>"] if detail else []
     return [
-        f"{_BULLET}{sentence}" + (f" — {detail}" if detail else "")
-        for sentence, detail in zip(sentences, details, strict=True)
+        f"{_BULLET}{kind_headline(activity.kind)}" + (f" — {detail}" if detail else "")
+        for activity, detail in zip(shown, details, strict=True)
     ]
 
 
@@ -256,12 +270,6 @@ def render_activity(group: SessionGroup, *, display: str, open_session: str) -> 
         activity_text(group, display=display),
         ((Button(OPEN_SESSION_LABEL, open_session),),),
     )
-
-
-def _sentence(activity: AgentActivity) -> str:
-    if activity.kind is ActivityKind.NEEDS_ANSWER:
-        return _WAITING
-    return _SENTENCES[activity.kind]
 
 
 def _detail_of(activity: AgentActivity) -> str | None:

@@ -8,8 +8,9 @@ def test_session_catalogue_adapters_keep_provider_ids_out_of_selection_metadata(
     # The moved sources, not the re-export shims left at the old paths — a sweep over a shim
     # asserts nothing about the code that actually runs.
     sources = "\n".join(
-        (root / "src" / "remote_agents" / "adapters" / "agents" / provider / "sessions.py")
-        .read_text(encoding="utf-8")
+        (
+            root / "src" / "remote_agents" / "adapters" / "agents" / provider / "sessions.py"
+        ).read_text(encoding="utf-8")
         for provider in ("claude", "codex")
     )
 

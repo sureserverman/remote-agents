@@ -60,7 +60,6 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-import pytest
 from backends import SessionUseCaseDouble, backend_for
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -195,15 +194,11 @@ def _context(
     )
 
 
-@pytest.mark.parametrize("group", ["Registered", "Unregistered"])
-async def test_the_project_row_names_its_group(group: str) -> None:
-    """README.md states that each project row names its group; this is that claim."""
-    project = CatalogProject("opaque-existing", "existing", "infra", group)
-    app = RemoteAgentsTui(_context(project=project))
-    async with app.run_test(size=(100, 30)) as pilot:
-        await pilot.pause()
-        screen = _rendered(app)
-        assert group in screen, f"no project row names its {group!r} group; screen was {screen!r}"
+# `test_the_project_row_names_its_group` stood here until the 2026-09-02 redesign, which gave
+# the projects pane two columns -- the name, and its last-launch age -- and dropped the
+# `[Registered]` tag the row used to carry. The sink it drove is still covered: the session
+# label and the conversation description below both reach `#choices`, and the structural sweep
+# at the end of this file still refuses a markup-rendering construction without `markup=False`.
 
 
 async def test_a_session_label_containing_markup_is_shown_literally() -> None:

@@ -896,7 +896,7 @@ notifications are still delivered and the menu simply stays where it was.
 | `completed` | "The agent has finished its work." | Claude's `Stop` hook | reported |
 | `limit_reached` | "The agent stopped after reaching a usage limit." | Claude's `StopFailure` hook, `error: rate_limit` | reported |
 | `output_limit` | "The agent stopped at its output length limit for one reply." | Claude's `StopFailure` hook, `error: max_output_tokens` | reported |
-| `needs_answer` | "The agent is waiting for an answer." | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
+| `needs_answer` | "❓ Waiting for an answer" | Claude's `Notification` hook, `notification_type: permission_prompt` or `agent_needs_input` | reported |
 
 All four are the agent reporting on itself, and each carries at most one bounded, escaped
 line of what it last said. Everything else those hook fields can carry — every other value of

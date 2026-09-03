@@ -266,13 +266,17 @@ def remote_control_directions(
 
 
 REMOTE_CONTROL_LABELS: dict[RemoteControlState, str] = {
-    RemoteControlState.ACTIVE: "Enable Remote Control",
-    RemoteControlState.INACTIVE: "Disable Remote Control",
+    RemoteControlState.ACTIVE: "Remote Control on",
+    RemoteControlState.INACTIVE: "Remote Control off",
 }
 """What each direction is called on screen, for every surface that offers one.
 
 Beside `ACTION_LABELS` and for the same reason: the bot and the terminal spelled these
 identically by coincidence rather than by construction, and a coincidence is not a contract.
+
+`on` / `off` rather than `Enable` / `Disable` since the 2026-09-02 redesign: the label names
+the state the button leaves the pane in, which is what the detail's `remote` fact line also
+reads back (`Remote Control off`), so the button and the fact use one vocabulary.
 """
 
 

@@ -44,7 +44,7 @@ from backends import SessionUseCaseDouble, backend_for
 from surfaces import surface_pairs
 from textual.widgets import OptionList
 
-from remote_agents.adapters.telegram.service import build_private_bot
+from remote_agents.adapters.telegram.service import build_private_bot, unmarked
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -105,11 +105,13 @@ async def _telegram_rendered_actions(record: SessionRecord) -> set[str]:
     """The stop actions the bot's detail view actually puts on screen."""
     boundary = build_private_bot(7, 11, backend=backend_for(sessions=_Launcher(record)))
     detail = await boundary._detail_reply(str(record.session_id))
+    # `unmarked` strips the bot's own mark (`⏹ Stop and close` → `Stop and close`): the mark is
+    # this surface's presentation and the word behind it is what the policy pins.
     return {
-        _LABEL_TO_ACTION[button.text]
+        _LABEL_TO_ACTION[unmarked(button.text)]
         for row in detail.keyboard
         for button in row
-        if button.text in _LABEL_TO_ACTION
+        if unmarked(button.text) in _LABEL_TO_ACTION
     }
 
 
@@ -208,7 +210,10 @@ async def _telegram_remote_control(record: SessionRecord) -> list[str]:
     )
     detail = await boundary._detail_reply(str(record.session_id))
     return [
-        button.text for row in detail.keyboard for button in row if "Remote Control" in button.text
+        unmarked(button.text)
+        for row in detail.keyboard
+        for button in row
+        if "Remote Control" in button.text
     ]
 
 
@@ -222,9 +227,9 @@ async def _terminal_remote_control(record: SessionRecord) -> list[str]:
 @pytest.mark.parametrize(
     ("observed", "expected"),
     [
-        (None, ["Enable Remote Control", "Disable Remote Control"]),
-        (RemoteControlState.ACTIVE, ["Disable Remote Control"]),
-        (RemoteControlState.INACTIVE, ["Enable Remote Control"]),
+        (None, ["Remote Control on", "Remote Control off"]),
+        (RemoteControlState.ACTIVE, ["Remote Control off"]),
+        (RemoteControlState.INACTIVE, ["Remote Control on"]),
     ],
 )
 @pytest.mark.parametrize(

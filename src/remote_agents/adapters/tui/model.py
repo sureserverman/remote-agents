@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.relative_time import age
-from remote_agents.application.session_views import selectable_area, session_row
+from remote_agents.application.session_views import selectable_area, session_lines, session_row
 from remote_agents.domain.conversations import ConversationSummary
 from remote_agents.domain.models import normalize_label
 
@@ -21,7 +21,7 @@ from remote_agents.domain.models import normalize_label
 # kinds of ORPHANED the same way (BL-031). They now live in `application/session_views.py`;
 # the names stay importable from here because `screens/` and `app.py` take them from this
 # module and there is nothing to gain from moving every import site.
-__all__ = ["selectable_area", "session_row"]
+__all__ = ["selectable_area", "session_lines", "session_row"]
 
 # Row keys for choices that are navigation rather than data. The NUL prefix is what keeps
 # them from colliding with a project id, a profile id, or a conversation reference.

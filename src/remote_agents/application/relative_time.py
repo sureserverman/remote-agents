@@ -32,12 +32,28 @@ def age(created_at: datetime) -> str:
     surfaces' hosts, or a record written a moment in the future, should read as `0m ago` and
     not as `-3m ago`, which looks like a bug in the session rather than in the clock.
     """
+    return f"{age_short(created_at)} ago"
+
+
+def age_short(created_at: datetime) -> str:
+    """`age` without its ` ago`: the same span, the same thresholds, for a row that has no room.
+
+    The compact session row and the fact lines of the redesign read `3h`, not `3h ago`, and the
+    surfaces were about to strip the suffix for themselves -- which is a second copy of this
+    module's one decision (the units, the thresholds, the clamp) held together by a string
+    operation. So the span is rendered once, here, and `age` is what adds the word.
+    """
     elapsed = max(0, int((datetime.now(UTC) - created_at).total_seconds()))
-    if elapsed < _HOUR:
-        return f"{elapsed // _MINUTE}m ago"
-    if elapsed < _DAY:
-        return f"{elapsed // _HOUR}h ago"
-    return f"{elapsed // _DAY}d ago"
+    return _span(elapsed)
+
+
+def _span(seconds: int) -> str:
+    """One unit, never two -- see the module docstring for why `5h 12m` is refused."""
+    if seconds < _HOUR:
+        return f"{seconds // _MINUTE}m"
+    if seconds < _DAY:
+        return f"{seconds // _HOUR}h"
+    return f"{seconds // _DAY}d"
 
 
 def until(moment: datetime) -> str:
@@ -53,8 +69,4 @@ def until(moment: datetime) -> str:
     shared thresholds are the point of them living side by side.
     """
     remaining = max(0, int((moment - datetime.now(UTC)).total_seconds()))
-    if remaining < _HOUR:
-        return f"{remaining // _MINUTE}m"
-    if remaining < _DAY:
-        return f"{remaining // _HOUR}h"
-    return f"{remaining // _DAY}d"
+    return _span(remaining)

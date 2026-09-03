@@ -153,7 +153,9 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
     no cursor was drawn on every screen rather than failing on its own bug.
     """
     choices = app.screen.query_one("#choices", OptionList)
-    rows = [str(option.prompt) for option in choices.options]
+    # Stripped, because a columned row (the sessions list, the projects list) is padded out to
+    # the pane's width; the text a cursor is compared against is the row's words.
+    rows = [str(option.prompt).strip() for option in choices.options]
     cursor = choices.get_visual_style(
         "option-list--option", "option-list--option-highlighted"
     ).rich_style.clear_meta_and_links()
@@ -163,7 +165,12 @@ def _highlighted(app: RemoteAgentsTui) -> tuple[str | None, list[str]]:
         painted = [segment for segment in strip if segment.text.strip()]
         if not painted:
             continue
-        if all(segment.style.clear_meta_and_links() == cursor for segment in painted):
+        # The *background* is the cursor since the redesign: a row's glyph, state word and age
+        # each carry their own foreground through a theme variable, so comparing whole styles
+        # would report no cursor on every row that is coloured -- which is every row. The
+        # highlight component style's background (`$selection`) is what `render_line` paints
+        # under the highlighted row and under no other.
+        if all(segment.style.bgcolor == cursor.bgcolor for segment in painted):
             marked.append("".join(segment.text for segment in strip).strip())
     assert len(marked) <= 1, f"more than one row is drawn as the cursor: {marked}"
     return (marked[0] if marked else None), rows

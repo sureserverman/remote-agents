@@ -86,6 +86,8 @@ async def test_the_terminal_creates_picks_and_launches_one_project(
             await pilot.pause()
             assert (dev_root / "infra" / "brand-new").is_dir()
 
+            # `/` reaches the filter (the keyboard rests on the rows since the redesign).
+            await pilot.press("slash")
             for character in "brand-new":
                 await pilot.press(character)
             await settle_filter(pilot)

@@ -433,9 +433,9 @@ async def test_the_trail_grows_as_the_owner_walks_into_a_flow() -> None:
     # So this pins two claims at once: a walk into a flow lengthens the trail, and the position
     # that would have made it redundant does not.
     assert trail == [
-        "Projects",
-        "Projects › infra/existing",
-        "Projects › infra/existing",
+        "Projects › dashboard",
+        "Projects › dashboard › infra/existing",
+        "Projects › dashboard › infra/existing",
     ]
 
 
@@ -473,7 +473,7 @@ async def test_the_longest_trail_still_fits_the_header_at_the_committed_width() 
         trail = breadcrumb(app)
         drawn = app.screen.query_one(_HeaderTitle).render_line(0).text
 
-    assert trail == "Projects › Resume › infra/existing › claude"
+    assert trail == "Projects › dashboard › Resume › infra/existing › claude"
     assert "…" not in drawn, f"the header elided the trail at 100 columns: {drawn!r}"
     assert "claude" in drawn, (
         "the agent fell out of the header, and the conversation list names it nowhere else"
@@ -501,8 +501,8 @@ async def test_leaving_a_flow_shortens_the_trail_again() -> None:
         await pilot.pause()
         back = breadcrumb(app)
 
-    assert deep == "Projects › infra/existing"
-    assert back == "Projects"
+    assert deep == "Projects › dashboard › infra/existing"
+    assert back == "Projects › dashboard"
 
 
 async def test_a_failure_status_carries_its_severity_as_a_design_system_class() -> None:

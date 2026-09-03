@@ -181,42 +181,43 @@ async def test_the_pane_declares_its_empty_state() -> None:
         assert "No project matches that filter." in str(option.prompt)
 
 
-async def test_the_keyboard_rests_in_the_filter_and_one_down_draws_the_cursor() -> None:
-    """The resting-cursor discipline as this position actually holds it.
+async def test_the_keyboard_rests_on_the_rows_and_slash_reaches_the_filter() -> None:
+    """The resting-cursor discipline as this position holds it since the redesign.
 
-    The projects list renders with `focus=False`, so it deliberately draws **no** cursor while
-    it is resting: the keyboard is in the filter, where typing narrows instead of being
-    swallowed, and a highlighted row under a keyboard that is somewhere else would advertise
-    an enter target the owner cannot reach. The discipline that does bind here is the one
-    BL-004 states for the sessions pane — **one** key from the resting position reaches the
-    first row — and from there the cursor must be *painted*, which is the half that was
-    missing in the defect `test_resting_cursor.py` was written for. So this asserts the
-    rendered highlight rather than the index, exactly as that file insists.
+    The keyboard rests on the *rows*, with the cursor painted on the first -- so `o` toggles the
+    order and the other bare letters are keys rather than typed characters -- and `/` is one
+    keystroke from the filter, where typing narrows. Escape inside the filter hands the keyboard
+    back. This asserts the rendered highlight rather than the index, exactly as
+    `test_resting_cursor.py` insists, comparing the background because the row's own fields
+    carry their own foreground colours.
     """
     app = ProjectsPane(_context())
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         choices = app.screen.query_one("#choices", OptionList)
-        assert isinstance(app.focused, Input)
-        assert app.focused.id == "filter"
-        assert choices.highlighted is None, "a resting list must not advertise an enter target"
-
-        await pilot.press("down")
-        await pilot.pause()
-        assert app.focused is choices
+        assert app.focused is choices, f"the keyboard rests on {app.focused!r}, not the rows"
         assert choices.highlighted == 0
         cursor = choices.get_visual_style(
             "option-list--option", "option-list--option-highlighted"
-        ).rich_style.clear_meta_and_links()
+        ).rich_style
         painted = [
             segment
             for line in range(choices.scrollable_content_region.height)
             for segment in choices.render_line(line)
             if segment.text.strip() and segment.style is not None
         ]
-        assert any(segment.style.clear_meta_and_links() == cursor for segment in painted), (
-            "the projects pane drew no cursor on the row the keyboard had reached"
+        assert any(segment.style.bgcolor == cursor.bgcolor for segment in painted), (
+            "the projects pane drew no cursor on its resting row"
         )
+
+        await pilot.press("slash")
+        await pilot.pause()
+        assert isinstance(app.focused, Input) and app.focused.id == "filter"
+
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.focused is choices, "escape inside the filter must return to the rows"
+        assert app.is_running
 
 
 @pytest.mark.parametrize("nothing", [()])

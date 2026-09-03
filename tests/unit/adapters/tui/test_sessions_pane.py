@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
+from textual.geometry import Region
 from textual.widgets import OptionList
 from tui_positions import position
 
@@ -79,6 +80,14 @@ def _context(records: tuple[SessionRecord, ...] = (), **overrides) -> TuiContext
     }
     base.update(overrides)
     return tui_context_for(**base)
+
+
+def _gauge(app) -> str:
+    """The gauge the row would draw for the one session, from the app's cache."""
+    from remote_agents.application.session_views import context_gauge
+
+    window = app.context_window_for(_SESSION)
+    return "" if window is None else context_gauge(window)
 
 
 def test_the_sessions_pane_rests_on_the_sessions_list() -> None:
@@ -263,13 +272,16 @@ async def test_a_show_that_fails_leaves_the_pane_running_and_says_so() -> None:
         assert position(app) == "SESSIONS_PANE"
 
 
-async def test_the_status_names_what_enter_actually_does_here() -> None:
+async def test_the_hint_names_what_enter_actually_does_here() -> None:
     """Inherited, both sentences described the *dashboard's* keys.
 
     Found by driving the real pane at the Stage 1 gate: it read "Select one for detail",
     which is what Enter means on the sessions screen the dashboard pushes and not what it
-    means here. A status that names the wrong key is a false sentence, and it is the kind
+    means here. A hint that names the wrong key is a false sentence, and it is the kind
     only a live drive shows.
+
+    Since the redesign the status carries the counts and the muted `#hint` row beneath it the
+    navigation keys, so this reads the hint.
     """
     from textual.widgets import Static
 
@@ -277,15 +289,17 @@ async def test_the_status_names_what_enter_actually_does_here() -> None:
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         status = str(app.screen.query_one("#status", Static).content)
-        assert "Enter opens" in status
-        assert "d detail" in status
-        assert "Enter opens the detail" not in status, "this is the other position's sentence"
+        hint = str(app.screen.query_one("#hint", Static).content)
+        assert "1 running" in status
+        assert "enter open" in hint
+        assert "d detail" in hint
+        assert "enter detail" not in hint, "this is the other position's sentence"
         # The way back out of the console, which is the pane's alone and is `show=False`, so
         # this line is the only place it is discoverable. F12 is named beside it because the
         # root key is the one that works from *inside* a displayed agent, where none of this
         # screen's own bindings can be pressed.
-        assert "p projects" in status
-        assert "F12" in status
+        assert "p projects" in hint
+        assert "F12" in hint
 
 
 async def test_an_empty_pane_does_not_offer_an_escape_it_does_not_have() -> None:
@@ -756,56 +770,44 @@ async def test_the_action_keys_are_offered_when_a_row_is_highlighted() -> None:
 
 
 @pytest.mark.parametrize("width", (100, 80, 60))
-async def test_the_status_line_names_the_keys_and_is_not_truncated(width: int) -> None:
-    """The keys are `show=False`, so the status line is where they are discoverable.
+async def test_the_list_title_names_the_keys_and_is_not_truncated(width: int) -> None:
+    """The keys are `show=False`, so the list's own frame is where they are discoverable.
 
     Not a preference: the footer at the project's own 100-column baseline already runs to
     about seventy columns, and six more entries would clip bindings the owner did not add --
     the defect `InspectScreen`'s own comment records having caused once.
 
-    **Asserted on the rendered line, not on `Static.content`.** The first version of this test
-    read the content, which holds the untruncated source string and would have passed at any
-    width whatsoever -- while `#status` is `height: 2` and clips. A Tier-1 review reproduced
-    the real thing at 60 columns: "m remote control" vanished with no ellipsis at all, which is
-    worse than eliding. This is the same pitfall `test_status_region.py`'s own
-    `test_the_attach_command_renders_whole_at_eighty_columns` documents, and it is the third
-    time in this plan that asserting the input instead of the render hid a real defect.
-
-    60 is included because `app.py`'s own margin comments treat it as a live budget.
+    They lived in the status line until the redesign moved the counts there and the letters to
+    the border title of the list they act on (`Sessions 6 · a i r s c f m`). Asserted on the
+    rendered top border rather than on the title string, for the reason the old version of this
+    test gave: the source string is untruncated at any width whatsoever, and 60 columns is a
+    live budget in `app.py`'s own margin comments.
     """
-    from textual.widgets import Static
-
     app = SessionsPane(_context((_record(),)))
     async with app.run_test(size=(width, 24)) as pilot:
         await pilot.pause()
-        status = app.screen.query_one("#status", Static)
-        # Rows joined with a space, not concatenated. `#status` is `height: 2` and wraps, and
-        # the wrap point falls mid-sentence -- at 60 columns it lands between "a" and
-        # "attach", so a bare concatenation reads "aattach" and the assertion fails on a
-        # string that is entirely present. Joining with a space can only ever produce a false
-        # *failure* (if a wrap split a word), never a false pass, which is the right direction
-        # for a test whose whole job is to notice loss.
-        drawn = " ".join(status.render_line(row).text.strip() for row in range(status.size.height))
+        choices = app.screen.query_one("#choices", OptionList)
+        # The top border row of the list, which is where the title is drawn.
+        drawn = choices.render_lines(Region(0, 0, choices.size.width, 1))[0].text
 
-    for key, _action, _label, word in _module_action_keys():
-        assert f"{key} {word}" in drawn, f"{key!r} missing at {width} columns: {drawn!r}"
-    assert "m remote" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
-    assert "…" not in drawn, f"the status line was elided at {width} columns: {drawn!r}"
+    for key, _action, _label, _word in _module_action_keys():
+        assert f" {key} " in drawn or drawn.endswith(f" {key}"), (
+            f"{key!r} missing from the title at {width} columns: {drawn!r}"
+        )
+    assert " m" in drawn, f"the Remote Control key is missing at {width}: {drawn!r}"
+    assert "…" not in drawn, f"the title was elided at {width} columns: {drawn!r}"
 
 
-async def test_the_sessions_status_is_three_fixed_rows() -> None:
-    """The keymap's room, and the property that room may not cost.
+async def test_the_sessions_status_is_two_fixed_rows_and_a_hint() -> None:
+    """The region's shape, and the property that shape may not cost.
 
     `test_status_region.py` pins two rows for the app in general and the reason: the region is
     *fixed*, so the list beneath it never moves as a message changes. The sessions positions
-    take a third row rather than an elastic one, so that property is untouched -- which is the
-    half worth testing, because `height: auto` is the obvious way to have made room and is the
-    exact defect the region split was introduced to fix.
-
-    Three because seven row keys plus two navigation keys plus the count do not fit in two rows
-    at 60 columns in any wording. That is measured by
-    `test_the_status_line_names_the_keys_and_is_not_truncated`, which is where a table grown
-    past the room fails first; this test only pins the room.
+    took a third row for their keymap until the redesign moved the letters into the list's
+    title; what is left is the two-row status carrying the counts and the one-row muted hint
+    under it, both fixed -- which is the half worth testing, because `height: auto` is the
+    obvious way to have made room and is the exact defect the region split was introduced to
+    fix.
     """
     from textual.widgets import Static
 
@@ -823,8 +825,10 @@ async def test_the_sessions_status_is_three_fixed_rows() -> None:
         await pilot.pause()
         after_long = rows.region
         height = app.screen.query_one("#status", Static).region.height
+        hint = app.screen.query_one("#hint", Static).region.height
 
-    assert height == 3, f"the sessions status region is {height} rows high, not 3"
+    assert height == 2, f"the sessions status region is {height} rows high, not 2"
+    assert hint == 1, f"the hint row is {hint} rows high, not 1"
     assert before == after_short == after_long, (
         "the list moved when the status grew, so the region is not fixed"
     )
@@ -1169,15 +1173,15 @@ async def test_the_panes_own_tick_keeps_its_gauges_moving(monkeypatch) -> None:
     app = SessionsPane(_context((_record(),), usage=moving))
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "25%" in app.context_gauge_for(_SESSION)
+        assert "25%" in _gauge(app)
 
         used[0] = 900_000
         for _ in range(40):
             await pilot.pause(0.05)
-            if "90%" in app.context_gauge_for(_SESSION):
+            if "90%" in _gauge(app):
                 break
 
-        assert "90%" in app.context_gauge_for(_SESSION), (
+        assert "90%" in _gauge(app), (
             "the console pane's gauges never refresh after mount, so they are frozen at their "
             "launch-time values for the life of the process"
         )

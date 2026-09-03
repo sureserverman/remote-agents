@@ -21,15 +21,16 @@ and the Textual side still hands its rows to a widget.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from math import ceil
 from typing import Protocol
 
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.relative_time import age, until
+from remote_agents.application.relative_time import age, age_short, until
 from remote_agents.application.session_actions import state_word
-from remote_agents.domain.models import SessionRecord, SessionState
+from remote_agents.domain.models import OrphanProvenance, SessionRecord, SessionState
 from remote_agents.domain.projects import ProjectIdentity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage, ContextWindow, UsageWindow
 
@@ -47,6 +48,185 @@ def session_row(record: SessionRecord) -> str:
     """
     word = state_word(record.state, record.orphan_provenance)
     return f"{record.display.rendered} · {word} · {age(record.created_at)}"
+
+
+class StateGroup(Enum):
+    """The four buckets a listed session falls into, in the order a list shows them.
+
+    A `SessionState` is the lifecycle's word; a group is how a *list* arranges those words so
+    the owner can scan it -- what is working, what is between states, what needs a hand, and
+    what is kept for reading. Both surfaces draw the same four buckets (the bot as headed
+    sections, the local surface as a coloured glyph and a count), so the mapping from state to
+    bucket lives here once rather than as two dictionaries that agree today (DEC-029, DEC-043).
+
+    Definition order is presentation order and `tuple(StateGroup)` is how a surface walks it.
+    """
+
+    ACTIVE = "active"
+    IN_TRANSITION = "in_transition"
+    NEEDS_ATTENTION = "needs_attention"
+    PRESERVED = "preserved"
+
+
+_GROUP_OF_STATE: dict[SessionState, StateGroup] = {
+    SessionState.RUNNING: StateGroup.ACTIVE,
+    SessionState.STARTING: StateGroup.IN_TRANSITION,
+    SessionState.STOP_REQUESTED: StateGroup.IN_TRANSITION,
+    SessionState.FAILED: StateGroup.NEEDS_ATTENTION,
+    # Both provenances and the pre-migration `None`: DEC-020 gives the two kinds of ORPHANED
+    # different *actions*, and the same place in the list -- an orphan is the row an owner most
+    # needs to notice, whichever kind it is.
+    SessionState.ORPHANED: StateGroup.NEEDS_ATTENTION,
+    SessionState.PRESERVED: StateGroup.PRESERVED,
+}
+"""ENDED is deliberately absent: `listed_in_sessions` filters it before any grouping happens."""
+
+_EMOJI_OF_GROUP: dict[StateGroup, str] = {
+    StateGroup.ACTIVE: "\U0001f7e2",  # 🟢
+    StateGroup.IN_TRANSITION: "\U0001f7e1",  # 🟡
+    StateGroup.NEEDS_ATTENTION: "\U0001f534",  # 🔴
+    StateGroup.PRESERVED: "\u26aa",  # ⚪
+}
+
+
+def state_group(state: SessionState) -> StateGroup | None:
+    """Which bucket a state is listed under, or `None` for the one state no list shows.
+
+    Keyed on the state alone and never on provenance, for the reason `listed_in_sessions`
+    gives: DEC-020 distinguishes the two kinds of ORPHANED by what can be *done* to them, and
+    a list that filed them apart would be inventing a third distinction nobody decided.
+    """
+    return _GROUP_OF_STATE.get(state)
+
+
+def group_emoji(group: StateGroup) -> str:
+    """The status mark for a whole bucket -- the one every member of it carries."""
+    return _EMOJI_OF_GROUP[group]
+
+
+def state_emoji(state: SessionState) -> str:
+    """The status mark for a state, mapped through its group so the two can never disagree.
+
+    Empty for ENDED rather than a fifth mark: nothing lists an ENDED row, and a mark for it
+    would be a symbol the owner never learns. A surface that does render one has already made
+    the mistake `listed_in_sessions` exists to prevent, and an empty string is the quietest
+    honest answer to it.
+    """
+    group = state_group(state)
+    return "" if group is None else group_emoji(group)
+
+
+def group_counts(records: Iterable[SessionRecord]) -> dict[StateGroup, int]:
+    """How many listed sessions sit in each bucket, every bucket present, in list order.
+
+    Every group is a key even at zero, so a surface deciding to *omit* an empty bucket does so
+    by reading a zero rather than by noticing an absence -- the two read the same on screen and
+    differently in a test. Counted from the records handed in and never from a second read,
+    which is the rule `_sessions_reply` already states for its own header.
+    """
+    counts = dict.fromkeys(StateGroup, 0)
+    for record in records:
+        group = state_group(record.state)
+        if group is not None:
+            counts[group] += 1
+    return counts
+
+
+def session_identity(record: SessionRecord) -> str:
+    """`project · agent[ · label]` -- the compact name both surfaces put on a two-line row.
+
+    The mode (`regular`, `resumed`, `recovered`) and the sequence are deliberately not here.
+    `SessionDisplayIdentity.rendered` carries both because a one-line list needed every token to
+    keep siblings apart; the two-line row spends its second line on the state instead and puts
+    the sequence in its own weight beside the name, so the surfaces need the name on its own.
+    The custom label stays: it is the one token the owner chose. `display.rendered` remains
+    the full identity where a screen wants it -- the local surface's breadcrumb, for one.
+    """
+    display = record.display
+    named = f"{display.project_slug} · {display.agent_label}"
+    return f"{named} · {display.custom_label}" if display.custom_label else named
+
+
+ADOPTED_NOTE = "may still be running"
+"""What an adopted orphan's row appends, in the words `_ADOPTED_ORPHAN_EXPLANATION` uses.
+
+The strongest honest tense, for the reason that explanation gives: `reconcile` never observes an
+ORPHANED record again, so a pane that died weeks ago and one still working read identically.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRowParts:
+    """One listed session, taken apart so a surface can weight and colour each piece.
+
+    `session_lines` joins these into the two plain lines the bot sends; the local surface draws
+    each field in its own column and colour and so needs them apart. Both read *this*, which is
+    what keeps the two renders one decision: which word, which age, whether a gauge is drawn at
+    all, and what an adopted orphan's row confesses are all answered here and nowhere else.
+    """
+
+    identity: str
+    sequence: int
+    group: StateGroup
+    state: str
+    age: str
+    gauge: str | None
+    note: str | None
+
+
+def session_row_parts(
+    record: SessionRecord, context: ContextWindow | None = None
+) -> SessionRowParts:
+    """Take one listed record apart for a two-line or columned row.
+
+    **A gauge is drawn only for a RUNNING session with a known ceiling.** The ceiling rule is
+    `context_gauge`'s (a bar with no denominator is DEC-061's forbidden inference drawn instead of
+    written); the state rule is new and is the redesign's: a preserved or failed session's context
+    is history, and a bar beside `failed` reads as a live figure. A ceilingless reading renders no
+    bar here and no count either -- the count belongs to the detail, where `usage_lines` words it.
+
+    Raises on ENDED rather than inventing a group for it, because no list is allowed to hand one
+    in (`listed_in_sessions`), and a row quietly filed under "preserved" would hide exactly the
+    widening DEC-017 forbids.
+    """
+    group = state_group(record.state)
+    if group is None:
+        raise ValueError("an ENDED session has no row; filter with `only_listed` first")
+    gauge = None
+    if (
+        record.state is SessionState.RUNNING
+        and context is not None
+        and context.used_fraction is not None
+    ):
+        gauge = context_gauge(context)
+    note = (
+        ADOPTED_NOTE
+        if record.state is SessionState.ORPHANED
+        and record.orphan_provenance is OrphanProvenance.ADOPTED
+        else None
+    )
+    return SessionRowParts(
+        identity=session_identity(record),
+        sequence=record.display.sequence,
+        group=group,
+        state=state_word(record.state, record.orphan_provenance),
+        age=age_short(record.created_at),
+        gauge=gauge,
+        note=note,
+    )
+
+
+def session_lines(record: SessionRecord, context: ContextWindow | None = None) -> tuple[str, str]:
+    """The two-line row: `identity #n` over `state · age[ · gauge][ · note]`.
+
+    Beside `session_row` rather than in place of it, as the redesign's handoff asked: that
+    function is pinned as the one-line format and stays importable, this is the two-line one.
+    Plain strings, no markup -- the bot bolds the identity and leaves the sequence outside the
+    bold, and that is its `escape()`-then-compose business (DEC-014), not this module's.
+    """
+    parts = session_row_parts(record, context)
+    tail = " · ".join(piece for piece in (parts.state, parts.age, parts.gauge, parts.note) if piece)
+    return f"{parts.identity} #{parts.sequence}", tail
 
 
 def with_project_names(
@@ -211,6 +391,11 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
       an owner told "not yet" about cursor-agent would wait for a number that is never coming.
     - **anything else** — the context window, and only that.
 
+    **Values, not sentences, since the redesign.** These used to open `Usage: …` / `Context: …`
+    and close with a full stop; the bot now renders them as the value of a labelled fact line
+    (`context  █████░░░ 62% · 124k / 200k declared`), so the label moved to the surface and
+    the wording here is what sits after it. Still plain strings (DEC-043, DEC-014).
+
     **The plan's rate-limit windows used to render here too, and moving them out is the whole
     of Task 2.1.** They are the account's: both providers that publish one publish it for the
     plan, so the same figure was appearing under whichever session happened to be open and
@@ -227,9 +412,9 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
     inference (DEC-061).
     """
     if usage is None:
-        return ("Usage: no conversation matched yet.",)
+        return ("no conversation matched yet",)
     if usage.is_empty:
-        return ("Usage: not reported by this agent.",)
+        return ("not reported by this agent",)
     if usage.context is None:
         # Not the sentence above, and the difference is the point. `is_empty` means the provider
         # matched and publishes nothing -- permanent, and worded so. *This* is a reading that
@@ -239,8 +424,8 @@ def usage_lines(usage: AgentUsage | None) -> tuple[str, ...]:
         # still thinking. `ClaudeUsageReader` no longer produces this shape, but `AgentUsage` is
         # a port type and any reader may, so the distinction is kept where it is rendered rather
         # than left to one adapter's discipline.
-        return ("Usage: no conversation matched yet.",)
-    return (f"Context: {_context_phrase(usage.context)}",)
+        return ("no conversation matched yet",)
+    return (_context_phrase(usage.context),)
 
 
 _STALE_READING_AGE = timedelta(minutes=30)
@@ -251,6 +436,61 @@ after. The two do different things with it — that one withholds the figure, th
 because the cases differ: a borrowed number this project cannot vouch for is better absent,
 while a provider's own number stays worth showing as long as it is labelled.
 """
+
+
+@dataclass(frozen=True, slots=True)
+class LimitWindow:
+    """One rate-limit window as a surface draws it: the provider's label, a whole percent, and
+    how long until it resets (`None` when the provider did not say)."""
+
+    label: str
+    percent: int
+    resets_in: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LimitRow:
+    """One agent's account-wide windows, taken apart for a surface to lay out.
+
+    `stale_for` is how long ago the figure was read, rendered by `age_short`, and only once that
+    is old enough to be news -- `_dated`'s bound. `borrowed` is DEC-061's disclosure, the name
+    of the file another program maintains, when the figure came from one.
+    """
+
+    profile: str
+    windows: tuple[LimitWindow, ...]
+    borrowed: str | None
+    stale_for: str | None
+
+
+def limit_rows(limits: Iterable[AgentLimits]) -> tuple[LimitRow, ...]:
+    """Each agent's windows as parts, one row per agent that has any -- the decision half.
+
+    `limit_lines` below joins these into the one-line sentence; the redesigned surfaces lay the
+    same parts out as a grid (the local surface) and a padded monospace block (the bot), so the
+    parts are what both read. Which agents contribute a row, how a percent is rounded, and when a
+    reading is old enough to be dated are all decided here once (DEC-043).
+    """
+    rows = []
+    for entry in limits:
+        if not entry.windows:
+            continue
+        rows.append(
+            LimitRow(
+                profile=str(entry.profile_id),
+                windows=tuple(
+                    LimitWindow(
+                        window.label,
+                        round(window.used_percent),
+                        None if window.resets_at is None else until(window.resets_at),
+                    )
+                    for window in entry.windows
+                ),
+                borrowed=entry.stale_source,
+                stale_for=_stale_for(entry.observed_at),
+            )
+        )
+    return tuple(rows)
 
 
 def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
@@ -270,16 +510,30 @@ def limit_lines(limits: Iterable[AgentLimits]) -> tuple[str, ...]:
 
     Returns strings and nothing else (DEC-043). Whether an empty result means a hidden block,
     a heading over a sentence, or an untouched pane is a layout question, and each adapter
-    answers it — as each does its own escaping (DEC-014).
+    answers it — as each does its own escaping (DEC-014). Built on `limit_rows`, so the one-line
+    form and the laid-out forms cannot disagree about which agents appear or what a percent is.
     """
     lines = []
-    for entry in limits:
-        if not entry.windows:
-            continue
-        rendered = " · ".join(_window_phrase(window) for window in entry.windows)
-        borrowed = "" if entry.stale_source is None else f" — via {entry.stale_source}"
-        lines.append(f"{entry.profile_id}: {rendered}{borrowed}{_dated(entry.observed_at)}")
+    for row in limit_rows(limits):
+        rendered = " · ".join(_window_phrase_of(window) for window in row.windows)
+        borrowed = "" if row.borrowed is None else f" — via {row.borrowed}"
+        dated = "" if row.stale_for is None else f" — as of {row.stale_for} ago"
+        lines.append(f"{row.profile}: {rendered}{borrowed}{dated}")
     return tuple(lines)
+
+
+def _window_phrase_of(window: LimitWindow) -> str:
+    spent = f"{window.label} {window.percent}%"
+    if window.resets_in is None:
+        return spent
+    return f"{spent} (resets in {window.resets_in})"
+
+
+def _stale_for(observed_at: datetime | None) -> str | None:
+    """How old a reading is, once it is old enough for that to be news; see `_dated`."""
+    if observed_at is None or datetime.now(UTC) - observed_at <= _STALE_READING_AGE:
+        return None
+    return age_short(observed_at)
 
 
 def _dated(observed_at: datetime | None) -> str:
@@ -312,6 +566,22 @@ bar supports -- it answers "roughly how full", and the percent beside it answers
 """
 
 
+def percent_gauge(percent: float) -> str:
+    """The eight-cell bar for a share already expressed as a percentage, bar only.
+
+    For the account-wide limits, whose figure the provider publishes as a percent and whose
+    percent the surface prints beside the bar in its own column. Same cells, same rounding-up,
+    same clamp as `context_gauge`, so the two gauges on one screen cannot fill differently for
+    the same share.
+    """
+    return _cells(percent / 100)
+
+
+def _cells(fraction: float) -> str:
+    filled = min(_GAUGE_CELLS, max(0, ceil(fraction * _GAUGE_CELLS)))
+    return f"{'█' * filled}{'░' * (_GAUGE_CELLS - filled)}"
+
+
 def context_gauge(context: ContextWindow) -> str:
     """Render how full one session's context is, as a bar and a share, or as a bare count.
 
@@ -341,11 +611,10 @@ def context_gauge(context: ContextWindow) -> str:
     fraction = context.used_fraction
     if fraction is None:
         return _tokens(context.used_tokens)
-    filled = min(_GAUGE_CELLS, ceil(fraction * _GAUGE_CELLS))
-    # Rounded up, so any use at all shows one cell: a session that has taken a turn is not in
-    # the same state as one that has not, and a bar that reads empty for both hides the
-    # difference the gauge exists to show.
-    return f"{'█' * filled}{'░' * (_GAUGE_CELLS - filled)} {round(fraction * 100)}%"
+    # Rounded up (in `_cells`), so any use at all shows one cell: a session that has taken a
+    # turn is not in the same state as one that has not, and a bar that reads empty for both
+    # hides the difference the gauge exists to show.
+    return f"{_cells(fraction)} {round(fraction * 100)}%"
 
 
 def _context_phrase(context: ContextWindow) -> str:
@@ -358,13 +627,15 @@ def _context_phrase(context: ContextWindow) -> str:
 
     Said here, on the detail line, and not on the row gauge -- the gauge is a glance in a pane a
     third of a narrow terminal wide, and the detail is where a reader goes to check.
+
+    Gauge first, then `used / limit`: the bar is what a reader takes in, the counts are what
+    they check it against, and the order follows the reading.
     """
     used = _tokens(context.used_tokens)
-    fraction = context.used_fraction
-    if context.limit_tokens is None or fraction is None:
+    if context.limit_tokens is None or context.used_fraction is None:
         return used
     declared = " declared" if context.limit_declared else ""
-    return f"{used} of {_tokens(context.limit_tokens)}{declared} · {round(fraction * 100)}%"
+    return f"{context_gauge(context)} · {used} / {_tokens(context.limit_tokens)}{declared}"
 
 
 def _window_phrase(window: UsageWindow) -> str:

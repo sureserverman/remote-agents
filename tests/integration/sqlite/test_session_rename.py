@@ -211,14 +211,14 @@ async def test_renaming_a_vanished_session_through_the_real_service_is_recoverab
         button.callback_data
         for row in chat.messages[anchor].reply_markup.inline_keyboard
         for button in row
-        if button.text.startswith("opaque-editor")
+        if button.text.endswith(" opaque-editor")
     )
     await boundary.callback(chat.press(detail_button), None)
     rename_button = next(
         button.callback_data
         for row in chat.messages[anchor].reply_markup.inline_keyboard
         for button in row
-        if button.text == "Rename"
+        if button.text.endswith("Rename")
     )
     await boundary.callback(chat.press(rename_button), None)
 

@@ -28,15 +28,21 @@ import logging
 from collections.abc import Iterable
 from dataclasses import replace
 
-from rich.text import Text
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.content import Content
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from remote_agents.adapters.tui.model import _BACK, LaunchSelection, session_row
+from remote_agents.adapters.tui.model import _BACK, LaunchSelection
+from remote_agents.adapters.tui.rows import (
+    limit_rows_content,
+    session_contents,
+    session_counts_content,
+)
 from remote_agents.adapters.tui.screens.base import (
     NEVER_EMPTY,
     ChoiceScreen,
@@ -45,13 +51,15 @@ from remote_agents.adapters.tui.screens.base import (
 )
 from remote_agents.adapters.tui.screens.feed import (
     _EMPTY_FEED_ROW,
+    FEED_TITLE,
     NO_NOTIFICATIONS,
     FeedRegion,
 )
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
+from remote_agents.adapters.tui.screens.sessions import sessions_title
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.session_views import limit_lines
+from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import SessionRecord
 
 _LOG = logging.getLogger(__name__)
@@ -77,6 +85,11 @@ _EMPTY_LIMITS_ROW = "limits:none"
 
 _LIMITS_ROW_PREFIX = "limits:"
 
+LIMITS_TITLE = "Plan limits"
+
+DASHBOARD_HINT = "enter open · d detail · / filter · o order"
+"""The dashboard's muted hint row: the keys that mean something on its resting position."""
+
 
 class LimitsRegion:
     """The account-wide limits render, shared by the dashboard and the console's own pane.
@@ -100,9 +113,9 @@ class LimitsRegion:
         `_reload_feed` state: the rows already drawn are stale, not wrong, and a background read
         having a bad moment must never blank a pane the owner is reading.
 
-        The rows come from `limit_lines`, so this pane and the bot's block are one decision
+        The rows come from `limit_rows`, so this pane and the bot's block are one decision
         rendered twice rather than two renderers that agree today (DEC-043). What stays here is
-        placement and the disabled-row rule -- the surface's half.
+        placement, colour and the disabled-row rule -- the surface's half.
         """
         reader = self.services.backend.limits
         if reader is None:
@@ -112,10 +125,20 @@ class LimitsRegion:
         except Exception:
             _LOG.exception("the agent limits pane could not be reloaded")
             return
-        lines = limit_lines(entries)
-        pane = self.query_one("#limits-pane", OptionList)
+        self._limit_rows = limit_rows(entries)
+        self._draw_limits()
+
+    #: The last successful read, so a resize can re-measure without a provider sweep.
+    _limit_rows: tuple[LimitRow, ...] = ()
+
+    def _draw_limits(self) -> None:
+        """Draw the rows last read, as the grid `rows.limit_row_content` lays out."""
+        found = self.query("#limits-pane")
+        if not found:
+            return
+        pane = found.first(OptionList)
         pane.clear_options()
-        if not lines:
+        if not self._limit_rows:
             # A *successful* read that found nothing is not the same event as a read that
             # raised, and this used to treat them alike -- it returned early, leaving the last
             # figures drawn. That is the routine state, not an exotic one: Claude's borrowed
@@ -123,13 +146,20 @@ class LimitsRegion:
             # percentage on screen permanently, countdown and all, with `(resets in 3h)` still
             # reading 3h four hours later. Worse, the bot correctly dropped its block at the
             # same instant, so the two surfaces asserted different things about one account --
-            # the exact divergence sharing `limit_lines` exists to prevent.
+            # the exact divergence sharing `limit_rows` exists to prevent.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
-            _fit_to_content(pane, (NO_LIMITS,))
+            _fit_to_content(pane, (Content(NO_LIMITS),))
             return
-        for index, line in enumerate(lines):
-            pane.add_option(Option(line, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
-        _fit_to_content(pane, lines)
+        width = pane.content_size.width
+        if width <= 0:
+            # Drawn inside `populate`, before the pane has been laid out: the lines are built
+            # for an unknown width now and rebuilt for the real one after the first refresh --
+            # the same deferral `_fit_to_content` makes for its measurement.
+            pane.call_after_refresh(self._draw_limits)
+        contents = limit_rows_content(self._limit_rows, width or None)
+        for index, content in enumerate(contents):
+            pane.add_option(Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
+        _fit_to_content(pane, contents)
 
 
 class ProjectsPaneScreen(ProjectsScreen):
@@ -275,7 +305,10 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
        `height: 1fr` is only what the pane shows before its first measurement: `_fit_to_content`
        overwrites it with the rows the content actually wraps to, and with no border to allow
        for that is now the pane's whole height. */
-    LimitsPaneScreen #limits-pane { height: 1fr; border: none; }
+    LimitsPaneScreen #limits-pane {
+        height: 1fr; border: none; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    LimitsPaneScreen #hint { display: none; }
     """
 
     def __init__(self) -> None:
@@ -297,6 +330,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
         """
         with Vertical(id="body"):
             yield Static(self.status, id="status", markup=False)
+            yield Static("", id="hint", classes="-empty", markup=False)
             yield Input(placeholder="", id="filter")
             yield OptionList(id="choices", markup=False)
             # Seeded with its empty state at compose time for the reason `FeedScreen` gives:
@@ -308,12 +342,15 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
                 id="limits-pane",
                 markup=False,
             )
-            pane.border_title = "Agent limits"
+            pane.border_title = LIMITS_TITLE
             yield pane
             with VerticalScroll(id="output-pane"):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._draw_limits()
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -366,14 +403,30 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         Binding("d", "session_detail", "Session detail", show=False),
     ]
 
+    #: The dashboard is the projects position, so its crumb is that position's, and the
+    #: redesign's header names the surface after it: `Projects › dashboard`.
+    crumb = "Projects › dashboard"
+
+    # Unchanged proportions -- 3fr / 2fr, and the right column's 2fr / 40% / 1fr. What the
+    # redesign changed: all four panes framed alike, the projects list included (it used to be
+    # the one unframed list), and an even one-cell gutter between them -- `margin: 0 1` on the
+    # left column, `margin-top: 1` between the right-hand panes.
     DEFAULT_CSS = """
     DashboardScreen #dashboard-panes { height: 1fr; }
-    DashboardScreen #dashboard-left { width: 3fr; }
+    DashboardScreen #dashboard-left { width: 3fr; margin: 0 1; }
     DashboardScreen #dashboard-right { width: 2fr; }
-    DashboardScreen #sessions-pane { height: 2fr; border: round $secondary; }
-    DashboardScreen #limits-pane { max-height: 40%; border: round $secondary; }
+    DashboardScreen #choices {
+        border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    DashboardScreen #sessions-pane {
+        height: 2fr; border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    DashboardScreen #limits-pane {
+        max-height: 40%; border: round $secondary; margin-top: 1;
+        text-wrap: nowrap; text-overflow: ellipsis;
+    }
     DashboardScreen #feed-pane {
-        height: 1fr; border: round $secondary;
+        height: 1fr; border: round $secondary; margin-top: 1;
         text-wrap: nowrap; text-overflow: ellipsis;
     }
     """
@@ -383,6 +436,22 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         self._sessions_timer: Timer | None = None
         self._reloading_sessions = False
         self._resumed_before = False
+        #: The rows last drawn, so a resize re-measures the columns without a store read.
+        self._session_records: tuple[SessionRecord, ...] = ()
+
+    def _describe_projects(self, count: int) -> None:
+        """Nothing: the dashboard's status is the sessions' counts (`_draw_session_rows`), and
+        its hint names every pane's keys at once. The project count and order moved to the
+        projects pane's own title, where `render_projects` writes them for every position."""
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Every pane lays its columns out to a measured width; re-measure all four."""
+        super().on_resize(event)
+        if not self.showing:
+            return
+        self._draw_session_rows(self._session_records)
+        self._draw_limits()
+        self.redraw_feed()
 
     def compose(self) -> ComposeResult:
         """The base body, re-arranged: same ids, so every inherited method still lands.
@@ -394,13 +463,16 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         yield Header()
         with Vertical(id="body"):
             yield Static(self.status, id="status", markup=False)
+            yield Static("", id="hint", classes="-empty", markup=False)
             with Horizontal(id="dashboard-panes"):
                 with Vertical(id="dashboard-left"):
                     yield Input(placeholder=self.filter_placeholder or "", id="filter")
                     yield OptionList(id="choices", markup=False)
                 with Vertical(id="dashboard-right"):
                     sessions = OptionList(id="sessions-pane", markup=False)
-                    sessions.border_title = "Sessions — enter opens, d for detail"
+                    # The count is written in by every draw; the letters are the row keys,
+                    # advertised on the frame of the list they act on.
+                    sessions.border_title = sessions_title(0)
                     yield sessions
                     # Between the sessions and the notifications, which is where the owner
                     # asked for it on 2026-08-29. Seeded with its empty state at compose time
@@ -416,7 +488,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                         id="limits-pane",
                         markup=False,
                     )
-                    limits.border_title = "Agent limits"
+                    limits.border_title = LIMITS_TITLE
                     yield limits
                     # Seeded with its empty state at compose time, not left blank. `_reload_feed`
                     # returns early when the capability is absent or the read raises, and a
@@ -428,7 +500,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                         id="feed-pane",
                         markup=False,
                     )
-                    feed.border_title = "Notifications — enter expands"
+                    feed.border_title = FEED_TITLE
                     yield feed
             with VerticalScroll(id="output-pane"):
                 yield TextArea(
@@ -557,20 +629,31 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         every gauge tick, and doubled them at mount -- caught by the limits pane's own
         one-read-at-mount check.
         """
+        self._session_records = records
         pane = self.query_one("#sessions-pane", OptionList)
         held_id = held_option_id(pane)
         pane.clear_options()
+        pane.border_title = sessions_title(len(records))
         if not records:
             pane.add_option(Option(_NO_SESSIONS, id="empty", disabled=True))
+            self.set_status(_NO_SESSIONS, hint=DASHBOARD_HINT)
             return
-        for record in records:
+        # The status is the counts and the hint is the keymap, both written here because the
+        # sessions are what the counts describe and this is the one place they are drawn from
+        # (one read, never two).
+        self.set_status(session_counts_content(records), hint=DASHBOARD_HINT)
+        parts = [
+            session_row_parts(record, self.tui.context_window_for(record.session_id))
+            for record in records
+        ]
+        contents = session_contents(parts, pane.content_size.width or None)
+        for record, content in zip(records, contents, strict=True):
             pane.add_option(
                 Option(
-                    # Appended by this surface, never folded into `session_row`: that function
-                    # is shared and pinned by the parity contract, so a gauge inside it would
-                    # appear on the bot's rows too. The id stays the record's, so DEC-007's
+                    # The gauge rides inside `session_row_parts`, drawn only for a running
+                    # session with a known ceiling; the id stays the record's, so DEC-007's
                     # cursor restoration is unaffected by what the row now says.
-                    f"{session_row(record)}{self.tui.context_gauge_for(record.session_id)}",
+                    content,
                     id=f"{_SESSION_KEY_PREFIX}{record.session_id}",
                 )
             )
@@ -583,7 +666,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         )
 
 
-def _fit_to_content(pane: OptionList, lines: Iterable[str]) -> None:
+def _fit_to_content(pane: OptionList, lines: Iterable[Content]) -> None:
     """Give the pane exactly the rows its wrapped text needs, and no more.
 
     `height: auto` does not track an `OptionList`'s content here -- measured at several sizes,
@@ -605,14 +688,13 @@ def _fit_to_content(pane: OptionList, lines: Iterable[str]) -> None:
         width = pane.content_size.width
         if width <= 0:
             return
-        # Rich's own wrapping, not a character chop. `ceil(len(line) / width)` divides as if
-        # text broke mid-word; the renderer breaks on words, which needs *more* rows whenever
-        # one straddles the boundary -- a sweep over widths 60..200 lost a row at four of them,
-        # always with the `(resets in ...)` clause both providers publish. A lost row here is
-        # unreachable rather than untidy: every option is disabled, so the highlight never
-        # moves and no key scrolls to it.
-        console = pane.app.console
-        rows_high = sum(max(1, len(Text(line).wrap(console, width))) for line in rows)
+        # A lost row here would be unreachable rather than untidy: every option is disabled, so
+        # the highlight never moves and no key scrolls to it -- which is why the rows are
+        # broken to the width *before* they are counted, and never wrapped by the widget.
+        # One row per line: `limit_row_content` has already broken each agent's windows into
+        # lines that fit the pane, and the pane draws them `nowrap`, so a line longer than the
+        # pane (a single window wider than the whole column) is ellipsised rather than wrapped.
+        rows_high = len(rows)
         # The widget's own gutter, not a literal 2. It *was* a literal, and it meant "the
         # border this list draws" -- true of both panes sharing this render until the console's
         # dropped its border, where a hardcoded 2 would have left two blank rows inside a pane

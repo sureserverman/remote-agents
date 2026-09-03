@@ -20,12 +20,14 @@ import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from textual import events
 from textual.binding import Binding
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, TextArea
 
-from remote_agents.adapters.tui.model import _BACK, label_or_error, session_row
+from remote_agents.adapters.tui.model import _BACK, label_or_error
+from remote_agents.adapters.tui.rows import session_contents, session_counts_content
 from remote_agents.adapters.tui.screens.base import NEVER_EMPTY, ChoiceScreen, held_option_id
 from remote_agents.adapters.tui.screens.confirm import (
     ForceConfirmModal,
@@ -44,6 +46,7 @@ from remote_agents.application.session_actions import (
     remote_control_available,
     remote_control_directions,
 )
+from remote_agents.application.session_views import session_row_parts
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
 
@@ -182,11 +185,13 @@ class OpeningAction(Message):
 #: row the owner *is* looking at, irreversible and unasked. That is the owner's standing trade
 #: for graceful stop everywhere else on both surfaces, not a new one taken here.
 #:
-#: The fourth field is the word the status line has room for, and it is not the action id.
+#: The fourth field is the word a one-line region has room for, and it is not the action id.
 #: `graceful` is the lifecycle's name for the action; "Stop and close" is the owner's, and
 #: `session_actions.ACTION_LABELS` is emphatic that the second is what a surface shows. A
-#: status reading "s graceful" would put the mechanism back on screen in the one place the
-#: label was written to keep it off. `stop` and `clean` are those labels at status-line width.
+#: line reading "s graceful" would put the mechanism back on screen in the one place the
+#: label was written to keep it off. `stop` and `clean` are those labels at that width. Since
+#: the redesign the list advertises the bare letters in its title and the word is one `d` away;
+#: the field is kept because it is the pinned owner-vocabulary for the day a region wants it.
 #:
 #: No trust key, deliberately (DEC-047): this surface answers the trust question in the pane
 #: the console exchanges in, so it has no trust row and must not grow a trust key either.
@@ -229,35 +234,23 @@ _CLEARS_VANISHED_CURSOR = True
 #: is not known until the record is read -- see `action_row_remote_control`.
 _REMOTE_CONTROL_KEY = "m"
 
-#: What the status line says about the row keys, built from the table rather than written
-#: beside it. Both sessions positions need the sentence and the second is a subclass of the
-#: first, so a literal in each would be two strings to keep agreeing -- the shape
-#: `remote_control_entries` above already exists to avoid.
+#: The row keys as the pane title advertises them -- `Sessions 6 · a i r s c f m` -- built from
+#: the table rather than written beside it. Both sessions positions carry the title and the
+#: second is a subclass of the first, so a literal in each would be two strings to keep agreeing.
 #:
-#: Short words on purpose, and from the table's fourth field rather than from its action ids:
-#: the full labels ran the pane's status past what `#status` can show at 60 columns, where it
-#: clips with no ellipsis at all rather than eliding -- worse than the truncation this region
-#: was hardened against once already.
-#:
-#: **A further key would have to earn its columns, and a test says so rather than this
-#: comment.** `test_the_status_line_names_the_keys_and_is_not_truncated` renders the real
-#: status at 100, 80 and 60 and asserts every key survives -- 60 being the floor `app.py`'s own
-#: budget comment commits to.
-#:
-#: Adding `s` and `c` is what exhausted the old budget, and the row this line is drawn in grew
-#: rather than the sentence being trimmed to fit. Measured at 60 columns: two rows hold about
-#: 114 characters and drop the rest **silently**, which is how the previous 112-character pane
-#: status was one key away from losing "m remote" with nothing on screen to say so. The
-#: sessions positions now take a three-row `#status` (`app.py`'s CSS, scoped by type selector
-#: to `SessionsScreen` and so to its pane subclass), which holds about 171. Seven row keys plus
-#: the two navigation keys plus the count do not fit in two rows at 60 in any wording; that was
-#: measured before the CSS was touched, not assumed.
-_ROW_KEY_SUMMARY = " · ".join(
-    [
-        *(f"{key} {word}" for key, _action, _label, word in SESSION_ACTION_KEYS),
-        f"{_REMOTE_CONTROL_KEY} remote",
-    ]
+#: The title, not the status line, since the redesign: the status carries the counts (`● 2
+#: running · …`) and the muted hint row beneath it the navigation keys, so the letters moved to
+#: the frame of the list they act on -- which is also where they stop competing for the columns
+#: the old three-row status needed at 60 wide. Letters alone; the word for each is one `d` away
+#: on the detail, and the modal that asks before `f` names its action in full.
+ROW_KEY_LETTERS = " ".join(
+    [*(key for key, _action, _label, _word in SESSION_ACTION_KEYS), _REMOTE_CONTROL_KEY]
 )
+
+
+def sessions_title(count: int) -> str:
+    """The list's border title: the count, then the row keys muted. Markup on fixed text only."""
+    return f"Sessions {count}[$text-muted] · {ROW_KEY_LETTERS}[/]"
 
 
 #: The bindings themselves, built once from the table above.
@@ -582,11 +575,19 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
     can_refresh = True
     crumb = "Sessions"
 
+    DEFAULT_CSS = """
+    SessionsScreen #choices {
+        border: round $secondary; text-wrap: nowrap; text-overflow: ellipsis;
+    }
+    """
+
     #: What this position tells the owner a row does, and where an empty list sends them.
     #: Class attributes rather than literals at the call site because the console's sessions
-    #: *pane* means something different by Enter and has nowhere to escape to — and a status
-    #: describing the other surface's keys is a false sentence, not a cosmetic one.
-    listing_status = "{count} session(s). Enter opens the detail. " + _ROW_KEY_SUMMARY
+    #: *pane* means something different by Enter and has nowhere to escape to — and a hint
+    #: describing the other surface's keys is a false sentence, not a cosmetic one. The
+    #: status itself is the counts (`rows.session_counts_content`); this is the muted row under
+    #: it.
+    listing_hint = "enter detail · esc back"
     empty_status = "No managed sessions. Press escape to go back."
     # "…to return to the project list" until the console's panes existed. This screen is
     # pushed, so escape is always real here — but the position it returns to is the
@@ -843,17 +844,23 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # the shape that stops being true the first time someone adds a second reader. Found by
         # this change's Tier-1 review.
         self._drawn = {str(record.session_id): record for record in records}
+        choices = self.query_one("#choices", OptionList)
+        choices.border_title = sessions_title(len(records))
         if not records:
             self.show_choices(())
-            self.set_status(self.empty_status)
+            self.set_status(self.empty_status, hint="")
             return
-        self.set_status(self.listing_status.format(count=len(records)))
-        rows = tuple(
-            (
-                str(record.session_id),
-                f"{session_row(record)}{self.tui.context_gauge_for(record.session_id)}",
-            )
+        # The counts are the facts; the keys are the hint. Both from the tuple the rows are drawn
+        # from -- one read (the rule `_sessions_reply` states for its own header).
+        self.set_status(session_counts_content(records), hint=self.listing_hint)
+        parts = [
+            session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
+        ]
+        contents = session_contents(parts, choices.content_size.width or None)
+        rows = tuple(
+            (str(record.session_id), content)
+            for record, content in zip(records, contents, strict=True)
         )
         if rest_on_nothing:
             # The third answer, and it goes through `show_choices`'s own `highlight=None`
@@ -886,11 +893,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # row key returns early on `highlighted_session() is None`, and Enter reaches no row.
         # One arrow press brings the cursor back, deliberately — the owner choosing a row again
         # is exactly the deliberate act the vanished one can no longer stand in for.
-        choices = self.query_one("#choices", OptionList)
         current = held_option_id(choices)
         keys = [key for key, _text in rows]
         highlight = keys.index(current) if current in keys else None
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Lay the columns out again for the new width, from the rows already drawn."""
+        if self.showing and self._drawn:
+            self._draw_listing(tuple(self._drawn.values()), keep_cursor=True)
 
     async def choose(self, key: str) -> None:
         if key == _BACK:
@@ -963,7 +974,8 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         # base class's "go back and open the session again" would be an instruction to leave a
         # position the owner is already on, about a state now on screen — and on the console
         # pane it would blank that pane's keymap line until the next tick.
-        self.set_status(self.listing_status.format(count=len(self._drawn)))
+        if self._drawn:
+            self.set_status(session_counts_content(tuple(self._drawn.values())))
 
     async def confirm_force(self, session_value: str) -> None:
         """Re-read the record, ask the modal over this list, and issue only on a `True`.
@@ -1067,9 +1079,7 @@ class SessionsPaneScreen(SessionsScreen):
     #: position — so there is no project list to escape to and escape at rest is inert.
     #: Inherited unchanged, both sentences named the other surface's keys. Found by driving
     #: the real pane at the Stage 1 gate, which is the only place a false status shows.
-    listing_status = (
-        "{count} session(s). Enter opens, d detail, p projects (or F12). " + _ROW_KEY_SUMMARY
-    )
+    listing_hint = "enter open · d detail · p projects · F12 from inside an agent"
     empty_status = (
         "No managed sessions on this host. Launching one starts it here. "
         "p returns the projects pane (or F12 from inside an agent)."

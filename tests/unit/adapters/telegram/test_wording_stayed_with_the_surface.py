@@ -119,7 +119,7 @@ def test_the_adapter_still_owns_the_wording() -> None:
     """
     wording = {node.name for node in _functions(_ADAPTER) if _returns_a_sentence(node)}
 
-    assert {"activity_text", "_sentence"} <= wording, (
+    assert {"activity_text", "kind_headline"} <= wording, (
         "the adapter stopped wording things; the renderers named here are the surface's half "
         f"of DEC-043's split and must stay. Found: {sorted(wording)}"
     )

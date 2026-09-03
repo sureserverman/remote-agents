@@ -127,8 +127,23 @@ _SIZE = (100, 30)
 # Pinned for the same reason as the size, and found the same way: `TEXTUAL_THEME` or
 # `NO_COLOR` in the environment re-renders every colour in the document, failing all 30
 # baselines at once and inviting a regeneration that would bake one person's terminal
-# configuration into the net.
-_THEME = "textual-dark"
+# configuration into the net. The surface's own default theme since the 2026-09-02 redesign;
+# the light theme is baselined too, below, on the dashboard at two sizes.
+_THEME = "relay-night"
+
+# The redesign's two themes at the two sizes its handoff names, on the one position that shows
+# every pane at once. `(theme, width, height)`, each committed as `DASHBOARD_<theme>_<w>x<h>`.
+_THEMED_DASHBOARDS = (
+    ("relay-night", 80, 24),
+    ("relay-night", 120, 40),
+    ("relay-day", 80, 24),
+    ("relay-day", 120, 40),
+)
+
+
+def _themed_name(theme: str, width: int, height: int) -> str:
+    return f"DASHBOARD_{theme}_{width}x{height}"
+
 
 # The fifteen positions, by the name each screen declares and each baseline is committed
 # under. A literal tuple rather than a derived one on purpose: deriving it from `ALL_SCREENS`
@@ -187,9 +202,9 @@ async def settle(app, pilot, *, tries: int = 20) -> None:
     per option — `show_choices` sets it synchronously now, so this usually returns on the first
     pause, but it still waits on the real condition and nothing here is wall-clock dependent.
 
-    The two early returns are the screens that legitimately never highlight: a list with no
-    rows, and a `show_choices(..., focus=False)` one such as PROJECTS, where the keyboard stays in
-    the filter and the list is deliberately left without a cursor.
+    The early return is the screen that legitimately never highlights: a list with no rows.
+    (PROJECTS used to be a second one, its keyboard resting in the filter; since the redesign
+    it rests on the rows with the cursor drawn, like every other list.)
     """
     from textual.widgets import OptionList
 
@@ -866,6 +881,31 @@ async def test_every_wizard_position_matches_its_baseline(step: str) -> None:
             await asyncio.wait_for(asking, timeout=5)
 
 
+@pytest.mark.parametrize(
+    ("theme", "width", "height"),
+    _THEMED_DASHBOARDS,
+    ids=[_themed_name(*case) for case in _THEMED_DASHBOARDS],
+)
+async def test_the_dashboard_matches_its_baseline_in_both_themes(
+    theme: str, width: int, height: int
+) -> None:
+    """The redesign's palettes, rendered: `relay-night` and `relay-day` at 80×24 and 120×40.
+
+    Two themes because the handoff ships two and every colour on the surface is a theme
+    variable -- a hex literal in a widget would render identically under both, which is the one
+    defect the light baseline can see and the dark one cannot. Two sizes because the rows lay
+    their columns out to the pane's measured width, so a narrow and a wide capture exercise the
+    ellipsis and the padding respectively.
+    """
+    app = RemoteAgentsTui(_context())
+    async with app.run_test(size=(width, height)) as pilot:
+        app.theme = theme
+        await pilot.pause()
+        await settle(app, pilot)
+        assert position(app) == "DASHBOARD"
+        _assert_snapshot(app, _themed_name(theme, width, height))
+
+
 def test_every_position_has_a_baseline() -> None:
     """The list above covers the registry, so a new position cannot go unwatched.
 
@@ -937,7 +977,11 @@ def test_no_baseline_is_orphaned_and_none_is_missing() -> None:
     missing one is a case that cannot pass at all.
     """
     committed = {path.stem for path in _SNAPSHOTS.glob("*.svg")}
-    expected = set(_POSITIONS) | {case.name for case in _STATES}
+    expected = (
+        set(_POSITIONS)
+        | {case.name for case in _STATES}
+        | {_themed_name(*case) for case in _THEMED_DASHBOARDS}
+    )
 
     assert committed - expected == set(), (
         f"these baselines are committed but nothing compares them any more: "

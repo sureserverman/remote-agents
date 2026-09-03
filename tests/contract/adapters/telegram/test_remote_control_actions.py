@@ -46,7 +46,7 @@ async def test_claude_remote_control_requires_confirmation_and_uses_opaque_callb
         button.callback_data
         for row in detail.keyboard
         for button in row
-        if button.text == "Enable Remote Control"
+        if button.text.endswith("Remote Control on")
     )
     boundary.callbacks.bind_pending(11, 1)
     state = boundary.callbacks.resolve(token, owner_id=7, chat_id=11, message_id=1)

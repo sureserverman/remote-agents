@@ -160,7 +160,7 @@ async def test_stop_returns_to_list_over_real_sqlite_and_tmux(tmp_path: Path) ->
         )
         assert inspect_capture(await _capture(gateway, record.session_id)).text.startswith("READY")
         listed = await boundary._sessions_reply()
-        assert "Sessions 1/1" in listed.text, "it is on the list before the stop"
+        assert "<b>Sessions</b> · 1  🟢 1" in listed.text, "it is on the list before the stop"
 
         token = boundary.stops.offer(
             record.session_id, record.profile_id, record.state, None, "graceful", 7, 11
@@ -230,7 +230,7 @@ async def test_instant_launch_reaches_ready_over_real_sqlite_and_tmux(tmp_path: 
             "READY"
         )
         listed = await boundary._sessions_reply()
-        assert "Sessions 1/1" in listed.text
+        assert "<b>Sessions</b> · 1  🟢 1" in listed.text
         assert "opaque-editor" in listed.keyboard[0][0].text
     finally:
         for record in await service.list_sessions():

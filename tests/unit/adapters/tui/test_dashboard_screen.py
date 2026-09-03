@@ -94,6 +94,14 @@ def _context(
     )
 
 
+def _gauge(app) -> str:
+    """The gauge a row would draw for the one session, from the app's cache."""
+    from remote_agents.application.session_views import context_gauge
+
+    window = app.context_window_for(_SESSION)
+    return "" if window is None else context_gauge(window)
+
+
 def test_the_resting_screen_is_the_dashboard() -> None:
     assert isinstance(RemoteAgentsTui(_context()).get_default_screen(), DashboardScreen)
 
@@ -330,7 +338,9 @@ async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
         pane = app.screen.query_one("#limits-pane", OptionList)
         drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
 
-        assert drawn == ["claude: 5h 2%", "codex: week 61%"]
+        # The redesign's grid: the profile padded to the widest, then each window as a muted
+        # label, an eight-cell gauge and the share -- `week` abbreviated to `wk`.
+        assert drawn == ["claude  5h █░░░░░░░ 2%", "codex   wk █████░░░ 61%"]
 
 
 async def test_every_row_in_the_limits_pane_is_disabled() -> None:
@@ -421,7 +431,7 @@ async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() ->
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
         drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
-        assert drawn == ["claude: 5h 2%"]
+        assert drawn == ["claude  5h █░░░░░░░ 2%"]
 
         screen = app.screen
         assert isinstance(screen, DashboardScreen)
@@ -451,7 +461,7 @@ async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
 
         pane = screen.query_one("#limits-pane", OptionList)
         drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
-        assert drawn == ["claude: 5h 2%"]
+        assert drawn == ["claude  5h █░░░░░░░ 2%"]
 
 
 @pytest.mark.parametrize("width", [60, 73, 74, 75, 86, 87, 100, 120])
@@ -614,12 +624,12 @@ async def test_a_session_that_has_ended_stops_carrying_a_reading() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await app.refresh_context_windows(await app.load_sessions())
-        assert app.context_gauge_for(_SESSION) != ""
+        assert app.context_window_for(_SESSION) is not None
 
         live.clear()
         await app.refresh_context_windows(await app.load_sessions())
 
-        assert app.context_gauge_for(_SESSION) == ""
+        assert app.context_window_for(_SESSION) is None
 
 
 def test_the_gauge_cadence_stays_slower_than_the_repaint() -> None:
@@ -684,15 +694,15 @@ async def test_the_scheduled_tick_actually_refreshes_a_drawn_gauge(monkeypatch) 
     app = RemoteAgentsTui(_context((_record(),), usage=moving))
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert "25%" in app.context_gauge_for(_SESSION)
+        assert "25%" in _gauge(app)
 
         used[0] = 900_000
         for _ in range(40):
             await pilot.pause(0.05)
-            if "90%" in app.context_gauge_for(_SESSION):
+            if "90%" in _gauge(app):
                 break
 
-        assert "90%" in app.context_gauge_for(_SESSION), (
+        assert "90%" in _gauge(app), (
             "the scheduled tick never refreshed the cache, so every gauge is frozen at its "
             "mount-time value for the life of the process"
         )

@@ -84,7 +84,8 @@ async def test_the_detail_screen_shows_what_the_session_has_spent() -> None:
         )
     )
 
-    assert "Context: 24.3k of 258k · 9%" in text
+    # The redesign's fact line: a padded label, then the gauge first and the counts after it.
+    assert "<code>context  █░░░░░░░ 9% · 24.3k / 258k</code>" in text
 
 
 @pytest.mark.asyncio
@@ -103,7 +104,7 @@ async def test_the_usage_lines_sit_below_the_state_they_are_context_for() -> Non
     """What a session *is* comes first; what it has spent is for a reader who has read that."""
     text = await _detail_text(_reader(AgentUsage(context=ContextWindow(1_000))))
 
-    assert text.index("State:") < text.index("Context:")
+    assert text.index("🟢 running") < text.index("<code>context")
 
 
 @pytest.mark.asyncio
@@ -111,14 +112,14 @@ async def test_a_host_that_wired_no_reader_renders_no_usage_line_at_all() -> Non
     """Absence is the answer, not a row telling the owner the host is missing something."""
     text = await _detail_text(None)
 
-    assert "Context" not in text and "Usage" not in text
+    assert "context" not in text and "Usage" not in text
 
 
 @pytest.mark.asyncio
 async def test_a_provider_publishing_nothing_says_so_on_the_screen() -> None:
     text = await _detail_text(_reader(AgentUsage()))
 
-    assert "Usage: not reported by this agent." in text
+    assert "<code>context  not reported by this agent</code>" in text
 
 
 @pytest.mark.asyncio
@@ -130,8 +131,8 @@ async def test_a_reader_that_raises_costs_the_line_and_not_the_screen() -> None:
 
     text = await _detail_text(exploding)
 
-    assert "State: running" in text
-    assert "Context" not in text
+    assert "<code>🟢 running" in text
+    assert "context" not in text
 
 
 # --- the account block, on the screen that is about every session -------------------------
@@ -172,8 +173,11 @@ async def test_the_sessions_screen_carries_one_line_per_answering_agent() -> Non
         )
     )._sessions_reply()
 
-    assert "claude: 5h 2% — via status-line cache" in rendered.text
-    assert "codex: week 61%" in rendered.text
+    # The `Plan limits` block: names padded to the longest plus two inside `<code>`, the
+    # borrowed source disclosed (DEC-061), no reset countdowns on the phone.
+    assert "<b>Plan limits</b>" in rendered.text
+    assert "<code>claude  5h 2% · via status-line cache</code>" in rendered.text
+    assert "<code>codex   week 61%</code>" in rendered.text
 
 
 @pytest.mark.asyncio
@@ -192,7 +196,7 @@ async def test_an_empty_list_still_carries_the_agents_limits() -> None:
     text = (await empty._sessions_reply()).text
 
     assert "Nothing is running." in text
-    assert "codex: week 61%" in text
+    assert "<code>codex  week 61%</code>" in text
 
 
 @pytest.mark.asyncio
@@ -216,8 +220,8 @@ async def test_a_limits_reader_that_raises_costs_the_block_and_not_the_screen() 
     assert rendered.keyboard
     # The assertion the test is named for. Without it, a guard that swallowed the exception and
     # then rendered a diagnostic line in its place passed here -- proven by mutation.
-    assert "Agent limits" not in rendered.text
-    assert "limits" not in rendered.text.replace("Agent limits", "")
+    assert "Plan limits" not in rendered.text
+    assert "limits" not in rendered.text.replace("Plan limits", "")
 
 
 @pytest.mark.asyncio
@@ -226,7 +230,7 @@ async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
 
     Reached whenever every agent answers with no windows -- Claude's borrowed cache past its
     thirty-minute fence, codex quiet -- which is the same routine state the TUI pane's empty
-    sentence exists for. A bare "Agent limits" over nothing promises a block and delivers none,
+    sentence exists for. A bare "Plan limits" over nothing promises a block and delivers none,
     and puts the two surfaces back into disagreement at the instant one of them says so.
     """
     text = (
@@ -235,4 +239,4 @@ async def test_no_heading_is_promised_when_there_is_nothing_under_it() -> None:
         )._sessions_reply()
     ).text
 
-    assert "Agent limits" not in text
+    assert "Plan limits" not in text

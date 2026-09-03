@@ -24,17 +24,28 @@ from uuid import UUID
 import pytest
 
 from remote_agents.application.project_catalog import CatalogProject
-from remote_agents.application.relative_time import age
+from remote_agents.application.relative_time import age, age_short
 from remote_agents.application.session_actions import state_word
 from remote_agents.application.session_views import (
+    ADOPTED_NOTE,
+    StateGroup,
     _window_phrase,
     context_gauge,
+    group_counts,
+    group_emoji,
     limit_lines,
+    limit_rows,
     listed_in_sessions,
     listed_sessions,
     only_listed,
+    percent_gauge,
     selectable_area,
+    session_identity,
+    session_lines,
     session_row,
+    session_row_parts,
+    state_emoji,
+    state_group,
     with_project_names,
 )
 from remote_agents.domain.models import (
@@ -135,6 +146,150 @@ def test_a_custom_label_reaches_the_row_through_the_identity() -> None:
     )
 
 
+# The two-line row and its parts (the 2026-09-02 redesign) ---------------------------------------
+
+
+def test_the_two_lines_are_identity_with_sequence_over_state_and_short_age() -> None:
+    first, second = session_lines(_record())
+
+    assert first == "demo · claude #1"
+    assert (
+        second
+        == f"{state_word(SessionState.RUNNING, None)} · {age_short(_NOW - timedelta(minutes=5))}"
+    )
+
+
+def test_the_compact_identity_drops_the_mode_and_keeps_the_owners_label() -> None:
+    """`display.rendered` carries `regular · #1`; the two-line row spends its second line on the
+    state and puts the sequence in its own weight, so the name is project, agent and label."""
+    assert session_identity(_record()) == "demo · claude"
+    assert (
+        session_identity(_record(custom_label="release review")) == "demo · claude · release review"
+    )
+
+
+def test_a_gauge_is_drawn_only_for_a_running_session_with_a_known_ceiling() -> None:
+    window = ContextWindow(250_000, 1_000_000)
+
+    assert session_row_parts(_record(), window).gauge == context_gauge(window)
+    assert session_row_parts(_record(), ContextWindow(250_000)).gauge is None, "no ceiling"
+    assert session_row_parts(_record(SessionState.PRESERVED), window).gauge is None, "not live"
+    assert session_row_parts(_record()).gauge is None
+
+
+def test_an_adopted_orphan_confesses_it_may_still_be_running() -> None:
+    adopted = session_row_parts(_record(SessionState.ORPHANED, OrphanProvenance.ADOPTED))
+    ambiguous = session_row_parts(_record(SessionState.ORPHANED, OrphanProvenance.AMBIGUOUS))
+
+    assert adopted.note == ADOPTED_NOTE
+    assert ambiguous.note is None
+    assert session_lines(_record(SessionState.ORPHANED, OrphanProvenance.ADOPTED))[1].endswith(
+        f" · {ADOPTED_NOTE}"
+    )
+
+
+def test_the_row_parts_read_the_shared_state_word() -> None:
+    assert (
+        session_row_parts(_record(SessionState.ORPHANED, OrphanProvenance.ADOPTED)).state
+        == "adopted"
+    )
+
+
+def test_an_ended_session_has_no_row_parts() -> None:
+    """`only_listed` filters ENDED first; a row for it would be DEC-017's widening in disguise."""
+    with pytest.raises(ValueError):
+        session_row_parts(_record(SessionState.ENDED))
+
+
+@pytest.mark.parametrize(
+    ("state", "group"),
+    [
+        (SessionState.RUNNING, StateGroup.ACTIVE),
+        (SessionState.STARTING, StateGroup.IN_TRANSITION),
+        (SessionState.STOP_REQUESTED, StateGroup.IN_TRANSITION),
+        (SessionState.FAILED, StateGroup.NEEDS_ATTENTION),
+        (SessionState.ORPHANED, StateGroup.NEEDS_ATTENTION),
+        (SessionState.PRESERVED, StateGroup.PRESERVED),
+        (SessionState.ENDED, None),
+    ],
+)
+def test_every_state_falls_in_exactly_the_bucket_the_design_names(state, group) -> None:
+    assert state_group(state) is group
+
+
+def test_the_marks_follow_the_buckets() -> None:
+    assert state_emoji(SessionState.RUNNING) == "🟢"
+    assert state_emoji(SessionState.STARTING) == state_emoji(SessionState.STOP_REQUESTED) == "🟡"
+    assert state_emoji(SessionState.FAILED) == state_emoji(SessionState.ORPHANED) == "🔴"
+    assert state_emoji(SessionState.PRESERVED) == "⚪"
+    assert state_emoji(SessionState.ENDED) == ""
+    assert {group_emoji(group) for group in StateGroup} == {"🟢", "🟡", "🔴", "⚪"}
+
+
+def test_the_buckets_are_walked_in_presentation_order() -> None:
+    assert tuple(StateGroup) == (
+        StateGroup.ACTIVE,
+        StateGroup.IN_TRANSITION,
+        StateGroup.NEEDS_ATTENTION,
+        StateGroup.PRESERVED,
+    )
+
+
+def test_group_counts_name_every_bucket_even_at_zero() -> None:
+    counts = group_counts((_record(), _record(SessionState.FAILED), _record(SessionState.ENDED)))
+
+    assert counts == {
+        StateGroup.ACTIVE: 1,
+        StateGroup.IN_TRANSITION: 0,
+        StateGroup.NEEDS_ATTENTION: 1,
+        StateGroup.PRESERVED: 0,
+    }
+
+
+def test_the_percent_gauge_fills_like_the_context_gauge() -> None:
+    assert percent_gauge(34) == "███░░░░░"
+    assert percent_gauge(0) == "░░░░░░░░"
+    assert percent_gauge(100) == "████████"
+    assert percent_gauge(25) == context_gauge(ContextWindow(250_000, 1_000_000)).split(" ")[0]
+
+
+def test_limit_rows_carry_the_parts_the_surfaces_lay_out() -> None:
+    resets = datetime.now(UTC) + timedelta(hours=3)
+    (row,) = limit_rows(
+        (
+            _account(
+                "codex",
+                UsageWindow("5h", 41.4, resets_at=resets),
+                UsageWindow("week", 61.0),
+                observed=datetime.now(UTC) - timedelta(hours=8),
+            ),
+        )
+    )
+
+    assert row.profile == "codex"
+    assert [(w.label, w.percent, w.resets_in) for w in row.windows] == [
+        ("5h", 41, "2h"),
+        ("week", 61, None),
+    ]
+    assert row.stale_for == "8h"
+    assert row.borrowed is None
+
+
+def test_limit_lines_are_built_from_the_same_rows() -> None:
+    limits = (_account("claude", UsageWindow("5h", 2.0), stale="status-line cache"),)
+
+    (line,) = limit_lines(limits)
+    (row,) = limit_rows(limits)
+
+    assert line.startswith(f"{row.profile}: ") and row.borrowed == "status-line cache"
+
+
+def test_a_short_age_is_the_age_without_its_word() -> None:
+    moment = _NOW - timedelta(hours=5)
+
+    assert age(moment) == f"{age_short(moment)} ago"
+
+
 # The area predicate -----------------------------------------------------------------------
 
 
@@ -219,6 +374,17 @@ def test_no_adapter_redefines_the_row_or_the_area_predicate() -> None:
         "def _with_project_name",
         "def with_project_name",
         "def with_project_names",
+        # The 2026-09-02 redesign's helpers, added the day they were written rather than the
+        # day a second surface wanted them: the two-line row and its parts, the compact
+        # identity, the four buckets and their marks, and the short age.
+        "def session_lines",
+        "def session_row_parts",
+        "def session_identity",
+        "def state_group",
+        "def state_emoji",
+        "def group_emoji",
+        "def group_counts",
+        "def age_short",
     )
     offenders = {
         path.relative_to(adapters).as_posix(): sorted(found)

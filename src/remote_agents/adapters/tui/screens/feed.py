@@ -18,16 +18,19 @@ import textwrap
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.context import FEED_LIMIT
-from remote_agents.adapters.tui.model import age
+from remote_agents.adapters.tui.rows import MUTED, feed_row_content
 from remote_agents.adapters.tui.screens.base import (
     ChoiceScreen,
     held_option_id,
     restore_highlight_by_id,
 )
+from remote_agents.application.relative_time import age_short
+from remote_agents.application.session_views import session_identity
 from remote_agents.domain.models import SessionRecord
 from remote_agents.ports.agent_activity import (
     MAXIMUM_DETAIL_CHARACTERS,
@@ -47,22 +50,18 @@ _FEED_LIMIT = FEED_LIMIT
 #: the bot's sentences live in its own adapter and carry chat conventions (grouping,
 #: standing messages) a glanceable feed line has no use for.
 KIND_WORDS = {
-    ActivityKind.COMPLETED: "finished its work",
-    ActivityKind.LIMIT_REACHED: "hit a usage limit",
-    ActivityKind.OUTPUT_LIMIT: "hit its output ceiling",
-    ActivityKind.NEEDS_ANSWER: "waiting for an answer",
+    ActivityKind.COMPLETED: "finished",
+    ActivityKind.LIMIT_REACHED: "usage limit",
+    ActivityKind.OUTPUT_LIMIT: "output limit",
+    ActivityKind.NEEDS_ANSWER: "needs answer",
 }
-"""Each phrase leads with what *differs*, and drops the subject the row already names.
+"""Two words a kind, in a column of their own, after a glyph that says the same thing.
 
-These read "the agent has finished its work", "the agent is waiting for an answer" and so on
-until the Stage 3 gate measured them at the width the dashboard actually gives this pane. Three
-of the five kinds then defined began with the same eight characters, and the row prefixes them
-with a session identity -- so at ~36 columns three observations of three different kinds
-truncated to the *same 36 characters*, and a pane of identical rows cannot be glanced at.
-
-Dropping "the agent" is not a shortening for its own sake: the row now opens with the session,
-so the subject was being said twice. `existing · claude · #1 · waiting for an answer` names who
-is waiting more precisely than the sentence it replaces did.
+These read "finished its work", "waiting for an answer" and so on until the redesign put the
+kind in its own aligned column, where a phrase that long pushed the identity -- the thing the row
+is *for* -- off a pane a third of a column wide. The glyph (`rows.KIND_GLYPH`) carries the kind
+at a glance and the word confirms it; the two together are what survive `NO_COLOR`. The console
+flash reads the same word, so what the status bar says and what the row says stay one vocabulary.
 """
 
 
@@ -76,28 +75,24 @@ _EMPTY_FEED_ROW = "notification:none"
 #: new handler, and specifically no app-level one (`screens/base.py:952` says why).
 NOTIFICATION_PREFIX = "notification:"
 
+FEED_TITLE = "Feed[$text-muted] · enter expands[/]"
+"""The pane's border title: the name, and the one key that means something here, muted.
 
-def _glance_identity(record: SessionRecord) -> str:
-    """How the feed names a session: project, agent, sequence -- and not the mode.
+Markup, deliberately, on the one string in this module that carries no agent's words -- the
+title is this surface's own two fixed phrases, and `border_title` is where Textual reads markup.
+Every row stays literal `Content`.
+"""
 
-    **Not `display.rendered`, and the difference is one token that costs ten columns.** That
-    property renders `<project> · <agent> · <mode> · #<n>`, which is right for a *sessions
-    list*, where `regular` versus `resumed` versus `recovered` distinguishes rows that are
-    otherwise the same session. A notification row is not identifying a session among its
-    siblings; it is saying which session an event belongs to, and it is doing that in a pane
-    a third of a column wide, where those ten columns are the difference between showing what
-    happened and not.
 
-    So this is a second *rendering*, not a second copy of a rule: it composes the same fields
-    the identity already exposes, and any question about what a session is *called* still has
-    one answer (DEC-043 -- the decision is shared, the sentence stays the surface's). The mode
-    remains one keypress away on the sessions pane and the detail screen.
+def _glance_identity(record: SessionRecord) -> tuple[str, int]:
+    """How the feed names a session: the compact identity and its sequence, apart.
 
-    A custom label is kept: it is the one part of the name the owner chose.
+    `session_views.session_identity` -- project, agent and the owner's label, without the mode --
+    is the same name the two-line session row uses, so the feed and the list call a session one
+    thing (DEC-043: the decision is shared, and this surface only places it). The sequence is
+    returned beside it because the row draws it muted after the name.
     """
-    display = record.display
-    named = f"{display.project_slug} · {display.agent_label} · #{display.sequence}"
-    return f"{named} · {display.custom_label}" if display.custom_label else named
+    return session_identity(record), record.display.sequence
 
 
 def feed_key(activity: AgentActivity) -> str:
@@ -156,35 +151,41 @@ def _elide(text: str, width: int | None = DETAIL_WIDTH) -> str:
 
 def feed_rows(
     activities: tuple[AgentActivity, ...],
-    names: dict[str, str] | None = None,
+    names: dict[str, tuple[str, int]] | None = None,
     *,
     limit: int = _FEED_LIMIT,
     opened: str | None = None,
     width: int | None = None,
-) -> list[tuple[str, str, bool]]:
-    """One `(key, line)` per observation, newest first, bounded.
+) -> list[tuple[str, Content, bool]]:
+    """One `(key, row, disabled)` per observation, newest first, bounded.
 
-    `<identity> · <kind words> · <age> — <detail>`, where the identity is the session's own
-    rendered name when `names` knows it and the bare session id when it does not.
+    `glyph  kind  identity #n — detail  age`: the glyph and kind word in the kind's colour, the
+    identity and detail taking the slack and ellipsised, the age against the right edge, muted.
+    A row older than a day is muted whole (`rows.FEED_HISTORY_AGE`). The identity is the
+    session's compact name when `names` knows it and the bare session id when it does not.
 
-    **The identity leads, and that is a correction rather than a preference.** It led with the
-    age until the Stage 2 gate evaluator measured the dashboard: that region is `2fr` of a
-    `3fr/2fr` split, so at this project's own 100-column baseline it has about 36 usable
-    columns for an identity that is 32 -- and eleven of them went to a timestamp, cutting the
-    row at `0m ago · existing · claude · regula…`. Both the sequence and the kind words were
-    gone, on the surface where the goal ("every row names the session it is about -- project,
-    agent and sequence") is hardest to meet and therefore matters most. The list is already
-    ordered newest-first, so position carries recency; the identity is what the row is *for*,
-    and the age is what falls off a narrow pane instead.
+    **The identity leads the flexible cell, and that is a correction rather than a preference.**
+    It led with the age until the Stage 2 gate evaluator measured the dashboard: that region is
+    `2fr` of a `3fr/2fr` split, so at this project's own 100-column baseline it has about 36
+    usable columns, and eleven of them went to a timestamp, cutting the row before the sequence
+    and the kind. The age now sits in its own short column at the end, where it is the thing
+    that shrinks; the identity is what the row is *for*.
 
     **The fallback is a feature, not a guard.** A notification outlives the session it is
     about -- that is what a durable feed is for -- so a row whose session has since been
     reconciled away must still say which one it was. Rendering an empty identity there would
-    turn "the agent is waiting for an answer" back into the thing this row exists to stop
-    being: a sentence about nobody.
+    turn "needs answer" back into the thing this row exists to stop being: a line about nobody.
+
+    `width` is the pane's own, measured at draw time, and lays the columns out; `None` -- a
+    pane not yet laid out -- joins them without padding, which is the same fallback the
+    continuation rows make.
     """
     names = names or {}
-    rows: list[tuple[str, str]] = []
+    rows: list[tuple[str, Content, bool]] = []
+    shown = activities[:limit]
+    kind_width = max((len(KIND_WORDS.get(a.kind, a.kind.value)) for a in shown), default=0)
+    ages = [age_short(activity.observed_at) for activity in shown]
+    age_width = max((len(rendered) for rendered in ages), default=0)
     #: How many rows already carry each composite key. `feed_key` is
     #: session + kind + observed_at, and nothing in the store makes that unique: the only
     #: unique column on `agent_activity` is `activity_id`, which `activity_store` discards
@@ -198,33 +199,45 @@ def feed_rows(
     #: the cursor on its row. A uniquifier that reshuffled would have traded a crash for the
     #: defect Task 2.1's composite key exists to prevent.
     seen: dict[str, int] = {}
-    for activity in activities[:limit]:
+    for activity, age_text in zip(shown, ages, strict=True):
         words = KIND_WORDS.get(activity.kind, activity.kind.value)
-        identity = names.get(str(activity.session_id)) or str(activity.session_id)
-        detail = f" — {_elide(activity.detail)}" if activity.detail else ""
+        named = names.get(str(activity.session_id))
+        identity, sequence = named if named is not None else (str(activity.session_id), None)
         # `_elide` caps the *detail* so one verbose agent cannot crowd out the identity that
-        # makes the row readable at all. Cutting the line to the *pane* is not done here and
-        # not in Python at all: `text-wrap: nowrap; text-overflow: ellipsis` in both surfaces'
-        # DEFAULT_CSS is the only thing enforcing one-observation-one-row, and it truncates
-        # at whatever width each pane actually renders at, which is what survives a resize.
-        #
-        # This comment previously described `_draw_feed` handing the widget a self-truncating
-        # `rich.text.Text`. That was true of a draft and false of the code: Textual 8.2's
-        # `Content.from_rich_text` drops `no_wrap`, so the approach was abandoned for the CSS
-        # and the comment was not. A maintainer trusting it would have concluded the CSS was
-        # redundant and deleted the only thing holding the property up.
+        # makes the row readable at all. Cutting the line to the *pane* is done by `columns`
+        # at the measured width and, when there is none yet, by `text-wrap: nowrap;
+        # text-overflow: ellipsis` in both surfaces' DEFAULT_CSS -- which is what survives a
+        # resize between two draws.
+        detail = _elide(activity.detail) if activity.detail else None
         key = feed_key(activity)
         occurrence = seen.get(key, 0)
         seen[key] = occurrence + 1
         if occurrence:
             key = f"{key}:{occurrence}"
-        rows.append((key, f"{identity} · {words} · {age(activity.observed_at)}{detail}", False))
+        rows.append(
+            (
+                key,
+                feed_row_content(
+                    activity.kind,
+                    words,
+                    identity,
+                    sequence,
+                    detail,
+                    activity.observed_at,
+                    age_text,
+                    width=width,
+                    kind_width=kind_width,
+                    age_width=age_width,
+                ),
+                False,
+            )
+        )
         if opened == key and activity.detail:
             rows.extend(_continuation_rows(key, activity.detail, width))
     return rows
 
 
-def _continuation_rows(key: str, detail: str, width: int | None) -> list[tuple[str, str, bool]]:
+def _continuation_rows(key: str, detail: str, width: int | None) -> list[tuple[str, Content, bool]]:
     """The open row's full detail, wrapped, as rows the cursor cannot land on.
 
     **Wrapped here in Python rather than by the widget**, because the pane declares
@@ -249,7 +262,11 @@ def _continuation_rows(key: str, detail: str, width: int | None) -> list[tuple[s
         # more -- not a silent truncation, and not a pane full of one observation.
         lines = [*lines[: MAXIMUM_CONTINUATION_ROWS - 1], "…"]
     return [
-        (f"{key}:detail:{index}", f"{' ' * _CONTINUATION_INDENT}{line}", True)
+        (
+            f"{key}:detail:{index}",
+            Content.assemble((f"{' ' * _CONTINUATION_INDENT}{line}", MUTED)),
+            True,
+        )
         for index, line in enumerate(lines)
     ]
 
@@ -301,8 +318,36 @@ class FeedRegion:
     #: state, which is the trap that comment already exists to have avoided once.
     opened_notification: str | None = None
 
-    async def _session_names(self) -> dict[str, str]:
-        """`{session_id: rendered identity}` for every session the store still holds.
+    #: The last successful read and the names it was drawn with, so a resize can lay the
+    #: columns out again without a read. Assigned on the instance for the reason the two
+    #: attributes above are.
+    _feed_drawn: tuple[tuple[AgentActivity, ...], dict[str, tuple[str, int]]] | None = None
+
+    def redraw_feed(self) -> None:
+        """Lay the last-read rows out again at the pane's current width; nothing is re-read."""
+        if self._feed_drawn is None:
+            return
+        found = self.query("#feed-pane")
+        if not found:
+            return
+        pane = found.first(OptionList)
+        activities, names = self._feed_drawn
+        measured = pane.content_size.width
+        try:
+            self._draw_feed(
+                pane,
+                feed_rows(
+                    activities,
+                    names,
+                    opened=self.opened_notification,
+                    width=measured if measured > 0 else None,
+                ),
+            )
+        except Exception:
+            _LOG.exception("the notifications feed could not be redrawn")
+
+    async def _session_names(self) -> dict[str, tuple[str, int]]:
+        """`{session_id: (identity, sequence)}` for every session the store still holds.
 
         Three deliberate choices, each of which the obvious alternative gets wrong.
 
@@ -370,7 +415,7 @@ class FeedRegion:
         await super().choose(key)
 
     @staticmethod
-    def _draw_feed(pane: OptionList, rows: list[tuple[str, str, bool]]) -> None:
+    def _draw_feed(pane: OptionList, rows: list[tuple[str, Content, bool]]) -> None:
         """Refill the pane, leaving the cursor on the observation it was on.
 
         By *key*, never by index. This pane repaints on a 10-second interval and the feed
@@ -411,6 +456,7 @@ class FeedRegion:
             _LOG.exception("the notifications feed could not be read")
             return
         if not activities:
+            self._feed_drawn = None
             pane.clear_options()
             # Nothing left to have open. Cleared for symmetry with the aged-out case, which
             # drops an expansion whose row has gone: leaving it set is a state that describes
@@ -427,15 +473,17 @@ class FeedRegion:
             # first layout, which `_continuation_rows` falls back on -- and an expansion only
             # ever happens on a keypress, by which time the pane has certainly been laid out.
             measured = pane.content_size.width
+            names = await self._session_names()
             self._draw_feed(
                 pane,
                 feed_rows(
                     activities,
-                    await self._session_names(),
+                    names,
                     opened=self.opened_notification,
                     width=measured if measured > 0 else None,
                 ),
             )
+            self._feed_drawn = (activities, names)
         except Exception:
             # The docstring above promises "never an exception" for the *method*, and only
             # the read was guarded -- so the naming join and the option rebuild could both
@@ -481,7 +529,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
     FeedScreen #filter { display: none; }
     FeedScreen #choices { display: none; }
     /* No `border` here: `OptionList` draws its own, which is where this pane's
-       `▔ Notifications ▔` chrome comes from -- inherited rather than chosen, and stated
+       `▔ Feed ▔` chrome comes from -- inherited rather than chosen, and stated
        because the `Static` this replaced drew none and the dashboard's twin sets one
        explicitly. `text-wrap`/`text-overflow` are load-bearing: they are the whole of
        one-observation-one-row. */
@@ -508,6 +556,7 @@ class FeedScreen(FeedRegion, ChoiceScreen):
         """
         with Vertical(id="body"):
             yield Static(self.status, id="status", markup=False)
+            yield Static("", id="hint", classes="-empty", markup=False)
             yield Input(placeholder="", id="filter")
             yield OptionList(id="choices", markup=False)
             # Seeded with its empty state at compose time, not left blank. `_reload_feed`
@@ -520,12 +569,15 @@ class FeedScreen(FeedRegion, ChoiceScreen):
                 id="feed-pane",
                 markup=False,
             )
-            feed.border_title = "Notifications — enter expands"
+            feed.border_title = FEED_TITLE
             yield feed
             with VerticalScroll(id="output-pane"):
                 yield TextArea(
                     "", id="output", read_only=True, soft_wrap=True, highlight_cursor_line=False
                 )
+
+    def on_resize(self) -> None:
+        self.redraw_feed()
 
     async def populate(self) -> None:
         self.hide_entry()
