@@ -32,11 +32,19 @@ every one of them advertise an affordance it cannot perform.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from remote_agents.application.backend import Backend
+from remote_agents.application.errors import DuplicateCommandError
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import SessionId
 from remote_agents.domain.profiles import ProfileCompatibility
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    PairingCode,
+    RemoteControlState,
+)
 from remote_agents.domain.trust import TrustState
 from remote_agents.ports.agent_activity import AgentActivity
 from remote_agents.ports.agent_usage import AgentLimits, AgentUsage
@@ -61,6 +69,7 @@ def backend_for(
     activity_feed: Callable[[], Awaitable[tuple[AgentActivity, ...]]] | None = _UNSET,  # type: ignore[assignment]
     usage: Callable[[SessionId], Awaitable[AgentUsage | None]] | None = _UNSET,  # type: ignore[assignment]
     limits: Callable[[], Awaitable[tuple[AgentLimits, ...]]] | None = _UNSET,  # type: ignore[assignment]
+    host_remote_control: object | None = _UNSET,
     max_label_length: int = _UNSET,  # type: ignore[assignment]
 ) -> Backend:
     """A `Backend` carrying what the caller stated and `Backend`'s own defaults for the rest.
@@ -80,6 +89,7 @@ def backend_for(
         "capture": capture,
         "activity_feed": activity_feed,
         "usage": usage,
+        "host_remote_control": host_remote_control,
         "limits": limits,
         "max_label_length": max_label_length,
     }
@@ -165,3 +175,59 @@ def tui_context_for(**arguments: object):
     surface = {name: value for name, value in arguments.items() if name in surface_fields}
     backend = {name: value for name, value in arguments.items() if name not in surface_fields}
     return TuiContext(backend=backend_for(**backend), **surface)  # type: ignore[arg-type]
+
+
+class FakeHostRemoteControl:
+    """A scripted host-level Remote Control, for a test that cares about the toggle.
+
+    Shaped like `application.host_remote_control.HostRemoteControlService` rather than like
+    the port beneath it, because that is what `Backend.host_remote_control` carries and what
+    both surfaces drive. It keeps the service's two contracts that a surface can observe --
+    a reading is returned rather than raised, and a repeated idempotency key is refused --
+    so a surface test exercising the fake exercises the real shape.
+
+    `connection` is settable per test, and `set_state` moves it, so a test can assert the
+    round trip rather than only the call.
+    """
+
+    def __init__(self, connection: HostConnection = HostConnection.DISABLED) -> None:
+        self.connection = connection
+        self.server_name: str | None = "Paisleys-Blender"
+        self.claimed: set[str] = set()
+        self.calls: list[str] = []
+        self.pairing_code = "ZZZZ-9999"
+        self.fail_with: Exception | None = None
+
+    async def status(self):
+        self.calls.append("status")
+        return HostRemoteControlStatus.observed(self.connection, server_name=self.server_name)
+
+    async def set_state(self, command):
+        self.calls.append(f"set_state:{command.desired_state.value}")
+        self._claim(command.idempotency_key)
+        if self.fail_with is not None:
+            return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
+        self.connection = (
+            HostConnection.CONNECTED
+            if command.desired_state is RemoteControlState.ACTIVE
+            else HostConnection.DISABLED
+        )
+        return await self.status()
+
+    async def pair(self, command):
+        self.calls.append("pair")
+        self._claim(command.idempotency_key)
+        if self.fail_with is not None:
+            raise self.fail_with
+        return PairingCode(
+            code=self.pairing_code,
+            expires_at=datetime(2026, 9, 3, 12, 0, tzinfo=UTC),
+        )
+
+    async def aclose(self) -> None:
+        self.calls.append("aclose")
+
+    def _claim(self, key: str) -> None:
+        if key in self.claimed:
+            raise DuplicateCommandError("host remote control callback was already handled")
+        self.claimed.add(key)

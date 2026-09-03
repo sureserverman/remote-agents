@@ -129,3 +129,66 @@ async def test_core_fake_lifecycle(tmp_path: Path) -> None:
     assert stopped.preserved is True, "the observation still reports how the pane exited"
     assert (await store.get(launched.session_id)).state is SessionState.ENDED
     assert await service.inspect(InspectQuery(launched.session_id)) is None
+
+
+@pytest.mark.asyncio
+async def test_core_fake_host_remote_control_round_trip() -> None:
+    """Drive the host toggle through `Backend.host_remote_control` and nothing else.
+
+    The point of routing it through the `Backend` rather than the service directly: both
+    frontends reach this capability by that field and by no other name, so a round trip that
+    holds here is the round trip a surface will get. Enable, read, disable, read -- and the
+    reading after each flip is the daemon's, not the command's echo.
+    """
+    from support.backends import FakeHostRemoteControl, backend_for
+
+    from remote_agents.application.errors import DuplicateCommandError
+    from remote_agents.application.host_remote_control import (
+        HostRemoteControlCommand,
+        PairCommand,
+    )
+    from remote_agents.domain.remote_control import HostConnection, RemoteControlState
+
+    backend = backend_for(host_remote_control=FakeHostRemoteControl())
+    control = backend.host_remote_control
+    assert control is not None, "this host wired the capability"
+
+    assert (await control.status()).state is RemoteControlState.INACTIVE
+
+    enabled = await control.set_state(
+        HostRemoteControlCommand(RemoteControlState.ACTIVE, "enable-1")
+    )
+    assert enabled.state is RemoteControlState.ACTIVE
+    assert enabled.connection is HostConnection.CONNECTED
+    assert (await control.status()).state is RemoteControlState.ACTIVE
+
+    disabled = await control.set_state(
+        HostRemoteControlCommand(RemoteControlState.INACTIVE, "disable-1")
+    )
+    assert disabled.state is RemoteControlState.INACTIVE
+    assert disabled.connection is HostConnection.DISABLED
+    assert (await control.status()).state is RemoteControlState.INACTIVE
+
+    with pytest.raises(DuplicateCommandError):
+        await control.set_state(HostRemoteControlCommand(RemoteControlState.ACTIVE, "enable-1"))
+    assert (await control.status()).state is RemoteControlState.INACTIVE, (
+        "a refused duplicate must not have moved the host"
+    )
+
+    code = await control.pair(PairCommand("pair-1"))
+    assert code.code == "ZZZZ-9999"
+    with pytest.raises(DuplicateCommandError):
+        await control.pair(PairCommand("pair-1"))
+
+
+@pytest.mark.asyncio
+async def test_a_host_that_wired_no_host_remote_control_says_so() -> None:
+    """`None` is the declared absence both surfaces read with `is None` (DEC-061/067).
+
+    Asserted here rather than assumed, because it is the branch every "unavailable" render
+    depends on -- and a `backend_for` that quietly defaulted it to a working double would
+    have made that branch unreachable across the whole suite.
+    """
+    from support.backends import backend_for
+
+    assert backend_for().host_remote_control is None
