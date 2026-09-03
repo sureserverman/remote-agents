@@ -105,6 +105,20 @@ _ABSENT_DAEMON_SIGNATURE = "app-server-control.sock"
 #: matters here. Requiring the ENOENT cause makes the ambiguous failures raise instead.
 _ABSENT_DAEMON_CAUSES = ("No such file or directory", "os error 2")
 
+#: What `codex` says when the *installation* cannot run a daemon at all.
+#:
+#: The whole daemon surface -- every verb, not just the enable -- requires OpenAI's standalone
+#: install at a fixed path, because that is where the daemon starts and updates app-server
+#: from. A host running the npm distribution answers every daemon command with this.
+#:
+#: Mapped to UNREACHABLE rather than ERRORED, which is where it landed first. ERRORED means
+#: the daemon answered and reported its own link broken; here there is no daemon and cannot be
+#: one, so an owner was shown "link broken" for a machine with no link to break and no way to
+#: learn why the button did nothing -- the same "button that could never explain itself" this
+#: feature exists to stop. Found by running the live drill on this host, which is what a live
+#: drill is for.
+_UNSUPPORTED_INSTALL_SIGNATURE = "managed standalone Codex install not found"
+
 # Enabling waits for the enrollment websocket, which is a network round trip to the relay;
 # the other two are local. Each is a ceiling, not an expectation -- the point is that a
 # `codex` command which never returns cannot hold the operation lock forever.
@@ -305,6 +319,11 @@ class CodexRemoteControl:
             result = await self._runner.run(
                 REMOTE_CONTROL_ARGV["enable_when_running"], timeout=_ENABLE_TIMEOUT_SECONDS
             )
+        if _UNSUPPORTED_INSTALL_SIGNATURE in result.stderr:
+            # Not a failure of this host's Remote Control: a statement that this installation
+            # of codex has no daemon to control and cannot acquire one. Both surfaces render
+            # UNREACHABLE with a sentence naming the cause.
+            return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
         # The daemon-scoped verb prints human-readable text only, so it never yields an
         # envelope; the re-read below is the whole answer in that branch.
         payload = self._payload(result.stdout) if result.returncode == 0 else None

@@ -20,6 +20,12 @@ What it proves, in the order a doubting reader would want it:
 
 It prints the two commands that undo everything, because a drill that enrols a machine and
 does not say how to unenrol it is a drill that leaves the host changed.
+
+**It also needs OpenAI's standalone Codex install**, not the npm package. Every verb on the
+daemon surface refuses without it, because that is where the daemon starts and updates
+app-server from -- and `codex --version` and `codex remote-control --help` both succeed
+regardless, which is why the plan's Preflight did not catch it. Skipped, named, rather than
+failed: a host that cannot run the feature is a fact about the host.
 """
 
 from __future__ import annotations
@@ -66,6 +72,13 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
     executable = shutil.which("codex")
     if executable is None:
         pytest.skip("BLOCKED: executable_missing")
+    # A precondition the plan's Preflight did not know to check, found by running this drill:
+    # `codex --version` and `--help` both pass on the npm distribution, and the entire daemon
+    # surface still refuses, because the daemon starts and updates app-server from this fixed
+    # path. A skip rather than a failure -- the host cannot run the feature, which is a fact
+    # about the host and not a defect in the code being qualified.
+    if not (Path.home() / ".codex/packages/standalone/current/codex").exists():
+        pytest.skip("BLOCKED: standalone_codex_install_missing")
 
     control = CodexRemoteControl()
     runner = AsyncCommandRunner()

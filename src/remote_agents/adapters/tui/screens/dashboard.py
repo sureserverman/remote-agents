@@ -207,7 +207,9 @@ _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
         "relay is broken."
     ),
     HostConnection.UNREACHABLE: (
-        "codex did not answer at all, so nothing was read. It may not be installed here."
+        "codex did not answer, so nothing was read. It may not be installed here, or this "
+        "install may be one that cannot run the daemon (the host toggle needs OpenAI's "
+        "standalone codex, not the npm package)."
     ),
 }
 

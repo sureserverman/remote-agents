@@ -105,6 +105,16 @@ the ChatGPT app gets control of this machine until it expires, and a phone that 
 access afterwards. Turning Codex Remote Control off is what ends that access. If you lose a
 code, mint another; the old one expires on its own.
 
+**It needs OpenAI's standalone Codex install, not the npm package.** Every verb on the daemon
+surface refuses without it — `Error: managed standalone Codex install not found at
+~/.codex/packages/standalone/current/codex` — because that fixed path is where the daemon
+starts and updates app-server from. `codex --version` and `codex remote-control --help` both
+succeed on the npm distribution regardless, so the absence shows up only when the toggle is
+pressed. On such a host every reading is `unreachable` and the toggle does nothing; that is
+the honest answer rather than a defect, and both surfaces say which of the two causes it is.
+Install the standalone distribution if you want this feature:
+`curl -fsSL https://chatgpt.com/codex/install.sh | sh`.
+
 **Six readings, and three of them are not "off".** `on`, `off`, `connecting`, `no daemon`,
 `link broken` and `unreachable`. `no daemon` means nothing is listening, so nothing can say
 whether this host is enrolled — the preference outlives the daemon that serves it, which is why

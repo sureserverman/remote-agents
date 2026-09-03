@@ -49,3 +49,18 @@ def test_the_compatibility_document_does_not_report_an_absent_daemon_as_off() ->
 
     assert "the preference outlives the daemon" in document
     assert "not reported as off" in document
+
+
+def test_the_compatibility_document_names_the_install_this_feature_needs() -> None:
+    """The precondition that `--version` and `--help` both hide.
+
+    Found by running the live drill: the whole daemon surface requires OpenAI's standalone
+    install, and every cheap probe an operator (or a plan's Preflight) would reach for passes
+    without it. A document that describes the feature and omits this sends someone to press a
+    button that cannot work.
+    """
+    document = Path("docs/profile-compatibility.md").read_text(encoding="utf-8")
+
+    assert "standalone Codex install" in document
+    assert "not the npm package" in document
+    assert "every reading is `unreachable`" in document

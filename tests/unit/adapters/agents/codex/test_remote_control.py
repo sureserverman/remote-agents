@@ -649,3 +649,37 @@ async def test_closing_the_adapter_closes_the_proxy_session_it_opened() -> None:
 async def test_closing_an_adapter_whose_client_cannot_close_is_not_an_error() -> None:
     """A test double should not have to grow a lifecycle to be usable."""
     await adapter().aclose()
+
+
+async def test_an_install_that_cannot_run_a_daemon_reads_as_unreachable() -> None:
+    """The daemon surface needs OpenAI's standalone codex; the npm one answers with this.
+
+    Found by running the live drill on a host with the npm distribution. Every daemon verb --
+    not only the enable -- refuses, so there is no daemon and cannot be one. Mapping it to
+    ERRORED, which is where it landed first, told the owner the daemon reported its own link
+    broken: a machine with no link to break, and no way to learn why the button did nothing.
+    """
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    "Error: managed standalone Codex install not found at "
+                    "/home/user/.codex/packages/standalone/current/codex\n\n"
+                    "This command requires the standalone install managed by the Codex "
+                    "installer, because the daemon starts and updates app-server from that "
+                    "fixed path."
+                ),
+            ),
+        }
+    )
+    result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
+
+    assert result.connection is HostConnection.UNREACHABLE
+    assert result.connection is not HostConnection.ERRORED
+    assert result.state is RemoteControlState.UNKNOWN
+    # And still nothing of what codex printed.
+    assert "/home/user" not in repr(result)
+    assert "standalone" not in repr(result)

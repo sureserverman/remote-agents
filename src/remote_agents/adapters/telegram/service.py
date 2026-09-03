@@ -392,8 +392,9 @@ _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
         "The codex daemon answered, and reported that its own link to the relay is broken."
     ),
     HostConnection.UNREACHABLE: (
-        "This machine could not talk to codex at all, so nothing was read and nothing is "
-        "known -- codex may not be installed here."
+        "This machine could not talk to codex, so nothing was read and nothing is known -- "
+        "codex may not be installed here, or this install may be one that cannot run the "
+        "daemon (the host toggle needs OpenAI's standalone codex, not the npm package)."
     ),
 }
 """The sentence under the reading, which is where a non-expert learns what to do next.
