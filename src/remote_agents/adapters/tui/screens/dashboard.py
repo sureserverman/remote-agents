@@ -33,6 +33,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -49,6 +50,7 @@ from remote_agents.adapters.tui.screens.base import (
     held_option_id,
     restore_highlight_by_id,
 )
+from remote_agents.adapters.tui.screens.confirm import HostRemoteControlConfirmModal
 from remote_agents.adapters.tui.screens.feed import (
     _EMPTY_FEED_ROW,
     FEED_TITLE,
@@ -58,9 +60,14 @@ from remote_agents.adapters.tui.screens.feed import (
 from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
 from remote_agents.adapters.tui.screens.sessions import sessions_title
+from remote_agents.application.host_remote_control import (
+    HOST_REMOTE_CONTROL_TITLE,
+    host_remote_control_directions,
+)
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.remote_control import HostConnection, HostRemoteControlStatus
 
 _LOG = logging.getLogger(__name__)
 
@@ -86,6 +93,104 @@ _EMPTY_LIMITS_ROW = "limits:none"
 _LIMITS_ROW_PREFIX = "limits:"
 
 LIMITS_TITLE = "Plan limits"
+
+#: A stable id for the host toggle's line, so a redraw can tell it from an agent's row and a
+#: test can find it without counting from the bottom of a list whose length is a provider's.
+_HOST_REMOTE_CONTROL_ROW = "limits:host-remote-control"
+
+HOST_REMOTE_CONTROL_KEY = "h"
+"""`h` for *host*, which is the one thing that distinguishes this toggle from `m`.
+
+`m` on a session row toggles Remote Control for that pane; this toggles it for the machine.
+Sharing a letter across the two subjects is precisely the confusion `HOST_REMOTE_CONTROL_TITLE`
+names the provider to avoid, so they are deliberately different keys.
+
+Free on both screens that carry the line, which is not the same as being free everywhere:
+`DashboardScreen` binds `d` and inherits `slash`, `o` and `ctrl+t` from the projects picker;
+`LimitsPaneScreen` binds nothing of its own. Neither inherits `SESSION_ACTION_BINDINGS`, whose
+letters (`a i r s c f m`) the dashboard's sessions pane nonetheless *advertises* in its border
+title -- so those letters are avoided here even though nothing would collide today, because a
+key the frame names for one subject must not quietly mean another.
+
+**Not a root binding, so `CONSOLE_BINDINGS` is untouched.** This is a screen binding inside
+our own process, exactly as `p` on the sessions pane is, and DEC-041's one-root-key budget
+still stands at one -- see `action_show_projects_pane`, which records the same distinction.
+"""
+
+#: How each reading of the daemon is put into words, and the whole of why this table exists.
+#:
+#: `ERRORED` and `UNREACHABLE` derive the same `RemoteControlState` (UNKNOWN) and open the same
+#: two directions, so a surface rendering the *state* would spell them identically -- and one
+#: did. They are different facts: ERRORED is the daemon answering that its own connection is
+#: broken, UNREACHABLE is this project never having had the conversation, which on a host with
+#: no `codex` installed is every path at once. An owner told "errored" for the second one can
+#: press the toggle forever and never learn the binary is missing. So this keys off the
+#: connection, in the surface's own words.
+#:
+#: `DAEMON_ABSENT` is deliberately not "off" either, for the reason its own docstring gives:
+#: the enrollment preference outlives the process that serves it, and "off" is the direction of
+#: wrongness an owner acts on by not acting.
+#:
+#: The direction *labels* are not spelled here -- they are `HOST_REMOTE_CONTROL_LABELS`, and
+#: this table is about readings rather than about actions.
+_HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
+    HostConnection.CONNECTED: "on",
+    HostConnection.CONNECTING: "on, still connecting",
+    HostConnection.DISABLED: "off",
+    HostConnection.DAEMON_ABSENT: "daemon not running",
+    HostConnection.ERRORED: "on, but its connection is broken",
+    HostConnection.UNREACHABLE: "no answer from codex",
+}
+
+#: What to say when the policy opens *both* directions, keyed by the reading that opened them.
+#:
+#: Both readings mean "we do not know", and they mean it for opposite reasons -- so the remedy
+#: is the sentence that actually differs, and it is the half an owner can act on. Consulted
+#: with `.get`, because a connection added later that opens two directions must still be
+#: refused with the reading rather than with a `KeyError` out of a message handler.
+_HOST_AMBIGUOUS_REMEDY: dict[HostConnection, str] = {
+    HostConnection.ERRORED: (
+        "The daemon is enrolled but says its own connection is broken. Restart it where "
+        "codex runs, then press again."
+    ),
+    HostConnection.UNREACHABLE: (
+        "This project could not talk to codex at all — check that it is installed and on "
+        "PATH, then press again."
+    ),
+}
+
+#: What a host that wired no toggle at all reads as. A declared absence is a reading
+#: (DEC-009/DEC-061), so the line is drawn and says this rather than being left out -- a
+#: missing line is indistinguishable from a surface that forgot to draw one.
+_HOST_UNAVAILABLE = "unavailable"
+
+
+def host_remote_control_line(status: HostRemoteControlStatus | None) -> str:
+    """The limits pane's one line about this machine's host Remote Control.
+
+    Module-level and named so the render can be asserted across all six connections without
+    driving a Textual app to reach each one -- the same reason `remote_control_entries` is a
+    function beside the screen that calls it rather than a method on it.
+    """
+    word = _HOST_UNAVAILABLE if status is None else _HOST_CONNECTION_WORDS[status.connection]
+    return f"{HOST_REMOTE_CONTROL_TITLE} · {word}"
+
+
+class HostRemoteControlAction(Message):
+    """The `h` key, handed to the screen's own pump before anything can suspend on it.
+
+    Posted rather than performed for the reason `RowStopAction` records in full: Textual
+    dispatches a screen's non-priority binding from `App._on_key` -> `_check_bindings` ->
+    `run_action`, so the action body runs on the **App's** message-pump task. `ask_to_confirm`
+    suspends its caller until the modal answers, and suspending there stops the app draining
+    messages at all -- observed on the owner's real workstation as a modal that drew correctly
+    and then answered no key, including quit.
+
+    DEC-068 is the decision that put a screen binding on DEC-025's list of forbidden callers,
+    and this is its required shape: the handler `on_host_remote_control_action` runs on the
+    screen's own pump, which is where every confirmation in this tree is raised from.
+    """
+
 
 DASHBOARD_HINT = "enter open · d detail · / filter · o order"
 """The dashboard's muted hint row: the keys that mean something on its resting position."""
@@ -116,28 +221,78 @@ class LimitsRegion:
         The rows come from `limit_rows`, so this pane and the bot's block are one decision
         rendered twice rather than two renderers that agree today (DEC-043). What stays here is
         placement, colour and the disabled-row rule -- the surface's half.
+
+        **Two reads, and the host one is not conditional on the other.** The limits reader and
+        the host toggle are separate capabilities: a host that wired one and not the other is
+        an ordinary composition, so an early return on an absent `limits` would have taken the
+        host line off a pane that could still draw it. The redraw happens once, after both, so
+        a pane never flickers between one fact and two.
         """
+        await self._reload_host_remote_control()
         reader = self.services.backend.limits
-        if reader is None:
+        if reader is not None:
+            try:
+                entries = await reader()
+            except Exception:
+                _LOG.exception("the agent limits pane could not be reloaded")
+            else:
+                self._limit_rows = limit_rows(entries)
+        self._draw_limits()
+
+    async def _reload_host_remote_control(self) -> None:
+        """Re-read this machine's host Remote Control, or leave the last reading drawn.
+
+        `HostRemoteControlService.status()` answers a reading rather than raising -- a boundary
+        that would not answer *is* UNREACHABLE -- so the `except` here is for the shapes it
+        cannot promise about (a composition wiring something else, a cancelled read), and it
+        follows the pane's contract rather than inventing one: what is drawn is stale, not
+        wrong, and a background read having a bad moment must never blank a line the owner is
+        reading.
+        """
+        control = self.services.backend.host_remote_control
+        if control is None:
+            # A declared absence, not a failure (DEC-061). Left as `None` so the line says
+            # "unavailable" rather than keeping a reading from a capability that is gone.
+            self._host_status = None
             return
         try:
-            entries = await reader()
+            self._host_status = await control.status()
         except Exception:
-            _LOG.exception("the agent limits pane could not be reloaded")
-            return
-        self._limit_rows = limit_rows(entries)
+            _LOG.exception("this host's Remote Control could not be read")
+
+    def show_host_remote_control(self, status: HostRemoteControlStatus | None) -> None:
+        """Draw a reading this region did not read itself.
+
+        The one caller is `RemoteAgentsTui.set_host_remote_control`, which has just been
+        handed the daemon's own reading of the change it made. Named rather than reaching
+        into `_host_status` from the app, so the pane's one write path is a method the pane
+        declares instead of an attribute a caller happens to know about.
+        """
+        self._host_status = status
         self._draw_limits()
 
     #: The last successful read, so a resize can re-measure without a provider sweep.
     _limit_rows: tuple[LimitRow, ...] = ()
 
+    #: The last reading of the host toggle. `None` is both "not read yet" and "no capability
+    #: wired", which the line renders identically and on purpose: before the first read there
+    #: is nothing this surface can honestly claim about the machine either.
+    _host_status: HostRemoteControlStatus | None = None
+
     def _draw_limits(self) -> None:
-        """Draw the rows last read, as the grid `rows.limit_row_content` lays out."""
+        """Draw the rows last read, as the grid `rows.limit_row_content` lays out.
+
+        The host toggle's line is drawn **last and always**, under whatever the plan limits
+        say, including under the empty sentence: it is a fact about this machine rather than
+        about the account, so an account with nothing to report says nothing about whether the
+        phone can reach this host.
+        """
         found = self.query("#limits-pane")
         if not found:
             return
         pane = found.first(OptionList)
         pane.clear_options()
+        host_line = Content(host_remote_control_line(self._host_status))
         if not self._limit_rows:
             # A *successful* read that found nothing is not the same event as a read that
             # raised, and this used to treat them alike -- it returned early, leaving the last
@@ -148,7 +303,8 @@ class LimitsRegion:
             # same instant, so the two surfaces asserted different things about one account --
             # the exact divergence sharing `limit_rows` exists to prevent.
             pane.add_option(Option(NO_LIMITS, id=_EMPTY_LIMITS_ROW, disabled=True))
-            _fit_to_content(pane, (Content(NO_LIMITS),))
+            self._add_host_row(pane, host_line)
+            _fit_to_content(pane, (Content(NO_LIMITS), host_line))
             return
         width = pane.content_size.width
         if width <= 0:
@@ -159,7 +315,19 @@ class LimitsRegion:
         contents = limit_rows_content(self._limit_rows, width or None)
         for index, content in enumerate(contents):
             pane.add_option(Option(content, id=f"{_LIMITS_ROW_PREFIX}{index}", disabled=True))
-        _fit_to_content(pane, contents)
+        self._add_host_row(pane, host_line)
+        _fit_to_content(pane, (*contents, host_line))
+
+    def _add_host_row(self, pane: OptionList, line: Content) -> None:
+        """The host line, disabled like every other row here.
+
+        Disabled although it is the one row in this pane that *does* something, and that is
+        deliberate: what acts is the key, not the row. Every row in this pane reports a fact
+        and none of them opens on Enter, so a cursor able to rest on exactly one of them would
+        answer Enter with silence on the other four -- which reads as a broken key rather than
+        as a pane that never had anything to open.
+        """
+        pane.add_option(Option(line, id=_HOST_REMOTE_CONTROL_ROW, disabled=True))
 
 
 class ProjectsPaneScreen(ProjectsScreen):
@@ -268,6 +436,16 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     It offers no flow and takes no keys of its own. Every limit here is a *read*: nothing on
     this pane mutates anything, which is why it is the one console pane that needs no
     confirmation, no busy interlock and no policy.
+
+    **That still holds now the pane carries the host toggle's line, and it is why the key is
+    not here.** The line is a reading like every other row, drawn by the shared region; the
+    key that changes it is bound on `DashboardScreen` alone. Binding it here would give this
+    pane its first mutating action and with it the confirmation, the busy interlock and the
+    policy the paragraph above says it does not have — and the confirmation could not be
+    shared with the dashboard's in any case, because the architecture sweep behind DEC-025
+    requires the method that asks it to be defined on a screen rather than on this region's
+    mixin. Under console hosting the toggle is therefore the phone's or the dashboard's, and
+    an owner reading the console's pane learns the state without being offered the change.
     """
 
     #: This pane can be empty and says so in its own words (DEC-009) — a host whose providers
@@ -401,6 +579,12 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # key only means something while the sessions pane holds a highlighted row — the
         # sessions pane's border title advertises it instead, where it is true.
         Binding("d", "session_detail", "Session detail", show=False),
+        # The host toggle, on the screen that draws the line it changes. Hidden for the same
+        # reason `d` is, and labelled from the application's title rather than spelled here:
+        # the two Remote Controls share one vocabulary by identity, not by agreement (DEC-007).
+        Binding(
+            HOST_REMOTE_CONTROL_KEY, "host_remote_control", HOST_REMOTE_CONTROL_TITLE, show=False
+        ),
     ]
 
     #: The dashboard is the projects position, so its crumb is that position's, and the
@@ -536,6 +720,82 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         if key is None or not key.startswith(_SESSION_KEY_PREFIX):
             return
         await self.tui.show_detail(key.removeprefix(_SESSION_KEY_PREFIX))
+
+    def action_host_remote_control(self) -> None:
+        """Hand the key to this screen's own pump and return immediately.
+
+        **Nothing is awaited here, and that is the whole of DEC-068.** A screen's binding is
+        dispatched from `App._on_key`, so this body runs on the *App's* message-pump task --
+        and the confirmation this key leads to suspends its caller until the owner answers.
+        Suspending here suspends the application: the modal draws and then no key works,
+        quit included. `on_host_remote_control_action` is where the work happens, on this
+        screen's own pump, which is the shape DEC-025 says makes every other confirmation in
+        this tree safe.
+        """
+        self.post_message(HostRemoteControlAction())
+
+    async def on_host_remote_control_action(self, message: HostRemoteControlAction) -> None:
+        """The screen handler `HostRemoteControlAction` is delivered to."""
+        del message
+        await self.confirm_host_remote_control()
+
+    async def confirm_host_remote_control(self) -> None:
+        """Re-read the machine, offer the one open direction, and issue only on a `True`.
+
+        Shaped after `SessionDetailScreen.confirm_remote_control` and guarded for the same
+        reasons: the guard is held across the re-read *and* the whole modal, so an Escape
+        landing mid-read cannot pop this screen out from under a question already on its way,
+        and it is released before the call that takes it itself.
+
+        **DEC-052 is satisfied by construction rather than by a mitigation.** That decision is
+        about a mutating key acting on whichever row the cursor happens to be on; this key
+        reads no row at all. Its subject is the machine, it is fixed before the question is
+        asked, and the modal names the direction it is asking about.
+
+        **The direction comes from a fresh read, not from the drawn line.** The line is up to
+        one reload old, and a direction taken from it would be a decision made against a
+        reading the owner may have been looking at for a minute. Where the policy opens *two*
+        directions -- ERRORED and UNREACHABLE, the two readings that mean "we do not know" --
+        this refuses in words rather than picking one: choosing a side of a question the
+        policy deliberately declines to answer would be guessing about a machine-wide setting.
+        The refusal names the reading and the remedy, which is the thing an owner pressing a
+        button most needs and the one this line exists to stop withholding.
+
+        The cost of that refusal, stated because it is real: from those two readings the
+        terminal offers no way to re-assert a direction, so an owner whose daemon is wedged
+        fixes it where codex runs rather than from here.
+        """
+        if self.tui.busy or self.services.backend.host_remote_control is None:
+            # A dead-end entry is worse than an absent one: a host that wired no toggle draws
+            # the line saying so and the key does nothing, rather than opening a question
+            # nothing could answer.
+            return
+        async with self.holding_the_guard():
+            await self._reload_host_remote_control()
+            if not self.showing:
+                return
+            self._draw_limits()
+            status = self._host_status
+            directions = host_remote_control_directions(status)
+            if not directions:
+                return
+            if len(directions) > 1:
+                remedy = _HOST_AMBIGUOUS_REMEDY.get(status.connection, "") if status else ""
+                self.announce(
+                    f"{host_remote_control_line(status)}. {remedy}".strip(), severity="warning"
+                )
+                return
+            try:
+                confirmed = await self.tui.ask_to_confirm(
+                    HostRemoteControlConfirmModal.for_direction(directions[0])
+                )
+            except Exception as error:
+                _LOG.exception("the host Remote Control confirmation could not be shown")
+                self.announce(f"The confirmation could not be shown: {error} Nothing was changed.")
+                return
+            if not confirmed:
+                return
+        await self.tui.set_host_remote_control(directions[0], self)
 
     async def populate(self) -> None:
         await super().populate()

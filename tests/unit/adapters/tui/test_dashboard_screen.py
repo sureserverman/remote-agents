@@ -22,6 +22,7 @@ from tui_feedback import announcements
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.dashboard import (
+    _HOST_REMOTE_CONTROL_ROW,
     _SESSIONS_AUTO_REFRESH,
     NO_LIMITS,
     DashboardScreen,
@@ -290,6 +291,22 @@ def _limits_reader(*entries: AgentLimits):
     return read
 
 
+def _limit_lines(pane: OptionList) -> list[str]:
+    """The pane's rows, without the line that is not about the account.
+
+    The pane draws one more row than the limits do: this machine's Codex Remote Control, which
+    is a fact about the *host* and is asserted in `test_tui_host_remote_control.py`. Filtered
+    by its row id rather than by its text, so each assertion in this file keeps saying exactly
+    what it was written to say -- and so a limits row that accidentally rendered the host
+    sentence would still be caught here rather than silently dropped.
+    """
+    return [
+        str(pane.get_option_at_index(index).prompt)
+        for index in range(pane.option_count)
+        if pane.get_option_at_index(index).id != _HOST_REMOTE_CONTROL_ROW
+    ]
+
+
 async def test_the_limits_pane_sits_between_the_sessions_and_the_notifications() -> None:
     """Where the owner asked for it: "on the right, between the sessions and notifications".
 
@@ -318,7 +335,7 @@ async def test_the_limits_pane_declares_its_empty_state_before_any_read() -> Non
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert pane.option_count == 1
+        assert _limit_lines(pane) == [NO_LIMITS]
         option = pane.get_option_at_index(0)
         assert option.disabled is True
         assert "No agent limits" in str(option.prompt)
@@ -336,7 +353,7 @@ async def test_the_limits_pane_draws_one_row_per_answering_agent() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
-        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
+        drawn = _limit_lines(pane)
 
         # The redesign's grid: the profile padded to the widest, then each window as a muted
         # label, an eight-cell gauge and the share -- `week` abbreviated to `wk`.
@@ -373,8 +390,7 @@ async def test_a_raising_limits_read_leaves_the_drawn_text_standing() -> None:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert pane.option_count == 1
-        assert "No agent limits" in str(pane.get_option_at_index(0).prompt)
+        assert _limit_lines(pane) == [NO_LIMITS]
 
 
 async def test_a_host_that_wired_no_limits_reader_keeps_its_empty_sentence() -> None:
@@ -383,8 +399,7 @@ async def test_a_host_that_wired_no_limits_reader_keeps_its_empty_sentence() -> 
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
 
-        assert pane.option_count == 1
-        assert "No agent limits" in str(pane.get_option_at_index(0).prompt)
+        assert _limit_lines(pane) == [NO_LIMITS]
 
 
 async def test_the_limits_pane_rides_the_tick_the_other_two_panes_ride() -> None:
@@ -430,15 +445,13 @@ async def test_a_read_that_finds_nothing_withdraws_the_figures_it_last_drew() ->
     async with app.run_test() as pilot:
         await pilot.pause()
         pane = app.screen.query_one("#limits-pane", OptionList)
-        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
-        assert drawn == ["claude  5h █░░░░░░░ 2%"]
+        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%"]
 
         screen = app.screen
         assert isinstance(screen, DashboardScreen)
         await screen._reload_limits()
 
-        redrawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
-        assert redrawn == [NO_LIMITS]
+        assert _limit_lines(pane) == [NO_LIMITS]
 
 
 async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
@@ -460,8 +473,7 @@ async def test_a_failed_read_still_leaves_the_last_figures_standing() -> None:
         await screen._reload_limits()
 
         pane = screen.query_one("#limits-pane", OptionList)
-        drawn = [str(pane.get_option_at_index(i).prompt) for i in range(pane.option_count)]
-        assert drawn == ["claude  5h █░░░░░░░ 2%"]
+        assert _limit_lines(pane) == ["claude  5h █░░░░░░░ 2%"]
 
 
 @pytest.mark.parametrize("width", [60, 73, 74, 75, 86, 87, 100, 120])

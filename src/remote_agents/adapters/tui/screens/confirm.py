@@ -109,6 +109,10 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _CANCEL
+from remote_agents.application.host_remote_control import (
+    HOST_REMOTE_CONTROL_LABELS,
+    HOST_REMOTE_CONTROL_TITLE,
+)
 from remote_agents.application.session_actions import explain_state
 from remote_agents.domain.models import SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
@@ -341,6 +345,58 @@ class RemoteControlConfirmModal(ConfirmScreen):
         return cls(
             f"{action} Claude Remote Control for {record.display.rendered}?\n{effect}",
             confirm_label=f"Yes, {action.casefold()} it",
+        )
+
+
+class HostRemoteControlConfirmModal(ConfirmScreen):
+    """Ask before changing **this machine's** host Remote Control, not a pane's.
+
+    The sibling above confirms a direction for one live Claude pane. This confirms a
+    direction for the host: there is no session in the question, because there is no session
+    in the subject. That is why it is a separate class rather than the same one with an
+    optional record — a record that is sometimes meaningful is a field every reader has to
+    ask about, which is the same argument `HostRemoteControlCommand` makes for itself.
+
+    **The title is the application's, and so is each direction's word.** `HOST_REMOTE_CONTROL_TITLE`
+    names the provider on purpose: an owner who already knows the Claude pane toggle would
+    otherwise read a bare title as that one and act on the wrong machine-versus-pane
+    assumption. `HOST_REMOTE_CONTROL_LABELS` **is** the pane toggle's table by identity, so
+    restating either here would recreate exactly the drift DEC-007 ended.
+
+    **Deliberately not in `ALL_CONFIRMS`.** Every arrangement in
+    `tests/unit/adapters/tui/test_confirm_modals.py` is keyed by a session-detail row and a
+    policy read against a `SessionRecord`, and this modal has neither, so registering it
+    would mean inventing an arrangement that describes nothing. The one guarantee that sweep
+    exists to hold — the abort resting under the cursor — is inherited from `ConfirmScreen`
+    by construction and asserted directly in
+    `tests/unit/adapters/tui/test_tui_host_remote_control.py`.
+    """
+
+    position = "HOST_REMOTE_CONTROL_MODAL"
+    question = f"Change {HOST_REMOTE_CONTROL_TITLE} for this machine?"
+    confirm_key = "host-remote-control-confirm"
+    confirm_label = "Yes, change it"
+
+    @classmethod
+    def for_direction(cls, desired: RemoteControlState) -> HostRemoteControlConfirmModal:
+        """The question for one direction, named in both the prompt and the confirm row.
+
+        Naming it on the row as well as in the prompt is `for_change`'s reasoning applied to
+        a wider blast radius: the row is what the owner reads while the cursor is next to it,
+        and this one does not change what a single agent can be driven from — it changes
+        whether the phone can reach *every* Codex session on this host.
+        """
+        label = HOST_REMOTE_CONTROL_LABELS[desired]
+        effect = (
+            "Your phone can drive Codex sessions on this machine."
+            if desired is RemoteControlState.ACTIVE
+            else "This machine stops answering the phone; sessions already running keep going."
+        )
+        return cls(
+            f"{HOST_REMOTE_CONTROL_TITLE}: {label}?\n"
+            "This applies to the whole machine, not to one session.\n"
+            f"{effect}",
+            confirm_label=f"Yes, {label.casefold()}",
         )
 
 

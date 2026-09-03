@@ -58,6 +58,10 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
+from remote_agents.application.host_remote_control import (
+    HOST_REMOTE_CONTROL_TITLE,
+    HostRemoteControlCommand,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import (
     CatalogProject,
@@ -1143,6 +1147,51 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.set_status(f"Remote Control: {state.value}")
         finally:
             self._busy = False
+
+    async def set_host_remote_control(
+        self, desired: RemoteControlState, screen: DashboardScreen
+    ) -> None:
+        """Flip **this machine's** host Remote Control once, for one owner press.
+
+        The sibling above re-reads a record and re-checks a policy against it. There is no
+        record here — the subject is the host — so what stands in for that mitigation is the
+        re-read `confirm_host_remote_control` makes immediately before asking, and the
+        service's own fail-closed contract underneath: a boundary that will not answer comes
+        back as a *reading* rather than as a traceback, so a failed toggle still leaves the
+        line saying something true.
+
+        **A fresh idempotency key per press, minted here rather than carried in.** A press
+        that ends in an UNREACHABLE reading has still burned its key — `set_state`'s docstring
+        says so — and a key reused across two presses would have the second refused as
+        "already handled" for something that demonstrably did not happen. Reachable only
+        after the modal answered `True`, which is what makes "one command per deliberate
+        press" a property rather than a hope.
+
+        The busy guard is taken here rather than at the caller, for the reason
+        `set_remote_control`'s docstring records paying for twice: a rule every *entry* has to
+        remember is a rule a later entry forgets, so it lives at the one place the command is
+        issued.
+        """
+        control = self._services.backend.host_remote_control
+        if control is None or self.busy:
+            return
+        self.set_busy(True)
+        try:
+            async with screen.awaiting(f"Setting {HOST_REMOTE_CONTROL_TITLE} to {desired.value}…"):
+                status = await control.set_state(
+                    HostRemoteControlCommand(desired, _idempotency_key())
+                )
+        except Exception as error:
+            _LOG.exception("this host's Remote Control could not be changed")
+            screen.announce(f"{HOST_REMOTE_CONTROL_TITLE} was not changed: {error}")
+            return
+        else:
+            # Redrawn from the answer rather than from a re-read: `set_state` returns the
+            # reading the daemon reports *after* the change, so asking again would be a second
+            # round trip that could only disagree with the one just made.
+            screen.show_host_remote_control(status)
+        finally:
+            self.set_busy(False)
 
     async def stop(self, action: str, session_value: str, screen: ChoiceScreen) -> None:
         """Issue one stop, after re-reading the record and re-checking the policy.

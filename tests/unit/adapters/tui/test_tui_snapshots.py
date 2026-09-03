@@ -111,7 +111,11 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlState,
+)
 from remote_agents.ports.agent_activity import (
     ActivityConfidence,
     ActivityKind,
@@ -373,6 +377,23 @@ def _limits_reader():
     return read
 
 
+#: What the limits pane's host line draws. Wired for the reason `_limits` and `_activities`
+#: are, and against the same defect a fourth time: unwired, the field is `None` and the DASHBOARD
+#: and LIMITS_PANE baselines could only ever capture the line's *absent-capability* sentence --
+#: so its placement under the plan rows, and the pane's height with one more line in it, would
+#: both be outside the net that exists to catch a render.
+#:
+#: CONNECTED rather than a failure reading, because that is the state a working host rests in;
+#: the six readings' wording is asserted string-by-string in
+#: `tests/unit/adapters/tui/test_tui_host_remote_control.py`, which is where an axis of six
+#: belongs rather than as six more SVGs.
+class _HostRemoteControl:
+    async def status(self) -> HostRemoteControlStatus:
+        return HostRemoteControlStatus.observed(
+            HostConnection.CONNECTED, server_name="Paisleys-Blender"
+        )
+
+
 def _activities() -> tuple[AgentActivity, ...]:
     return (
         AgentActivity(
@@ -446,6 +467,7 @@ def _context(
             conversations=_Conversations() if conversations is None else conversations,  # type: ignore[arg-type]
             activity_feed=_activity_reader() if activity_feed is None else activity_feed,
             limits=_limits_reader() if limits is None else limits,
+            host_remote_control=_HostRemoteControl(),
             usage=_session_usage() if usage is None else usage,
         ),
         profiles=(
