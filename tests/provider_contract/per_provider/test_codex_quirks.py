@@ -13,6 +13,7 @@ measurement showed are dangerous, so a case fails if the parser widens.
 from __future__ import annotations
 
 import json
+import tempfile
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -153,21 +154,60 @@ def _remote_control_fixture(name: str) -> dict:
     return json.loads((_FIXTURES / "remote_control" / name).read_text(encoding="utf-8"))
 
 
-class _ScriptedRpc:
-    """Answers the daemon's status method with a recorded payload."""
+def _running_probe():
+    """A daemon that answers, so the reading turns on the preference, not on liveness.
 
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-        self.calls: list[str] = []
+    Built in a function rather than at module scope because every other test in this file
+    imports the adapter inside its own body -- the provider contract suite is deliberately
+    importable without the adapter package resolving.
+    """
+    from remote_agents.adapters.agents.codex.remote_control import CommandResult
 
-    async def request(self, method: str, params: dict) -> dict:
-        self.calls.append(method)
-        return self._payload
+    return CommandResult(returncode=0, stdout='{"cli":"0.153.0"}', stderr="")
 
 
-async def test_the_recorded_connected_payload_reads_as_active() -> None:
+class _ScriptedRunner:
+    """Answers every argv with one result. The probe is the only command a read runs."""
+
+    def __init__(self, result) -> None:
+        self._result = result
+
+    async def run(self, argv: tuple[str, ...], *, timeout: float):
+        return self._result
+
+
+def _settings_home(fixture_name: str) -> Path:
+    """Lay the recorded settings file out the way `CODEX_HOME` actually holds it.
+
+    Copied into a temporary home rather than read in place, because the reader's contract is
+    the *path* `<CODEX_HOME>/app-server-daemon/settings.json` as much as the content.
+    """
+    home = Path(tempfile.mkdtemp())
+    daemon_directory = home / "app-server-daemon"
+    daemon_directory.mkdir(parents=True)
+    (daemon_directory / "settings.json").write_text(
+        (_FIXTURES / "remote_control" / fixture_name).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return home
+
+
+async def test_the_recorded_settings_file_reads_as_active() -> None:
+    """The contract this reading now rests on: Codex's own daemon settings file.
+
+    It rested on a `remoteControl/status/read` RPC until 2026-09-03, with fixtures whose
+    provenance cited `v2/RemoteControlStatusReadResponse.ts` from codex-cli 0.151.0. No such
+    type exists in the installed 0.153.0 -- `generate-ts` and `generate-json-schema` both emit
+    only the enable/disable params, a connection-status enum and a `status/changed` server
+    notification -- and the `app-server proxy` transport never answered `initialize` on any
+    host this was run against. Those fixtures and their tests were removed rather than left
+    passing against a double: a green contract test for a method the product does not expose
+    is worse than no test at all (BL-039).
+
+    What replaces them is a file that was *observed*, not derived -- see its `_provenance`.
+    """
     from remote_agents.adapters.agents.codex.remote_control import (
-        STATUS_METHOD,
+        CodexHomeSettings,
         CodexRemoteControl,
     )
     from remote_agents.adapters.agents.registry import provider_descriptors
@@ -180,21 +220,27 @@ async def test_the_recorded_connected_payload_reads_as_active() -> None:
     )
     assert isinstance(wired, CodexRemoteControl), "the registry wires codex's own adapter"
 
-    rpc = _ScriptedRpc(_remote_control_fixture("status-connected.json"))
-    status = await CodexRemoteControl(runner=object(), rpc=rpc).status()
+    home = _settings_home("settings-enabled.json")
+    assert await CodexHomeSettings(home=home).remote_control_preference() is True
 
-    assert rpc.calls == [STATUS_METHOD]
+    status = await CodexRemoteControl(
+        runner=_ScriptedRunner(_running_probe()), settings=CodexHomeSettings(home=home)
+    ).status()
     assert status.connection is HostConnection.CONNECTED
     assert status.state is RemoteControlState.ACTIVE
-    assert status.server_name == "Paisleys-Blender"
 
 
-async def test_the_recorded_disabled_payload_reads_as_inactive() -> None:
-    from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
+async def test_the_recorded_settings_file_reads_as_inactive() -> None:
+    from remote_agents.adapters.agents.codex.remote_control import (
+        CodexHomeSettings,
+        CodexRemoteControl,
+    )
     from remote_agents.domain.remote_control import HostConnection, RemoteControlState
 
-    rpc = _ScriptedRpc(_remote_control_fixture("status-disabled.json"))
-    status = await CodexRemoteControl(runner=object(), rpc=rpc).status()
+    home = _settings_home("settings-disabled.json")
+    status = await CodexRemoteControl(
+        runner=_ScriptedRunner(_running_probe()), settings=CodexHomeSettings(home=home)
+    ).status()
 
     assert status.connection is HostConnection.DISABLED
     assert status.state is RemoteControlState.INACTIVE

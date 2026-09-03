@@ -1,0 +1,4 @@
+{
+  "_provenance": "As settings-enabled.json, captured in the same session immediately after `codex app-server daemon disable-remote-control`.",
+  "remoteControlEnabled": false
+}

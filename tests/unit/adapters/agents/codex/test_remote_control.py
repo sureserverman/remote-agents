@@ -17,6 +17,7 @@ import pytest
 
 from remote_agents.adapters.agents.codex.remote_control import (
     REMOTE_CONTROL_ARGV,
+    CodexHomeSettings,
     CodexRemoteControl,
     CommandResult,
 )
@@ -53,22 +54,25 @@ class FakeRunner:
 
 
 @dataclass
-class FakeRpc:
-    """One JSON-RPC round trip, scripted per method, recording what was asked."""
+class FakeSettings:
+    """The persisted preference, scripted three-valued, counting how often it was read.
 
-    payload: object = field(default_factory=dict)
-    error: Exception | None = None
-    calls: list[tuple[str, dict]] = field(default_factory=list)
+    `None` is the interesting value and the reason this is not a plain bool: it means the
+    file could not be read, which must never become "off".
+    """
 
-    async def request(self, method: str, params: dict) -> dict:
-        self.calls.append((method, dict(params)))
-        if self.error is not None:
-            raise self.error
-        return self.payload  # type: ignore[return-value]
+    preference: bool | None = False
+    reads: int = 0
+
+    async def remote_control_preference(self) -> bool | None:
+        self.reads += 1
+        return self.preference
 
 
-def adapter(runner: FakeRunner | None = None, rpc: FakeRpc | None = None) -> CodexRemoteControl:
-    return CodexRemoteControl(runner=runner or FakeRunner(), rpc=rpc or FakeRpc())
+def adapter(
+    runner: FakeRunner | None = None, settings: FakeSettings | None = None
+) -> CodexRemoteControl:
+    return CodexRemoteControl(runner=runner or FakeRunner(), settings=settings or FakeSettings())
 
 
 #: What `codex app-server daemon version` prints when nothing is listening, reproduced from
@@ -97,7 +101,7 @@ def test_the_argv_table_is_a_closed_module_constant_that_only_runs_codex() -> No
         assert argv[0] == "codex", name
 
 
-def test_the_table_is_pinned_to_exactly_these_six_vectors() -> None:
+def test_the_table_is_pinned_to_exactly_these_five_vectors() -> None:
     """An exact pin, because a predicate can only forbid the danger somebody thought of.
 
     The first version of this test asserted `"stop" not in argv`, which reads as "no teardown
@@ -110,9 +114,12 @@ def test_the_table_is_pinned_to_exactly_these_six_vectors() -> None:
     already applies one layer up. The banned-verb check below is kept as well: the pin says
     what the table IS, and that says what it must never become, which is the sentence a
     reader reaches for when they are about to add a sixth entry.
+
+    Five since 2026-09-03: `status` -> `codex app-server proxy` was removed with the read
+    path that used it. It named a transport that never answered `initialize` on any host
+    this was run against, for a method the protocol does not define (BL-039).
     """
     assert dict(REMOTE_CONTROL_ARGV) == {
-        "status": ("codex", "app-server", "proxy"),
         "daemon_probe": ("codex", "app-server", "daemon", "version"),
         "enable_when_absent": ("codex", "remote-control", "start", "--json"),
         "enable_when_running": ("codex", "app-server", "daemon", "enable-remote-control"),
@@ -160,42 +167,47 @@ CONNECTION_FOR_REPORTED_STATUS = {
 }
 
 
-async def test_status_asks_the_daemon_through_the_app_server_proxy() -> None:
-    rpc = FakeRpc(payload={"status": "connected", "serverName": "Paisleys-Blender"})
-    result = await adapter(rpc=rpc).status()
+async def test_status_reads_the_preference_then_whether_anything_is_serving_it() -> None:
+    """The whole read, in the order it happens: one file, then one probe that starts nothing."""
+    settings = FakeSettings(preference=True)
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
 
-    assert rpc.calls == [("remoteControl/status/read", {})]
-    assert REMOTE_CONTROL_ARGV["status"] == ("codex", "app-server", "proxy")
+    result = await adapter(runner=runner, settings=settings).status()
+
+    assert settings.reads == 1
+    assert runner.argvs == [("codex", "app-server", "daemon", "version")]
     assert result.connection is HostConnection.CONNECTED
-    assert result.server_name == "Paisleys-Blender"
+    assert result.state is RemoteControlState.ACTIVE
 
 
-@pytest.mark.parametrize(("reported", "expected"), sorted(CONNECTION_FOR_REPORTED_STATUS.items()))
-async def test_every_status_the_daemon_reports_maps_to_one_connection(
-    reported: str, expected: HostConnection
-) -> None:
-    rpc = FakeRpc(payload={"status": reported, "serverName": "Paisleys-Blender"})
-    assert (await adapter(rpc=rpc).status()).connection is expected
+async def test_the_preference_being_off_is_the_whole_answer() -> None:
+    """A running daemon with the preference off is genuinely off; the probe adds nothing.
+
+    Asserted as "the probe did not run" rather than just "the reading is DISABLED", because
+    the point is that the file is authoritative for *off* -- a later edit that consulted the
+    daemon first would still produce DISABLED here and would have changed what the reading
+    means.
+    """
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
+
+    result = await adapter(runner=runner, settings=FakeSettings(preference=False)).status()
+
+    assert result.connection is HostConnection.DISABLED
+    assert result.state is RemoteControlState.INACTIVE
+    assert runner.argvs == [], "off needs no second opinion from a daemon"
 
 
-async def test_a_status_the_daemon_has_never_reported_is_a_protocol_error() -> None:
-    rpc = FakeRpc(payload={"status": "teleported", "serverName": "x"})
-    with pytest.raises(ProtocolError):
-        await adapter(rpc=rpc).status()
-
-
-async def test_a_connect_failure_naming_the_control_socket_means_no_daemon() -> None:
-    """`codex app-server daemon version` answers with that path when nothing is listening."""
+async def test_enabled_with_nothing_listening_is_not_reported_as_off() -> None:
+    """The reason DAEMON_ABSENT exists: the preference outlives the process serving it."""
     runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE})
-    rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
 
-    result = await adapter(runner=runner, rpc=rpc).status()
+    result = await adapter(runner=runner, settings=FakeSettings(preference=True)).status()
 
     assert result.connection is HostConnection.DAEMON_ABSENT
-    assert result.state is RemoteControlState.UNKNOWN, (
-        "the enrollment preference outlives the daemon, so a stopped daemon is not 'off'"
+    assert result.state is RemoteControlState.UNKNOWN
+    assert result.state is not RemoteControlState.INACTIVE, (
+        "one daemon start away from reachable is not the same as not enrolled"
     )
-    assert result.server_name is None
 
 
 async def test_a_socket_we_cannot_reach_is_not_a_socket_that_is_not_there() -> None:
@@ -203,8 +215,8 @@ async def test_a_socket_we_cannot_reach_is_not_a_socket_that_is_not_there() -> N
 
     A daemon owned by another uid, a divergent CODEX_HOME between the interactive shell and
     the user service, or a backlog refusal all print the same "failed to connect to <path>"
-    line as a missing socket. Reading those as DAEMON_ABSENT would report a host that IS
-    remote-controlled as one that is not.
+    line as a missing socket. Reading those as DAEMON_ABSENT would assert something definite
+    about a host we could not question.
     """
     for cause in ("Permission denied (os error 13)", "Connection refused (os error 111)"):
         runner = FakeRunner(
@@ -220,39 +232,113 @@ async def test_a_socket_we_cannot_reach_is_not_a_socket_that_is_not_there() -> N
                 )
             }
         )
-        rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
 
-        with pytest.raises(ProtocolError):
-            await adapter(runner=runner, rpc=rpc).status()
+        result = await adapter(runner=runner, settings=FakeSettings(preference=True)).status()
+
+        assert result.connection is HostConnection.UNREACHABLE, cause
+        assert result.connection is not HostConnection.DAEMON_ABSENT, cause
 
 
-async def test_any_other_rpc_failure_is_raised_rather_than_read_as_no_daemon() -> None:
-    """A daemon that is up and failing must not render as a daemon that is not there."""
+async def test_an_unreadable_preference_is_never_read_as_off() -> None:
+    """The fail-closed rule, at the one boundary where breaking it is silent.
+
+    A future Codex that renames or moves the settings file makes every read `None`. If that
+    became DISABLED, every surface would confidently report "off" for a machine still enrolled
+    with the relay -- the owner's phone would keep working while the terminal said it could
+    not. UNKNOWN is the honest word and the one the surfaces already render.
+    """
     runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
-    rpc = FakeRpc(error=ProtocolError("provider protocol response timed out"))
 
-    with pytest.raises(ProtocolError):
-        await adapter(runner=runner, rpc=rpc).status()
+    result = await adapter(runner=runner, settings=FakeSettings(preference=None)).status()
 
-
-async def test_the_server_name_passes_the_presentation_boundary_encoder() -> None:
-    """DEC-014: a name this project did not decode is made encodable once, here."""
-    rpc = FakeRpc(payload={"status": "connected", "serverName": "Pais\x1b[31mleys\x07"})
-    result = await adapter(rpc=rpc).status()
-
-    assert result.server_name is not None
-    assert "\x1b" not in result.server_name
-    assert "\x07" not in result.server_name
+    assert result.connection is HostConnection.UNREACHABLE
+    assert result.state is RemoteControlState.UNKNOWN
+    assert result.state is not RemoteControlState.INACTIVE
 
 
-async def test_a_reading_with_no_server_name_says_so_rather_than_inventing_one() -> None:
-    rpc = FakeRpc(payload={"status": "disabled"})
-    assert (await adapter(rpc=rpc).status()).server_name is None
+async def test_codex_being_absent_is_a_reading_rather_than_a_raised_error() -> None:
+    """A surface drawing a row cannot render an exception; it can render "no answer"."""
+
+    class MissingCodex:
+        async def run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult:
+            raise ProtocolError("codex is not installed on this host")
+
+    subject = CodexRemoteControl(runner=MissingCodex(), settings=FakeSettings(preference=True))
+
+    assert (await subject.status()).connection is HostConnection.UNREACHABLE
 
 
-async def test_the_recorded_connected_fixture_reads_as_connected() -> None:
-    rpc = FakeRpc(payload=json.loads(fixture("status-connected.json")))
-    assert (await adapter(rpc=rpc).status()).connection is HostConnection.CONNECTED
+async def test_reading_the_status_never_runs_a_command_that_changes_anything() -> None:
+    """`status()` is a read. The probe starts no daemon; nothing else is invoked at all."""
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
+
+    await adapter(runner=runner, settings=FakeSettings(preference=True)).status()
+
+    for name in ("enable_when_absent", "enable_when_running", "disable", "pair"):
+        assert REMOTE_CONTROL_ARGV[name] not in runner.argvs, name
+
+
+# ------------------------------------------------------- the preference file itself
+
+
+@pytest.mark.parametrize(
+    ("label", "content", "expected"),
+    [
+        ("missing file", None, None),
+        ("not json", "}{ nonsense", None),
+        ("not an object", "[1, 2, 3]", None),
+        ("key absent", '{"somethingElse": true}', None),
+        # `isinstance(True, int)` is True in Python, so a numeric 1 would read as enabled
+        # under any check looser than `isinstance(value, bool)`.
+        ("numeric one", '{"remoteControlEnabled": 1}', None),
+        ("string true", '{"remoteControlEnabled": "true"}', None),
+        ("null", '{"remoteControlEnabled": null}', None),
+        ("genuinely false", '{"remoteControlEnabled": false}', False),
+        ("genuinely true", '{"remoteControlEnabled": true}', True),
+    ],
+)
+async def test_only_a_real_boolean_is_an_answer(
+    label: str, content: str | None, expected: bool | None, tmp_path: Path
+) -> None:
+    """Everything else is `None`, which the reading above turns into UNKNOWN, never "off"."""
+    home = tmp_path / label.replace(" ", "_")
+    (home / "app-server-daemon").mkdir(parents=True)
+    if content is not None:
+        (home / "app-server-daemon" / "settings.json").write_text(content, encoding="utf-8")
+
+    assert await CodexHomeSettings(home=home).remote_control_preference() is expected
+
+
+async def test_a_settings_file_too_large_to_be_one_is_refused_unread(tmp_path: Path) -> None:
+    """A `CODEX_HOME` pointed somewhere wrong should not read a huge file to answer a toggle."""
+    home = tmp_path / "huge"
+    (home / "app-server-daemon").mkdir(parents=True)
+    path = home / "app-server-daemon" / "settings.json"
+    path.write_text(" " * (64 * 1024 + 1) + '{"remoteControlEnabled": true}', encoding="utf-8")
+
+    assert await CodexHomeSettings(home=home).remote_control_preference() is None
+
+
+async def test_the_reader_follows_codex_home_rather_than_assuming_a_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`codex` honours CODEX_HOME -- verified live by watching its control socket move.
+
+    A reader that always looked in `~/.codex` would, on a host whose user service and
+    interactive shell disagree about CODEX_HOME, report the wrong machine's preference with
+    complete confidence.
+    """
+    home = tmp_path / "elsewhere"
+    (home / "app-server-daemon").mkdir(parents=True)
+    (home / "app-server-daemon" / "settings.json").write_text(
+        '{"remoteControlEnabled": true}', encoding="utf-8"
+    )
+    monkeypatch.setenv("CODEX_HOME", str(home))
+
+    assert await CodexHomeSettings().remote_control_preference() is True
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nowhere"))
+    assert await CodexHomeSettings().remote_control_preference() is None
 
 
 # --------------------------------------------------------------------------- set_state()
@@ -268,8 +354,8 @@ async def test_turning_it_on_with_no_daemon_running_starts_one() -> None:
             ),
         }
     )
-    rpc = FakeRpc(payload={"status": "disabled"})
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    settings = FakeSettings(preference=False)
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.ACTIVE)
 
     assert runner.argvs == [
         ("codex", "app-server", "daemon", "version"),
@@ -277,7 +363,7 @@ async def test_turning_it_on_with_no_daemon_running_starts_one() -> None:
     ]
     assert result.connection is HostConnection.CONNECTED
     assert result.server_name == "Paisleys-Blender"
-    assert rpc.calls == [], "a settled connected envelope needs no second opinion"
+    assert settings.reads == 0, "a settled connected envelope needs no second opinion"
 
 
 async def test_turning_it_on_with_a_daemon_already_up_never_runs_start() -> None:
@@ -291,45 +377,53 @@ async def test_turning_it_on_with_a_daemon_already_up_never_runs_start() -> None
     this path does not call it.
     """
     runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
-    rpc = FakeRpc(payload={"status": "connected", "serverName": "Paisleys-Blender"})
 
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=FakeSettings(preference=True)).set_state(
+        RemoteControlState.ACTIVE
+    )
 
+    # Probe, the daemon-scoped verb, then the re-read's own probe. The third entry is not
+    # slack: the verb reports the preference it wrote, not whether anything serves it.
     assert runner.argvs == [
         ("codex", "app-server", "daemon", "version"),
         ("codex", "app-server", "daemon", "enable-remote-control"),
+        ("codex", "app-server", "daemon", "version"),
     ]
     assert ("codex", "remote-control", "start", "--json") not in runner.argvs
     assert result.connection is HostConnection.CONNECTED
 
 
 async def test_the_daemon_scoped_verb_is_answered_by_re_reading_the_daemon() -> None:
-    """It prints human-readable text only, so the re-read is the whole answer."""
+    """What it reports is the preference it wrote, so the re-read is the whole answer.
+
+    (It does print JSON -- an earlier version of this docstring said "human-readable text
+    only", which was wrong -- but about the preference, not about what is serving it.)
+    """
     runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
-    rpc = FakeRpc(payload={"status": "connecting", "serverName": "Paisleys-Blender"})
+    settings = FakeSettings(preference=True)
 
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.ACTIVE)
 
-    assert rpc.calls == [("remoteControl/status/read", {})]
-    assert result.connection is HostConnection.CONNECTING
+    assert settings.reads == 1
+    assert result.connection is HostConnection.CONNECTED
 
 
 async def test_an_enable_that_timed_out_connecting_asks_the_daemon_instead() -> None:
     """`timedOut` means "enrolled, but the relay link did not come up while we waited"."""
     runner = FakeRunner(
         results={
-            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
-            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
+            REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_running"]: CommandResult(
                 returncode=0, stdout=fixture("start-connecting.json"), stderr=""
             ),
         }
     )
-    rpc = FakeRpc(payload={"status": "connected", "serverName": "Paisleys-Blender"})
+    settings = FakeSettings(preference=True)
 
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.ACTIVE)
 
-    assert ("remoteControl/status/read", {}) in rpc.calls
-    assert result.connection is HostConnection.CONNECTED, "the daemon is the authority"
+    assert settings.reads == 1, "an unsettled envelope is not the final word"
+    assert result.connection is HostConnection.CONNECTED, "the host's own state is the authority"
 
 
 async def test_a_bailed_enable_reports_what_the_daemon_says_not_a_flat_error() -> None:
@@ -342,9 +436,9 @@ async def test_a_bailed_enable_reports_what_the_daemon_says_not_a_flat_error() -
             ),
         }
     )
-    rpc = FakeRpc(payload={"status": "disabled", "serverName": "Paisleys-Blender"})
-
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=FakeSettings(preference=False)).set_state(
+        RemoteControlState.ACTIVE
+    )
 
     assert result.connection is HostConnection.DISABLED
     assert result.state is RemoteControlState.INACTIVE
@@ -360,9 +454,9 @@ async def test_an_absent_daemon_is_not_believed_immediately_after_an_enable() ->
             ),
         }
     )
-    rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
-
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=FakeSettings(preference=True)).set_state(
+        RemoteControlState.ACTIVE
+    )
 
     assert result.connection is HostConnection.CONNECTING
     assert result.state is RemoteControlState.ACTIVE
@@ -379,7 +473,13 @@ async def test_a_failed_enable_is_errored_and_does_not_echo_what_codex_printed()
             ),
         }
     )
-    result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
+    # An unreadable preference, so the re-read has no opinion and the terminal ERRORED
+    # fallback is what is under test. With a *readable* preference a failed enable reports
+    # that preference instead -- a strictly better answer, pinned by
+    # `test_a_bailed_enable_reports_what_the_daemon_says_not_a_flat_error` above.
+    result = await adapter(runner=runner, settings=FakeSettings(preference=None)).set_state(
+        RemoteControlState.ACTIVE
+    )
 
     assert result == HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
     assert secret not in repr(result)
@@ -395,21 +495,29 @@ async def test_an_enable_whose_json_is_unreadable_is_errored_and_echoes_nothing(
             ),
         }
     )
-    result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
+    result = await adapter(runner=runner, settings=FakeSettings(preference=None)).set_state(
+        RemoteControlState.ACTIVE
+    )
 
     assert result.connection is HostConnection.ERRORED
     assert "secret" not in repr(result)
 
 
 async def test_turning_it_off_disables_the_preference_and_re_reads_the_status() -> None:
-    """`off` never tears the daemon down -- attached panes would exit on disconnect."""
-    runner = FakeRunner()
-    rpc = FakeRpc(payload={"status": "disabled", "serverName": "Paisleys-Blender"})
+    """The verb writes the preference; the reading that follows is read back, not assumed.
 
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.INACTIVE)
+    This docstring used to say "`off` never tears the daemon down". It does restart it --
+    measured -- which costs an attached pane its conversation but not its life. The re-read
+    is the part this test is about, and it is why the surfaces report what the host now says
+    rather than what the command claimed.
+    """
+    runner = FakeRunner()
+    settings = FakeSettings(preference=False)
+
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.INACTIVE)
 
     assert runner.argvs == [("codex", "app-server", "daemon", "disable-remote-control")]
-    assert rpc.calls == [("remoteControl/status/read", {})]
+    assert settings.reads == 1
     assert result.connection is HostConnection.DISABLED
 
 
@@ -421,12 +529,12 @@ async def test_a_failed_disable_is_errored_and_does_not_re_read() -> None:
             )
         }
     )
-    rpc = FakeRpc(payload={"status": "connected"})
+    settings = FakeSettings(preference=True)
 
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.INACTIVE)
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.INACTIVE)
 
     assert result == HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
-    assert rpc.calls == [], "a failed disable must not be reported as a re-read reading"
+    assert settings.reads == 0, "a failed disable must not be reported as a re-read reading"
     assert "private" not in repr(result)
     assert "private" not in str(result)
 
@@ -561,8 +669,7 @@ async def test_every_runner_call_is_bounded_by_a_timeout_no_longer_than_thirty_s
             ),
         }
     )
-    rpc = FakeRpc(error=ProtocolError("unavailable"))
-    subject = adapter(runner=runner, rpc=rpc)
+    subject = adapter(runner=runner, settings=FakeSettings(preference=True))
 
     await subject.set_state(RemoteControlState.ACTIVE)
     await subject.set_state(RemoteControlState.INACTIVE)
@@ -629,21 +736,28 @@ def test_the_command_result_does_not_print_what_codex_wrote() -> None:
 # -------------------------------------------------------------------------------- lifecycle
 
 
-async def test_closing_the_adapter_closes_the_proxy_session_it_opened() -> None:
-    """`status()` spawns a long-lived `codex app-server proxy` child on first use."""
+async def test_closing_the_adapter_closes_a_collaborator_that_holds_something_open() -> None:
+    """Nothing holds a resource today, so this pins the *hook* rather than a live child.
 
-    class ClosableRpc(FakeRpc):
+    It read "closes the proxy session it opened" until 2026-09-03, when the long-lived
+    `codex app-server proxy` child was removed with the dead read path. The hook stays wired
+    and every caller still awaits it, so a collaborator that grows a resource later is closed
+    without anyone having to remember to re-add the plumbing -- which is exactly what this
+    asserts, using a double that does hold one.
+    """
+
+    class ClosableSettings(FakeSettings):
         closed: bool = False
 
         async def close(self) -> None:
             self.closed = True
 
-    rpc = ClosableRpc(payload={"status": "connected"})
-    subject = adapter(rpc=rpc)
+    settings = ClosableSettings(preference=True)
+    subject = adapter(settings=settings)
     await subject.status()
     await subject.aclose()
 
-    assert rpc.closed is True
+    assert settings.closed is True
 
 
 async def test_closing_an_adapter_whose_client_cannot_close_is_not_an_error() -> None:
@@ -701,11 +815,11 @@ async def test_the_disable_verb_also_classifies_an_install_that_cannot_serve_a_d
             )
         }
     )
-    rpc = FakeRpc(payload={"status": "connected"})
-    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.INACTIVE)
+    settings = FakeSettings(preference=True)
+    result = await adapter(runner=runner, settings=settings).set_state(RemoteControlState.INACTIVE)
 
     assert result.connection is HostConnection.UNREACHABLE
-    assert rpc.calls == [], "an install that cannot serve a daemon has nothing to re-read"
+    assert settings.reads == 0, "an install that cannot serve a daemon has nothing to re-read"
 
 
 def test_both_directions_share_one_classifier_for_that_message() -> None:

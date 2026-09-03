@@ -64,7 +64,7 @@ class RecordingRunner:
 
 def _minted(stdout: str = PAIR_RESPONSE, returncode: int = 0) -> CodexRemoteControl:
     runner = RecordingRunner(CommandResult(returncode=returncode, stdout=stdout, stderr=""))
-    return CodexRemoteControl(runner=runner, rpc=object())  # type: ignore[arg-type]
+    return CodexRemoteControl(runner=runner, settings=object())  # type: ignore[arg-type]
 
 
 async def test_minting_a_pairing_code_writes_it_to_no_log_record(
@@ -97,7 +97,7 @@ async def test_a_failed_mint_puts_nothing_of_what_codex_printed_in_the_exception
     runner = RecordingRunner(
         CommandResult(returncode=1, stdout=PAIR_RESPONSE, stderr=f"rejected code {SECRET}")
     )
-    subject = CodexRemoteControl(runner=runner, rpc=object())  # type: ignore[arg-type]
+    subject = CodexRemoteControl(runner=runner, settings=object())  # type: ignore[arg-type]
 
     with pytest.raises(ProtocolError) as raised:
         await subject.pair()

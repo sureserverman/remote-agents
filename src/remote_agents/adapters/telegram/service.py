@@ -360,7 +360,7 @@ _HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
     HostConnection.DISABLED: "off",
     HostConnection.DAEMON_ABSENT: "unknown, no daemon is running",
     HostConnection.ERRORED: "on, but the link is broken",
-    HostConnection.UNREACHABLE: "unknown, codex never replied",
+    HostConnection.UNREACHABLE: "unknown, nothing could be read",
 }
 """The one-line reading of this machine, for the status line both screens share.
 
@@ -379,23 +379,28 @@ come from `application`, because those are what the two surfaces must spell iden
 """
 
 _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
-    HostConnection.CONNECTED: "This machine is enrolled, and a paired phone can reach it.",
+    HostConnection.CONNECTED: (
+        "This machine is enrolled and a codex daemon is running to serve it. Whether the "
+        "link to OpenAI is healthy right now is not something this can see."
+    ),
     HostConnection.CONNECTING: (
         "The setting has taken and the link to the relay is still settling."
     ),
     HostConnection.DISABLED: "This machine is not enrolled, so no phone can reach it.",
     HostConnection.DAEMON_ABSENT: (
-        "The codex daemon is not running here, so nothing can say whether this machine is "
-        "enrolled. The setting outlives the daemon, so this is not the same as being off."
+        "The setting is on, but no codex daemon is running here to serve it, so no phone "
+        "can reach this machine right now. Start a codex session, or press on again, and "
+        "it becomes reachable -- which is why this is not shown as off."
     ),
     HostConnection.ERRORED: (
         "The codex daemon answered, and reported that its own link to the relay is broken."
     ),
     HostConnection.UNREACHABLE: (
-        "This machine could not talk to codex, so nothing was read and nothing is known -- "
-        "codex may not be installed here, or this install may be unable to *start* a "
-        "daemon; only OpenAI's standalone codex can do that. Sessions launched by any "
-        "build can still attach to a daemon once one is running."
+        "Nothing could be read, so nothing is known -- and this is deliberately not shown "
+        "as off. Either codex did not answer (it may not be installed here, and only "
+        "OpenAI's standalone build can *start* a daemon), or the file codex keeps this "
+        "setting in could not be read. Sessions launched by any build can still attach to "
+        "a daemon once one is running."
     ),
 }
 """The sentence under the reading, which is where a non-expert learns what to do next.

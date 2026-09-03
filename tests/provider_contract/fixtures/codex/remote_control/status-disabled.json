@@ -1,7 +1,0 @@
-{
-  "_provenance": "As status-connected.json: shape from v2/RemoteControlStatusReadResponse.ts, codex-cli 0.151.0, 2026-09-03. `environmentId` is nullable in the binding and is null here, which is the shape a never-connected enrollment has.",
-  "status": "disabled",
-  "serverName": "Paisleys-Blender",
-  "installationId": "inst_recorded_fixture",
-  "environmentId": null
-}

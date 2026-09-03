@@ -193,24 +193,29 @@ _HOST_UNAVAILABLE = "unavailable"
 #: what a terminal owner could learn. Rendered by the direction chooser, which is the screen
 #: an owner reaches precisely when the reading is one they cannot act on confidently.
 _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
-    HostConnection.CONNECTED: ("This machine is enrolled and a paired phone can reach it."),
+    HostConnection.CONNECTED: (
+        "This machine is enrolled and a codex daemon is running to serve it. Whether the "
+        "link to OpenAI is healthy right now is not something this can see."
+    ),
     HostConnection.CONNECTING: (
         "The setting has taken and the link to the relay is still settling."
     ),
     HostConnection.DISABLED: ("This machine is not enrolled, so no phone can reach it."),
     HostConnection.DAEMON_ABSENT: (
-        "The codex daemon is not running, so nothing here can say whether this machine is "
-        "enrolled. The setting outlives the daemon, so this is not the same as off."
+        "The setting is on, but no codex daemon is running to serve it, so no phone can "
+        "reach this machine right now. Start a codex session, or press on again, and it "
+        "becomes reachable -- which is why this is not shown as off."
     ),
     HostConnection.ERRORED: (
         "The daemon answered and reported that this machine is enrolled but its link to the "
         "relay is broken."
     ),
     HostConnection.UNREACHABLE: (
-        "codex did not answer, so nothing was read. It may not be installed here, or this "
-        "install may be unable to *start* a daemon -- only OpenAI's standalone codex can "
-        "do that. Sessions launched by any build can still attach to a daemon once one "
-        "is running."
+        "Nothing could be read, so nothing is known -- deliberately not reported as off. "
+        "Either codex did not answer (it may not be installed, and only OpenAI's standalone "
+        "build can *start* a daemon), or the file codex keeps its setting in could not be "
+        "read. Sessions launched by any build can still attach to a daemon once one is "
+        "running."
     ),
 }
 

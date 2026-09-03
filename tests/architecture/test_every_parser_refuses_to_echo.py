@@ -117,7 +117,7 @@ def test_a_malformed_provider_payload_never_comes_back_out_of_the_error() -> Non
     from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
     from remote_agents.adapters.agents.protocols import ProtocolError
 
-    subject = CodexRemoteControl(runner=object(), rpc=object())  # type: ignore[arg-type]
+    subject = CodexRemoteControl(runner=object(), settings=object())  # type: ignore[arg-type]
 
     # A payload that cannot be read at all.
     assert subject._payload(POISON) is None

@@ -1,0 +1,4 @@
+{
+  "_provenance": "The REAL file, read from ~/.codex/app-server-daemon/settings.json on 2026-09-03 against codex-cli 0.153.0 with Remote Control on. Not a shape derived from a binding: it was observed flipping true -> false -> true in step with `app-server daemon enable-remote-control` / `disable-remote-control`. The `_provenance` key is this repository's own and is not in the real file; the reader ignores unknown keys, which this fixture also proves.",
+  "remoteControlEnabled": true
+}

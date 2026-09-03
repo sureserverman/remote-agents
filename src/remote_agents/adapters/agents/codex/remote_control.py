@@ -6,48 +6,78 @@ drive it. Everything about the shape here follows from that.
 
 **The table is closed and it has one home.** Every vector is a module constant beginning with
 `codex`; nothing is built from a caller's string, and the destructive teardown verb is absent
-by construction rather than by discipline -- a test asserts no entry carries it. Turning
-Remote Control *off* is `disable-remote-control`, which flips the persisted preference and the
-running daemon in one step. **It is not, however, the non-destructive verb this module
-originally claimed it was**, and that correction is the important sentence here: reading
-`set_remote_control_locked` in `app-server-daemon/src/lib.rs` shows that when the preference
-actually *changes* and a managed backend is running, it does `backend.stop()` and then
-`start_managed_backend()` -- a restart. Panes attached to the old process disconnect, and a
-Codex TUI exits on disconnect. The daemon comes back; the panes do not.
+by construction rather than by discipline -- a test asserts no entry carries it.
 
-So the choice between this verb and the teardown one is narrower than it looked: `stop` leaves
-the daemon dead, this restarts it. Neither spares an attached pane. The genuinely safe "off"
-is the daemon's own `remoteControl/disable` RPC, reachable through the proxy this module
-already speaks for `status()`, which flips the preference in-process with no restart at all --
-it is what the CLI itself calls on the no-op path. See BL-038; it was found after this feature
-was built and is not yet implemented.
+**What "off" costs, measured rather than reasoned.** Turning Remote Control off is
+`disable-remote-control`, and it *does* restart the daemon: across one call the app-server
+process is replaced and `--remote-control` disappears from its argv. Two earlier versions of
+this paragraph got the consequence wrong in opposite directions -- first "attached panes keep
+going", then "an attached Codex TUI exits on disconnect" -- and running the live drill on a
+standalone install settled it. The attached pane is **not** killed: same pid, still at a
+usable prompt afterwards. What it loses is the conversation, durably: the TUI reconnects to
+the replacement daemon and reports "This conversation is unavailable; no operation was sent."
 
-**Both collaborators are injected.** The subprocess runner and the JSON-RPC round trip are
-constructor arguments, so nothing below `tests/live` spawns a real `codex`. The default
-implementations are at the bottom of this module.
+So the cost of "off" is in-flight work, not the session, and there is no gentler verb to
+switch to. An earlier note here proposed the daemon's own `remoteControl/disable` RPC; no such
+client request exists in the app-server protocol. See BL-039, which supersedes BL-038.
+
+**Both collaborators are injected.** The subprocess runner and the daemon-state reader are
+constructor arguments, so nothing below `tests/live` spawns a real `codex` or touches a real
+`CODEX_HOME`. The default implementations are at the bottom of this module.
 
 **Nothing this module reads is echoed.** `codex` writes paths, auth hints and prompts to
 stderr; a status line built out of that text renders whatever the provider happened to say
-into a Telegram message. So a failure becomes `ERRORED` -- the reading that means "the daemon
-answered and would not say" -- and never a string. `serverName` is the one provider value
-that is rendered, and it passes the presentation-boundary encoder first (DEC-014).
+into a Telegram message. So a failure becomes a *reading* -- UNREACHABLE, "this project has no
+answer" -- and never a string. `serverName` is the one provider value that is rendered, and it
+passes the presentation-boundary encoder first (DEC-014).
 
-**Reading is not enabling.** `status()` only ever asks; the one place a read touches a
-subprocess is the `daemon version` probe that tells "no daemon is running" apart from "the
-daemon is up and failing", and that command starts nothing.
+**Reading is two local facts, because the protocol offers no third.** `status()` does not ask
+the daemon anything, and the reason is worth stating rather than discovering again. The
+original design asked it over `codex app-server proxy` for a `remoteControl/status/read`
+method. That method does not exist -- `codex app-server generate-json-schema` defines no
+`remoteControl` client request at all, only a `status/changed` server notification -- and the
+proxy transport never answered `initialize` regardless, so the reading it produced was always
+either a fallback or a raised error. The CLI offers no read-only status verb either: every
+`app-server daemon` subcommand mutates something except `version`, which says nothing about
+enrollment.
+
+What is left is what Codex writes down for itself, and it is enough for the states an owner
+acts on:
+
+- **the persisted preference**, `$CODEX_HOME/app-server-daemon/settings.json` ->
+  `remoteControlEnabled`, which Codex rewrites on every toggle (watched flipping both ways);
+- **whether anything is serving it**, the existing `daemon version` probe, which answers in
+  well under a second and starts nothing.
+
+Preference off is DISABLED whatever the daemon is doing. Preference on with a daemon running
+is CONNECTED; with none, DAEMON_ABSENT -- "on, but nothing is serving it", which is the whole
+reason that member exists. Anything this module cannot read is UNREACHABLE, never a guess.
+
+**What this read cannot see, stated so no surface claims otherwise.** Whether the link to
+OpenAI's relay is actually healthy: a daemon can be up and enrolled and still unable to reach
+the relay, and this reads CONNECTED. That was ERRORED's job, and ERRORED is now reachable only
+from the enable command's own JSON, which does report it at the moment of enabling. Likewise
+`serverName`: the settings file does not carry one, so a plain read supplies None and only
+`set_state` can name the machine. The bot already renders the name conditionally.
+
+**Reading is not enabling.** Nothing in `status()` starts a process other than the probe,
+which starts no daemon; the preference is read from a file.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-from remote_agents.adapters.agents.protocols import JsonRpcProcess, ProtocolError
+from remote_agents.adapters.agents.protocols import ProtocolError
 from remote_agents.domain.remote_control import (
     HostConnection,
     HostRemoteControlStatus,
@@ -70,13 +100,15 @@ from remote_agents.ports.terminal_text import encodable_text, sanitize_terminal_
 #: exact-match pin in the tests is what actually holds the table's contents.
 #:
 #: A closed table rather than a builder, for the reason the tmux adapter's codecs are closed:
-#: a vector assembled from a caller's value is a vector a caller can steer. `status` is the
-#: proxy the JSON-RPC client speaks over; `daemon_probe` answers whether anything is
-#: listening at all. The table carries no teardown verb and a test proves it -- see the
-#: module docstring for why that matters more than it looks.
+#: a vector assembled from a caller's value is a vector a caller can steer. `daemon_probe`
+#: answers whether anything is listening at all; there is no read vector, because the reading
+#: comes from a file Codex maintains rather than from a command (see the module docstring).
+#: The table carries no teardown verb and a test proves it.
+#:
+#: `status` lived here until 2026-09-03, pointing at `codex app-server proxy`. It was removed
+#: rather than left unused: it named a transport that never once answered.
 REMOTE_CONTROL_ARGV: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
-        "status": ("codex", "app-server", "proxy"),
         "daemon_probe": ("codex", "app-server", "daemon", "version"),
         "enable_when_absent": ("codex", "remote-control", "start", "--json"),
         "enable_when_running": ("codex", "app-server", "daemon", "enable-remote-control"),
@@ -85,12 +117,14 @@ REMOTE_CONTROL_ARGV: Mapping[str, tuple[str, ...]] = MappingProxyType(
     }
 )
 
-#: The JSON-RPC method the running daemon answers with its enrollment state (app-server v2).
-STATUS_METHOD = "remoteControl/status/read"
-
-#: What the daemon calls each state, mapped to the connection vocabulary the domain derives
-#: from. Closed: a value not listed here is a protocol this adapter does not speak, and it
-#: raises rather than guessing at a neighbouring meaning.
+#: What `codex remote-control start --json` calls each state, mapped to the connection
+#: vocabulary the domain derives from. Closed: a value not listed here is a protocol this
+#: adapter does not speak, and it raises rather than guessing at a neighbouring meaning.
+#:
+#: This table used to serve a `remoteControl/status/read` RPC as well. That method does not
+#: exist in the app-server protocol and never did, so the *only* thing that speaks this
+#: vocabulary now is the enable command's own envelope -- which is also the only place
+#: `connecting` and `errored` can still come from.
 _CONNECTION_FOR_REPORTED_STATUS: dict[str, HostConnection] = {
     "connected": HostConnection.CONNECTED,
     "connecting": HostConnection.CONNECTING,
@@ -144,6 +178,25 @@ _DISABLE_TIMEOUT_SECONDS = 15.0
 _PAIR_TIMEOUT_SECONDS = 15.0
 _PROBE_TIMEOUT_SECONDS = 10.0
 
+#: Where Codex persists the enrollment preference, relative to `CODEX_HOME`.
+#:
+#: A file rather than a command because the CLI exposes no read-only status verb, and a fact
+#: Codex writes for its own use rather than a documented interface (DEC-063: Codex facts are
+#: convention). It is load-bearing, so it fails *closed*: an absent, unreadable or
+#: unrecognisable file yields "no reading" -- UNREACHABLE -- and never "off". A future Codex
+#: that moves this file therefore degrades to honest silence rather than to a confident wrong
+#: answer on a machine that is enrolled.
+#:
+#: Watched flipping `true` -> `false` -> `true` in step with the toggle on 2026-09-03.
+_SETTINGS_RELATIVE_PATH = ("app-server-daemon", "settings.json")
+
+#: The key inside it. Codex writes exactly `{"remoteControlEnabled": <bool>}` today.
+_PREFERENCE_KEY = "remoteControlEnabled"
+
+#: A settings file is small. This bound is what stops a `CODEX_HOME` pointed at something
+#: enormous -- by accident or otherwise -- from being read into memory to answer a toggle.
+_SETTINGS_MAX_BYTES = 64 * 1024
+
 #: A server name is a machine name. Bounded because it is rendered into a Telegram message
 #: and a TUI line, and this project did not decode it.
 _SERVER_NAME_MAX_BYTES = 256
@@ -191,30 +244,73 @@ class CommandRunner(Protocol):
     async def run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult: ...
 
 
-class DaemonRpc(Protocol):
-    """One JSON-RPC round trip to the running daemon, over `codex app-server proxy`."""
+class DaemonSettings(Protocol):
+    """Read this host's persisted Remote Control preference, or say it cannot be read.
 
-    async def request(self, method: str, params: Mapping[str, object]) -> Mapping[str, object]: ...
+    Three-valued on purpose. `True` and `False` are answers; `None` means *no answer* -- the
+    file is missing, unreadable, or does not say what this adapter knows how to read -- and it
+    must never be collapsed into `False`, which would render "off" on a machine that is on.
+    """
+
+    async def remote_control_preference(self) -> bool | None: ...
+
+
+class DaemonLiveness(StrEnum):
+    """Whether anything is serving the preference, as the local probe could tell."""
+
+    RUNNING = "running"
+    """`daemon version` answered."""
+    ABSENT = "absent"
+    """It failed, naming the control socket, because the socket is not there (ENOENT)."""
+    INDETERMINATE = "indeterminate"
+    """It failed some other way -- EACCES, a divergent CODEX_HOME, a backlog refusal.
+
+    Distinct from ABSENT because reading those as "nothing is listening" is how a machine
+    that is on gets rendered off; that is the one direction of wrongness that matters here."""
 
 
 class CodexRemoteControl:
     """Codex's `HostRemoteControl`: read the daemon, flip it, mint a pairing code."""
 
-    def __init__(self, runner: CommandRunner | None = None, rpc: DaemonRpc | None = None) -> None:
+    def __init__(
+        self, runner: CommandRunner | None = None, settings: DaemonSettings | None = None
+    ) -> None:
         self._runner: CommandRunner = runner or AsyncCommandRunner()
-        self._rpc: DaemonRpc = rpc or AppServerProxyRpc()
+        self._settings: DaemonSettings = settings or CodexHomeSettings()
 
     async def status(self) -> HostRemoteControlStatus:
-        """Ask the daemon what it is doing, starting nothing and changing nothing."""
+        """Read the preference Codex persisted, then whether anything is serving it.
+
+        Starts nothing and changes nothing: one file read and one `daemon version`. The
+        module docstring carries why it is not a question put to the daemon.
+
+        The order is deliberate. The preference is read first and answers on its own when it
+        says *off*, because a running daemon without remote control enabled is genuinely off
+        and there is nothing the probe could add. Only "on" needs the second fact, which is
+        the difference between "the phone can reach this machine" and "it could, once
+        something starts".
+
+        Every unreadable path lands on UNREACHABLE rather than raising. The caller is a
+        surface drawing a row, and a raised error there costs the owner the whole reading --
+        including the part this did establish -- where UNREACHABLE says "no answer" in the
+        vocabulary the row already renders. `ProtocolError` still escapes `set_state` and
+        `pair`, which are actions and must be able to fail.
+        """
+        preference = await self._settings.remote_control_preference()
+        if preference is None:
+            return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
+        if not preference:
+            return HostRemoteControlStatus.observed(HostConnection.DISABLED, server_name=None)
         try:
-            payload = await self._rpc.request(STATUS_METHOD, {})
+            liveness = await self._daemon_liveness()
         except ProtocolError:
-            if await self._no_daemon_is_listening():
-                return HostRemoteControlStatus.observed(
-                    HostConnection.DAEMON_ABSENT, server_name=None
-                )
-            raise
-        return self._reading(payload)
+            # `codex` is missing, or did not answer in time. Enrolled-but-unverifiable.
+            return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
+        if liveness is DaemonLiveness.RUNNING:
+            return HostRemoteControlStatus.observed(HostConnection.CONNECTED, server_name=None)
+        if liveness is DaemonLiveness.ABSENT:
+            return HostRemoteControlStatus.observed(HostConnection.DAEMON_ABSENT, server_name=None)
+        return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
 
     async def set_state(self, desired: RemoteControlState) -> HostRemoteControlStatus:
         """Drive the host to `desired` and answer with the reading that followed."""
@@ -228,15 +324,18 @@ class CodexRemoteControl:
         )
 
     async def aclose(self) -> None:
-        """Close the proxy session, if one was opened and the client can close it.
+        """Release anything this adapter holds open. Today that is nothing.
 
-        `status()` opens a long-lived `codex app-server proxy` child on first use. Without
-        this, a caller constructing an adapter per request leaks one subprocess and its three
-        pipes per construction, and nothing in the process could ever reclaim them. Tolerant
-        of an injected client that has no `close` -- a test double should not have to grow a
-        lifecycle to be usable.
+        It held a long-lived `codex app-server proxy` child until 2026-09-03, opened by the
+        first `status()` and leaked once per construction without this. The read is now a file
+        and a bounded subprocess that has already exited, so there is nothing left to reclaim.
+
+        Kept, rather than deleted with the thing it closed, because it is the lifecycle hook
+        `composition/service.py` calls in a `finally` on the way out: a collaborator that grows
+        a resource later should find the hook already wired and already awaited by every
+        caller. It stays tolerant of an injected double that has no `close`.
         """
-        close = getattr(self._rpc, "close", None)
+        close = getattr(self._settings, "close", None)
         if close is not None:
             await close()
 
@@ -370,7 +469,19 @@ class CodexRemoteControl:
             confirmed = await self.status()
         except ProtocolError:
             confirmed = None
-        if confirmed is not None and confirmed.connection is not HostConnection.DAEMON_ABSENT:
+        # Two readings are refused here rather than believed, and for the same reason: we have
+        # just run the command whose whole job is to enrol this host, so a re-read saying
+        # "nothing is listening" (DAEMON_ABSENT) or "I have no answer" (UNREACHABLE) is far
+        # more likely to be a race with a daemon still coming up than the truth. Believing
+        # either would render "off"/"unknown" over a hint that said `connected`, which is the
+        # one direction of wrongness this feature cannot afford.
+        #
+        # UNREACHABLE joined DAEMON_ABSENT here on 2026-09-03: `status()` used to *raise* when
+        # it could not read, and the `except` above turned that into "no opinion". It now
+        # returns a reading instead, so without this the unreadable case would silently start
+        # winning over the hint.
+        unconvincing = {HostConnection.DAEMON_ABSENT, HostConnection.UNREACHABLE}
+        if confirmed is not None and confirmed.connection not in unconvincing:
             return confirmed
         return hint or HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
 
@@ -392,15 +503,32 @@ class CodexRemoteControl:
         return await self.status()
 
     async def _no_daemon_is_listening(self) -> bool:
-        """Tell "nothing is running" apart from "the daemon is up and failing"."""
+        """Whether nothing is listening -- the boolean `_enable` needs to pick its verb.
+
+        Only ABSENT counts as "no daemon". INDETERMINATE deliberately answers False, so the
+        enable path takes the daemon-scoped verb that starts nothing: on an ambiguous probe
+        the safe assumption is that a daemon *might* be up, because the alternative verb can
+        reach `bootstrap_locked` and tear a running backend down.
+        """
+        return await self._daemon_liveness() is DaemonLiveness.ABSENT
+
+    async def _daemon_liveness(self) -> DaemonLiveness:
+        """Tell "nothing is running" apart from "the daemon is up" and from "cannot tell".
+
+        The three-way answer is the same evidence the boolean above was already weighing --
+        `status()` needs the third arm, because "I could not find out" and "nothing is
+        listening" render as different readings.
+        """
         result = await self._runner.run(
             REMOTE_CONTROL_ARGV["daemon_probe"], timeout=_PROBE_TIMEOUT_SECONDS
         )
         if result.returncode == 0:
-            return False
+            return DaemonLiveness.RUNNING
         if _ABSENT_DAEMON_SIGNATURE not in result.stderr:
-            return False
-        return any(cause in result.stderr for cause in _ABSENT_DAEMON_CAUSES)
+            return DaemonLiveness.INDETERMINATE
+        if any(cause in result.stderr for cause in _ABSENT_DAEMON_CAUSES):
+            return DaemonLiveness.ABSENT
+        return DaemonLiveness.INDETERMINATE
 
     def _reading(self, payload: Mapping[str, object]) -> HostRemoteControlStatus:
         reported = payload.get("status")
@@ -507,14 +635,49 @@ class AsyncCommandRunner:
         )
 
 
-class AppServerProxyRpc:
-    """One JSON-RPC session over `codex app-server proxy`, opened on first use."""
+class CodexHomeSettings:
+    """Read `remoteControlEnabled` out of the daemon settings file under `CODEX_HOME`.
 
-    def __init__(self) -> None:
-        self._process = JsonRpcProcess(REMOTE_CONTROL_ARGV["status"])
+    Honours `CODEX_HOME` because `codex` does -- verified by pointing it at a temporary
+    directory and watching the control socket move with it. Reading `~/.codex` unconditionally
+    would, on a host whose service and shell disagree about it, report the wrong machine's
+    preference with total confidence.
 
-    async def request(self, method: str, params: Mapping[str, object]) -> Mapping[str, object]:
-        return await self._process.request(method, params)
+    **Every failure is `None`, never `False`.** Missing file, unreadable bytes, bad JSON, a
+    non-object, a missing key, a non-boolean value, a file too large to be a settings file, or
+    any OSError on the way -- all mean "no reading". This class exists to answer one question
+    and it declines rather than guesses, because the guess it would otherwise make is "off",
+    which is the answer an owner acts on by not acting.
 
-    async def close(self) -> None:
-        await self._process.close()
+    Synchronous file work on the event loop is deliberate: it is a single stat-and-read of a
+    file measured in tens of bytes, and a thread hand-off would cost more than it saves.
+    """
+
+    def __init__(self, home: Path | None = None) -> None:
+        self._home = home
+
+    async def remote_control_preference(self) -> bool | None:
+        path = self._settings_path()
+        try:
+            if path.stat().st_size > _SETTINGS_MAX_BYTES:
+                return None
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, ValueError, UnicodeDecodeError):
+            return None
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, ValueError, RecursionError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        value = parsed.get(_PREFERENCE_KEY)
+        # `isinstance(True, int)` is True, so an unguarded numeric check would read a `1` as
+        # enabled. Only an actual boolean is an answer here.
+        return value if isinstance(value, bool) else None
+
+    def _settings_path(self) -> Path:
+        home = self._home
+        if home is None:
+            configured = os.environ.get("CODEX_HOME")
+            home = Path(configured).expanduser() if configured else Path.home() / ".codex"
+        return home.joinpath(*_SETTINGS_RELATIVE_PATH)
