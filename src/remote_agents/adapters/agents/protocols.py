@@ -6,9 +6,16 @@ import asyncio
 import json
 from collections.abc import Mapping
 
+from remote_agents.ports.provider_errors import ProviderUnavailable
 
-class ProtocolError(RuntimeError):
-    """Raised when a provider protocol is unavailable or returns an invalid response."""
+
+class ProtocolError(ProviderUnavailable):
+    """Raised when a provider protocol is unavailable or returns an invalid response.
+
+    Subclasses `ports.provider_errors.ProviderUnavailable` so an application service can
+    catch the category without importing an adapter (ARCH-02). Every existing `raise` and
+    `except ProtocolError` is unaffected -- this widens what can catch it, not what it is.
+    """
 
 
 class JsonRpcProcess:

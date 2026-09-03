@@ -29,7 +29,9 @@ class HostRemoteControl(Protocol):
 
     Implementations run outside the process and can fail in ways the caller must be able to
     render: `status()` answers with a snapshot for every reachable outcome, including
-    `DAEMON_ABSENT` and `ERRORED`, rather than raising for the ordinary ones.
+    `DAEMON_ABSENT` and `ERRORED`, rather than raising for the ordinary ones. When one of
+    them genuinely cannot answer it raises `ProviderUnavailable`, which is named in `ports/`
+    precisely so a use case can catch it without reaching across the boundary (ARCH-02).
     """
 
     async def status(self) -> HostRemoteControlStatus:
