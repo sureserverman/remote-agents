@@ -66,7 +66,9 @@ from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_LABELS,
     HOST_REMOTE_CONTROL_TITLE,
     HostRemoteControlCommand,
+    PairCommand,
     host_remote_control_directions,
+    pair_available,
 )
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
@@ -1124,6 +1126,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._host_remote_control_confirm_reply(entity_id))
         if action == "host.remote.confirm":
             return await self._host_remote_control_act_reply(entity_id, token, message_id)
+        if action == "host.remote.pair":
+            return await self._host_pair_reply(token, message_id)
         if action == "session.trust":
             return await self._trust_reply(entity_id, token, message_id)
         if action == "session.inspect":
@@ -1860,6 +1864,17 @@ class PrivateBotBoundary:
             )
             for direction in directions
         )
+        # Pairing sits behind its own predicate rather than beside the directions: a code
+        # minted with no live link expires unused, which reads as a broken feature rather
+        # than as an action that was never offered. `mutation=True` because the token it
+        # mints is the idempotency key the request will carry.
+        if pair_available(status):
+            buttons += (
+                Button(
+                    f"{_REMOTE_EMOJI} Pair a phone",
+                    self._callback("host.remote.pair", "host", mutation=True),
+                ),
+            )
         return self._message(
             f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)}</b>\n"
             f"<code>{self._host_reading(status)}</code>\n"
@@ -1934,6 +1949,71 @@ class PrivateBotBoundary:
         # the service answers a failed enable with a reading rather than an exception, and
         # that reading is exactly what the owner needs in order to decide what to do next.
         return _reply_arguments(self._host_remote_screen(status))
+
+    async def _host_pair_reply(self, token: str, message_id: int) -> dict[str, object]:
+        """Mint one pairing code and send it once, with no keyboard under it.
+
+        **No keyboard, deliberately.** Every other screen in this bot ends in buttons, and
+        one here would be a control that re-renders a message whose whole content is a
+        secret -- a second copy in the chat, or worse, one produced long after the owner
+        stopped looking. The message is terminal: it is read, and then it is history the
+        owner can delete.
+
+        **Nothing about the code is stored, logged, or echoed** (DEC-013). It is escaped like
+        any provider text on its way into HTML and then it is gone from this process. A mint
+        that fails says so without repeating what the provider printed, because a failure
+        after the relay produced a code would otherwise put that code in an error message.
+
+        The token is the idempotency key, as it is for the toggle, and it is claimed after
+        the capability check so a press that could never have worked does not spend it.
+        """
+        control = self.backend.host_remote_control
+        if control is None:
+            return _reply_arguments(self._host_unavailable())
+        # Re-read before minting, exactly as the terminal does. The button was drawn against
+        # a reading that may be a screen old, and a link that has dropped since would mint a
+        # live code that pairs nothing -- which reads to an owner as a broken feature rather
+        # than as an action that was never available. Checked before the claim, so a press
+        # that could never have worked does not spend its one-shot.
+        status = await control.status()
+        if not pair_available(status):
+            return _reply_arguments(self._host_remote_screen(status))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        try:
+            code = await control.pair(PairCommand(token))
+        except Exception as error:
+            # The type only -- see the sibling in `adapters/tui/app.py` for why `exception`
+            # would put a still-live pairing code into this process's logs.
+            _LOG.error("a pairing code could not be minted: %s", type(error).__name__)
+            return _reply_arguments(
+                self._message(
+                    f"No {escape(HOST_REMOTE_CONTROL_TITLE)} pairing code was produced. "
+                    "Nothing changed."
+                )
+            )
+        expires = code.expires_at.astimezone().strftime("%H:%M:%S %Z")
+        # `render_message` rather than `self._message`, which is the fourth screen in this
+        # class to skip the navigation bar and the first to do so for a reason of its own.
+        # The bar is a keyboard, and a keyboard under a message whose entire content is a
+        # secret is a control that can re-send it -- into the same chat, possibly long after
+        # the owner stopped looking. The two permanent exceptions above skip the bar so a
+        # wait cannot be pressed into a second launch; this one skips it so a secret cannot
+        # be pressed into a second copy.
+        return _reply_arguments(
+            render_message(
+                f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)} pairing code</b>\n"
+                f"<code>{escape(code.code)}</code>\n\n"
+                f"Shown once. It expires at {escape(expires)}.\n"
+                "Type it into the ChatGPT app's manual pairing screen. "
+                "Anyone who has it can drive this machine until it expires."
+            )
+        )
 
     async def _host_remote_block(self) -> str:
         """This machine's reading for the sessions list, or nothing at all.

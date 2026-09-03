@@ -47,6 +47,7 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.screens.confirm import (
     ConfirmScreen,
+    HostPairingCodeModal,
     HostRemoteControlConfirmModal,
 )
 from remote_agents.adapters.tui.screens.dashboard import (
@@ -543,3 +544,121 @@ async def test_the_key_is_refused_while_the_surface_is_busy() -> None:
         assert isinstance(app.screen, DashboardScreen)
         assert not [call for call in control.calls if call.startswith("set_state")]
         app.set_busy(False)
+
+
+# --- Pairing ---------------------------------------------------------------------------
+#
+# The one screen in this surface that renders a secret. Everything here is about the two
+# properties that follow from that: it is offered only where a code could pair anything, and
+# it is shown once and then gone -- no history, no re-open, no snapshot baseline holding a
+# picture of it.
+
+
+async def test_pairing_is_offered_only_where_there_is_a_link_to_pair_to() -> None:
+    """`pair_available` is the policy; the key must not be a second opinion about it.
+
+    Pairing while disabled would mint a code that expires unused, which reads to an owner as
+    a broken feature rather than as an action that was never available.
+    """
+    for connection in (HostConnection.DISABLED, HostConnection.DAEMON_ABSENT):
+        control = FakeHostRemoteControl(connection)
+        app = RemoteAgentsTui(_context(control))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.screen.confirm_host_pair()
+            await pilot.pause()
+            assert "pair" not in control.calls, connection
+
+
+async def test_pairing_shows_the_code_and_when_it_expires() -> None:
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pairing = asyncio.create_task(app.screen.confirm_host_pair())
+        try:
+            await _until(
+                lambda: isinstance(app.screen, HostPairingCodeModal),
+                why="the pairing code to be shown",
+            )
+            rendered = app.screen.rendered_code()
+            assert "ZZZZ-9999" in rendered
+            assert "expires" in rendered.lower()
+            await pilot.press("escape")
+            await _until(
+                lambda: isinstance(app.screen, DashboardScreen),
+                why="any key to dismiss the code",
+            )
+        finally:
+            pairing.cancel()
+        assert control.calls.count("pair") == 1
+
+
+async def test_the_code_modal_dismisses_on_any_key_not_only_on_escape() -> None:
+    """It is a notice, not a question. Every way out is the same way out."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pairing = asyncio.create_task(app.screen.confirm_host_pair())
+        try:
+            await _until(
+                lambda: isinstance(app.screen, HostPairingCodeModal),
+                why="the pairing code to be shown",
+            )
+            await pilot.press("j")
+            await _until(
+                lambda: isinstance(app.screen, DashboardScreen),
+                why="an ordinary key to dismiss the code",
+            )
+        finally:
+            pairing.cancel()
+
+
+async def test_each_pairing_press_mints_a_fresh_idempotency_key() -> None:
+    """The fake refuses a repeat, so a constant key would make the second press impossible."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for _ in range(2):
+            pairing = asyncio.create_task(app.screen.confirm_host_pair())
+            try:
+                await _until(
+                    lambda: isinstance(app.screen, HostPairingCodeModal),
+                    why="the pairing code to be shown",
+                )
+                await pilot.press("escape")
+                await _until(
+                    lambda: isinstance(app.screen, DashboardScreen),
+                    why="the code to be dismissed",
+                )
+            finally:
+                pairing.cancel()
+        assert control.calls.count("pair") == 2
+        assert len(control.claimed) == 2, "two presses reused one key"
+
+
+async def test_the_pairing_modal_is_not_a_snapshot_fixture() -> None:
+    """A baseline holding a picture of a secret is a secret committed to the repository.
+
+    The other two confirms declare a `position` so the snapshot suite can commit a picture of
+    them. This one declares none, deliberately, and the assertion is written here so that
+    adding one later fails rather than quietly landing a rendered code in `snapshots/`.
+    """
+    assert getattr(HostPairingCodeModal, "position", "") == ""
+
+
+async def test_a_failed_pairing_says_so_without_repeating_what_failed() -> None:
+    """The failure path is the one that interpolates, because failures want context."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    control.fail_with = RuntimeError("relay refused code ZZZZ-9999")
+    app = RemoteAgentsTui(_context(control))
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.screen.confirm_host_pair()
+        await pilot.pause()
+        said = announcements(app)
+        assert not isinstance(app.screen, HostPairingCodeModal)
+        assert said, "a failure the owner is not told about is a surface that lied"
+        assert "ZZZZ-9999" not in " ".join(said)

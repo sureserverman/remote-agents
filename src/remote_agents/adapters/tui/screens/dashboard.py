@@ -63,6 +63,7 @@ from remote_agents.adapters.tui.screens.sessions import sessions_title
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     host_remote_control_directions,
+    pair_available,
 )
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
@@ -99,6 +100,11 @@ LIMITS_TITLE = "Plan limits"
 _HOST_REMOTE_CONTROL_ROW = "limits:host-remote-control"
 
 HOST_REMOTE_CONTROL_KEY = "h"
+
+#: Pairing, on the same screen as the reading it depends on. `P` rather than `p` because
+#: the sessions pane advertises `p` for Projects, and a key the frame names for one subject
+#: must not quietly mean another -- the same rule that kept the toggle off `m`.
+HOST_PAIR_KEY = "P"
 """`h` for *host*, which is the one thing that distinguishes this toggle from `m`.
 
 `m` on a session row toggles Remote Control for that pane; this toggles it for the machine.
@@ -174,6 +180,14 @@ def host_remote_control_line(status: HostRemoteControlStatus | None) -> str:
     """
     word = _HOST_UNAVAILABLE if status is None else _HOST_CONNECTION_WORDS[status.connection]
     return f"{HOST_REMOTE_CONTROL_TITLE} · {word}"
+
+
+class HostPairAction(Message):
+    """Posted by the pairing key so the code is minted on this screen's own pump.
+
+    Same reason as `HostRemoteControlAction`: the modal this leads to suspends its caller,
+    and a binding body runs on the App's pump (DEC-068).
+    """
 
 
 class HostRemoteControlAction(Message):
@@ -585,6 +599,10 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         Binding(
             HOST_REMOTE_CONTROL_KEY, "host_remote_control", HOST_REMOTE_CONTROL_TITLE, show=False
         ),
+        # Pairing, hidden for the same reason and offered only where the policy says a code
+        # could pair anything -- the key exists on the screen, the availability is checked
+        # when it is pressed.
+        Binding(HOST_PAIR_KEY, "host_pair", f"{HOST_REMOTE_CONTROL_TITLE} pairing", show=False),
     ]
 
     #: The dashboard is the projects position, so its crumb is that position's, and the
@@ -738,6 +756,49 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         """The screen handler `HostRemoteControlAction` is delivered to."""
         del message
         await self.confirm_host_remote_control()
+
+    def action_host_pair(self) -> None:
+        """Hand the pairing key to this screen's own pump, for DEC-068's reason exactly."""
+        self.post_message(HostPairAction())
+
+    async def on_host_pair_action(self, message: HostPairAction) -> None:
+        """The screen handler `HostPairAction` is delivered to."""
+        del message
+        await self.confirm_host_pair()
+
+    async def confirm_host_pair(self) -> None:
+        """Mint one pairing code and show it once.
+
+        **No confirmation stands in front of this**, and that is a decision rather than an
+        omission. A confirmation exists to stop an owner changing something by accident;
+        minting a code changes nothing about the machine -- it is a read that happens to
+        produce a secret. What the owner needs is not to be asked twice but to be *told*,
+        which the modal does: what it is, when it dies, and that anyone holding it can drive
+        this machine.
+
+        **Availability is re-read, not taken from the drawn line.** The line is up to one
+        reload old, and `pair_available` is false wherever there is no live relay link -- a
+        code minted then would expire unused and read to an owner as a broken feature rather
+        than as an action that was never offered.
+
+        The code is never returned from here, never announced, and never stored. It exists on
+        the modal for as long as the modal is on screen and nowhere else (DEC-013).
+        """
+        if self.tui.busy or self.services.backend.host_remote_control is None:
+            return
+        async with self.holding_the_guard():
+            await self._reload_host_remote_control()
+            if not self.showing:
+                return
+            self._draw_limits()
+            if not pair_available(self._host_status):
+                self.announce(
+                    f"{host_remote_control_line(self._host_status)}. "
+                    "Pairing needs a live connection to pair to.",
+                    severity="warning",
+                )
+                return
+        await self.tui.pair_host_remote_control(self)
 
     async def confirm_host_remote_control(self) -> None:
         """Re-read the machine, offer the one open direction, and issue only on a `True`.

@@ -101,6 +101,7 @@ what makes it answerable with a `bool` and what the bot has always done
 
 from __future__ import annotations
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -115,7 +116,7 @@ from remote_agents.application.host_remote_control import (
 )
 from remote_agents.application.session_actions import explain_state
 from remote_agents.domain.models import SessionRecord
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import PairingCode, RemoteControlState
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -398,6 +399,89 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
             f"{effect}",
             confirm_label=f"Yes, {label.casefold()}",
         )
+
+
+class HostPairingCodeModal(ModalScreen[None]):
+    """Show a pairing code once, then take it off the screen for good.
+
+    **The only screen in this surface that renders a secret**, and every difference from the
+    confirms above follows from that one fact.
+
+    *It asks nothing*, so it is `ModalScreen[None]` rather than `[bool]`. There is no yes and
+    no no -- the code is either read or it is not -- and giving it an abort row would suggest
+    a decision the owner does not have. **Any key dismisses it**, which is the honest
+    affordance for a notice: an owner who has copied the code presses whatever is under their
+    hand, and one who has not simply does not press.
+
+    *It declares no `position`*, so the snapshot suite cannot commit a picture of it. That is
+    not an oversight to be tidied up later: a baseline holding a rendered pairing code would
+    be a secret checked into the repository, and a test in
+    `tests/unit/adapters/tui/test_tui_host_remote_control.py` asserts this class stays out of
+    the baselines so that adding one fails rather than quietly landing.
+
+    *It is not in `ALL_CONFIRMS`* for a simpler reason than its sibling's: that registry is
+    swept for a resting row that mutates, and this modal has no rows at all.
+
+    *It is not re-openable.* The code is held for the life of the screen and nothing stores
+    it (DEC-013), so once dismissed there is no history entry, no scrollback and no command
+    that can bring it back -- the owner mints a new one, which is what the relay expects
+    anyway since the old one is still live until it expires.
+    """
+
+    BINDINGS = [Binding("escape", "dismiss_code", "Dismiss", show=False)]
+
+    def __init__(self, code: PairingCode) -> None:
+        super().__init__()
+        # Held on the instance and never on the screen's own state beyond it. The value is
+        # read back by `rendered_code()` for the test that proves it reached the screen; it
+        # is deliberately not exposed through a property that survives dismissal.
+        self._code: PairingCode | None = code
+
+    def compose(self) -> ComposeResult:
+        # `markup=False` like every sibling widget in this file, and for the recorded
+        # reason: a bracket in text this surface did not author raises `MarkupError` and
+        # takes the screen down. The upstream validator admits any printable code, and `[`
+        # is printable -- so a code containing one would crash the one screen whose whole
+        # job is to show it.
+        yield Static(self.rendered_code(), id="host-pairing-code", markup=False)
+
+    def rendered_code(self) -> str:
+        """What the owner sees: the code, when it dies, and that it will not be shown again.
+
+        `expires_at` is rendered in the owner's own timezone rather than UTC -- a code with a
+        deadline is only useful if the deadline is in the clock they are reading.
+        """
+        if self._code is None:
+            return "This pairing code has been dismissed."
+        expires = self._code.expires_at.astimezone().strftime("%H:%M:%S %Z")
+        return (
+            f"{HOST_REMOTE_CONTROL_TITLE} pairing code\n\n"
+            f"    {self._code.code}\n\n"
+            f"It expires at {expires}, and this is the only time it is shown.\n"
+            "Type it into the ChatGPT app's manual pairing screen.\n"
+            "Anyone who has it can drive this machine until it expires.\n\n"
+            "Press any key to dismiss."
+        )
+
+    def action_dismiss_code(self) -> None:
+        self._forget()
+        self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        """Any key at all, because this is a notice and not a question."""
+        event.stop()
+        self._forget()
+        self.dismiss(None)
+
+    def _forget(self) -> None:
+        """Drop the value on the way out, rather than trusting nothing else holds it.
+
+        The docstring above rests "dismissed is gone" on no other reference existing. That
+        is true today and it is a claim about the whole process rather than about this
+        object; clearing the field makes it a property of this object instead, independent
+        of when a collector happens to run or what Textual's screen stack retains.
+        """
+        self._code = None
 
 
 #: Every confirm the surface can put in front of a destructive action. The stage gate sweeps

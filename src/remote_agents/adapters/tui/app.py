@@ -49,7 +49,7 @@ from remote_agents.adapters.tui.screens import (
     SessionsScreen,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
-from remote_agents.adapters.tui.screens.confirm import ConfirmScreen
+from remote_agents.adapters.tui.screens.confirm import ConfirmScreen, HostPairingCodeModal
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
@@ -61,6 +61,7 @@ from remote_agents.application.commands import (
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     HostRemoteControlCommand,
+    PairCommand,
 )
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import (
@@ -1147,6 +1148,47 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.set_status(f"Remote Control: {state.value}")
         finally:
             self._busy = False
+
+    async def pair_host_remote_control(self, screen: DashboardScreen) -> None:
+        """Mint one pairing code for one owner press and put it on screen once.
+
+        **The code never leaves this method except onto the modal.** It is not announced (an
+        announcement lands in a feedback log the surface keeps), not logged, not returned,
+        and not held anywhere after the modal is dismissed -- which is what DEC-013 asks for
+        and what `PairingCode`'s own refusal to print itself backs up from underneath.
+
+        A fresh idempotency key per press, minted here for the same reason the toggle's is:
+        a failed mint burns its key, and two presses sharing one would have the second
+        refused as "already handled" for a code that was never produced.
+
+        This one **raises rather than answering with a reading**, unlike `set_state`: there is
+        no honest empty `PairingCode`, so a failure has to be told rather than rendered. The
+        message deliberately does not carry the provider's text -- a mint that failed after
+        the relay produced a code would otherwise put it in a feedback line.
+        """
+        control = self._services.backend.host_remote_control
+        if control is None or self.busy:
+            return
+        self.set_busy(True)
+        try:
+            async with screen.awaiting(f"Minting a {HOST_REMOTE_CONTROL_TITLE} pairing code…"):
+                code = await control.pair(PairCommand(_idempotency_key()))
+        except Exception as error:
+            # The TYPE, never the exception. `_LOG.exception` attaches `exc_info`, and a
+            # formatted record appends the traceback -- which ends in `str(exception)`.
+            # Verified rather than assumed: logging `RuntimeError("... ZZZZ-9999")` this way
+            # puts the code in the handler's output while `record.getMessage()` stays clean,
+            # which is exactly the shape a test asserting on the message alone would miss.
+            # A mint can fail *after* the relay produced a live code, so this is the one log
+            # site in the surface where a provider exception could carry a working secret.
+            _LOG.error("a pairing code could not be minted: %s", type(error).__name__)
+            screen.announce(
+                f"No {HOST_REMOTE_CONTROL_TITLE} pairing code was produced. Nothing changed."
+            )
+            return
+        finally:
+            self.set_busy(False)
+        await self.push_screen_wait(HostPairingCodeModal(code))
 
     async def set_host_remote_control(
         self, desired: RemoteControlState, screen: DashboardScreen

@@ -358,3 +358,110 @@ async def test_a_host_with_no_toggle_leaves_the_sessions_list_as_it_was() -> Non
 
     assert HOST_REMOTE_CONTROL_TITLE not in text
     assert "Plan limits" in text
+
+
+# --- Pairing ---------------------------------------------------------------------------
+
+
+async def _pair(bot: PrivateBotBoundary) -> dict[str, object]:
+    """One whole owner press of Pair, through the token the screen actually minted."""
+    screen = await bot._host_remote_control_reply()
+    bot.callbacks.bind_pending(CHAT, 1)
+    token = _token(screen, "Pair a phone")
+    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
+    assert state is not None and state.action == "host.remote.pair"
+    bot.callbacks.bind_pending(CHAT, 1)
+    return await bot._host_pair_reply(token, 1)
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [HostConnection.CONNECTED, HostConnection.CONNECTING],
+    ids=lambda c: c.value,
+)
+async def test_pairing_is_offered_where_there_is_a_link_to_pair_to(connection) -> None:
+    bot = _bot(FakeHostRemoteControl(connection))
+    assert "Pair a phone" in _labels(await bot._host_remote_control_reply())
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        HostConnection.DISABLED,
+        HostConnection.DAEMON_ABSENT,
+        HostConnection.ERRORED,
+        HostConnection.UNREACHABLE,
+    ],
+    ids=lambda c: c.value,
+)
+async def test_pairing_is_not_offered_where_a_code_would_expire_unused(connection) -> None:
+    """An action that was never available must not render as one that is broken."""
+    bot = _bot(FakeHostRemoteControl(connection))
+    assert "Pair a phone" not in _labels(await bot._host_remote_control_reply())
+
+
+async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
+    """A button here would be a control that re-renders a message that IS a secret."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    reply = await _pair(_bot(control))
+
+    assert "ZZZZ-9999" in reply["text"]
+    # No *buttons*, which is the property that matters: an empty markup renders nothing, and
+    # what must not be there is a control that could re-send the message. Every other screen
+    # in this bot ends in the navigation bar; this one deliberately does not.
+    markup = reply["reply_markup"]
+    assert not markup.inline_keyboard, (
+        f"a keyboard under a secret can re-send it: {markup.inline_keyboard}"
+    )
+    assert "once" in reply["text"].lower()
+    assert "expires" in reply["text"].lower()
+    assert control.calls.count("pair") == 1
+
+
+async def test_the_pairing_token_is_the_idempotency_key() -> None:
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot(control)
+    screen = await bot._host_remote_control_reply()
+    token = _token(screen, "Pair a phone")
+
+    bot.callbacks.bind_pending(CHAT, 1)
+    await bot._host_pair_reply(token, 1)
+
+    assert control.claimed == {token}
+
+
+async def test_a_replayed_pair_press_mints_no_second_code() -> None:
+    """Two codes from one press is two live secrets, and only one is on the owner's screen."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot(control)
+    screen = await bot._host_remote_control_reply()
+    token = _token(screen, "Pair a phone")
+
+    bot.callbacks.bind_pending(CHAT, 1)
+    await bot._host_pair_reply(token, 1)
+    replayed = await bot._host_pair_reply(token, 1)
+
+    assert control.calls.count("pair") == 1
+    assert "already run" in replayed["text"]
+
+
+async def test_a_failed_mint_says_so_without_repeating_what_the_provider_printed() -> None:
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    control.fail_with = RuntimeError("relay refused code ZZZZ-9999 at /home/user/.codex")
+    bot = _bot(control)
+    screen = await bot._host_remote_control_reply()
+    token = _token(screen, "Pair a phone")
+
+    bot.callbacks.bind_pending(CHAT, 1)
+    reply = await bot._host_pair_reply(token, 1)
+
+    assert "ZZZZ-9999" not in reply["text"]
+    assert ".codex" not in reply["text"]
+    assert "Nothing changed" in reply["text"]
+
+
+async def test_pairing_on_a_host_with_no_toggle_says_it_is_unavailable() -> None:
+    bot = _bot(None)
+    bot.callbacks.bind_pending(CHAT, 1)
+    reply = await bot._host_pair_reply("token", 1)
+    assert "unavailable" in reply["text"].lower()
