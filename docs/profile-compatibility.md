@@ -79,9 +79,21 @@ its verb from the state the host is actually in: `codex app-server daemon
 enable-remote-control` when a daemon is already listening, and `codex remote-control start
 --json` only when nothing is. Turning it *off* is always `codex app-server daemon
 disable-remote-control`, which flips the persisted preference and the running daemon in one
-step and leaves the daemon up. `codex remote-control stop` is **never** issued: it tears the
-daemon down, and every TUI attached to that daemon exits on disconnect — so "off" would
-silently kill whatever agents were running.
+step. `codex remote-control stop` is **never** issued: it tears the daemon down and leaves it
+down.
+
+**A correction worth reading before you rely on "off".** This document previously said the
+disable verb leaves the daemon up and therefore spares attached panes. It does not. Reading
+`set_remote_control_locked` upstream: when the preference actually changes and a managed
+backend is running, it stops that backend and starts a new one. The daemon returns; panes
+attached to the old process disconnect, and a Codex TUI exits on disconnect. The difference
+from `stop` is that the daemon comes back, not that your sessions survive.
+
+The genuinely non-destructive "off" is the daemon's own `remoteControl/disable` RPC — what the
+CLI itself calls when the preference is already at the target — which flips it in-process with
+no restart. This service does not use it yet; see BL-038. Until then, treat turning Remote
+Control off as something that may cost you attached Codex sessions, and stop them yourself
+first if that matters.
 
 The reason "on" is a choice rather than a constant is the same reason `stop` is banned.
 `codex remote-control start` reaches a function that, on a host which has not been

@@ -8,9 +8,19 @@ drive it. Everything about the shape here follows from that.
 `codex`; nothing is built from a caller's string, and the destructive teardown verb is absent
 by construction rather than by discipline -- a test asserts no entry carries it. Turning
 Remote Control *off* is `disable-remote-control`, which flips the persisted preference and the
-running daemon in one step and leaves the daemon up. Tearing the daemon down instead would
-disconnect every TUI attached to it, and those panes exit on disconnect: "off" would silently
-kill the owner's running agents.
+running daemon in one step. **It is not, however, the non-destructive verb this module
+originally claimed it was**, and that correction is the important sentence here: reading
+`set_remote_control_locked` in `app-server-daemon/src/lib.rs` shows that when the preference
+actually *changes* and a managed backend is running, it does `backend.stop()` and then
+`start_managed_backend()` -- a restart. Panes attached to the old process disconnect, and a
+Codex TUI exits on disconnect. The daemon comes back; the panes do not.
+
+So the choice between this verb and the teardown one is narrower than it looked: `stop` leaves
+the daemon dead, this restarts it. Neither spares an attached pane. The genuinely safe "off"
+is the daemon's own `remoteControl/disable` RPC, reachable through the proxy this module
+already speaks for `status()`, which flips the preference in-process with no restart at all --
+it is what the CLI itself calls on the no-op path. See BL-038; it was found after this feature
+was built and is not yet implemented.
 
 **Both collaborators are injected.** The subprocess runner and the JSON-RPC round trip are
 constructor arguments, so nothing below `tests/live` spawns a real `codex`. The default

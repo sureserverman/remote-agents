@@ -393,8 +393,9 @@ _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
     ),
     HostConnection.UNREACHABLE: (
         "This machine could not talk to codex, so nothing was read and nothing is known -- "
-        "codex may not be installed here, or this install may be one that cannot run the "
-        "daemon (the host toggle needs OpenAI's standalone codex, not the npm package)."
+        "codex may not be installed here, or this install may be unable to *start* a "
+        "daemon; only OpenAI's standalone codex can do that. Sessions launched by any "
+        "build can still attach to a daemon once one is running."
     ),
 }
 """The sentence under the reading, which is where a non-expert learns what to do next.
@@ -416,7 +417,13 @@ _HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
         "need them reachable."
     ),
     RemoteControlState.INACTIVE: (
-        "This unenrols the whole machine, so a paired phone stops reaching any codex session on it."
+        # The disconnection half is not decoration: changing the preference while a daemon
+        # runs restarts it, and an attached Codex pane exits on disconnect. Unverified live,
+        # so it warns rather than promising either way -- and it must say the same thing the
+        # terminal's confirmation says (DEC-007).
+        "This unenrols the whole machine, so a paired phone stops reaching any codex session "
+        "on it. Sessions currently attached to the daemon may be disconnected when it "
+        "restarts."
     ),
 }
 """What the confirmation warns about: the subject is the machine, not one pane.

@@ -397,7 +397,15 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
             "Codex sessions you start after this can be driven from your phone. "
             "Ones already running cannot; restart them if you need them reachable."
             if desired is RemoteControlState.ACTIVE
-            else "This machine stops answering the phone; sessions already running keep going."
+            # NOT "sessions already running keep going", which this said until the claim
+            # was checked against `set_remote_control_locked`: changing the preference
+            # while a daemon runs restarts it, and an attached Codex pane exits on
+            # disconnect. Unverified live (the drill that would show it is blocked), so
+            # the wording warns rather than promising either way.
+            else (
+                "This machine stops answering the phone. Codex sessions currently attached "
+                "to the daemon may be disconnected when it restarts."
+            )
         )
         return cls(
             f"{HOST_REMOTE_CONTROL_TITLE}: {label}?\n"

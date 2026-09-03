@@ -208,8 +208,9 @@ _HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
     ),
     HostConnection.UNREACHABLE: (
         "codex did not answer, so nothing was read. It may not be installed here, or this "
-        "install may be one that cannot run the daemon (the host toggle needs OpenAI's "
-        "standalone codex, not the npm package)."
+        "install may be unable to *start* a daemon -- only OpenAI's standalone codex can "
+        "do that. Sessions launched by any build can still attach to a daemon once one "
+        "is running."
     ),
 }
 
