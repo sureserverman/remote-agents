@@ -26,13 +26,14 @@ from remote_agents.domain.remote_control import (
 #: Written from the requirement, not from the implementation: what each daemon-reported
 #: connection means for the one lifecycle vocabulary the surfaces render. CONNECTING counts
 #: as ACTIVE because the enable already took -- the daemon is enrolled and the websocket is
-#: still settling -- and DAEMON_ABSENT counts as INACTIVE because a daemon that is not
-#: running is not remote-controlling anything.
+#: still settling -- and DAEMON_ABSENT counts as UNKNOWN, not INACTIVE, because Codex
+#: persists the enrollment preference: a stopped daemon is not evidence that this host is
+#: not enrolled, and "off" is the direction an owner acts on by not acting.
 DERIVED_STATE = {
     HostConnection.CONNECTED: RemoteControlState.ACTIVE,
     HostConnection.CONNECTING: RemoteControlState.ACTIVE,
     HostConnection.DISABLED: RemoteControlState.INACTIVE,
-    HostConnection.DAEMON_ABSENT: RemoteControlState.INACTIVE,
+    HostConnection.DAEMON_ABSENT: RemoteControlState.UNKNOWN,
     HostConnection.ERRORED: RemoteControlState.UNKNOWN,
 }
 

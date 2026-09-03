@@ -31,12 +31,14 @@ from remote_agents.domain.remote_control import PairingCode
 #: coincidence, and shaped like a real manual pairing code.
 SECRET = "ZZZZ-9999"
 
+#: The spelling the real CLI prints, verified from `codex app-server generate-ts
+#: --experimental` against the installed codex-cli 0.151.0: camelCase throughout.
 PAIR_RESPONSE = json.dumps(
     {
-        "pairing_code": "0000-0000",
-        "manual_pairing_code": SECRET,
-        "environment_id": "env_test",
-        "expires_at": 1788436800,
+        "pairingCode": "0000-0000",
+        "manualPairingCode": SECRET,
+        "environmentId": "env_test",
+        "expiresAt": 1788436800,
     }
 )
 
@@ -101,7 +103,7 @@ async def test_a_malformed_mint_response_is_refused_without_quoting_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A response carrying the secret under an unexpected key must not be echoed back."""
-    stdout = json.dumps({"pairing_code": SECRET, "expires_at": 1788436800})
+    stdout = json.dumps({"pairingCode": SECRET, "expiresAt": 1788436800})
 
     with caplog.at_level(logging.DEBUG), pytest.raises(ProtocolError) as raised:
         await _minted(stdout=stdout).pair()

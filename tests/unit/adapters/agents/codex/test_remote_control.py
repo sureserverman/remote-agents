@@ -71,6 +71,22 @@ def adapter(runner: FakeRunner | None = None, rpc: FakeRpc | None = None) -> Cod
     return CodexRemoteControl(runner=runner or FakeRunner(), rpc=rpc or FakeRpc())
 
 
+#: What `codex app-server daemon version` prints when nothing is listening, reproduced from
+#: a real run on a daemon-less host: the socket path AND the ENOENT cause.
+ABSENT_PROBE = CommandResult(
+    returncode=1,
+    stdout="",
+    stderr=(
+        "Error: failed to connect to "
+        "/home/user/.codex/app-server-control/app-server-control.sock\n\n"
+        "Caused by:\n    No such file or directory (os error 2)"
+    ),
+)
+
+#: A daemon that is up: the probe answers.
+RUNNING_PROBE = CommandResult(returncode=0, stdout='{"cli":"0.151.0"}', stderr="")
+
+
 # --------------------------------------------------------------------------- the argv table
 
 
@@ -81,13 +97,56 @@ def test_the_argv_table_is_a_closed_module_constant_that_only_runs_codex() -> No
         assert argv[0] == "codex", name
 
 
-def test_no_entry_in_the_table_can_tear_the_daemon_down() -> None:
-    """The teardown verb kills the daemon and every attached pane exits on disconnect.
+def test_the_table_is_pinned_to_exactly_these_six_vectors() -> None:
+    """An exact pin, because a predicate can only forbid the danger somebody thought of.
 
-    Written over the whole table rather than over the entries that exist today, so an entry
-    added later is covered before anyone writes a case for it.
+    The first version of this test asserted `"stop" not in argv`, which reads as "no teardown
+    verb" and actually means "not that one spelling". `terminate`, `kill`, `shutdown` and
+    `reset` would all have passed it, and so would any *other* dangerous vector that simply
+    is not a teardown -- nothing else here bounds the table's keys at all.
+
+    So the guard is the table itself. Adding, removing or repointing any vector fails here
+    and forces a reviewed edit, which is the discipline `test_descriptor_fields_are_pinned.py`
+    already applies one layer up. The banned-verb check below is kept as well: the pin says
+    what the table IS, and that says what it must never become, which is the sentence a
+    reader reaches for when they are about to add a sixth entry.
     """
-    assert not any("stop" in argv for argv in REMOTE_CONTROL_ARGV.values())
+    assert dict(REMOTE_CONTROL_ARGV) == {
+        "status": ("codex", "app-server", "proxy"),
+        "daemon_probe": ("codex", "app-server", "daemon", "version"),
+        "enable_when_absent": ("codex", "remote-control", "start", "--json"),
+        "enable_when_running": ("codex", "app-server", "daemon", "enable-remote-control"),
+        "disable": ("codex", "app-server", "daemon", "disable-remote-control"),
+        "pair": ("codex", "remote-control", "pair", "--json"),
+    }
+
+
+#: Every spelling by which a `codex` invocation could take the shared daemon down, and with
+#: it every TUI pane attached to that daemon. Broader than the one verb the CLI uses today,
+#: because the cost of guessing wrong is the owner's live agent sessions.
+TEARDOWN_VERBS = ("stop", "terminate", "kill", "shutdown", "restart", "reset", "down")
+
+
+def test_no_entry_in_the_table_can_tear_the_daemon_down() -> None:
+    """Kept beside the pin: the pin says what the table is, this says what it must not be."""
+    for name, argv in REMOTE_CONTROL_ARGV.items():
+        for verb in TEARDOWN_VERBS:
+            assert verb not in argv, f"{name} carries the teardown verb {verb!r}"
+
+
+def test_the_teardown_guard_can_actually_catch_one() -> None:
+    """A guard that matched nothing would pass for the wrong reason."""
+    assert any(verb in ("codex", "app-server", "daemon", "stop") for verb in TEARDOWN_VERBS), (
+        "the banned-verb list no longer matches the CLI's own teardown vector"
+    )
+
+
+def test_the_table_cannot_be_repointed_at_runtime() -> None:
+    """`closed by construction` is a claim about the object, not about the author."""
+    import pytest as _pytest
+
+    with _pytest.raises(TypeError):
+        REMOTE_CONTROL_ARGV["disable"] = ("codex", "app-server", "daemon", "stop")  # type: ignore[index]
 
 
 # ------------------------------------------------------------------------------- status()
@@ -127,36 +186,49 @@ async def test_a_status_the_daemon_has_never_reported_is_a_protocol_error() -> N
 
 async def test_a_connect_failure_naming_the_control_socket_means_no_daemon() -> None:
     """`codex app-server daemon version` answers with that path when nothing is listening."""
-    runner = FakeRunner(
-        results={
-            REMOTE_CONTROL_ARGV["daemon_probe"]: CommandResult(
-                returncode=1,
-                stdout="",
-                stderr=(
-                    "Error: failed to connect to "
-                    "/home/user/.codex/app-server-control/app-server-control.sock"
-                ),
-            )
-        }
-    )
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE})
     rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
 
     result = await adapter(runner=runner, rpc=rpc).status()
 
     assert result.connection is HostConnection.DAEMON_ABSENT
-    assert result.state is RemoteControlState.INACTIVE
+    assert result.state is RemoteControlState.UNKNOWN, (
+        "the enrollment preference outlives the daemon, so a stopped daemon is not 'off'"
+    )
     assert result.server_name is None
+
+
+async def test_a_socket_we_cannot_reach_is_not_a_socket_that_is_not_there() -> None:
+    """The dangerous confusion: both failures name the socket path.
+
+    A daemon owned by another uid, a divergent CODEX_HOME between the interactive shell and
+    the user service, or a backlog refusal all print the same "failed to connect to <path>"
+    line as a missing socket. Reading those as DAEMON_ABSENT would report a host that IS
+    remote-controlled as one that is not.
+    """
+    for cause in ("Permission denied (os error 13)", "Connection refused (os error 111)"):
+        runner = FakeRunner(
+            results={
+                REMOTE_CONTROL_ARGV["daemon_probe"]: CommandResult(
+                    returncode=1,
+                    stdout="",
+                    stderr=(
+                        "Error: failed to connect to "
+                        "/home/user/.codex/app-server-control/app-server-control.sock\n\n"
+                        f"Caused by:\n    {cause}"
+                    ),
+                )
+            }
+        )
+        rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
+
+        with pytest.raises(ProtocolError):
+            await adapter(runner=runner, rpc=rpc).status()
 
 
 async def test_any_other_rpc_failure_is_raised_rather_than_read_as_no_daemon() -> None:
     """A daemon that is up and failing must not render as a daemon that is not there."""
-    runner = FakeRunner(
-        results={
-            REMOTE_CONTROL_ARGV["daemon_probe"]: CommandResult(
-                returncode=0, stdout='{"cli":"0.151.0"}', stderr=""
-            )
-        }
-    )
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
     rpc = FakeRpc(error=ProtocolError("provider protocol response timed out"))
 
     with pytest.raises(ProtocolError):
@@ -186,20 +258,114 @@ async def test_the_recorded_connected_fixture_reads_as_connected() -> None:
 # --------------------------------------------------------------------------- set_state()
 
 
-async def test_turning_it_on_runs_exactly_the_start_argv() -> None:
+async def test_turning_it_on_with_no_daemon_running_starts_one() -> None:
+    """Nothing is listening, so the bootstrap `start` may perform has nothing to stop."""
     runner = FakeRunner(
         results={
-            REMOTE_CONTROL_ARGV["enable"]: CommandResult(
-                returncode=0, stdout=fixture("start-connecting.json"), stderr=""
-            )
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
+                returncode=0, stdout=fixture("start-connected.json"), stderr=""
+            ),
         }
     )
-    result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
+    rpc = FakeRpc(payload={"status": "disabled"})
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
 
-    assert runner.argvs == [("codex", "remote-control", "start", "--json")]
+    assert runner.argvs == [
+        ("codex", "app-server", "daemon", "version"),
+        ("codex", "remote-control", "start", "--json"),
+    ]
+    assert result.connection is HostConnection.CONNECTED
+    assert result.server_name == "Paisleys-Blender"
+    assert rpc.calls == [], "a settled connected envelope needs no second opinion"
+
+
+async def test_turning_it_on_with_a_daemon_already_up_never_runs_start() -> None:
+    """The whole point of the two-verb rule.
+
+    `remote-control start` reaches `bootstrap_locked` on a host that is not bootstrapped,
+    and that function stops a running managed backend before starting its own -- every pane
+    attached to it exits on disconnect. The daemon-scoped verb flips the preference on the
+    live daemon and starts nothing, so the destructive branch is not merely unused here, it
+    is unreachable: the only state in which it could stop something is the state in which
+    this path does not call it.
+    """
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
+    rpc = FakeRpc(payload={"status": "connected", "serverName": "Paisleys-Blender"})
+
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+
+    assert runner.argvs == [
+        ("codex", "app-server", "daemon", "version"),
+        ("codex", "app-server", "daemon", "enable-remote-control"),
+    ]
+    assert ("codex", "remote-control", "start", "--json") not in runner.argvs
+    assert result.connection is HostConnection.CONNECTED
+
+
+async def test_the_daemon_scoped_verb_is_answered_by_re_reading_the_daemon() -> None:
+    """It prints human-readable text only, so the re-read is the whole answer."""
+    runner = FakeRunner(results={REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE})
+    rpc = FakeRpc(payload={"status": "connecting", "serverName": "Paisleys-Blender"})
+
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+
+    assert rpc.calls == [("remoteControl/status/read", {})]
+    assert result.connection is HostConnection.CONNECTING
+
+
+async def test_an_enable_that_timed_out_connecting_asks_the_daemon_instead() -> None:
+    """`timedOut` means "enrolled, but the relay link did not come up while we waited"."""
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
+                returncode=0, stdout=fixture("start-connecting.json"), stderr=""
+            ),
+        }
+    )
+    rpc = FakeRpc(payload={"status": "connected", "serverName": "Paisleys-Blender"})
+
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+
+    assert ("remoteControl/status/read", {}) in rpc.calls
+    assert result.connection is HostConnection.CONNECTED, "the daemon is the authority"
+
+
+async def test_a_bailed_enable_reports_what_the_daemon_says_not_a_flat_error() -> None:
+    """`disabled` and `errored` bail with a non-zero exit and NO json on stdout."""
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_running"]: CommandResult(
+                returncode=1, stdout="", stderr="Remote control is disabled on Paisleys-Blender"
+            ),
+        }
+    )
+    rpc = FakeRpc(payload={"status": "disabled", "serverName": "Paisleys-Blender"})
+
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+
+    assert result.connection is HostConnection.DISABLED
+    assert result.state is RemoteControlState.INACTIVE
+
+
+async def test_an_absent_daemon_is_not_believed_immediately_after_an_enable() -> None:
+    """Reporting "not reachable" for a machine we just enrolled is the wrong direction."""
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
+                returncode=0, stdout=fixture("start-connecting.json"), stderr=""
+            ),
+        }
+    )
+    rpc = FakeRpc(error=ProtocolError("provider protocol is unavailable"))
+
+    result = await adapter(runner=runner, rpc=rpc).set_state(RemoteControlState.ACTIVE)
+
     assert result.connection is HostConnection.CONNECTING
     assert result.state is RemoteControlState.ACTIVE
-    assert result.server_name == "Paisleys-Blender"
 
 
 async def test_a_failed_enable_is_errored_and_does_not_echo_what_codex_printed() -> None:
@@ -207,19 +373,15 @@ async def test_a_failed_enable_is_errored_and_does_not_echo_what_codex_printed()
     secret = "token=sk-abcdef0123456789"
     runner = FakeRunner(
         results={
-            REMOTE_CONTROL_ARGV["enable"]: CommandResult(
+            REMOTE_CONTROL_ARGV["daemon_probe"]: RUNNING_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_running"]: CommandResult(
                 returncode=1, stdout="", stderr=f"auth failed: {secret}"
-            )
+            ),
         }
     )
     result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
 
-    # Equality with the canonical reading, not just "the secret is absent": a failed enable
-    # must produce the *same* value whatever codex printed, which no interpolation of stderr
-    # into any field can satisfy. The weaker `secret not in repr(...)` form would also hold
-    # for a branch that never read stderr at all, and so could not tell the two apart.
     assert result == HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
-    assert result.state is RemoteControlState.UNKNOWN
     assert secret not in repr(result)
     assert secret not in str(result)
 
@@ -227,9 +389,10 @@ async def test_a_failed_enable_is_errored_and_does_not_echo_what_codex_printed()
 async def test_an_enable_whose_json_is_unreadable_is_errored_and_echoes_nothing() -> None:
     runner = FakeRunner(
         results={
-            REMOTE_CONTROL_ARGV["enable"]: CommandResult(
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
                 returncode=0, stdout="not json at all: /home/user/secret", stderr=""
-            )
+            ),
         }
     )
     result = await adapter(runner=runner).set_state(RemoteControlState.ACTIVE)
@@ -295,16 +458,16 @@ async def test_pairing_runs_the_pair_argv_and_returns_the_manual_code() -> None:
 
 
 async def test_pairing_prefers_the_manual_code_over_the_short_one() -> None:
-    """`pairing_code` is the app-to-app handshake; only the manual code is typed by a human."""
+    """`pairingCode` is the app-to-app handshake; only the manual code is typed by a human."""
     runner = FakeRunner(
         results={
             REMOTE_CONTROL_ARGV["pair"]: CommandResult(
                 returncode=0,
                 stdout=json.dumps(
                     {
-                        "pairing_code": "0000-0000",
-                        "manual_pairing_code": "ZZZZ-9999",
-                        "expires_at": 1788436800,
+                        "pairingCode": "0000-0000",
+                        "manualPairingCode": "ZZZZ-9999",
+                        "expiresAt": 1788436800,
                     }
                 ),
                 stderr="",
@@ -312,6 +475,34 @@ async def test_pairing_prefers_the_manual_code_over_the_short_one() -> None:
         }
     )
     assert (await adapter(runner=runner).pair()).code == "ZZZZ-9999"
+
+
+async def test_the_snake_case_spelling_is_still_accepted() -> None:
+    """The relay wire protocol spells it snake_case and never reaches stdout -- but Codex's
+    JSON is convention rather than contract (DEC-063), and tolerating it costs one `or`."""
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["pair"]: CommandResult(
+                returncode=0,
+                stdout=json.dumps({"manual_pairing_code": "ZZZZ-9999", "expires_at": 1788436800}),
+                stderr="",
+            )
+        }
+    )
+    assert (await adapter(runner=runner).pair()).code == "ZZZZ-9999"
+
+
+async def test_an_enrollment_offering_no_manual_code_fails_closed() -> None:
+    """`manualPairingCode` is nullable upstream. A null must not render as an empty box."""
+    runner = FakeRunner(
+        results={
+            REMOTE_CONTROL_ARGV["pair"]: CommandResult(
+                returncode=0, stdout=fixture("pair-no-manual-code.json"), stderr=""
+            )
+        }
+    )
+    with pytest.raises(ProtocolError):
+        await adapter(runner=runner).pair()
 
 
 async def test_a_pair_response_without_a_manual_code_is_refused() -> None:
@@ -361,14 +552,12 @@ async def test_every_runner_call_is_bounded_by_a_timeout_no_longer_than_thirty_s
     """A `codex` command that never returns must not hold the operation lock forever."""
     runner = FakeRunner(
         results={
-            REMOTE_CONTROL_ARGV["enable"]: CommandResult(
+            REMOTE_CONTROL_ARGV["daemon_probe"]: ABSENT_PROBE,
+            REMOTE_CONTROL_ARGV["enable_when_absent"]: CommandResult(
                 returncode=0, stdout=fixture("start-connecting.json"), stderr=""
             ),
             REMOTE_CONTROL_ARGV["pair"]: CommandResult(
                 returncode=0, stdout=fixture("pair.json"), stderr=""
-            ),
-            REMOTE_CONTROL_ARGV["daemon_probe"]: CommandResult(
-                returncode=1, stdout="", stderr="failed to connect to app-server-control.sock"
             ),
         }
     )
@@ -381,8 +570,60 @@ async def test_every_runner_call_is_bounded_by_a_timeout_no_longer_than_thirty_s
     await subject.status()
 
     assert runner.calls, "a test that recorded no calls would pass vacuously"
+    assert {argv for argv, _ in runner.calls} >= {
+        REMOTE_CONTROL_ARGV["daemon_probe"],
+        REMOTE_CONTROL_ARGV["enable_when_absent"],
+        REMOTE_CONTROL_ARGV["disable"],
+        REMOTE_CONTROL_ARGV["pair"],
+    }, "the sweep must actually reach every runner-backed verb"
     for argv, timeout in runner.calls:
         assert 0 < timeout <= 30, (argv, timeout)
+
+
+async def test_a_hostile_pairing_code_is_refused_rather_than_cleaned() -> None:
+    """A scrubbed secret is a secret that no longer works, shown to someone who would type it."""
+    for hostile in (
+        "\x1b]0;pwned\x07ZZZZ-9999",
+        "A" * 200,
+        "ZZZZ\u202e9999",
+        "ZZZZ\u200b9999",
+        "  ZZZZ-9999  ",
+    ):
+        runner = FakeRunner(
+            results={
+                REMOTE_CONTROL_ARGV["pair"]: CommandResult(
+                    returncode=0,
+                    stdout=json.dumps({"manualPairingCode": hostile, "expiresAt": 1788436800}),
+                    stderr="",
+                )
+            }
+        )
+        with pytest.raises(ProtocolError):
+            await adapter(runner=runner).pair()
+
+
+async def test_an_absurd_expiry_is_refused_in_the_boundary_s_own_vocabulary() -> None:
+    """NaN, 1e30 and 10**30 each raise a different arithmetic type out of the stdlib."""
+    for absurd in (float("nan"), 1e30, -1e30, 10**30, True):
+        runner = FakeRunner(
+            results={
+                REMOTE_CONTROL_ARGV["pair"]: CommandResult(
+                    returncode=0,
+                    stdout=json.dumps({"manualPairingCode": "ZZZZ-9999", "expiresAt": absurd}),
+                    stderr="",
+                )
+            }
+        )
+        with pytest.raises(ProtocolError):
+            await adapter(runner=runner).pair()
+
+
+def test_the_command_result_does_not_print_what_codex_wrote() -> None:
+    """It carries the pairing code on its way to `PairingCode`; tracebacks render locals."""
+    rendered = repr(CommandResult(returncode=0, stdout="ZZZZ-9999", stderr="/home/user/secret"))
+    assert "ZZZZ-9999" not in rendered
+    assert "secret" not in rendered
+    assert "returncode=0" in rendered
 
 
 # -------------------------------------------------------------------------------- lifecycle

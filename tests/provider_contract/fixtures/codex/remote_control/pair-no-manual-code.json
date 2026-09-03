@@ -1,0 +1,7 @@
+{
+  "_provenance": "The nullable arm of RemoteControlPairingStartResponse (codex-cli 0.151.0, 2026-09-03). A null manualPairingCode means this enrollment offers no code a human can type, which must fail closed rather than render an empty box the owner would try to read aloud.",
+  "pairingCode": "0000-0000",
+  "manualPairingCode": null,
+  "environmentId": "env_recorded_fixture",
+  "expiresAt": 1788436800
+}

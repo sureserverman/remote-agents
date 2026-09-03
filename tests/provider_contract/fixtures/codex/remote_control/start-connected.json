@@ -1,0 +1,8 @@
+{
+  "_provenance": "As start-connecting.json. The settled arm: status connected and timedOut false is the one envelope this adapter trusts without re-reading the daemon.",
+  "mode": "daemon",
+  "status": "connected",
+  "serverName": "Paisleys-Blender",
+  "environmentId": "env_recorded_fixture",
+  "timedOut": false
+}

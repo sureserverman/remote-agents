@@ -49,9 +49,15 @@ from remote_agents.ports.terminal_text import encodable_text, sanitize_terminal_
 #: Every `codex` invocation this project will ever make about Remote Control, by name.
 #:
 #: Read-only at runtime as well as closed at authoring time: the tmux codecs get their
-#: immutability free by being tuples, and a plain dict here would have made "absent by
-#: construction" a claim about the author rather than about the object. One assignment
-#: elsewhere in the interpreter could otherwise point `disable` at the teardown verb.
+#: immutability free by being tuples, and a plain dict here would have let any code in the
+#: interpreter repoint `disable` at a teardown verb by assignment, which every call site
+#: would then pick up because they all look the table up by name at call time.
+#:
+#: Stated precisely, because the proxy is weaker than it first appears: it blocks assignment,
+#: and it does NOT block `gc.get_referents()` reaching the underlying dict, nor rebinding this
+#: module attribute wholesale. Both need arbitrary in-process code, at which point the game is
+#: already lost -- so the proxy is a guard against mistakes, not against an attacker, and the
+#: exact-match pin in the tests is what actually holds the table's contents.
 #:
 #: A closed table rather than a builder, for the reason the tmux adapter's codecs are closed:
 #: a vector assembled from a caller's value is a vector a caller can steer. `status` is the
@@ -62,7 +68,8 @@ REMOTE_CONTROL_ARGV: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "status": ("codex", "app-server", "proxy"),
         "daemon_probe": ("codex", "app-server", "daemon", "version"),
-        "enable": ("codex", "remote-control", "start", "--json"),
+        "enable_when_absent": ("codex", "remote-control", "start", "--json"),
+        "enable_when_running": ("codex", "app-server", "daemon", "enable-remote-control"),
         "disable": ("codex", "app-server", "daemon", "disable-remote-control"),
         "pair": ("codex", "remote-control", "pair", "--json"),
     }
@@ -90,6 +97,14 @@ _CONNECTION_FOR_REPORTED_STATUS: dict[str, HostConnection] = {
 #: is why a substring match is tolerable here and would not be if the branches were reversed.
 _ABSENT_DAEMON_SIGNATURE = "app-server-control.sock"
 
+#: ...and the cause line that distinguishes "there is no socket" from "there is a socket I
+#: cannot reach". Both failures name the socket path, so the path alone is not evidence: a
+#: daemon owned by another uid (EACCES), a divergent `CODEX_HOME` between the interactive
+#: shell and the user service, or a backlog refusal would all have been read as "no daemon"
+#: and rendered as **off on a host that is on** -- the one direction of wrongness that
+#: matters here. Requiring the ENOENT cause makes the ambiguous failures raise instead.
+_ABSENT_DAEMON_CAUSES = ("No such file or directory", "os error 2")
+
 # Enabling waits for the enrollment websocket, which is a network round trip to the relay;
 # the other two are local. Each is a ceiling, not an expectation -- the point is that a
 # `codex` command which never returns cannot hold the operation lock forever.
@@ -102,14 +117,30 @@ _PROBE_TIMEOUT_SECONDS = 10.0
 #: and a TUI line, and this project did not decode it.
 _SERVER_NAME_MAX_BYTES = 256
 
+#: A manual pairing code is something a person reads off one screen and types into
+#: another, so it is short by construction. Generous against the real `XXXX-XXXX` shape
+#: without admitting a payload.
+_PAIRING_CODE_MAX_CHARACTERS = 64
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True, slots=True, repr=False)
 class CommandResult:
-    """One finished `codex` invocation, as its runner observed it."""
+    """One finished `codex` invocation, as its runner observed it.
+
+    Redacted like `config.TelegramSecrets.bot_token`, and for the identical reason its
+    docstring gives: one uncaught traceback rendering its locals would print the value
+    verbatim. `pair()` puts the manual pairing code into `stdout` on its way to a
+    `PairingCode`, and `textual` renders rich tracebacks with frame locals -- so redacting
+    only the final `PairingCode` would have been the last thirty centimetres of a pipe that
+    is open along its whole length.
+    """
 
     returncode: int
     stdout: str
     stderr: str
+
+    def __repr__(self) -> str:
+        return f"CommandResult(returncode={self.returncode}, stdout=<redacted>, stderr=<redacted>)"
 
 
 class CommandRunner(Protocol):
@@ -175,35 +206,124 @@ class CodexRemoteControl:
         payload = self._payload(result.stdout)
         if payload is None:
             raise ProtocolError("codex printed a pairing response this adapter cannot read")
-        code = payload.get("manual_pairing_code") or payload.get("manualPairingCode")
-        expires_at = payload.get("expires_at", payload.get("expiresAt"))
+        # `manualPairingCode` is what the CLI actually prints -- verified from
+        # `codex app-server generate-ts --experimental` against the installed 0.151.0, whose
+        # `RemoteControlPairingStartResponse` is camelCase throughout. The snake_case spelling
+        # belongs to the relay *wire* protocol and never reaches stdout; it is still accepted
+        # here because Codex's JSON is convention rather than contract (DEC-063) and the cost
+        # of tolerating the other spelling is one `or`.
+        #
         # The manual code is the one a human types into the app's manual-pairing screen; the
-        # short `pairing_code` is the app-to-app handshake and pairs nothing when read aloud.
-        # Both spellings are accepted because Codex's JSON is convention, not contract
-        # (DEC-063), and a rename would otherwise read as "pairing is broken".
+        # short `pairingCode` is the app-to-app handshake and pairs nothing when read aloud.
+        # It is declared NULLABLE upstream: an enrollment offering no manual code must fail
+        # closed here rather than render an empty box the owner would try to read out.
+        code = payload.get("manualPairingCode") or payload.get("manual_pairing_code")
+        expires_at = payload.get("expiresAt", payload.get("expires_at"))
         if not isinstance(code, str) or not code:
             raise ProtocolError("codex printed no manual pairing code")
-        if not isinstance(expires_at, int | float):
+        code = self._pairing_code(code)
+        # `bool` is an `int` in Python, so an unchecked isinstance would accept `true` and
+        # render a code that expired at 1970-01-01T00:00:01Z as merely "long expired".
+        if isinstance(expires_at, bool) or not isinstance(expires_at, int | float):
             raise ProtocolError("codex printed a pairing code with no expiry")
-        return PairingCode(code=code, expires_at=datetime.fromtimestamp(expires_at, tz=UTC))
+        try:
+            expiry = datetime.fromtimestamp(expires_at, tz=UTC)
+        except (OverflowError, OSError, ValueError) as error:
+            # NaN, +-1e30 and 10**30 each raise a different one of these. A caller that
+            # already handles ProtocolError for every other failure of this boundary should
+            # not also have to handle three arithmetic types to cover "the expiry is absurd".
+            raise ProtocolError(
+                "codex printed a pairing expiry this adapter cannot read"
+            ) from error
+        return PairingCode(code=code, expires_at=expiry)
 
     # ------------------------------------------------------------------ internals
 
     async def _enable(self) -> HostRemoteControlStatus:
-        result = await self._runner.run(
-            REMOTE_CONTROL_ARGV["enable"], timeout=_ENABLE_TIMEOUT_SECONDS
-        )
-        if result.returncode != 0:
-            # A `disabled` or `errored` outcome arrives as a non-zero exit rather than a JSON
-            # row, so this branch is the ordinary failure and not only the exotic one.
-            return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
-        payload = self._payload(result.stdout)
-        if payload is None:
-            return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
+        """Enable by the verb that is safe for the daemon state this host is actually in.
+
+        **Which verb, and why it is a choice rather than a constant.** `remote-control start`
+        is the obvious "on", and on a host whose daemon is already bootstrapped it is
+        perfectly safe: it reaches `ensure_remote_control_started`, which flips the persisted
+        preference and then calls `start()`, whose body contains no teardown at all -- it
+        probes, reports `AlreadyRunning`, and leaves everything up.
+
+        But that function has a second branch. On a host that is *not* bootstrapped it calls
+        `bootstrap_locked`, and that one tears down a running managed backend before starting
+        its own. Any pane attached to the backend it replaces exits on disconnect. So the
+        naive constant argv reaches, in one real configuration, exactly the harm this module
+        exists to avoid -- and it does so under a verb spelled `start`, which no banned-verb
+        test could ever catch.
+
+        The fix is to never put the CLI in a position to make that choice:
+
+        - **A daemon is already running** -> `app-server daemon enable-remote-control`, the
+          daemon-scoped verb documented as "enable remote control for future starts and a
+          currently running managed daemon". It flips the preference on the live daemon and
+          returns; it starts nothing and stops nothing, so no attached pane can be harmed.
+        - **No daemon is running** -> `remote-control start --json`, which is what actually
+          brings one up. Any bootstrap it performs has nothing to stop, because we just
+          established nothing is listening.
+
+        The destructive branch is therefore not merely unused; it is unreachable, because the
+        only state in which `bootstrap_locked` could stop something is the state in which this
+        method does not call it.
+
+        Then report what the daemon says rather than what the CLI guessed.
+
+        The envelope `remote-control start --json` prints is a *hint*, and only one arm of it
+        is trustworthy on its own: a settled `connected` with `timedOut` false. Every other
+        arm is answered by re-reading the daemon, which is the same move `_disable` already
+        makes and for the same reason -- the authority on this host's enrollment is the
+        daemon, not the exit status of the command that nudged it.
+
+        Two arms motivate that, and neither is exotic:
+
+        - `disabled` and `errored` arrive as a **non-zero exit with no JSON at all** (the CLI
+          bails before its `--json` branch). Reporting a flat ERRORED there collapses "the
+          preference is off" into "something went wrong", when a structured read would have
+          said `disabled` -> INACTIVE authoritatively.
+        - `connecting` routinely carries `timedOut: true`, because the CLI sets it whenever
+          the status is still connecting on the daemon path. That means "enrolled, but the
+          relay link did not come up while we waited" -- a real state, and one worth
+          re-reading rather than rendering as a flat "on".
+
+        The fallback is deliberately asymmetric: a re-read that answers DAEMON_ABSENT is
+        **not** believed here, because we have just run the command whose whole job is to
+        start that daemon. Believing it would render "off" for a machine that may well be
+        enrolled and reachable, which is the one direction of wrongness that matters.
+        """
+        if await self._no_daemon_is_listening():
+            result = await self._runner.run(
+                REMOTE_CONTROL_ARGV["enable_when_absent"], timeout=_ENABLE_TIMEOUT_SECONDS
+            )
+        else:
+            result = await self._runner.run(
+                REMOTE_CONTROL_ARGV["enable_when_running"], timeout=_ENABLE_TIMEOUT_SECONDS
+            )
+        # The daemon-scoped verb prints human-readable text only, so it never yields an
+        # envelope; the re-read below is the whole answer in that branch.
+        payload = self._payload(result.stdout) if result.returncode == 0 else None
+        hint: HostRemoteControlStatus | None = None
+        if payload is not None:
+            try:
+                hint = self._reading(payload)
+            except ProtocolError:
+                hint = None
+            if (
+                hint is not None
+                and hint.connection is HostConnection.CONNECTED
+                and not payload.get("timedOut")
+            ):
+                return hint
+
         try:
-            return self._reading(payload)
+            confirmed = await self.status()
         except ProtocolError:
-            return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
+            confirmed = None
+        if confirmed is not None and confirmed.connection is not HostConnection.DAEMON_ABSENT:
+            return confirmed
+        return hint or HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
 
     async def _disable(self) -> HostRemoteControlStatus:
         result = await self._runner.run(
@@ -220,7 +340,11 @@ class CodexRemoteControl:
         result = await self._runner.run(
             REMOTE_CONTROL_ARGV["daemon_probe"], timeout=_PROBE_TIMEOUT_SECONDS
         )
-        return result.returncode != 0 and _ABSENT_DAEMON_SIGNATURE in result.stderr
+        if result.returncode == 0:
+            return False
+        if _ABSENT_DAEMON_SIGNATURE not in result.stderr:
+            return False
+        return any(cause in result.stderr for cause in _ABSENT_DAEMON_CAUSES)
 
     def _reading(self, payload: Mapping[str, object]) -> HostRemoteControlStatus:
         reported = payload.get("status")
@@ -238,9 +362,39 @@ class CodexRemoteControl:
         """The one JSON object `codex --json` printed, or None -- never the text itself."""
         try:
             parsed = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
+            # RecursionError because deeply nested JSON raises it straight through the
+            # decoder; unreadable is unreadable, whichever way the text was unreadable.
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _pairing_code(raw: str) -> str:
+        """Bound and validate the secret, failing closed rather than sanitising it.
+
+        The far less sensitive `serverName` two methods below already passes the presentation
+        boundary (DEC-014); the code -- which is rendered into a Telegram message and a TUI
+        modal -- went straight from `json.loads` to the domain type unbounded and unchecked.
+        A `manualPairingCode` of `"\x1b]0;pwned\x07" + "A" * 100_000 + "\u202eEVIL"` is legal
+        JSON and would have arrived intact.
+
+        **Refused rather than cleaned**, which is the opposite of the choice made for the
+        server name, and deliberately so: a scrubbed machine name is still a usable label,
+        but a scrubbed *secret* is a secret that no longer works -- shown to an owner who
+        would type it, watch it fail, and have no way to tell a mangled code from an expired
+        one. Anything that is not a plausible code is therefore not a code.
+
+        `isprintable()` is the same filter `probe_version_line` uses, and it is doing more
+        than it looks: it is False for every Cc and Cf code point, so it rejects ESC and with
+        it every ANSI sequence, plus U+202E RIGHT-TO-LEFT OVERRIDE and U+200B ZERO WIDTH
+        SPACE -- the ones a reader would not think to check for.
+        """
+        cleaned = encodable_text(raw)
+        if len(cleaned) > _PAIRING_CODE_MAX_CHARACTERS:
+            raise ProtocolError("codex printed a pairing code far longer than a code can be")
+        if not cleaned.isprintable() or cleaned.strip() != cleaned:
+            raise ProtocolError("codex printed a pairing code that is not typable text")
+        return cleaned
 
     @staticmethod
     def _server_name(raw: object) -> str | None:
@@ -256,6 +410,12 @@ class CodexRemoteControl:
         cleaned = sanitize_terminal_text(
             encodable_text(raw).encode("utf-8"), max_lines=1, max_bytes=_SERVER_NAME_MAX_BYTES
         )
+        # The sanitizer strips ESC and everything below space, which stops ANSI. It does not
+        # stop C1 controls, bidi overrides or zero-width characters, and a RIGHT-TO-LEFT
+        # OVERRIDE in a provider-controlled machine name reverses the rest of the rendered
+        # row. `isprintable()` is False for every Cc and Cf code point, so the two together
+        # cover what either alone leaves through (the `probe_version_line` precedent).
+        cleaned = "".join(character for character in cleaned if character.isprintable())
         return cleaned or None
 
 
@@ -263,6 +423,15 @@ class AsyncCommandRunner:
     """Run one prevalidated `codex` vector without a shell, bounded by a timeout."""
 
     async def run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult:
+        try:
+            return await self._run(argv, timeout=timeout)
+        except FileNotFoundError:
+            # `codex` is not on PATH. A caller that already handles ProtocolError for every
+            # other way this boundary can fail should not have to also handle an OSError to
+            # cover "the provider is not installed" -- the boundary answers in one vocabulary.
+            raise ProtocolError("codex is not installed on this host") from None
+
+    async def _run(self, argv: tuple[str, ...], *, timeout: float) -> CommandResult:
         process = await asyncio.create_subprocess_exec(
             *argv,
             stdin=asyncio.subprocess.DEVNULL,

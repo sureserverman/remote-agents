@@ -1,8 +1,8 @@
 {
+  "_provenance": "The CLI-level envelope `remote-control start --json` prints (RemoteControlStartJsonOutput, serde rename_all=camelCase). Top-level shape verified against codex-cli 0.151.0; `timedOut` is true here because upstream sets timed_out = (status == Connecting) on the daemon path, so a connecting row routinely carries it. An earlier version of this fixture also carried a nested `daemon` object -- that block was INVENTED (wrong key and wrong value casing) and is removed rather than replaced with a second guess: this adapter never reads it, so recording a shape nothing verified would be a liability with no benefit.",
   "mode": "daemon",
   "status": "connecting",
   "serverName": "Paisleys-Blender",
   "environmentId": "env_recorded_fixture",
-  "timedOut": false,
-  "daemon": {"state": "AlreadyRunning"}
+  "timedOut": true
 }

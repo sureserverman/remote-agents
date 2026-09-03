@@ -28,6 +28,16 @@ class HostConnection(StrEnum):
     """
 
     DAEMON_ABSENT = "daemon_absent"
+    """Nothing is listening on the daemon's control socket.
+
+    Deliberately NOT read as "off". Codex persists the enrollment preference in its own
+    state database -- the CLI's own wording for the daemon-scoped enable is that it takes
+    effect *for future starts* -- so a host whose flag is on but whose daemon happens to be
+    down is one daemon start away from being reachable by the phone again. Rendering that
+    "off" would tell the owner this machine is not remote-controllable when the only true
+    statement is
+    that it is not remote-controllable *right now*, and "off" is the direction of wrongness
+    that matters: it is the one an owner acts on by not acting."""
     DISABLED = "disabled"
     CONNECTING = "connecting"
     CONNECTED = "connected"
@@ -37,14 +47,18 @@ class HostConnection(StrEnum):
 #: The one derivation, in the domain because the adapter, the application policy and both
 #: surfaces must agree on it and none of them may import another (DEC-001). CONNECTING is
 #: ACTIVE because the enable has already taken and only the websocket is still settling;
-#: DAEMON_ABSENT is INACTIVE because a daemon that is not running remote-controls nothing;
-#: ERRORED is UNKNOWN because the daemon answered and declined to say, which is exactly what
-#: the third word is for.
+#: DAEMON_ABSENT is UNKNOWN because the persisted preference outlives the process that
+#: serves it, so a stopped daemon says nothing about whether this host is enrolled;
+#: ERRORED is UNKNOWN because the daemon reports enrollment ON with a broken connection --
+#: its own words are "remote control is enabled ... but the connection is errored" -- so
+#: neither "on" nor "off" is honest, which is exactly what the third word is for. (An earlier
+#: version of this comment said the daemon "declined to say". It does not; it says something
+#: that does not fit two words.)
 _DERIVED_STATE: dict[HostConnection, RemoteControlState] = {
     HostConnection.CONNECTED: RemoteControlState.ACTIVE,
     HostConnection.CONNECTING: RemoteControlState.ACTIVE,
     HostConnection.DISABLED: RemoteControlState.INACTIVE,
-    HostConnection.DAEMON_ABSENT: RemoteControlState.INACTIVE,
+    HostConnection.DAEMON_ABSENT: RemoteControlState.UNKNOWN,
     HostConnection.ERRORED: RemoteControlState.UNKNOWN,
 }
 
@@ -63,7 +77,15 @@ class HostRemoteControlStatus:
     server_name: str | None
 
     def __post_init__(self) -> None:
-        derived = _DERIVED_STATE[self.connection]
+        derived = _DERIVED_STATE.get(self.connection)
+        if derived is None:
+            # This project runs no type checker, so a plain string or a typo reaches here as
+            # a value rather than as a diagnostic. Answering in the domain's own vocabulary
+            # keeps a caller's `except ValueError` from being silently bypassed by a KeyError.
+            raise ValueError(
+                f"{self.connection!r} is not a connection this project knows -- "
+                f"one of {[member.value for member in HostConnection]}"
+            )
         if self.state is not derived:
             raise ValueError(
                 f"{self.connection} derives {derived}, not {self.state} -- a status whose "

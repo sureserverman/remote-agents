@@ -1,6 +1,7 @@
 {
-  "pairing_code": "0000-0000",
-  "manual_pairing_code": "ZZZZ-9999",
-  "environment_id": "env_recorded_fixture",
-  "expires_at": 1788436800
+  "_provenance": "Shape from `codex app-server generate-ts --experimental`, codex-cli 0.151.0, 2026-09-03: v2/RemoteControlPairingStartResponse.ts declares { pairingCode, manualPairingCode: string | null, environmentId, expiresAt: bigint } -- camelCase, and manualPairingCode is NULLABLE. An earlier version of this fixture used snake_case; that spelling belongs to the relay wire protocol and never reaches the CLI's stdout, so it was invented rather than recorded. expiresAt is epoch seconds.",
+  "pairingCode": "0000-0000",
+  "manualPairingCode": "ZZZZ-9999",
+  "environmentId": "env_recorded_fixture",
+  "expiresAt": 1788436800
 }

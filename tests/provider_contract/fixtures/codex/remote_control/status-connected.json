@@ -1,5 +1,7 @@
 {
+  "_provenance": "Shape taken from `codex app-server generate-ts --experimental` run against the installed codex-cli 0.151.0 on 2026-09-03: v2/RemoteControlStatusReadResponse.ts declares { status, serverName, installationId, environmentId } -- camelCase, installationId non-optional. Values are placeholders; the SHAPE is recorded, not invented.",
   "status": "connected",
   "serverName": "Paisleys-Blender",
+  "installationId": "inst_recorded_fixture",
   "environmentId": "env_recorded_fixture"
 }
