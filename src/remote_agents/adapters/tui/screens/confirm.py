@@ -397,14 +397,16 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
             "Codex sessions you start after this can be driven from your phone. "
             "Ones already running cannot; restart them if you need them reachable."
             if desired is RemoteControlState.ACTIVE
-            # NOT "sessions already running keep going", which this said until the claim
-            # was checked against `set_remote_control_locked`: changing the preference
-            # while a daemon runs restarts it, and an attached Codex pane exits on
-            # disconnect. Unverified live (the drill that would show it is blocked), so
-            # the wording warns rather than promising either way.
+            # Third wording, and the first one measured rather than reasoned. It said
+            # "sessions already running keep going" (false), then "may be disconnected when
+            # it restarts" (overstated). Running the drill on a standalone install settled
+            # it: the daemon IS replaced, the attached pane is NOT killed -- same pid, live
+            # prompt -- but it comes back reporting "This conversation is unavailable", and
+            # that is durable. The cost is the conversation, not the session. DEC-071.
             else (
-                "This machine stops answering the phone. Codex sessions currently attached "
-                "to the daemon may be disconnected when it restarts."
+                "This machine stops answering the phone. The daemon restarts, so an "
+                "attached codex session loses the conversation it is in; the pane itself "
+                "survives."
             )
         )
         return cls(

@@ -417,13 +417,14 @@ _HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
         "need them reachable."
     ),
     RemoteControlState.INACTIVE: (
-        # The disconnection half is not decoration: changing the preference while a daemon
-        # runs restarts it, and an attached Codex pane exits on disconnect. Unverified live,
-        # so it warns rather than promising either way -- and it must say the same thing the
-        # terminal's confirmation says (DEC-007).
+        # Measured on 2026-09-03 rather than reasoned about, after two earlier wordings got
+        # it wrong in opposite directions: the daemon is replaced, the attached pane is not
+        # killed, and what it loses is the conversation. Must say the same thing the
+        # terminal's confirmation says (DEC-007) -- and no test pins that, so the two move
+        # together by hand. See BL-039 for why the feature is not being built on further.
         "This unenrols the whole machine, so a paired phone stops reaching any codex session "
-        "on it. Sessions currently attached to the daemon may be disconnected when it "
-        "restarts."
+        "on it. The daemon restarts, so an attached codex session loses the conversation it "
+        "is in; the pane itself survives."
     ),
 }
 """What the confirmation warns about: the subject is the machine, not one pane.

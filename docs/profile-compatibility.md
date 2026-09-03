@@ -82,18 +82,28 @@ disable-remote-control`, which flips the persisted preference and the running da
 step. `codex remote-control stop` is **never** issued: it tears the daemon down and leaves it
 down.
 
-**A correction worth reading before you rely on "off".** This document previously said the
-disable verb leaves the daemon up and therefore spares attached panes. It does not. Reading
-`set_remote_control_locked` upstream: when the preference actually changes and a managed
-backend is running, it stops that backend and starts a new one. The daemon returns; panes
-attached to the old process disconnect, and a Codex TUI exits on disconnect. The difference
-from `stop` is that the daemon comes back, not that your sessions survive.
+**What "off" actually costs you, measured.** This paragraph has been wrong twice, in opposite
+directions, so here is what was observed on a standalone install rather than what was reasoned
+from source. Turning Remote Control off **does** restart the daemon: the app-server process is
+replaced and the `--remote-control` flag is gone from its argv. An attached `codex` pane is
+**not** killed — same pid, still at a usable prompt afterwards. What it loses is the
+conversation: the TUI reconnects to the replacement daemon and reports `Reconnected. No input
+was resent.` and then `This conversation is unavailable; no operation was sent.`, and that state
+does not heal. So "off" costs you in-flight work in attached panes, not the panes themselves.
+Finish or checkpoint anything you care about before pressing it.
 
-The genuinely non-destructive "off" is the daemon's own `remoteControl/disable` RPC — what the
-CLI itself calls when the preference is already at the target — which flips it in-process with
-no restart. This service does not use it yet; see BL-038. Until then, treat turning Remote
-Control off as something that may cost you attached Codex sessions, and stop them yourself
-first if that matters.
+There is no gentler verb to switch to. An earlier version of this section proposed the daemon's
+own `remoteControl/disable` RPC; no such client request exists in the app-server protocol (the
+schema defines `RemoteControlEnableParams`/`RemoteControlDisableParams` as orphan types that no
+method references), and the stdio transport it assumed does not work at all. See BL-039.
+
+**Bigger caveat, same source.** The *reading* this feature displays does not work. `status()`
+depends on a `remoteControl/status/read` request that the protocol does not define, reached over
+a `codex app-server proxy` that never answers `initialize` on a healthy host. With Remote Control
+genuinely on, neither surface can report it, and pressing *off* surfaces an error even though the
+preference flips. BL-039 has the measurements and the options. Until that is settled, treat the
+on-screen reading as unreliable and `codex app-server daemon version` plus the daemon's argv as
+the real source of truth.
 
 The reason "on" is a choice rather than a constant is the same reason `stop` is banned.
 `codex remote-control start` reaches a function that, on a host which has not been
@@ -135,7 +145,9 @@ absence shows up only when the toggle is pressed.
 Install the standalone distribution if you want this feature:
 `curl -fsSL https://chatgpt.com/codex/install.sh | sh`. Note it may place a `codex` on your
 `PATH` ahead of an npm one; check `command -v codex` afterwards if the npm build is the one
-you want launching sessions.
+you want launching sessions. Installing it is necessary but **not** sufficient — with it
+installed, the daemon starts and the toggle writes, and the reading still does not work
+(BL-039).
 
 **Six readings, and three of them are not "off".** `on`, `off`, `connecting`, `no daemon`,
 `link broken` and `unreachable`. `no daemon` means nothing is listening, so nothing can say
