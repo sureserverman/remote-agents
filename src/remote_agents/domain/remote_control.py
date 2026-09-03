@@ -42,6 +42,23 @@ class HostConnection(StrEnum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     ERRORED = "errored"
+    """The daemon answered, and what it said was that its own connection is broken.
+
+    Its words are "remote control is enabled on <name> but the connection is errored" --
+    enrollment ON, socket down. Not to be confused with UNREACHABLE below, which is this
+    project failing to have the conversation at all."""
+
+    UNREACHABLE = "unreachable"
+    """This project could not talk to `codex`, so it has no reading to report.
+
+    A distinct member because collapsing it into ERRORED told the owner something specific
+    and false. On a host where `codex` is not installed, every path -- the proxy RPC and the
+    probe that would otherwise answer DAEMON_ABSENT -- fails the same way, and the surface
+    rendered "errored", whose documented meaning is a fact the daemon stated. The owner could
+    press the toggle forever and never be told the reason was that the binary is missing.
+
+    Kept separate from DAEMON_ABSENT too: that one is a *successful* conversation with a
+    definite answer ("nothing is listening on the socket"), and this one is no conversation."""
 
 
 #: The one derivation, in the domain because the adapter, the application policy and both
@@ -60,6 +77,7 @@ _DERIVED_STATE: dict[HostConnection, RemoteControlState] = {
     HostConnection.DISABLED: RemoteControlState.INACTIVE,
     HostConnection.DAEMON_ABSENT: RemoteControlState.UNKNOWN,
     HostConnection.ERRORED: RemoteControlState.UNKNOWN,
+    HostConnection.UNREACHABLE: RemoteControlState.UNKNOWN,
 }
 
 

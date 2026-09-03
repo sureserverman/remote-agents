@@ -54,6 +54,11 @@ _DIRECTIONS: dict[HostConnection, tuple[RemoteControlState, ...]] = {
     HostConnection.DISABLED: (RemoteControlState.ACTIVE,),
     HostConnection.DAEMON_ABSENT: (RemoteControlState.ACTIVE,),
     HostConnection.ERRORED: (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE),
+    # Both, for the same reason ERRORED offers both and a different one besides: a boundary
+    # that would not answer is frequently transient, and the owner pressing a direction is
+    # how they find out whether it still will not. What must NOT happen is the surface
+    # naming this "errored" -- see the member's own docstring.
+    HostConnection.UNREACHABLE: (RemoteControlState.ACTIVE, RemoteControlState.INACTIVE),
 }
 
 
@@ -120,9 +125,23 @@ class HostRemoteControlService:
     so invisible to the phone. The honest mitigation is that the owner can see the reading
     and launch after it settles, not a lock this class could take.
 
+    **The lock is per-process, and the subject is not.** `compose_backend` is called
+    independently by the TUI and the bot compositions, each minting its own `SessionLocks`
+    and its own service with its own lock. So this serialises host toggles *within one
+    process*; an owner toggling from the terminal while the phone toggles from the bot gets
+    two concurrent calls to one daemon, with distinct idempotency keys the shared SQLite
+    claim cannot join. That is DEC-005's accepted multi-writer world and the operation
+    converges rather than corrupting -- but it is stated here because the rest of this
+    docstring is careful about what is not provided, and this is the qualifier that applies
+    to its own lock.
+
     `operation()` is still entered, and earns its place for the other reason: an enable in
     flight is a network round trip that enrols this machine, and shutdown should finish it
-    rather than abandon it half-done.
+    rather than abandon it half-done. **Stated honestly: nothing on the shipped `serve` path
+    calls `SessionLocks.drain()` today** -- its only caller is `RuntimeCoordinator`, which
+    `bootstrap` does not construct -- so entering `operation()` records the intent and buys
+    the guarantee only once that gap is closed. It is a pre-existing gap that `SessionService`
+    shares; it is named here rather than left implied by the word "drain".
     """
 
     def __init__(
@@ -143,7 +162,14 @@ class HostRemoteControlService:
         does not require one: a provider whose boundary opens nothing has nothing to close.
         """
         close = getattr(self._control, "aclose", None)
-        if close is not None:
+        if close is None:
+            return
+        # Under the same lock the toggles take. Closing the proxy's pipes out from under an
+        # in-flight `set_state` would break this class's fail-closed promise at exactly the
+        # moment its own docstring says matters most -- the mid-flight call would fail with
+        # something that is not `ProviderUnavailable`, so the `except` that exists to turn a
+        # failure into a reading would not catch it.
+        async with self._host_lock:
             await close()
 
     async def status(self) -> HostRemoteControlStatus:
@@ -159,24 +185,42 @@ class HostRemoteControlService:
         """
         try:
             return await self._control.status()
-        except ProviderUnavailable:
-            return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
+        except (ProviderUnavailable, OSError):
+            return HostRemoteControlStatus.observed(HostConnection.UNREACHABLE, server_name=None)
 
     async def set_state(self, command: HostRemoteControlCommand) -> HostRemoteControlStatus:
-        """Flip this host's Remote Control once for an exact owner press."""
+        """Flip this host's Remote Control once for an exact owner press.
+
+        A press that ends in an ERRORED or UNREACHABLE reading has still burned its key, so a
+        redelivery of that same press is refused as "already handled" for something that
+        demonstrably did not happen. Harmless because both surfaces mint a fresh key per
+        press -- the owner presses again and gets a real attempt -- but written down because
+        the two operations on this service read inconsistently side by side otherwise, and
+        `pair`'s docstring explains the same trade in the opposite direction.
+        """
         async with self._locks.operation(), self._host_lock:
             if not await self._store.claim_idempotency_key(command.idempotency_key):
                 raise DuplicateCommandError("host remote control callback was already handled")
             try:
                 return await self._control.set_state(command.desired_state)
-            except ProviderUnavailable:
-                return HostRemoteControlStatus.observed(HostConnection.ERRORED, server_name=None)
+            except (ProviderUnavailable, OSError):
+                return HostRemoteControlStatus.observed(
+                    HostConnection.UNREACHABLE, server_name=None
+                )
 
     async def pair(self, command: PairCommand) -> PairingCode:
         """Mint one pairing code for one owner press, and store none of it.
 
         Claimed for a sharper reason than the toggle's: two codes minted from one press are
         two live secrets, and only one of them is on the owner's screen.
+
+        **The key is burned before the code is minted, and stays burned if the mint fails.**
+        That ordering is deliberate and it is the safe one -- claiming afterwards would let a
+        redelivered callback mint a second secret -- but its cost is worth naming: a `pair`
+        that fails validation *after* `codex` has already produced a code leaves a live
+        secret nobody rendered and nobody can revoke from here. It expires on its own. Both
+        surfaces mint a fresh key per press, so the owner is never stuck; the exposure is the
+        unrendered code's lifetime, not the owner's ability to retry.
 
         Unlike the two paths above, a failure here RAISES. There is no honest empty
         `PairingCode` to answer with -- a surface must render "that did not work" rather

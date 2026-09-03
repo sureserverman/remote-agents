@@ -17,6 +17,9 @@ from remote_agents.config import TelegramSecrets
 from remote_agents.ports.agent_activity import ActivityConfidence, ActivityKind, AgentActivity
 
 _LOG = logging.getLogger(__name__)
+
+#: A shutdown courtesy, not a negotiation: past this the child is left to the OS.
+_CLOSE_TIMEOUT_SECONDS = 5.0
 _ACTIVITY_POLL_SECONDS = 30.0
 
 
@@ -122,12 +125,23 @@ async def _close_host_remote_control(composition: ServiceComposition) -> None:
     none (DEC-061), and swallowed because a failure to tidy up must not be the last thing a
     clean shutdown does.
     """
-    control = getattr(composition.boundary, "backend", None)
-    control = getattr(control, "host_remote_control", None)
+    backend = getattr(composition.boundary, "backend", None)
+    if backend is None:
+        return
+    # Direct attribute access, not `getattr(..., None)`: `Backend` is a frozen slots
+    # dataclass, so a renamed field is a loud AttributeError everywhere else in this
+    # codebase. Swallowing it here would convert that into a silent `return` that leaves the
+    # child unreclaimed with no signal at all -- the exact failure this function prevents.
+    control = backend.host_remote_control
     if control is None:
         return
     try:
-        await control.aclose()
+        # Bounded, because this runs in a `finally` on the way out. `aclose()` closes a
+        # subprocess, and an unbounded await would make `systemctl stop` hang until
+        # TimeoutStopSec, which then kills only the main process and orphans that very child.
+        await asyncio.wait_for(control.aclose(), timeout=_CLOSE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _LOG.warning("host remote control did not close within %ss", _CLOSE_TIMEOUT_SECONDS)
     except Exception:  # noqa: BLE001 -- tidying up may not turn a clean stop into a crash
         _LOG.debug("host remote control did not close cleanly", exc_info=True)
 

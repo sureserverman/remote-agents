@@ -34,6 +34,7 @@ DIRECTIONS = {
     HostConnection.DISABLED: (ACTIVE,),
     HostConnection.DAEMON_ABSENT: (ACTIVE,),
     HostConnection.ERRORED: (ACTIVE, INACTIVE),
+    HostConnection.UNREACHABLE: (ACTIVE, INACTIVE),
 }
 
 #: Pairing needs a live relay link to pair *to*.
@@ -43,6 +44,7 @@ PAIRABLE = {
     HostConnection.DISABLED: False,
     HostConnection.DAEMON_ABSENT: False,
     HostConnection.ERRORED: False,
+    HostConnection.UNREACHABLE: False,
 }
 
 

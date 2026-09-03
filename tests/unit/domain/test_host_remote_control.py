@@ -35,19 +35,21 @@ DERIVED_STATE = {
     HostConnection.DISABLED: RemoteControlState.INACTIVE,
     HostConnection.DAEMON_ABSENT: RemoteControlState.UNKNOWN,
     HostConnection.ERRORED: RemoteControlState.UNKNOWN,
+    HostConnection.UNREACHABLE: RemoteControlState.UNKNOWN,
 }
 
 EXPIRES = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
 
 
 def test_the_connection_vocabulary_is_closed() -> None:
-    """Five connections, no more: an unlisted one has no declared state to derive."""
+    """Six connections, no more: an unlisted one has no declared state to derive."""
     assert {member.value for member in HostConnection} == {
         "daemon_absent",
         "disabled",
         "connecting",
         "connected",
         "errored",
+        "unreachable",
     }
 
 

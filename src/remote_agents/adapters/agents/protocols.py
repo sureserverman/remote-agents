@@ -8,6 +8,11 @@ from collections.abc import Mapping
 
 from remote_agents.ports.provider_errors import ProviderUnavailable
 
+#: How long a closing app-server child gets to exit on its own, then on SIGTERM, before
+#: it is killed. Both are short because every caller of `close()` is shutting down.
+_GRACEFUL_EXIT_SECONDS = 2
+_TERMINATE_EXIT_SECONDS = 2
+
 
 class ProtocolError(ProviderUnavailable):
     """Raised when a provider protocol is unavailable or returns an invalid response.
@@ -44,10 +49,19 @@ class JsonRpcProcess:
                 process.stdin.close()
                 await process.stdin.wait_closed()
             try:
-                await asyncio.wait_for(process.wait(), timeout=2)
+                await asyncio.wait_for(process.wait(), timeout=_GRACEFUL_EXIT_SECONDS)
             except TimeoutError:
                 process.terminate()
-                await process.wait()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=_TERMINATE_EXIT_SECONDS)
+                except TimeoutError:
+                    # `terminate()` is SIGTERM, which a child is free to ignore -- and this
+                    # runs in a shutdown path. An unbounded wait here turns "stop the
+                    # service" into a hang, systemd's TimeoutStopSec then kills only the
+                    # main process, and the child this function exists to reclaim is
+                    # orphaned anyway. Escalating costs one signal and removes both.
+                    process.kill()
+                    await process.wait()
 
     async def _ensure_started(self) -> None:
         if self._process is not None and self._process.returncode is None:
