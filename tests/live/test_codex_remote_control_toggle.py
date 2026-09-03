@@ -118,7 +118,9 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
             },
         )
         socket = f"remote-agents-test-{session_id.value.hex}"
-        gateway = TmuxGateway(socket, AsyncTmuxRunner(), intent_directory=tmp_path / "intents")
+        tmux = AsyncTmuxRunner()
+        base = ("tmux", "-L", socket)
+        gateway = TmuxGateway(socket, tmux, intent_directory=tmp_path / "intents")
         terminal = TmuxTerminal(
             gateway,
             {project_id: project_path},
@@ -159,9 +161,19 @@ async def test_codex_remote_control_enables_launches_visibly_and_disables_withou
             )
             print("after disable: the pane is live and the daemon still answers")
         finally:
-            # (7) Leave nothing behind.
+            # (7) Leave nothing behind. `kill-server` is issued through the runner and the
+            # socket file unlinked afterwards, which is the idiom every other live drill uses
+            # (test_pane_addressing, test_console_journey): tmux stops the server but does not
+            # reliably remove its socket, and `TmuxGateway` has no teardown method of its own.
+            # It said `gateway.kill_server()` until 2026-09-03 -- an AttributeError in a
+            # `finally`, so the first real run of this drill both failed and masked whatever
+            # the body had done.
             await terminal.force_stop(session_id)
-            await gateway.kill_server()
+            try:
+                await tmux.run(*base, "kill-server")
+            except RuntimeError:
+                pass
+            (Path(f"/tmp/tmux-{os.getuid()}") / socket).unlink(missing_ok=True)
     finally:
         await control.aclose()
         print(f"\nThis host is still enrolled unless you run:\n{_UNDO}\n")
