@@ -49,6 +49,7 @@ from remote_agents.adapters.tui.screens.confirm import (
     ConfirmScreen,
     HostPairingCodeModal,
     HostRemoteControlConfirmModal,
+    HostRemoteControlDirectionModal,
 )
 from remote_agents.adapters.tui.screens.dashboard import (
     HOST_REMOTE_CONTROL_KEY,
@@ -504,28 +505,55 @@ async def test_the_key_is_inert_where_no_host_toggle_is_wired() -> None:
 @pytest.mark.parametrize(
     "connection", [HostConnection.ERRORED, HostConnection.UNREACHABLE], ids=lambda c: c.value
 )
-async def test_a_reading_that_opens_two_directions_explains_itself_instead_of_guessing(
+async def test_a_reading_that_opens_two_directions_asks_which_rather_than_guessing(
     connection: HostConnection,
 ) -> None:
-    """The policy declines to pick a side here, so the surface declines too — out loud.
+    """The policy declines to pick a side here, so the surface asks -- it does not pick either.
 
-    `host_remote_control_directions` answers both directions for these two readings, and a
-    key that picked one would be guessing on the owner's behalf about a machine-wide setting.
-    What it must not do is nothing: that is the "button that could never explain itself" this
-    whole line exists to end, so the refusal names the reading it is refusing on.
+    **This replaced an earlier refusal, and the parity contract is what replaced it.** The key
+    used to announce the reading and stop, which sounds careful and is not: the bot offers
+    both directions as buttons for these two readings, so a terminal that offered none was
+    rendering a smaller set than its sibling from the same policy -- exactly the divergence
+    DEC-007's parity contract exists to catch. It caught this one
+    (`tests/contract/test_session_actions_parity.py`).
+
+    What survives from the refusal is the part that was right: the reading and its remedy are
+    still announced, because "the button that could never explain itself" is the failure this
+    whole line exists to end. What changed is that the owner is now also given the two
+    choices, and choosing still passes through the ordinary confirmation.
     """
     control = FakeHostRemoteControl(connection)
     app = RemoteAgentsTui(_context(control))
     async with app.run_test() as pilot:
         await pilot.pause()
-        await _press_expecting_no_question(app, pilot)
-        assert isinstance(app.screen, DashboardScreen), "no direction was open to confirm"
-        assert not [call for call in control.calls if call.startswith("set_state")]
+        asking = asyncio.create_task(app.screen.confirm_host_remote_control())
+        try:
+            await _until(
+                lambda: isinstance(app.screen, HostRemoteControlDirectionModal),
+                why="the key to ask which direction",
+            )
+            options = app.screen.query_one("#choices", OptionList)
+            rows = [
+                str(options.get_option_at_index(index).prompt)
+                for index in range(options.option_count)
+            ]
+            assert set(HOST_REMOTE_CONTROL_LABELS.values()) <= set(rows), rows
+            assert rows[0] == "Cancel", "the way out must rest under the cursor"
+
+            await pilot.press("escape")
+            await _until(
+                lambda: isinstance(app.screen, DashboardScreen),
+                why="cancelling to return to the dashboard",
+            )
+        finally:
+            asking.cancel()
+            await asyncio.gather(asking, return_exceptions=True)
+
+        assert not [call for call in control.calls if call.startswith("set_state")], (
+            "cancelling the choice must not change the machine"
+        )
         said = announcements(app)
-        assert said, "the key did nothing and said nothing"
-        assert any(HOST_REMOTE_CONTROL_TITLE in one for one in said)
-        # The two readings must not be refused in the same words either -- the remedy is the
-        # half the owner can act on, and it is the half that differs.
+        assert said, "the reading and its remedy are still what the owner needs"
         assert any(host_remote_control_line(control_status(control)) in one for one in said)
 
 

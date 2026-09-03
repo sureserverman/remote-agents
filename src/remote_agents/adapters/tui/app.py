@@ -49,7 +49,11 @@ from remote_agents.adapters.tui.screens import (
     SessionsScreen,
 )
 from remote_agents.adapters.tui.screens.base import ChoiceScreen
-from remote_agents.adapters.tui.screens.confirm import ConfirmScreen, HostPairingCodeModal
+from remote_agents.adapters.tui.screens.confirm import (
+    ConfirmScreen,
+    HostPairingCodeModal,
+    HostRemoteControlDirectionModal,
+)
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
@@ -1148,6 +1152,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             screen.set_status(f"Remote Control: {state.value}")
         finally:
             self._busy = False
+
+    async def ask_for_host_direction(
+        self, directions: tuple[RemoteControlState, ...]
+    ) -> RemoteControlState | None:
+        """Ask which direction, where the policy offered more than one.
+
+        Beside `ask_to_confirm` and awaited the same way, because it has the same hazard:
+        the caller is a screen handler on its own pump (DEC-068), never a binding body.
+        """
+        return await self.push_screen_wait(HostRemoteControlDirectionModal(directions))
 
     async def pair_host_remote_control(self, screen: DashboardScreen) -> None:
         """Mint one pairing code for one owner press and put it on screen once.

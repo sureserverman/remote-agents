@@ -23,13 +23,14 @@ import asyncio
 from datetime import UTC, datetime
 
 import pytest
-from backends import SessionUseCaseDouble, backend_for
+from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
 from stop_results import a_clean_stop, a_verified_force_stop
 from textual.widgets import OptionList, TextArea
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.screens.confirm import HostPairingCodeModal
 from remote_agents.application.commands import (
     CleanupCommand,
     ForceStopCommand,
@@ -37,6 +38,7 @@ from remote_agents.application.commands import (
     RemoteControlCommand,
     ResumeCommand,
 )
+from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_TITLE
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.services import ResumeOutcome
@@ -58,7 +60,11 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlState,
+)
 
 _PROJECT = CatalogProject("opaque-existing", "existing", "infra", "Registered")
 _REFERENCE = "c-" + "0" * 16
@@ -140,6 +146,12 @@ async def _capture(_session_id) -> str:
     return "Claude Code ready"
 
 
+#: One host toggle for the two probes below, connected so both the direction and the pairing
+#: are on offer -- `pair_available` is false everywhere else, and a probe cannot assert a
+#: capability the policy is refusing.
+_HOST_CONTROL = FakeHostRemoteControl(HostConnection.CONNECTED)
+
+
 def _app(state: SessionState = SessionState.RUNNING) -> tuple[RemoteAgentsTui, _Everything]:
     launcher = _Everything(state)
     return (
@@ -152,6 +164,7 @@ def _app(state: SessionState = SessionState.RUNNING) -> tuple[RemoteAgentsTui, _
                     catalogue=(_PROJECT,),
                     capture=_capture,
                     conversations=_Conversations(),  # type: ignore[arg-type]
+                    host_remote_control=_HOST_CONTROL,
                 ),
                 profiles=(ProfileAvailability("claude", True),),
                 attach_argv=lambda session_id: ("tmux", "attach-session", "-t", f"={session_id}"),
@@ -322,6 +335,49 @@ async def _probe_resume(app, launcher, pilot) -> None:
     assert app.return_value is not None, "a ready resume must hand back an attach request"
 
 
+async def _probe_host_remote_control(app, launcher, pilot) -> None:
+    """The host toggle: the reading is drawn, and the key reaches a confirmation.
+
+    Driven from the dashboard rather than a session detail, because its subject is the
+    machine -- there is no row to open first, which is the structural difference from
+    `_probe_remote_control` above and the reason both are listed.
+    """
+    del launcher
+    await pilot.pause()
+    rows = [
+        str(app.screen.query_one("#limits-pane", OptionList).get_option_at_index(index).prompt)
+        for index in range(app.screen.query_one("#limits-pane", OptionList).option_count)
+    ]
+    assert any(HOST_REMOTE_CONTROL_TITLE in row for row in rows), rows
+    assert app.screen.host_directions_offered(
+        HostRemoteControlStatus.observed(HostConnection.CONNECTED, server_name=None)
+    )
+
+
+async def _probe_host_pairing(app, launcher, pilot) -> None:
+    """Pairing: offered where there is a link to pair to, and it produces a code once."""
+    del launcher
+    await pilot.pause()
+    assert app.screen.host_pair_offered(
+        HostRemoteControlStatus.observed(HostConnection.CONNECTED, server_name=None)
+    )
+    before = _HOST_CONTROL.calls.count("pair")
+    pairing = asyncio.create_task(app.screen.confirm_host_pair())
+    try:
+        await _settle_position(app, pilot, "")
+    except Exception:  # noqa: BLE001 -- the modal declares no position, so settle by type
+        pass
+    for _ in range(50):
+        await pilot.pause()
+        if isinstance(app.screen, HostPairingCodeModal):
+            break
+    assert isinstance(app.screen, HostPairingCodeModal), "no pairing code was shown"
+    await pilot.press("escape")
+    await pilot.pause()
+    pairing.cancel()
+    assert _HOST_CONTROL.calls.count("pair") == before + 1
+
+
 # The state each capability needs to be offered at all, from the shared policy.
 CAPABILITIES = {
     "sessions list": (_probe_sessions_list, SessionState.RUNNING),
@@ -333,6 +389,8 @@ CAPABILITIES = {
     "claude remote control": (_probe_remote_control, SessionState.RUNNING),
     "inspect output": (_probe_inspect, SessionState.RUNNING),
     "resume": (_probe_resume, SessionState.RUNNING),
+    "codex host remote control": (_probe_host_remote_control, SessionState.RUNNING),
+    "codex host pairing": (_probe_host_pairing, SessionState.RUNNING),
 }
 
 
@@ -368,5 +426,11 @@ def test_the_parity_claim_names_every_capability_the_plan_enumerated() -> None:
         "claude remote control",
         "inspect output",
         "resume",
+        # Added by the 2026-09-03 Codex Remote Control plan. Listed rather than folded
+        # into "claude remote control": the two have different subjects -- a live owned
+        # pane and this machine -- and a checklist that merged them would let either one
+        # disappear behind the other.
+        "codex host remote control",
+        "codex host pairing",
     }
     assert set(CAPABILITIES) == expected

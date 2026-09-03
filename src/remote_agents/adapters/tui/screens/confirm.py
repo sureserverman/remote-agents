@@ -401,6 +401,69 @@ class HostRemoteControlConfirmModal(ConfirmScreen):
         )
 
 
+class HostRemoteControlDirectionModal(ModalScreen[RemoteControlState | None]):
+    """Ask *which* direction, where the policy declines to say which way the host is set.
+
+    `ERRORED` and `UNREACHABLE` both mean "we could not read the setting", so the policy
+    offers both directions rather than guessing -- and a surface that then guessed on its
+    behalf would put the guess back one layer down. The bot renders both as buttons; this is
+    the terminal's equal, and it exists because the two surfaces must offer the same set
+    (DEC-007), not because the terminal wanted another screen. The parity contract is what
+    found the gap: the terminal used to decline here, and declining is a smaller set.
+
+    It chooses; it does not act. The direction it returns goes on to the ordinary
+    confirmation, which is what keeps "the toggle is confirmed" true on both surfaces
+    however many directions were open -- the same two steps the bot takes.
+
+    **Not in `ALL_CONFIRMS`, and no `position`.** That registry is swept for a resting row
+    that mutates, and nothing here mutates: this screen returns a choice and the confirmation
+    after it is what stands in front of the change.
+    """
+
+    position = ""
+    abort_label = "Cancel"
+
+    BINDINGS = [Binding("escape", "dismiss_direction", "Cancel", show=False)]
+
+    def __init__(self, directions: tuple[RemoteControlState, ...]) -> None:
+        super().__init__()
+        self._directions = directions
+
+    def compose(self) -> ComposeResult:
+        # `#dialog`, `#status` and `#choices` deliberately, not names of this modal's own:
+        # that trio is the vocabulary every test helper and the resting-cursor assertion
+        # already read, and a modal that renamed them would be invisible to the checks that
+        # matter most here. The note on `ConfirmScreen.compose` says so in those words.
+        with Vertical(id="dialog"):
+            yield Static(
+                f"{HOST_REMOTE_CONTROL_TITLE}: this machine's setting could not be read.\n"
+                "Choose the direction to assert.",
+                id="status",
+                markup=False,
+            )
+            # `_CANCEL` is the sentinel *id*, not a label -- passing it as the prompt too
+            # renders its null byte on screen. `ConfirmScreen` keeps the two apart in `rows`
+            # and so does this.
+            options = [Option(self.abort_label, id=_CANCEL)] + [
+                Option(HOST_REMOTE_CONTROL_LABELS[direction], id=direction.value)
+                for direction in self._directions
+            ]
+            # Cancel first, so leaving and declining rest under the same cursor as everywhere
+            # else in this file.
+            yield OptionList(*options, id="choices", markup=False)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        chosen = event.option.id
+        if chosen is None or chosen == _CANCEL:
+            self.dismiss(None)
+            return
+        self.dismiss(RemoteControlState(chosen))
+
+    def action_dismiss_direction(self) -> None:
+        self.dismiss(None)
+
+
 class HostPairingCodeModal(ModalScreen[None]):
     """Show a pairing code once, then take it off the screen for good.
 

@@ -45,6 +45,13 @@ from surfaces import surface_pairs
 from textual.widgets import OptionList
 
 from remote_agents.adapters.telegram.service import build_private_bot, unmarked
+from remote_agents.application.host_remote_control import (
+    HOST_REMOTE_CONTROL_LABELS as _HOST_LABELS,
+)
+from remote_agents.application.host_remote_control import (
+    host_remote_control_directions,
+    pair_available,
+)
 from remote_agents.application.session_actions import ACTION_LABELS, available_actions
 from remote_agents.domain.models import (
     OrphanProvenance,
@@ -55,7 +62,11 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlState,
+)
 
 # One decoder for both surfaces. This used to be a hand-written table mapping the bot's
 # title-cased spellings back to action ids, which existed only because the two surfaces
@@ -247,3 +258,168 @@ async def test_both_surfaces_offer_the_same_remote_control_directions(
     record = replace(_record(SessionState.RUNNING), remote_control_state=observed)
 
     assert await rows(record) == expected, f"{surface} disagrees for observed={observed}"
+
+
+# --- The host action -------------------------------------------------------------------
+#
+# A second `surface_pairs`, because the host toggle is a second vocabulary the two surfaces
+# must render identically -- and it is a *different* one. Everything above is keyed by a
+# `SessionRecord` and answers "what may this session be asked to do"; nothing here has a
+# session at all. The pairing was written twice rather than generalised for the same reason
+# `HostRemoteControlCommand` is a separate type: a record that is sometimes meaningful is a
+# field every reader has to ask about.
+
+
+async def _telegram_host_offer(status) -> tuple[frozenset[str], bool]:
+    """What the bot puts on screen for this reading: directions offered, and pairing."""
+    from backends import FakeHostRemoteControl
+
+    from remote_agents.adapters.telegram.presenters import unpadded
+
+    control = FakeHostRemoteControl(status.connection)
+    bot = build_private_bot(7, 11, backend=backend_for(host_remote_control=control))
+    screen = await bot._host_remote_control_reply()
+    labels = [unmarked(unpadded(button.text)) for row in screen.keyboard for button in row]
+    words = frozenset(_HOST_LABELS.values())
+    offered = frozenset(label for label in labels if label in words)
+    return offered, any("Pair" in label for label in labels)
+
+
+class _HostLauncher(SessionUseCaseDouble):
+    """Just enough session use case for the dashboard to draw itself without complaining."""
+
+    async def refresh_readiness(self) -> None:
+        return None
+
+    async def list_sessions(self):
+        return ()
+
+
+async def _tui_host_offer(status) -> tuple[frozenset[str], bool]:
+    """What the terminal offers for this reading, observed by driving the real flow.
+
+    **Deliberately not `screen.host_directions_offered(status)`.** That accessor returns the
+    policy, so a surface that consulted it and then declined to act would still report the
+    full set -- which is exactly what happened: an early `return` after the call passed every
+    assertion in this file while the terminal offered nothing. A parity test that asks a
+    surface what it would do, rather than watching what it does, cannot see the divergence it
+    exists to catch.
+
+    So this drives `confirm_host_remote_control` and reads the modal that actually appears:
+    the confirmation names one direction, the chooser offers several, and neither appearing
+    means none were offered.
+    """
+    import asyncio
+
+    from backends import FakeHostRemoteControl
+    from textual.widgets import OptionList as _OptionList
+
+    from remote_agents.adapters.tui.app import RemoteAgentsTui
+    from remote_agents.adapters.tui.context import TuiContext
+    from remote_agents.adapters.tui.screens.confirm import (
+        HostRemoteControlConfirmModal,
+        HostRemoteControlDirectionModal,
+    )
+    from remote_agents.application.host_remote_control import HOST_REMOTE_CONTROL_LABELS
+    from remote_agents.application.profiles import ProfileAvailability
+
+    words = frozenset(HOST_REMOTE_CONTROL_LABELS.values())
+    control = FakeHostRemoteControl(status.connection)
+    app = RemoteAgentsTui(
+        TuiContext(
+            backend=backend_for(
+                sessions=_HostLauncher(),
+                projects=object(),
+                refresh_catalogue=tuple,
+                host_remote_control=control,
+            ),
+            profiles=(ProfileAvailability("codex", True),),
+            attach_argv=lambda session_id: ("tmux",),
+        )
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        dashboard = app.screen
+
+        asking = asyncio.create_task(dashboard.confirm_host_remote_control())
+        offered: frozenset[str] = frozenset()
+        try:
+            for _ in range(60):
+                await pilot.pause()
+                screen = app.screen
+                if isinstance(screen, HostRemoteControlDirectionModal):
+                    options = screen.query_one("#choices", _OptionList)
+                    offered = (
+                        frozenset(
+                            str(options.get_option_at_index(index).prompt)
+                            for index in range(options.option_count)
+                        )
+                        & words
+                    )
+                    break
+                if isinstance(screen, HostRemoteControlConfirmModal):
+                    # The direction is in the confirm row ("Yes, remote control off"): the
+                    # question above names the fact, the row names the act.
+                    options = screen.query_one("#choices", _OptionList)
+                    rendered = " ".join(
+                        str(options.get_option_at_index(index).prompt)
+                        for index in range(options.option_count)
+                    ).casefold()
+                    offered = frozenset(word for word in words if word.casefold() in rendered)
+                    break
+            await pilot.press("escape")
+            await pilot.pause()
+        finally:
+            asking.cancel()
+            await asyncio.gather(asking, return_exceptions=True)
+
+        pairing = asyncio.create_task(dashboard.confirm_host_pair())
+        try:
+            for _ in range(60):
+                await pilot.pause()
+                if control.calls.count("pair"):
+                    break
+            paired = control.calls.count("pair") > 0
+            if paired:
+                await pilot.press("escape")
+                await pilot.pause()
+        finally:
+            pairing.cancel()
+            await asyncio.gather(pairing, return_exceptions=True)
+
+    return offered, paired
+
+
+HOST_SURFACES = surface_pairs(telegram=_telegram_host_offer, tui=_tui_host_offer)
+
+
+@pytest.mark.parametrize("surface_name,offer", HOST_SURFACES)
+@pytest.mark.parametrize("connection", list(HostConnection), ids=lambda c: c.value)
+async def test_both_surfaces_offer_exactly_the_host_policy_s_directions(
+    surface_name: str, offer, connection: HostConnection
+) -> None:
+    """DEC-007 for the host action: one policy, one vocabulary, two renderers.
+
+    Written over every `HostConnection` rather than over the interesting ones, because the
+    readings that diverged in practice were the two nobody thought were interesting --
+    `ERRORED` and `UNREACHABLE`, where the policy declines to say which way the host is set
+    and therefore offers both.
+    """
+    status = HostRemoteControlStatus.observed(connection, server_name=None)
+    expected = frozenset(
+        _HOST_LABELS[direction] for direction in host_remote_control_directions(status)
+    )
+    offered, _ = await offer(status)
+    assert offered == expected, f"{surface_name} disagrees with the policy on {connection}"
+
+
+@pytest.mark.parametrize("surface_name,offer", HOST_SURFACES)
+@pytest.mark.parametrize("connection", list(HostConnection), ids=lambda c: c.value)
+async def test_both_surfaces_offer_pairing_under_the_same_predicate(
+    surface_name: str, offer, connection: HostConnection
+) -> None:
+    status = HostRemoteControlStatus.observed(connection, server_name=None)
+    _, pairing = await offer(status)
+    assert pairing is pair_available(status), (
+        f"{surface_name} offers pairing where the policy does not, on {connection}"
+    )

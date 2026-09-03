@@ -68,7 +68,11 @@ from remote_agents.application.host_remote_control import (
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.application.session_views import LimitRow, limit_rows, session_row_parts
 from remote_agents.domain.models import SessionRecord
-from remote_agents.domain.remote_control import HostConnection, HostRemoteControlStatus
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlState,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -791,7 +795,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             if not self.showing:
                 return
             self._draw_limits()
-            if not pair_available(self._host_status):
+            if not self.host_pair_offered(self._host_status):
                 self.announce(
                     f"{host_remote_control_line(self._host_status)}. "
                     "Pairing needs a live connection to pair to.",
@@ -799,6 +803,22 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                 )
                 return
         await self.tui.pair_host_remote_control(self)
+
+    def host_directions_offered(
+        self, status: HostRemoteControlStatus | None
+    ) -> tuple[RemoteControlState, ...]:
+        """Which directions this screen will act on for `status`.
+
+        The policy's answer, returned rather than re-derived, and consulted by the real key
+        path below so the two cannot disagree. It exists as a method because the terminal's
+        directions live in what the key is willing to do rather than in a keyboard a parity
+        test could scrape -- the bot has buttons to read; this is its equal.
+        """
+        return host_remote_control_directions(status)
+
+    def host_pair_offered(self, status: HostRemoteControlStatus | None) -> bool:
+        """Whether this screen will mint a code for `status`. Same reason as above."""
+        return pair_available(status)
 
     async def confirm_host_remote_control(self) -> None:
         """Re-read the machine, offer the one open direction, and issue only on a `True`.
@@ -837,18 +857,29 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                 return
             self._draw_limits()
             status = self._host_status
-            directions = host_remote_control_directions(status)
+            directions = self.host_directions_offered(status)
             if not directions:
                 return
+            chosen = directions[0]
             if len(directions) > 1:
+                # The policy declined to say which way the host is set, so this asks rather
+                # than guessing -- and rather than refusing, which is what it used to do. The
+                # bot renders both directions as buttons, and a surface offering a smaller
+                # set than its sibling is exactly the drift DEC-007's parity contract exists
+                # to catch. It caught this one.
                 remedy = _HOST_AMBIGUOUS_REMEDY.get(status.connection, "") if status else ""
-                self.announce(
-                    f"{host_remote_control_line(status)}. {remedy}".strip(), severity="warning"
-                )
-                return
+                if remedy:
+                    self.announce(
+                        f"{host_remote_control_line(status)}. {remedy}".strip(),
+                        severity="warning",
+                    )
+                picked = await self.tui.ask_for_host_direction(directions)
+                if picked is None:
+                    return
+                chosen = picked
             try:
                 confirmed = await self.tui.ask_to_confirm(
-                    HostRemoteControlConfirmModal.for_direction(directions[0])
+                    HostRemoteControlConfirmModal.for_direction(chosen)
                 )
             except Exception as error:
                 _LOG.exception("the host Remote Control confirmation could not be shown")
@@ -856,7 +887,7 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                 return
             if not confirmed:
                 return
-        await self.tui.set_host_remote_control(directions[0], self)
+        await self.tui.set_host_remote_control(chosen, self)
 
     async def populate(self) -> None:
         await super().populate()
