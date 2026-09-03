@@ -62,6 +62,12 @@ from remote_agents.application.conversations import (
     resume_available,
 )
 from remote_agents.application.errors import ProjectCreationError, SessionNotFoundError
+from remote_agents.application.host_remote_control import (
+    HOST_REMOTE_CONTROL_LABELS,
+    HOST_REMOTE_CONTROL_TITLE,
+    HostRemoteControlCommand,
+    host_remote_control_directions,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreateProjectCommand
 from remote_agents.application.project_catalog import (
@@ -116,7 +122,11 @@ from remote_agents.domain.models import (
     normalize_label,
 )
 from remote_agents.domain.projects import ProjectIdentity
-from remote_agents.domain.remote_control import RemoteControlState
+from remote_agents.domain.remote_control import (
+    HostConnection,
+    HostRemoteControlStatus,
+    RemoteControlState,
+)
 from remote_agents.domain.trust import TRUST_ANSWERABLE, TrustState
 from remote_agents.ports.agent_usage import ContextWindow
 from remote_agents.ports.callback_state import CallbackStatePort
@@ -144,6 +154,27 @@ _OWNER_COMMANDS = (
     BotCommand("sessions", "View managed sessions"),
     BotCommand("help", "Show available actions"),
 )
+_HOST_REMOTE_COMMAND = BotCommand("remote", HOST_REMOTE_CONTROL_TITLE)
+"""The one command this bot lists conditionally, named by `application` rather than here.
+
+The description is the shared title and not a literal, for the reason the direction labels
+are shared: an owner who already knows the pane toggle would read a bare "Remote Control" as
+that one, and the two must not be able to drift apart in this file (DEC-007).
+
+Conditional because `/resume`'s asymmetry does not apply. Resume is listed on every host and
+answers "unavailable" where it is not wired, which is a sentence rather than a dead end; this
+one is offered only where a provider declared the capability, because a host with no `codex`
+has no relay to enrol with, and an entry whose only possible answer is no is worse than none.
+"""
+
+
+def owner_commands(backend: Backend) -> tuple[BotCommand, ...]:
+    """The command menu this composition should publish, given what it actually wired."""
+    if backend.host_remote_control is None:
+        return _OWNER_COMMANDS
+    return _OWNER_COMMANDS + (_HOST_REMOTE_COMMAND,)
+
+
 _GUIDED_TEXT_ENTRY = {
     "launch.search": (
         "Reply with a project name. Send Cancel or Back to leave this step.",
@@ -312,6 +343,71 @@ _REMOTE_CONTROL_WORDS: dict[RemoteControlState, str] = {
     RemoteControlState.INACTIVE: "off",
 }
 """How the detail's `remote` fact line reads the last observation. Anything else is `unknown`."""
+
+_HOST_CONNECTION_WORDS: dict[HostConnection, str] = {
+    HostConnection.CONNECTED: "on",
+    HostConnection.CONNECTING: "on, still connecting",
+    HostConnection.DISABLED: "off",
+    HostConnection.DAEMON_ABSENT: "unknown, no daemon is running",
+    HostConnection.ERRORED: "on, but the link is broken",
+    HostConnection.UNREACHABLE: "unknown, codex never replied",
+}
+"""The one-line reading of this machine, for the status line both screens share.
+
+Six words for six connections, and no two the same. The two pairs that are easiest to
+collapse are the two that must not be:
+
+* `DAEMON_ABSENT` is not `off`. The domain says why in its own words -- the enrollment
+  outlives the process that serves it, so a host whose flag is on with its daemon down is one
+  daemon start from reachable, and "off" is the direction of wrongness an owner acts on by
+  not acting.
+* `UNREACHABLE` is not `ERRORED`. One is the daemon reporting its own broken link; the other
+  is this project never having reached `codex` at all.
+
+The words themselves are this surface's (DEC-043) -- only the title and the direction labels
+come from `application`, because those are what the two surfaces must spell identically.
+"""
+
+_HOST_CONNECTION_EXPLANATIONS: dict[HostConnection, str] = {
+    HostConnection.CONNECTED: "This machine is enrolled, and a paired phone can reach it.",
+    HostConnection.CONNECTING: (
+        "The setting has taken and the link to the relay is still settling."
+    ),
+    HostConnection.DISABLED: "This machine is not enrolled, so no phone can reach it.",
+    HostConnection.DAEMON_ABSENT: (
+        "The codex daemon is not running here, so nothing can say whether this machine is "
+        "enrolled. The setting outlives the daemon, so this is not the same as being off."
+    ),
+    HostConnection.ERRORED: (
+        "The codex daemon answered, and reported that its own link to the relay is broken."
+    ),
+    HostConnection.UNREACHABLE: (
+        "This machine could not talk to codex at all, so nothing was read and nothing is "
+        "known -- codex may not be installed here."
+    ),
+}
+"""The sentence under the reading, which is where a non-expert learns what to do next.
+
+`UNREACHABLE` names the missing program on purpose. Before this member existed the surface
+rendered "errored" for a host where `codex` was simply not installed, and an owner could
+press the toggle forever without ever being told that.
+"""
+
+_HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
+    RemoteControlState.ACTIVE: (
+        "This enrols the whole machine with the relay, so a paired phone can drive every "
+        "codex session on it."
+    ),
+    RemoteControlState.INACTIVE: (
+        "This unenrols the whole machine, so a paired phone stops reaching any codex session on it."
+    ),
+}
+"""What the confirmation warns about: the subject is the machine, not one pane.
+
+The pane toggle's confirmation says "this uses only the verified Claude interaction", which is
+a statement about a keystroke into one session. Nothing about that reassurance is true here,
+and reusing its shape would have been the whole mistake this screen exists to avoid.
+"""
 
 
 _FACT_LABEL_WIDTH = 8
@@ -758,6 +854,21 @@ class PrivateBotBoundary:
                 update.effective_message, _reply_arguments(await self._sessions_reply())
             )
 
+    async def remote_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Open this machine's own Remote Control -- the one screen about no session at all.
+
+        `self._flow` is cleared rather than set: the navigation bar has three destinations and
+        this is not one of them, so marking a tab would tell the owner they are standing
+        somewhere they are not.
+        """
+        del context
+        if self.permits(update) and update.effective_message is not None:
+            self._flow = None
+            await self._answer_command(
+                update.effective_message,
+                _reply_arguments(await self._host_remote_control_reply()),
+            )
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Explain the actions this deployment actually offers, and leave a way on.
 
@@ -783,6 +894,12 @@ class PrivateBotBoundary:
         )
         if self.backend.projects is not None:
             lines.append("<b>Add Project</b> registers a new project to launch into.")
+        if self.backend.host_remote_control is not None:
+            lines.append(
+                f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)}</b> reports whether this machine is "
+                "enrolled with the relay, and turns that setting on or off for the whole "
+                "machine rather than for one session."
+            )
         lines += [
             "",
             f"<b>{ACTION_LABELS[GRACEFUL]}</b> asks the agent to exit on its own terms and "
@@ -998,6 +1115,15 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._attach_reply(entity_id))
         if action == "remote.control":
             return _reply_arguments(await self._remote_control_confirm_reply(entity_id))
+        # The host's three, kept under their own prefix rather than beside the pane's. The
+        # subjects differ, so a shared prefix would put one screen's Cancel on the other's
+        # entity id -- and `_session_scope` would then read a direction as a session.
+        if action == "host.remote.open":
+            return _reply_arguments(await self._host_remote_control_reply())
+        if action == "host.remote":
+            return _reply_arguments(await self._host_remote_control_confirm_reply(entity_id))
+        if action == "host.remote.confirm":
+            return await self._host_remote_control_act_reply(entity_id, token, message_id)
         if action == "session.trust":
             return await self._trust_reply(entity_id, token, message_id)
         if action == "session.inspect":
@@ -1284,6 +1410,10 @@ class PrivateBotBoundary:
         # when this list is empty, and an agent's weekly limit does not stop existing because
         # nothing is running against it right now.
         spent = await self._limit_block()
+        # Read beside the limits and for the same reasons: both branches render it, and the
+        # empty one needs it most -- a machine's enrollment does not stop being a fact because
+        # nothing is running against it right now.
+        host = await self._host_remote_block()
         if not records:
             self._sessions_page = 1
             # No body Launch. It was the way out before a permanent way out existed; the
@@ -1291,7 +1421,7 @@ class PrivateBotBoundary:
             # duplicating the one directly beneath it reads as a bug.
             return self._message(
                 f"{self._notice_line(notice)}<b>Sessions</b>{heading_counts}\n"
-                f"Nothing is running.{spent}"
+                f"Nothing is running.{spent}{host}"
             )
         page_count = max(1, ceil(len(records) / self.session_page_size))
         index = min(max(page, 1), page_count)
@@ -1338,7 +1468,7 @@ class PrivateBotBoundary:
         title = "Sessions" if page_count == 1 else f"Sessions {index}/{page_count}"
         body = "\n\n".join(sections)
         return self._message(
-            f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}",
+            f"{self._notice_line(notice)}<b>{title}</b>{heading_counts}\n\n{body}{spent}{host}",
             tuple(buttons),
         )
 
@@ -1694,6 +1824,140 @@ class PrivateBotBoundary:
         # difference would be asserting something this layer cannot see. The port would have
         # to say whether it acted, which is a wider change than this screen's wording.
         return _reply_arguments(self._message(f"Remote Control: {result.value}."))
+
+    @staticmethod
+    def _host_reading(status: HostRemoteControlStatus) -> str:
+        """The reading itself: a word for the connection, and the daemon's name for the host.
+
+        `server_name` is provider-supplied text this project did not decode, so it passes the
+        presentation boundary's encoder before it reaches a message (DEC-014) -- the same rule
+        every project name and captured line on this surface obeys. Escaped whole rather than
+        in the one part that needs it, because the escape is a property of the boundary and not
+        a judgement made string by string.
+        """
+        reading = _HOST_CONNECTION_WORDS[status.connection]
+        if status.server_name:
+            reading = f"{reading} ({status.server_name})"
+        return escape(reading)
+
+    def _host_unavailable(self) -> RenderedMessage:
+        """What a composition that declared no host capability answers, at every door."""
+        return self._message(f"{escape(HOST_REMOTE_CONTROL_TITLE)} is unavailable.")
+
+    def _host_remote_screen(self, status: HostRemoteControlStatus) -> RenderedMessage:
+        """The reading, what it means, and the direction (or directions) still worth offering.
+
+        One button per direction the policy returns, which is one for a host whose connection
+        the daemon stated and both where it could not be read -- `ERRORED` and `UNREACHABLE`
+        both leave the true setting unknown, and pressing a direction is how the owner finds
+        out whether it still will not take.
+        """
+        directions = host_remote_control_directions(status)
+        buttons = tuple(
+            Button(
+                f"{_REMOTE_EMOJI} {HOST_REMOTE_CONTROL_LABELS[direction]}",
+                self._callback("host.remote", direction.value),
+            )
+            for direction in directions
+        )
+        return self._message(
+            f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)}</b>\n"
+            f"<code>{self._host_reading(status)}</code>\n"
+            f"{escape(_HOST_CONNECTION_EXPLANATIONS[status.connection])}",
+            (buttons,) if buttons else (),
+        )
+
+    async def _host_remote_control_reply(self) -> RenderedMessage:
+        """Read this machine and draw it. No claim and no confirmation -- it is a read."""
+        control = self.backend.host_remote_control
+        if control is None:
+            return self._host_unavailable()
+        return self._host_remote_screen(await control.status())
+
+    async def _host_remote_control_confirm_reply(self, entity_id: str) -> RenderedMessage:
+        """Ask before the machine changes, the way the pane toggle asks before a pane does.
+
+        The entity is a direction and nothing else: this screen names no session, which is the
+        whole structural difference from `_remote_control_confirm_reply` and the reason the two
+        are siblings rather than one function with an optional session in it.
+        """
+        control = self.backend.host_remote_control
+        if control is None:
+            return self._host_unavailable()
+        direction = _host_direction(entity_id)
+        if direction is None:
+            return self._message("That Remote Control request is incomplete.")
+        label = HOST_REMOTE_CONTROL_LABELS[direction]
+        return self._message(
+            f"<b>{escape(label)}?</b>\n{escape(_HOST_DIRECTION_CAUTIONS[direction])}",
+            (
+                (
+                    Button(
+                        label,
+                        self._callback("host.remote.confirm", entity_id, mutation=True),
+                    ),
+                ),
+                (Button("Cancel", self._callback("host.remote.open", "host")),),
+            ),
+        )
+
+    async def _host_remote_control_act_reply(
+        self, entity_id: str, token: str, message_id: int
+    ) -> dict[str, object]:
+        """Flip this machine once, for this exact press, and draw what it now reads.
+
+        **The token is the idempotency key.** It is minted fresh by the confirmation screen
+        that drew this button, so each press carries its own -- which matters more here than
+        for the pane: a toggle that ends in a broken reading has still burned its key, so a
+        reused one would make the retry unavailable rather than merely redundant.
+
+        `claim_mutation` is what stops a redelivered callback from acting twice, and it is
+        claimed *after* the capability check for the reason `_launch_reply` gives: spending the
+        one-shot on a press that could never have worked answers the retry with "already run".
+        """
+        control = self.backend.host_remote_control
+        if control is None:
+            return _reply_arguments(self._host_unavailable())
+        direction = _host_direction(entity_id)
+        if direction is None:
+            return _reply_arguments(self._message("That Remote Control request is incomplete."))
+        if not self.callbacks.claim_mutation(
+            token,
+            owner_id=self.owner_user_id,
+            chat_id=self.owner_chat_id,
+            message_id=message_id,
+        ):
+            return _reply_arguments(self._message("That action has already run."))
+        status = await control.set_state(HostRemoteControlCommand(direction, token))
+        # The reading the host now reports, not the direction that was asked for. A screen
+        # claiming the press succeeded would be asserting something this layer cannot see --
+        # the service answers a failed enable with a reading rather than an exception, and
+        # that reading is exactly what the owner needs in order to decide what to do next.
+        return _reply_arguments(self._host_remote_screen(status))
+
+    async def _host_remote_block(self) -> str:
+        """This machine's reading for the sessions list, or nothing at all.
+
+        Placed under `Plan limits` and for the same reason that block sits where it does: it is
+        a statement about the host rather than about any row, so it must not read as the state
+        of whichever session it happens to sit beside.
+
+        The broad `except` is `_limit_block`'s trade, made for the same screen: `status()` does
+        not raise by contract -- a boundary that will not answer comes back as a reading -- but
+        this line is a decoration on the one screen that is the only way to reach a session at
+        all, and no provider change may cost the owner that list.
+        """
+        control = self.backend.host_remote_control
+        if control is None:
+            return ""
+        try:
+            status = await control.status()
+        except Exception:
+            _LOG.debug("host remote control read failed", exc_info=True)
+            return ""
+        return (
+            f"\n\n<code>{escape(HOST_REMOTE_CONTROL_TITLE)} · {self._host_reading(status)}</code>"
+        )
 
     async def _awaiting_trust(self, record: SessionRecord) -> bool:
         """Whether to offer the trust row. Costs one pane capture per detail render.
@@ -2597,6 +2861,10 @@ async def run_private_bot(
     application.add_handler(CommandHandler("resume", boundary.resume_command))
     application.add_handler(CommandHandler("sessions", boundary.sessions_command))
     application.add_handler(CommandHandler("help", boundary.help_command))
+    # Registered on every host, while `owner_commands` *lists* it only where the capability
+    # is wired: a command a bot does not handle is answered by silence, and an owner who
+    # typed it from a menu their other host published deserves the sentence instead.
+    application.add_handler(CommandHandler("remote", boundary.remote_command))
     application.add_handler(CallbackQueryHandler(boundary.callback))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & filters.UpdateType.MESSAGE, boundary.text)
@@ -2610,7 +2878,9 @@ async def run_private_bot(
     # not exist until here.
     boundary.notifier.attach(application.bot)
     try:
-        await _sync_owner_metadata(application.bot, secrets.owner_chat_id)
+        await _sync_owner_metadata(
+            application.bot, secrets.owner_chat_id, owner_commands(boundary.backend)
+        )
         webhook = await application.bot.get_webhook_info()
         if webhook.url:
             raise RuntimeError("Telegram webhook is configured; refusing concurrent polling")
@@ -2627,10 +2897,18 @@ async def run_private_bot(
         await application.shutdown()
 
 
-async def _sync_owner_metadata(bot, owner_chat_id: int) -> None:
+async def _sync_owner_metadata(
+    bot, owner_chat_id: int, commands: tuple[BotCommand, ...] = _OWNER_COMMANDS
+) -> None:
+    """Publish this deployment's shell. `commands` is what *this* composition wired.
+
+    Defaulted rather than required because the menu is the same four on every host that wired
+    no host capability, and every caller but `run_private_bot` -- which alone holds a backend
+    to ask -- means exactly those four.
+    """
     scope = BotCommandScopeChat(owner_chat_id)
     await bot.delete_my_commands()
-    await bot.set_my_commands(_OWNER_COMMANDS, scope=scope)
+    await bot.set_my_commands(commands, scope=scope)
     await bot.set_chat_menu_button(chat_id=owner_chat_id, menu_button=MenuButtonCommands())
     await bot.set_my_description(_BOT_DESCRIPTION)
     await bot.set_my_short_description(_BOT_SHORT_DESCRIPTION)
@@ -2651,6 +2929,12 @@ async def audit_bot_metadata(bot, owner_chat_id: int) -> dict[str, object]:
     description = await bot.get_my_description()
     short_description = await bot.get_my_short_description()
     expected_commands = [command.command for command in _OWNER_COMMANDS]
+    # Two shells are healthy, because this reads a live bot over the network and has no
+    # composition to ask which one it should be: a host that wired the host-level toggle
+    # publishes one command more, and reporting that as unhealthy would make the audit fail on
+    # every machine with `codex` installed. What it still catches is the failure it was written
+    # for -- a menu that has drifted from the reviewed set in any other way.
+    healthy_commands = (expected_commands, [*expected_commands, _HOST_REMOTE_COMMAND.command])
     report = {
         "default_commands": [command.command for command in default_commands],
         "owner_commands": [command.command for command in owner_commands],
@@ -2660,7 +2944,7 @@ async def audit_bot_metadata(bot, owner_chat_id: int) -> dict[str, object]:
     }
     report["healthy"] = (
         not report["default_commands"]
-        and report["owner_commands"] == expected_commands
+        and report["owner_commands"] in healthy_commands
         and report["owner_menu"] == "commands"
         and report["description_matches"]
         and report["short_description_matches"]
@@ -2675,6 +2959,18 @@ def _install_stop_signals(stopping: asyncio.Event) -> None:
             loop.add_signal_handler(event, stopping.set)
         except NotImplementedError:
             signal.signal(event, lambda _number, _frame: stopping.set())
+
+
+def _host_direction(entity_id: str) -> RemoteControlState | None:
+    """The direction a host token carries, or `None` for anything that is not one.
+
+    `UNKNOWN` is a member of the enum and is refused here rather than at the command, which
+    raises `ValueError`: a token minted before a deploy is still live (DEC-011), so this
+    boundary answers an entity it no longer draws with a sentence rather than a traceback.
+    """
+    if entity_id not in {RemoteControlState.ACTIVE.value, RemoteControlState.INACTIVE.value}:
+        return None
+    return RemoteControlState(entity_id)
 
 
 def _session_scope(entity_id: str) -> str:

@@ -202,8 +202,8 @@ def _harness(
     return _Harness(log, chain, application, bot, updater, stop_events)
 
 
-def _boundary(log: list[str]) -> Any:
-    boundary = build_private_bot(OWNER, CHAT, backend=backend_for())
+def _boundary(log: list[str], **backend: Any) -> Any:
+    boundary = build_private_bot(OWNER, CHAT, backend=backend_for(**backend))
     attach = boundary.notifier.attach
 
     def _record(bot: Any) -> None:
@@ -218,7 +218,7 @@ def _boundary(log: list[str]) -> Any:
 async def test_every_handler_the_owner_can_reach_is_registered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Seven handlers, and nothing has ever checked that they are all there.
+    """Eight handlers, and nothing has ever checked that they are all there.
 
     A dropped or renamed handler is a command that silently stops existing: PTB simply has
     no route for the update, so the bot answers nothing and logs nothing. The count is
@@ -229,14 +229,17 @@ async def test_every_handler_the_owner_can_reach_is_registered(
     await run_private_bot(SECRETS, _boundary(harness.log))
 
     handlers = harness.application.handlers
-    assert len(handlers) == 7, f"expected 7 handlers, found {len(handlers)}"
+    assert len(handlers) == 8, f"expected 8 handlers, found {len(handlers)}"
 
     commands = {
         next(iter(handler.commands)): handler.callback
         for handler in handlers
         if isinstance(handler, CommandHandler)
     }
-    assert set(commands) == {"start", "launch", "resume", "sessions", "help"}
+    # `/remote` is registered on every host and *listed* only where the capability is wired
+    # (`owner_commands`), so an owner who types it on a bare host gets the sentence rather
+    # than silence.
+    assert set(commands) == {"start", "launch", "resume", "sessions", "help", "remote"}
 
     callbacks = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
     messages = [h for h in handlers if isinstance(h, MessageHandler)]
@@ -267,6 +270,7 @@ async def test_each_command_routes_to_its_own_boundary_method(
         "resume": boundary.resume_command,
         "sessions": boundary.sessions_command,
         "help": boundary.help_command,
+        "remote": boundary.remote_command,
     }
 
     callback = next(h for h in harness.application.handlers if isinstance(h, CallbackQueryHandler))
@@ -359,6 +363,35 @@ async def test_the_owner_metadata_is_synced_before_the_bot_answers_anything(
     assert harness.bot.commands_set, "the owner's command list was set to nothing"
 
 
+async def test_the_published_menu_is_the_one_this_composition_can_actually_serve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The menu is set once for the chat, so it must be built from *this* host's backend.
+
+    `owner_commands` decides which entries a composition may publish, and this is the only
+    place that decision reaches Telegram. Passing the module constant instead would compile,
+    run, and publish four commands on a host that can serve five -- which is invisible
+    everywhere except on the owner's phone.
+    """
+    from backends import FakeHostRemoteControl
+
+    wired = _harness(monkeypatch)
+    await run_private_bot(
+        SECRETS, _boundary(wired.log, host_remote_control=FakeHostRemoteControl())
+    )
+    bare = _harness(monkeypatch)
+    await run_private_bot(SECRETS, _boundary(bare.log))
+
+    assert [command.command for command in wired.bot.commands_set] == [
+        "launch",
+        "resume",
+        "sessions",
+        "help",
+        "remote",
+    ]
+    assert "remote" not in [command.command for command in bare.bot.commands_set]
+
+
 async def test_the_builder_is_driven_with_the_token_and_sequential_updates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -426,6 +459,6 @@ async def test_the_default_boundary_is_a_wired_one(monkeypatch: pytest.MonkeyPat
 
     await run_private_bot(SECRETS)
 
-    assert harness.log.count("add_handler") == 7, "the default path wired no handlers"
+    assert harness.log.count("add_handler") == 8, "the default path wired no handlers"
     assert harness.log[-1] == "shutdown", "the default path did not complete"
     assert "initialize" in harness.log
