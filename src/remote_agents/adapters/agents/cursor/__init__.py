@@ -20,8 +20,9 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> CursorSessionCatalogue
 def descriptor() -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
-    Hooks stay a declared None. `usage` is constant-empty and deliberately NOT None: cursor
-    answers "I publish nothing", which renders as "not reported by this agent"; a None here
+    Hooks and `remote_control` both stay a declared None. `usage` is constant-empty and
+    deliberately NOT None: cursor answers "I publish nothing", which renders as "not
+    reported by this agent"; a None here
     would render "no conversation matched yet" forever (DEC-061 — the two must never
     conflate; the fold regression test pins the consequence).
     """

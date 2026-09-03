@@ -138,3 +138,63 @@ def test_claude_parsing_is_untouched_by_the_codex_widening() -> None:
     assert observed is not None
     assert observed.detail == "Claude's line."
     assert observed.reason == "rate_limit"
+
+
+# --------------------------------------------------------------------------------------
+# Host-level Remote Control, driven against recorded daemon payloads.
+#
+# Recorded rather than invented, and kept beside the activity fixtures for the same reason:
+# the field names here are Codex's convention, not a contract (DEC-063), so the day one
+# changes the failure should be a fixture that no longer matches reality -- not a parser
+# quietly reading `None` and rendering "off" on a host where Remote Control is on.
+
+
+def _remote_control_fixture(name: str) -> dict:
+    return json.loads((_FIXTURES / "remote_control" / name).read_text(encoding="utf-8"))
+
+
+class _ScriptedRpc:
+    """Answers the daemon's status method with a recorded payload."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+        self.calls: list[str] = []
+
+    async def request(self, method: str, params: dict) -> dict:
+        self.calls.append(method)
+        return self._payload
+
+
+async def test_the_recorded_connected_payload_reads_as_active() -> None:
+    from remote_agents.adapters.agents.codex.remote_control import (
+        STATUS_METHOD,
+        CodexRemoteControl,
+    )
+    from remote_agents.adapters.agents.registry import provider_descriptors
+    from remote_agents.domain.remote_control import HostConnection, RemoteControlState
+
+    wired = next(
+        descriptor.remote_control
+        for descriptor in provider_descriptors()
+        if str(descriptor.profile_id) == "codex"
+    )
+    assert isinstance(wired, CodexRemoteControl), "the registry wires codex's own adapter"
+
+    rpc = _ScriptedRpc(_remote_control_fixture("status-connected.json"))
+    status = await CodexRemoteControl(runner=object(), rpc=rpc).status()
+
+    assert rpc.calls == [STATUS_METHOD]
+    assert status.connection is HostConnection.CONNECTED
+    assert status.state is RemoteControlState.ACTIVE
+    assert status.server_name == "Paisleys-Blender"
+
+
+async def test_the_recorded_disabled_payload_reads_as_inactive() -> None:
+    from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
+    from remote_agents.domain.remote_control import HostConnection, RemoteControlState
+
+    rpc = _ScriptedRpc(_remote_control_fixture("status-disabled.json"))
+    status = await CodexRemoteControl(runner=object(), rpc=rpc).status()
+
+    assert status.connection is HostConnection.DISABLED
+    assert status.state is RemoteControlState.INACTIVE

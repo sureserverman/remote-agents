@@ -19,7 +19,11 @@ def _sessions(project_paths: Mapping[ProjectId, Path]) -> OpenCodeSessionCatalog
 
 
 def descriptor() -> ProviderDescriptor:
-    """This provider's declared capability set (ARCH-04). Hooks stay a declared None."""
+    """This provider's declared capability set (ARCH-04).
+
+    Hooks and `remote_control` both stay a declared None: opencode takes no hooks and
+    publishes no host-level Remote Control (DEC-061).
+    """
     return ProviderDescriptor(
         ProfileId("opencode"),
         sessions=_sessions,

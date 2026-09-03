@@ -12,7 +12,12 @@ from __future__ import annotations
 import types
 import typing
 
-_CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity")
+#: The pin moved 5 -> 6 on 2026-09-03 by the plan
+#: `2026-09-03-codex-remote-control-toggle-plan.md`, which added `remote_control`: the
+#: host-level Remote Control toggle Codex publishes and the other three do not. Recorded
+#: here rather than assumed, because DEC-070's whole claim is that growing this set is a
+#: reviewable act and not drift.
+_CAPABILITY_FIELDS = ("sessions", "usage", "hooks", "activity", "remote_control")
 
 
 def _descriptor_fields() -> tuple[str, ...]:
@@ -23,10 +28,10 @@ def _descriptor_fields() -> tuple[str, ...]:
 
 
 def test_the_descriptor_field_set_is_read_from_the_dataclass() -> None:
-    """Five fields: one identity, four capabilities. A sixth is a reviewable act."""
+    """Six fields: one identity, five capabilities. A seventh is a reviewable act."""
     fields = _descriptor_fields()
-    assert len(fields) == 5, (
-        f"`ProviderDescriptor` now declares {len(fields)} fields, not 5. That may be fine — "
+    assert len(fields) == 6, (
+        f"`ProviderDescriptor` now declares {len(fields)} fields, not 6. That may be fine — "
         "but every field is a capability a frontend reads as declared rather than discovers, "
         "so confirm the new field belongs here and update this pin deliberately."
     )

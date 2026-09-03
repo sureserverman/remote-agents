@@ -26,7 +26,7 @@ def expected_skips() -> int:
 
 
 def test_the_skip_count_is_fully_accounted_for() -> None:
-    assert expected_skips() == 6, (
+    assert expected_skips() == 9, (
         "the kit's skip budget changed; re-derive the gate's grep expectation from this "
         "number rather than editing either side alone"
     )

@@ -40,24 +40,37 @@ DECLARATIONS: dict[str, dict[str, tuple[Requirement, str]]] = {
         "sessions": (SUPPORTED, "transcript catalogue over the workspace mapping"),
         "usage": (SUPPORTED, "transcript accounting plus the borrowed status-line cache"),
         "hooks": (SUPPORTED, "settings.json hook groups (claude, flagless)"),
+        "remote_control": (
+            UNSUPPORTED,
+            "claude's toggle is a pane action, not a host one; the registry declares None",
+        ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
     },
     "codex": {
         "sessions": (SUPPORTED, "rollout catalogue via the app-server client"),
         "usage": (SUPPORTED, "rollout token_count records, session and account-wide"),
         "hooks": (SUPPORTED, "hooks.json hook groups (codex, flagged)"),
+        "remote_control": (SUPPORTED, "daemon-level toggle over the fixed argv table"),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
     },
     "opencode": {
         "sessions": (SUPPORTED, "opencode.db catalogue via the CLI runner"),
         "usage": (SUPPORTED, "opencode.db message-token accounting"),
         "hooks": (UNSUPPORTED, "opencode takes no hooks; the registry declares None"),
+        "remote_control": (
+            UNSUPPORTED,
+            "opencode has no remote control; the registry declares None",
+        ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
     },
     "cursor-agent": {
         "sessions": (SUPPORTED, "constant catalogue; workspace-blind by design"),
         "usage": (SUPPORTED, "constant-empty answer: publishes nothing, honestly (DEC-061)"),
         "hooks": (UNSUPPORTED, "cursor takes no hooks; the registry declares None"),
+        "remote_control": (
+            UNSUPPORTED,
+            "cursor has no remote control; the registry declares None",
+        ),
         "activity": (CONDITIONAL, "placeholder until the vertical wires an activity source"),
     },
 }

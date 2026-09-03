@@ -59,3 +59,21 @@ def test_activity_contract(descriptor) -> None:
     """Placeholder capability: conditional everywhere until a vertical wires one."""
     wired = drive_or_skip(descriptor, "activity")
     assert wired is not None  # unreachable today; the skip carries the condition
+
+
+def test_remote_control_contract(descriptor) -> None:
+    """The host-level toggle answers three verbs and offers no way to tear the daemon down.
+
+    Behavior, not address: the contract is that a provider declaring `remote_control` can be
+    asked to read, to flip, and to mint a pairing code. Driving `status()` for real would
+    reach the host's own daemon, so the recorded-fixture drive lives in the per-provider
+    quirks module, which injects a client -- the same split `usage`'s `limits()` already has.
+    """
+    import inspect
+
+    control = drive_or_skip(descriptor, "remote_control")
+    for verb in ("status", "set_state", "pair"):
+        method = getattr(control, verb, None)
+        assert inspect.iscoroutinefunction(method), (
+            f"{descriptor.profile_id}'s remote control cannot be awaited for {verb}"
+        )

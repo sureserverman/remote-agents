@@ -16,7 +16,9 @@ returning the provider's conversation catalogue, `usage` a reader shaped like
 `adapters.agents.<provider>.usage`'s (a `read(UsageQuery)` / `limits()` object), `hooks`
 the provider name the hook-install surface in `adapters.agents.registry` accepts (each
 vertical's `hooks.py` holds the configuration value), `activity` a declared placeholder —
-`None` for all four providers until a vertical wires one.
+`None` for all four providers until a vertical wires one — and `remote_control` the
+host-level Remote Control object, wired only by Codex because only Codex has a toggle
+whose subject is the machine rather than a pane.
 """
 
 from __future__ import annotations
@@ -53,3 +55,13 @@ class ProviderDescriptor:
 
     activity: object | None = None
     """The provider's activity source, or None when it reports no activity events."""
+
+    remote_control: object | None = None
+    """The provider's host-level Remote Control, shaped like `ports.host_remote_control`'s
+    protocol, or None when the provider has no host-level toggle.
+
+    The sixth field, added deliberately (DEC-070) rather than grown into: only Codex
+    publishes a Remote Control whose subject is *this machine*. Claude's toggle is a pane
+    action and lives on the terminal port instead, so claude declares None here and is not
+    thereby less capable — the two are different subjects, not two depths of one
+    capability."""

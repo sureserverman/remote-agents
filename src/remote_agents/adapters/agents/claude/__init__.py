@@ -20,6 +20,11 @@ def descriptor(
 ) -> ProviderDescriptor:
     """This provider's declared capability set (ARCH-04).
 
+    `remote_control` stays a declared None (DEC-061). Claude *has* a Remote Control, but its
+    subject is a live owned pane, so it rides the terminal port rather than this field. The
+    absence here is a statement about the subject, not about the capability — reading it as
+    "Claude cannot be remote-controlled" would be exactly backwards.
+
     The two keyword arguments exist because exactly one capability is owner-configurable:
     the context-window ceiling reaches the reader only when the owner stated one (DEC-061 —
     a reader supplying its own ceiling would be inventing it).
