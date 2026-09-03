@@ -64,3 +64,67 @@ def test_the_sweep_can_actually_find_a_parser() -> None:
     total = sum(len(_parser_constructions(path)) for path in SOURCE_ROOT.rglob("*.py"))
 
     assert total >= 2, "the parser sweep found almost nothing, so it is not sweeping"
+
+
+# --------------------------------------------------------------------------------------
+# The second kind of parser: the ones that read a *provider's* output rather than an
+# operator's argv.
+#
+# Same failure, opposite direction. Above, the danger is that an operator's own words --
+# which may be a credential -- reach an error message. Here it is that a *provider's* words
+# reach one: `codex` writes paths, auth hints and prompts to stdout and stderr, and this
+# project renders its errors into a Telegram message and a TUI line. A parser that
+# interpolates what it could not read hands whatever the provider happened to say to
+# whoever is watching (DEC-013: what a provider hands this service is rendered, never
+# stored -- and an error string is rendered by definition).
+#
+# Structural like the sweep above, and for the same reason: registering the module here
+# covers a parse function added tomorrow before anyone writes a case for it.
+
+#: The modules whose job is to read provider output, relative to `SOURCE_ROOT`.
+OUTPUT_PARSER_MODULES = ("adapters/agents/codex/remote_control.py",)
+
+#: Text a hostile or merely unlucky provider could print, which must not come back out.
+POISON = "/home/operator/.codex/auth.json token=sk-abcdef0123456789"
+
+
+def _parse_functions(path: Path) -> list[str]:
+    """Every function in one module that reads provider output into a value or an error."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and ("payload" in node.name or "reading" in node.name or "parse" in node.name)
+    ]
+
+
+def test_every_registered_output_parser_module_actually_has_parse_functions() -> None:
+    """The registration is a claim about a real module; a rename must not silently empty it."""
+    for module in OUTPUT_PARSER_MODULES:
+        path = SOURCE_ROOT / module
+        assert path.exists(), f"{module} is registered here but does not exist"
+        assert _parse_functions(path), (
+            f"{module} is registered as an output-parser module but no parse function was "
+            "found -- either the registration is stale or the naming convention moved"
+        )
+
+
+def test_a_malformed_provider_payload_never_comes_back_out_of_the_error() -> None:
+    """Drive the real parsers with unreadable text and prove none of it is in the raised error."""
+    import pytest
+
+    from remote_agents.adapters.agents.codex.remote_control import CodexRemoteControl
+    from remote_agents.adapters.agents.protocols import ProtocolError
+
+    subject = CodexRemoteControl(runner=object(), rpc=object())  # type: ignore[arg-type]
+
+    # A payload that cannot be read at all.
+    assert subject._payload(POISON) is None
+
+    # A payload that reads as JSON but says something this adapter does not speak.
+    with pytest.raises(ProtocolError) as raised:
+        subject._reading({"status": POISON, "serverName": POISON})
+    assert POISON not in str(raised.value)
+    assert "sk-abcdef" not in str(raised.value)
+    assert POISON not in repr(raised.value)
