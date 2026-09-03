@@ -266,7 +266,9 @@ _WINDOW_LABELS = {"week": "wk"}
 
 
 def _window_content(row: LimitRow, window) -> Content:
-    """`5h ███░░░░░ 34% ↻2h` -- one window's cell, dated instead of counted down when stale."""
+    """`5h ███░░░░░ 34% ↻ 2h` -- one window's cell, dated instead of counted down when stale.
+    The space after the arrow is deliberate: terminal fonts draw `↻` wider than one cell and it
+    overlapped the digit that followed."""
     bar = percent_gauge(window.percent)
     filled = bar.rstrip("░")
     cell = Content.assemble(
@@ -277,23 +279,22 @@ def _window_content(row: LimitRow, window) -> Content:
         (f" {window.percent}%", None),
     )
     if window.resets_in is not None and row.stale_for is None:
-        cell = cell + Content.assemble((f" ↻{window.resets_in}", MUTED))
+        cell = cell + Content.assemble((f" ↻ {window.resets_in}", MUTED))
     return cell
 
 
 def _trailers(row: LimitRow) -> Content:
-    """What a row says after its windows: how old a stale reading is, dim, and where a
-    borrowed one came from (DEC-061)."""
+    """What a row says after its windows: how old a stale reading is, dim. The borrowed-source
+    stamp DEC-061 asks for is not drawn here -- it cost the console's 73-column pane its
+    one-line row (removed 2026-09-03 on the owner's ask); the bot still says it."""
     trailer = Content("")
     if row.stale_for is not None:
         trailer = trailer + Content.assemble((f" · as of {row.stale_for}", DIM))
-    if row.borrowed is not None:
-        trailer = trailer + Content.assemble((f" · via {row.borrowed}", DIM))
     return trailer
 
 
 def limit_row_content(row: LimitRow, profile_width: int, width: int | None) -> list[Content]:
-    """`profile  5h ███░░░░░ 34% ↻2h  wk █████░░░ 61% ↻3d`, or one line per window when narrow.
+    """`profile  5h ███░░░░░ 34% ↻ 2h  wk █████░░░ 61% ↻ 3d`, or one line per window when narrow.
 
     The gauge's fill takes the threshold colour -- under half `$success`, up to 85 `$warning`,
     past it `$error` -- and its empty track `$secondary`. The reset countdown is muted; a
