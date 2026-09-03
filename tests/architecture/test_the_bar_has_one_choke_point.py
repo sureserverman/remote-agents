@@ -44,9 +44,14 @@ _TELEGRAM = _ADAPTERS / "telegram"
 _EXPECTED_CALLS = {
     "notifications.py": (1, "an activity notification is a message, not a screen (DEC-031)"),
     "service.py": (
-        2,
-        "`_message` itself, which is where the bar is appended, plus the pending screen, "
-        "which drops its keyboard so a wait cannot be pressed into a second launch",
+        3,
+        "`_message` itself, which is where the bar is appended; the pending screen, which "
+        "drops its keyboard so a wait cannot be pressed into a second launch; and the "
+        "pairing-code reply, whose entire content is a live secret -- a keyboard under it "
+        "is a control that can re-send it into the chat, possibly long after the owner "
+        "stopped looking. Third barless render, added 2026-09-03 by the Codex Remote "
+        "Control plan and recorded in DEC-071, per this file's own instruction that "
+        "changing a number here belongs in the decision register",
     ),
 }
 
@@ -108,9 +113,13 @@ def test_the_bar_is_built_in_exactly_one_place() -> None:
     being universal without any single change looking wrong.
     """
     calls = _direct_callers().get("service.py", 0)
+    expected, _why = _EXPECTED_CALLS["service.py"]
 
-    assert calls == 2, (
-        f"service.py calls render_message {calls} times, expected 2 (_message itself, and the "
-        "pending screen). A new direct call is a screen built outside the one place the "
-        "navigation bar is appended."
+    # Read off the map above rather than restated, so the two tests cannot disagree about the
+    # number while both claiming to pin it. They still fail differently on purpose: the map's
+    # failure says "the set of barless renders changed", this one says "the boundary started
+    # composing its own screens", and those are different mistakes to have made.
+    assert calls == expected, (
+        f"service.py calls render_message {calls} times, expected {expected} ({_why}). A new "
+        "direct call is a screen built outside the one place the navigation bar is appended."
     )
