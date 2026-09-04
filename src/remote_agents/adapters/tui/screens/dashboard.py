@@ -1040,6 +1040,9 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         self._session_records = records
         pane = self.query_one("#sessions-pane", OptionList)
         held_id = held_option_id(pane)
+        # Measured before the clear, and it is the difference between "the row the owner was
+        # on has gone" and "this pane has not drawn yet" -- `held_id` is `None` for both.
+        was_populated = pane.option_count > 0
         pane.clear_options()
         pane.border_title = sessions_title(len(records))
         if not records:
@@ -1065,12 +1068,28 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
                     id=f"{_SESSION_KEY_PREFIX}{record.session_id}",
                 )
             )
-        # The cursor always rests somewhere (DEC-007's discipline, as show_choices keeps
-        # it for every #choices list): on the row it held if that row survived the
-        # rebuild, else on the first row — a pane advertising "enter opens" with no
-        # highlighted row makes both keys silent no-ops until an arrow press.
+        # On the row it held if that row survived the rebuild, and on **nothing** if it did
+        # not. Row 0 of a list that just lost a row is a different session, silently, on a
+        # timer nobody pressed — DEC-052's central hazard, closed for `SessionsScreen` by
+        # DEC-062 and taken here too, which is that entry's rejected alternative 3 as written:
+        # both positions, never one.
+        #
+        # This pane binds no stop keys, so on its own the cost of the old fallback was `d`
+        # opening the wrong detail rather than `s` ending the wrong session. It is closed
+        # anyway because the two positions have to agree about where the cursor is: the
+        # selection every console pane acts on is published from one code path, and a position
+        # that quietly answers "row 0" would publish a session the owner is not looking at.
+        #
+        # An earlier version of this comment said "the cursor always rests somewhere (DEC-007's
+        # discipline)". DEC-007's rule is that a *resting* cursor is never on something that
+        # mutates, which no cursor at all satisfies strictly — every row key returns early on a
+        # `None` highlight, and one arrow press brings it back.
         restore_highlight_by_id(
-            pane, held_id, [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records]
+            pane,
+            held_id,
+            [f"{_SESSION_KEY_PREFIX}{record.session_id}" for record in records],
+            when_gone="none",
+            was_populated=was_populated,
         )
 
 

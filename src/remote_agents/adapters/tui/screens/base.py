@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
@@ -65,16 +65,65 @@ def held_option_id(pane: OptionList) -> str | None:
     return pane.get_option_at_index(held).id
 
 
-def restore_highlight_by_id(pane: OptionList, held_id: str | None, keys: Sequence[str]) -> None:
-    """Put the cursor back on the row it was on, or on the first row.
+def restore_highlight_by_id(
+    pane: OptionList,
+    held_id: str | None,
+    keys: Sequence[str],
+    *,
+    when_gone: Literal["first", "none"] = "first",
+    was_populated: bool = True,
+) -> None:
+    """Put the cursor back on the row it was on, and answer for the row that has gone.
 
-    By key and never by index: these lists are newest-first and grow at the head, so the
-    index the owner was on names a different thing after any reload. Row 0 is the fallback
-    because the cursor must always rest somewhere non-mutating (DEC-007), never nowhere.
+    By key and never by index, because **rows are inserted and removed** and the index the
+    owner was on therefore names a different thing after any reload. That is the whole of the
+    justification. An earlier version of this said "these lists are newest-first and grow at
+    the head", which is true of the feed and false of the sessions list — that one is
+    insertion-ordered and grows at the tail (`SessionStore.list`, `ORDER BY rowid`). A reason
+    that holds for one caller and not the other is worse than none: it invites the next reader
+    to conclude the helper does not apply to their list.
+
+    `when_gone` is what the two callers actually disagree about, and it is a parameter rather
+    than a policy because both answers are correct for their own position.
+
+    - `"first"` — the feed. A row ages out of a notification list on its own schedule and the
+      pane binds nothing destructive, so a cursor that must always rest somewhere
+      non-mutating (DEC-007) is satisfied by row 0.
+    - `"none"` — both sessions positions. Row 0 of a list that just lost a row is a *different
+      session*, silently, on a ten-second timer nobody pressed. DEC-052 named that as its
+      central hazard and DEC-062 closed it for the pane, where `s` and `c` end a session with
+      no confirmation. The dashboard binds no stop keys — its blast radius is `d` opening the
+      wrong detail — and takes the same answer anyway, which is DEC-062's rejected alternative
+      3 as written: both positions, never one.
+
+    DEC-007 is honoured by `"none"` rather than traded away. Its rule is that a *resting*
+    cursor is never on something that mutates, and no cursor at all satisfies that strictly:
+    every row key returns early on a `None` highlight, and one arrow press brings the cursor
+    back — the owner choosing a row again being exactly the deliberate act the vanished one
+    can no longer stand in for.
+
+    `was_populated` is the question `held_id` alone cannot answer, and getting it wrong is a
+    measured defect rather than a hypothetical: a pane being filled for the **first** time has
+    no held row either, and reading that as "the row has gone" left the dashboard's sessions
+    pane with no cursor at all from mount — caught by five committed snapshots. Nothing was
+    lost there, because nothing had been chosen yet, and a pane advertising "enter opens" with
+    no highlighted row makes its keys silent no-ops until an arrow press.
+
+    It is also what makes `"none"` survive the next tick. Once a vanished row has cleared the
+    cursor, the following reload reads `held_id` as `None` again — so without this flag the
+    mitigation would undo itself ten seconds later, on the very timer it exists to defend
+    against. A populated pane with no held row is a cursor deliberately resting on nothing;
+    an unpopulated one is a screen that has not drawn yet.
     """
     if not keys:
         return
-    target = keys.index(held_id) if held_id in keys else 0
+    if held_id in keys:
+        target = keys.index(held_id)
+    elif when_gone == "none" and was_populated:
+        pane.highlighted = None
+        return
+    else:
+        target = 0
     # Never onto a disabled row. Textual's own guards do not cover this path: `validate_
     # highlighted` only clamps to bounds, and `watch_highlighted` merely skips the scroll and
     # the `OptionHighlighted` post for a disabled index -- neither refuses to *set* it. So a

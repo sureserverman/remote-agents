@@ -718,3 +718,146 @@ async def test_the_scheduled_tick_actually_refreshes_a_drawn_gauge(monkeypatch) 
             "the scheduled tick never refreshed the cache, so every gauge is frozen at its "
             "mount-time value for the life of the process"
         )
+
+
+def _distinct(hexen: str, slug: str) -> SessionRecord:
+    """A record with an id of its own, which `_record` deliberately does not give.
+
+    Every other test here has one session, so one shared `_SESSION` is simpler and correct.
+    A cursor that must survive rows *leaving* needs rows it can tell apart.
+    """
+    return SessionRecord(
+        SessionId.parse(f"{hexen * 8}-{hexen * 4}-4{hexen * 3}-8{hexen * 3}-{hexen * 12}"),
+        ProjectId("opaque-existing"),
+        ProfileId("claude"),
+        SessionDisplayIdentity(slug, "claude", "regular", 1),
+        SessionState.RUNNING,
+        datetime.now(UTC),
+    )
+
+
+async def test_a_vanished_row_rests_on_nothing_on_the_dashboard_too() -> None:
+    """The fallback DEC-062 removed from the pane, still standing on the other position.
+
+    `restore_highlight_by_id` falls back to row 0 when the held row has gone, and the
+    dashboard's sessions pane is the caller that still takes it. Row 0 of a list that just
+    lost a row is a *different session*, silently, on a timer nobody pressed — the hazard
+    DEC-052 named and DEC-062 closed for `SessionsScreen`, reached here through the shared
+    helper rather than through that screen.
+
+    The blast radius is smaller than the pane's, because this position binds no stop keys: it
+    is `d` opening the wrong detail, not `s` ending the wrong session. It is closed anyway
+    because Stage 2 publishes the selection from one code path, and two positions that
+    disagree about where the cursor is would publish a row the owner is not looking at. This
+    is DEC-062's rejected alternative 3 taken as it was written — both positions, never one.
+    """
+    one, two, three = _distinct("1", "one"), _distinct("2", "two"), _distinct("3", "three")
+    launcher = _Launcher((one, two, three))
+    context = _context()
+    context = replace(context, backend=replace(context.backend, sessions=launcher))
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+        assert pane.option_count == 3
+        pane.highlighted = 2
+        held = pane.get_option_at_index(2).id
+
+        launcher.records = (one, two)
+        await screen._reload_sessions_pane()
+
+        assert pane.option_count == 2
+        assert pane.highlighted is None, (
+            "the vanished row put the cursor on row 0 — a session the owner never chose"
+        )
+        assert held not in {option.id for option in pane.options}
+
+
+async def test_a_surviving_row_still_keeps_the_dashboard_cursor() -> None:
+    """Resting on nothing is for the row that left, not for every reload.
+
+    The other half of the same branch: without this, a helper that simply stopped restoring
+    would satisfy the test above.
+    """
+    one, two, three = _distinct("1", "one"), _distinct("2", "two"), _distinct("3", "three")
+    launcher = _Launcher((one, two, three))
+    context = _context()
+    context = replace(context, backend=replace(context.backend, sessions=launcher))
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+        pane.highlighted = 2
+        held = pane.get_option_at_index(2).id
+
+        # The row above it leaves, so the index the owner was on now names something else.
+        launcher.records = (one, three)
+        await screen._reload_sessions_pane()
+
+        assert pane.highlighted is not None, "a surviving row lost the cursor"
+        assert pane.get_option_at_index(pane.highlighted).id == held, (
+            "the cursor followed the index instead of the session"
+        )
+
+
+async def test_the_first_fill_still_gets_a_cursor() -> None:
+    """No held row is not a vanished row, and the pane must not open with no cursor.
+
+    Written because the first version of `when_gone="none"` did exactly that: a pane being
+    filled for the first time has no held id either, so reading `held_id is None` as "the row
+    has gone" left the dashboard with no cursor from mount. Five committed snapshots caught it.
+    Nothing is lost on a first fill, because nothing has been chosen — and a pane advertising
+    "enter opens" with no highlighted row makes its keys silent no-ops until an arrow press.
+    """
+    one, two = _distinct("1", "one"), _distinct("2", "two")
+    context = _context()
+    context = replace(context, backend=replace(context.backend, sessions=_Launcher((one, two))))
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+
+        assert pane.highlighted == 0, "the pane opened with no cursor on its very first fill"
+
+
+async def test_resting_on_nothing_survives_the_next_reload() -> None:
+    """The mitigation must not undo itself on the timer it exists to defend against.
+
+    Once a vanished row has cleared the cursor, the next reload reads the held id as `None`
+    again — the same value a first fill reports. Without the populated/unpopulated distinction
+    the pane would fall back to row 0 ten seconds later, which is the original hazard arriving
+    one tick late instead of not at all.
+    """
+    one, two, three = _distinct("1", "one"), _distinct("2", "two"), _distinct("3", "three")
+    launcher = _Launcher((one, two, three))
+    context = _context()
+    context = replace(context, backend=replace(context.backend, sessions=launcher))
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+        pane.highlighted = 2
+
+        launcher.records = (one, two)
+        await screen._reload_sessions_pane()
+        assert pane.highlighted is None
+
+        # A second tick, with nothing else changing.
+        await screen._reload_sessions_pane()
+        assert pane.highlighted is None, "the next tick put the cursor back on row 0"
