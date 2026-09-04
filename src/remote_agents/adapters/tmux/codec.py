@@ -32,6 +32,19 @@ CONSOLE_SESSION_NAME = "ra-console"
 # so nothing inherits it, since neither the console session nor a managed one sets it.
 CONSOLE_SLOT_OPTION = "@remote_agents_console_slot"
 SURFACE_SLOT = "surface"
+# Which session the console's sessions pane has highlighted, readable by every pane process on
+# this console. **Session-scoped, and that is the deliberate part.**
+#
+# DEC-038 puts identity on the *pane*, because a session-scoped mark stays behind while the
+# pane travels and then describes whatever swapped in. That argument is about identity and it
+# does not reach this: a selection is one fact about the console as a whole, written by the one
+# pane that owns a cursor and read by the three that do not. Pane scope here would give each
+# reader a private copy of a shared fact — which is DEC-038's own failure mode, running in the
+# other direction. It is not identity, it says nothing about which pane is which, and no reader
+# may treat it as either.
+#
+# It dies with `ra-console`, so a stale selection cannot outlive the console that published it.
+SELECTED_SESSION_OPTION = "@remote_agents_selected_session"
 
 # The four identity option names, spelled **once each** and referenced everywhere else in this
 # module. They are written by `pane_mark_args` and read back by two format strings, and those
@@ -477,6 +490,59 @@ def console_slot_mark_args(
         CONSOLE_SLOT_OPTION,
         slot.value,
     )
+
+
+def publish_selection_args(session_id: SessionId | None) -> tuple[str, ...]:
+    """Return the argv suffix publishing which session the console has selected.
+
+    `-t` and the console session, not `-p` and a pane: see `SELECTED_SESSION_OPTION` for why a
+    selection is console state rather than pane identity, and why DEC-038 does not reach it.
+
+    `None` writes the **empty string** rather than unsetting the option. The sessions pane
+    clears its cursor whenever the highlighted row leaves the list (DEC-052, DEC-062), and that
+    has to be published: an option left naming a row that has gone is exactly the stale
+    selection a chord in another pane would then act on. Empty is also what `show-options -qv`
+    returns for an option never set, so "cleared" and "never written" decode identically by
+    construction rather than by two readers agreeing to.
+    """
+    return (
+        "set-option",
+        "-t",
+        console_target(),
+        SELECTED_SESSION_OPTION,
+        "" if session_id is None else str(session_id),
+    )
+
+
+def read_selection_args() -> tuple[str, ...]:
+    """Return the argv suffix reading the published selection back.
+
+    `-q` so an unset option is the empty string rather than an error, and `-v` so the value
+    arrives alone rather than as `name value` — the two together make "nothing is selected" a
+    value this can decode instead of a failure it would have to interpret.
+    """
+    return ("show-options", "-qv", "-t", console_target(), SELECTED_SESSION_OPTION)
+
+
+def decode_selection(raw: str) -> SessionId | None:
+    """Decode a published selection, refusing anything that is not a session id.
+
+    Refusing is the only safe answer. What this returns is what an Alt chord acts on, and two
+    of those chords end a session with no confirmation (DEC-018), so a value this process did
+    not write — a hand-set option, a truncated read, a leftover from a tmux the owner drives
+    themselves — must decode to "nothing selected" rather than to something addressable.
+
+    DEC-007 is the second half of that and is unchanged: the acting surface re-reads the record
+    and re-checks `available_actions` at issue time, so even a well-formed id that names a
+    session the policy now forbids cannot be acted on.
+    """
+    value = raw.strip()
+    if not value:
+        return None
+    try:
+        return SessionId.parse(value)
+    except ValueError:
+        return None
 
 
 def console_layout_args(main_percent: int, column: Sequence[tuple[str, int]]):

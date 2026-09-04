@@ -20,11 +20,15 @@ import pytest
 
 from remote_agents.adapters.tmux.codec import (
     CONSOLE_SESSION_NAME,
+    SELECTED_SESSION_OPTION,
     console_layout_args,
     console_target,
     console_zoom_args,
+    decode_selection,
     display_message_args,
     exact_session_target,
+    publish_selection_args,
+    read_selection_args,
     switch_client_argv,
 )
 from remote_agents.domain.models import SessionId
@@ -121,3 +125,70 @@ def test_a_layout_column_takes_percentages_and_pane_ids_or_nothing() -> None:
     with pytest.raises(ValueError):
         console_layout_args(60, (("ra-console:", 41),))
     assert console_layout_args(60, ())[2:] == (), "a column with nothing named resizes nothing"
+
+
+def test_the_selection_is_published_at_session_scope_and_read_back() -> None:
+    """The console's selected session is console state, not pane identity — hence `-t`, not `-p`.
+
+    DEC-038 puts identity on the pane, because a mark that stays behind while the pane travels
+    describes whatever swapped in. That reasoning is about *identity*, and it does not apply
+    here: a selection is one fact about the console as a whole — which session its sessions
+    pane has highlighted — and every pane process must read the same answer. Session scope is
+    what makes one writer visible to three readers; pane scope would give each pane its own
+    private copy of a shared fact, which is the defect DEC-038 describes running the other way.
+
+    The target is the console session by name, never a managed one: `ra-console` cannot satisfy
+    `exact_session_target`, so this can never address a session as though it were an agent's.
+    """
+    session_id = SessionId.new()
+
+    assert publish_selection_args(session_id) == (
+        "set-option",
+        "-t",
+        console_target(),
+        SELECTED_SESSION_OPTION,
+        str(session_id),
+    )
+    assert read_selection_args() == (
+        "show-options",
+        "-qv",
+        "-t",
+        console_target(),
+        SELECTED_SESSION_OPTION,
+    )
+
+
+def test_publishing_no_selection_writes_an_empty_value() -> None:
+    """Resting on nothing is a value, and it has to be written rather than left behind.
+
+    The sessions pane clears the cursor whenever the highlighted row leaves the list
+    (DEC-052, DEC-062). If that published nothing at all, the option would still name the row
+    that has gone and a chord pressed in another pane would act on it — the stale publication
+    the whole design has to avoid. Empty is the spelling, because `show-options -qv` returns
+    the empty string for an option that was never set, so "cleared" and "never written" decode
+    to the same thing by construction rather than by agreement.
+    """
+    assert publish_selection_args(None) == (
+        "set-option",
+        "-t",
+        console_target(),
+        SELECTED_SESSION_OPTION,
+        "",
+    )
+
+
+def test_a_published_selection_decodes_back_to_the_session_it_named() -> None:
+    session_id = SessionId.new()
+
+    assert decode_selection(f"{session_id}\n") == session_id
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "\n", "not-a-uuid", "\x00", "ra-console"])
+def test_anything_that_is_not_a_session_decodes_to_no_selection(raw: str) -> None:
+    """Including the empty string, which is what an unset option reads back as.
+
+    A reader must never turn a malformed value into a session id: the chord layer acts on
+    whatever this returns, and `s` and `c` end a session without asking. Refusing is the only
+    safe answer for a value this process did not write.
+    """
+    assert decode_selection(raw) is None

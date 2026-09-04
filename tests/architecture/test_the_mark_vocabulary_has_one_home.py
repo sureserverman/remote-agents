@@ -1,4 +1,4 @@
-"""The four `@remote_agents_*` identity option names live in the codec and nowhere else.
+"""Every `@remote_agents_*` option name lives in the codec and nowhere else.
 
 Identity is written twice — once at session scope by sessions launched before schema 2, once
 at pane scope by every launch since — and read back through one pinned format string. Those
@@ -24,12 +24,23 @@ import pathlib
 
 _SOURCE = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 
-#: Every identity option name, and the one module allowed to spell it.
+#: Every option name in the vocabulary, and the one module allowed to spell it.
+#:
+#: **Four are identity and two are not**, and the difference is worth keeping visible here
+#: rather than flattening it into "six marks". `@remote_agents_console_slot` says which of the
+#: console's three panes this is; `@remote_agents_selected_session` says which session the
+#: console has highlighted. Neither says "this pane is a session", and DEC-038's pane-scope
+#: rule is about the ones that do — the selection is deliberately *session*-scoped for the
+#: reason its constant records. What they share, and the only thing this test asserts, is that
+#: a name written by one builder and read back by another agrees only because one module spells
+#: it: a second spelling is a second vocabulary, whichever kind of fact it carries.
 _IDENTITY_OPTIONS = (
     "@remote_agents_schema",
     "@remote_agents_id",
     "@remote_agents_project_id",
     "@remote_agents_profile",
+    "@remote_agents_console_slot",
+    "@remote_agents_selected_session",
 )
 
 #: `module path -> {option: occurrences}`, as the tree is allowed to look.
@@ -49,6 +60,8 @@ _EXPECTED = {
         "@remote_agents_id": 1,
         "@remote_agents_project_id": 1,
         "@remote_agents_profile": 1,
+        "@remote_agents_console_slot": 1,
+        "@remote_agents_selected_session": 1,
     },
     "adapters/tmux/feature_probe.py": {"@remote_agents_schema": 2},
 }
