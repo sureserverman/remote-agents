@@ -1400,6 +1400,17 @@ class SessionsPaneScreen(SessionsScreen):
         last row remains selected with no cursor anywhere on screen to show it. This is the
         same shape as DEC-062's residual — a hazard reduced to a narrow window rather than
         closed — and Stage 3's chords inherit it.
+
+        **The clean exit has a narrow version of the same hole, measured rather than reasoned.**
+        `App._process_messages` cancels every worker before `_shutdown` runs `on_unmount`, and
+        cancelling `communicate()` does not kill a `tmux set-option` child that has already
+        forked. So: arrow to X, press quit, the worker is cancelled mid-round-trip, `on_unmount`
+        acquires the free lock and writes the clear, and the orphan then writes X over it. The
+        window is the few milliseconds a fork/exec takes, and nothing at this layer can close
+        it — the child is out of the process's hands the moment it exists. Closing it properly
+        means the write carrying a sequence tmux could compare, which is a change to the option's
+        contract rather than to this method. Named here so Stage 3 inherits a known residual
+        rather than an assumption.
         """
         publish = self.services.console_publish_selection
         if publish is None:
