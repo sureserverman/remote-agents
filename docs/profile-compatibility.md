@@ -95,12 +95,12 @@ Finish or checkpoint anything you care about before pressing it.
 There is no gentler verb to switch to. An earlier version of this section proposed the daemon's
 own `remoteControl/disable` RPC; no such client request exists in the app-server protocol (the
 schema defines `RemoteControlEnableParams`/`RemoteControlDisableParams` as orphan types that no
-method references), and the stdio transport it assumed does not work at all. See BL-039.
+method references), and the stdio transport it assumed does not work at all. See BL-040.
 
 **Where the reading comes from, and what it cannot see.** Not from the daemon: it was asked
 over `codex app-server proxy` for a `remoteControl/status/read` method until 2026-09-03, and
 that method does not exist in the protocol while the transport never answered `initialize` on
-any host this was run against, so the reading was always a fallback or an error (BL-039). The
+any host this was run against, so the reading was always a fallback or an error (BL-040). The
 CLI offers no read-only status verb either. The reading is therefore two local facts:
 
 | `$CODEX_HOME/app-server-daemon/settings.json` | daemon running? | reading |

@@ -19,7 +19,7 @@ the replacement daemon and reports "This conversation is unavailable; no operati
 
 So the cost of "off" is in-flight work, not the session, and there is no gentler verb to
 switch to. An earlier note here proposed the daemon's own `remoteControl/disable` RPC; no such
-client request exists in the app-server protocol. See BL-039, which supersedes BL-038.
+client request exists in the app-server protocol. See BL-040, which supersedes BL-038.
 
 **Both collaborators are injected.** The subprocess runner and the daemon-state reader are
 constructor arguments, so nothing below `tests/live` spawns a real `codex` or touches a real

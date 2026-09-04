@@ -202,7 +202,7 @@ async def test_the_recorded_settings_file_reads_as_active() -> None:
     notification -- and the `app-server proxy` transport never answered `initialize` on any
     host this was run against. Those fixtures and their tests were removed rather than left
     passing against a double: a green contract test for a method the product does not expose
-    is worse than no test at all (BL-039).
+    is worse than no test at all (BL-040).
 
     What replaces them is a file that was *observed*, not derived -- see its `_provenance`.
     """

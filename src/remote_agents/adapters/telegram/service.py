@@ -426,7 +426,7 @@ _HOST_DIRECTION_CAUTIONS: dict[RemoteControlState, str] = {
         # it wrong in opposite directions: the daemon is replaced, the attached pane is not
         # killed, and what it loses is the conversation. Must say the same thing the
         # terminal's confirmation says (DEC-007) -- and no test pins that, so the two move
-        # together by hand. See BL-039 for why the feature is not being built on further.
+        # together by hand. See BL-040 for why the feature is not being built on further.
         "This unenrols the whole machine, so a paired phone stops reaching any codex session "
         "on it. The daemon restarts, so an attached codex session loses the conversation it "
         "is in; the pane itself survives."

@@ -117,7 +117,7 @@ def test_the_table_is_pinned_to_exactly_these_five_vectors() -> None:
 
     Five since 2026-09-03: `status` -> `codex app-server proxy` was removed with the read
     path that used it. It named a transport that never answered `initialize` on any host
-    this was run against, for a method the protocol does not define (BL-039).
+    this was run against, for a method the protocol does not define (BL-040).
     """
     assert dict(REMOTE_CONTROL_ARGV) == {
         "daemon_probe": ("codex", "app-server", "daemon", "version"),
