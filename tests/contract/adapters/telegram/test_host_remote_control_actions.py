@@ -454,9 +454,18 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
     # No *buttons*, which is the property that matters: an empty markup renders nothing, and
     # what must not be there is a control that could re-send the message. Every other screen
     # in this bot ends in the navigation bar; this one deliberately does not.
-    markup = reply.reply_markup
-    assert markup is None or not markup.inline_keyboard, (
-        f"a keyboard under a secret can re-send it: {markup}"
+    # **One button, and what it is matters more than that there is one.** The rule this
+    # message lives under is "no control that can RE-SEND the secret", which until
+    # 2026-09-04 was implemented as "no keyboard at all". A `copy_text` button is handled
+    # entirely by the client: pressing it copies and sends nothing to the bot, so there is
+    # no callback, no re-render, and nothing that could produce a second copy in the chat.
+    # A callback button here would still be forbidden, and that is what this asserts.
+    buttons = [button for row in reply.reply_markup.inline_keyboard for button in row]
+    assert len(buttons) == 1, f"expected exactly one button, got {buttons}"
+    assert buttons[0].copy_text is not None, "the button must be a client-side copy"
+    assert buttons[0].copy_text.text == "ZZZZ-9999", "it must copy the code, not something else"
+    assert buttons[0].callback_data is None, (
+        "a callback under a secret is a control that can re-send it"
     )
     # Unforwardable and unsavable in the client, like a captured pane and for a stronger
     # reason: a pane carries what an agent printed, this carries a key to the machine. This
@@ -470,7 +479,10 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
     assert "control of this machine" in text, "the holder's power is not stated"
     assert "Valid for about" in text, "no deadline the owner can act on"
     assert "turn" in text and "off to end it" in text, "no way to end a pairing is named"
-    assert "Delete this message" in text, "the medium keeps it and the message must say so"
+    assert "removes itself" in text, "the owner is not told what happens to the message"
+    assert "every device signed into this account" in text, (
+        "the medium keeps it until then and the message must say so"
+    )
     assert control.calls.count("pair") == 1
 
 
@@ -564,3 +576,50 @@ async def test_the_deadline_is_a_duration_and_survives_being_run_tomorrow() -> N
     expired = await _pair(_bot(stale))
 
     assert "expired" in expired.text, "an already-dead code must say so, not count down"
+
+
+async def test_the_code_message_takes_itself_out_of_the_chat_on_the_next_interaction() -> None:
+    """A code is read in seconds; after that it is a live credential in a chat history.
+
+    The owner is told to delete it, and this stops that being their job. It cannot be tied to
+    the copy itself -- `copy_text` is handled by the client and reports nothing back, so no
+    bot can know a code was copied -- so the trigger is the next thing the owner does here,
+    which in practice is the same moment.
+    """
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot(control)
+    chat = await _remote_screen(bot)
+    token = await _pair_token(bot, chat)
+
+    await bot.callback(chat.press(token), None)
+    carrying = [m for m in chat.bot_messages if "ZZZZ-9999" in m.text]
+    assert len(carrying) == 1, "the code was not sent"
+
+    # Any interaction at all: another command is the plainest one.
+    await bot.remote_command(chat.message_update("/remote"), None)
+
+    assert "ZZZZ-9999" not in " ".join(m.text for m in chat.bot_messages), (
+        "the pairing code is still in the chat after the owner moved on"
+    )
+
+
+async def test_a_failed_removal_is_not_forgotten() -> None:
+    """`discard` answers whether the message is really gone, and a refusal must be kept.
+
+    Dropping the id on a failure would leave a live secret in the chat with nothing left that
+    could ever try again -- the one outcome worse than leaving it there deliberately.
+    """
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot(control)
+    chat = await _remote_screen(bot)
+    await bot.callback(chat.press(await _pair_token(bot, chat)), None)
+    tracked = bot._pairing_message
+    assert tracked is not None
+
+    async def refuse(_bot, _message_id):
+        return False
+
+    bot.view.discard = refuse
+    await bot._release_pairing_code(chat.bot)
+
+    assert bot._pairing_message == tracked, "a refused removal must stay on the books"

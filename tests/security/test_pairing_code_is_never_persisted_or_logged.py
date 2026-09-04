@@ -218,8 +218,18 @@ async def test_the_bot_puts_no_control_under_the_secret_that_could_re_send_it() 
     sent, _chat = await _press_pair(bot)
 
     assert sent is not None, "no message carried the code"
-    markup = sent.reply_markup
-    assert markup is None or not markup.inline_keyboard
+    # The rule is about what a control can DO, not about whether one exists. It was
+    # implemented as "no keyboard at all" until 2026-09-04, when a one-tap copy was added:
+    # `copy_text` is resolved by the Telegram client, sends nothing to this bot, and so has
+    # no callback to re-render anything. A callback button is still forbidden here, and that
+    # is the half worth asserting -- it is the one that could put a second copy of a live
+    # secret into the chat, possibly long after the owner stopped looking.
+    for row in sent.reply_markup.inline_keyboard:
+        for button in row:
+            assert button.callback_data is None, (
+                f"a callback under the secret can re-send it: {button.text!r}"
+            )
+            assert button.url is None, f"a link under the secret can carry it out: {button.text!r}"
     # And it is unforwardable, which only a real send can carry.
     assert sent.protect_content is True
 

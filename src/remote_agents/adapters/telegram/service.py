@@ -15,6 +15,7 @@ from telegram import (
     Bot,
     BotCommand,
     BotCommandScopeChat,
+    CopyTextButton,
     ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -527,6 +528,10 @@ class PrivateBotBoundary:
     """
     _awaiting_text: dict[tuple[int, int], _TextEntry] = field(default_factory=dict)
     _attachment: tuple[str, int] | None = None
+    #: The pairing-code message, until the owner's next interaction takes it out of the chat.
+    #: A bare id rather than the attachment's `(scope, id)` pair, because a pairing code is
+    #: about no session and so has nothing to stay on screen for.
+    _pairing_message: int | None = None
     _project_views: dict[str, tuple[CatalogProject, ...]] = field(default_factory=dict)
     _flow: str | None = None
     """Which of the bar's three flows the screen being drawn belongs to, or None for neither.
@@ -660,6 +665,7 @@ class PrivateBotBoundary:
         bot = message.get_bot()
         await self.view.render(bot, arguments)
         await self._release_attachment(bot, None)
+        await self._release_pairing_code(bot)
         await self._abandon_entry(bot)
         await self.view.discard(bot, message.message_id)
 
@@ -813,6 +819,7 @@ class PrivateBotBoundary:
         await self.view.render(bot, arguments)
         self._awaiting_text.pop(self._entry_key, None)
         await self._release_attachment(bot, None)
+        await self._release_pairing_code(bot)
         await self._clear_entry(bot, entry, message)
 
     async def _ask_again(self, bot, entry: _TextEntry, message, notice: str) -> None:
@@ -1015,6 +1022,7 @@ class PrivateBotBoundary:
             # than leaving a cleared spinner and nothing drawn.
             showing = None if state.action in _LIST_LANDING_ACTIONS else state.entity_id
             await self._release_attachment(query.get_bot(), showing)
+            await self._release_pairing_code(query.get_bot())
             if state.action not in _TEXT_ENTRY_ACTIONS:
                 await self._abandon_entry(query.get_bot())
             if state.action == "session.inspect":
@@ -2096,8 +2104,9 @@ class PrivateBotBoundary:
                 "there. Do not forward it.\n"
                 f"{escape(expires)}. A phone that pairs keeps its access after that — turn "
                 f"{escape(HOST_REMOTE_CONTROL_TITLE)} off to end it.\n"
-                "<b>Delete this message once the phone is paired.</b> Telegram keeps it in "
-                "this chat, and on every device signed into this account, until you do."
+                "<b>This message removes itself</b> the next time you use this bot. Until "
+                "then Telegram keeps it here and on every device signed into this account, "
+                "so delete it yourself if you are stepping away."
             ),
             # Marked unforwardable like a captured pane, and for a stronger reason than the
             # one that earned it there: a pane carries whatever an agent printed, and this
@@ -2105,10 +2114,25 @@ class PrivateBotBoundary:
             # which is the other half of why this goes out through `send_apart`.
             protect_content=True,
         )
+        # One tap to the clipboard. `copy_text` is a *client-side* button: pressing it copies
+        # and sends nothing to this bot, which is what makes it admissible under the rule that
+        # no control under this message may re-send it. It is not a callback, so it needs no
+        # token -- which matters, because `send_apart` deliberately binds none.
+        #
+        # The code is thereby in the message twice, in the text and in the markup. That is not
+        # a new exposure: same message, same chat, same lifetime, and the owner could always
+        # select the text by hand. What it buys is not fumbling a hyphenated code on a phone.
+        arguments["reply_markup"] = InlineKeyboardMarkup(
+            ((InlineKeyboardButton("Copy code", copy_text=CopyTextButton(code.code)),),)
+        )
         # The acknowledgement first, so the code is the last thing in the chat -- it is what
         # the owner is looking for, and a screen drawn after it would push it up.
         await self._render(query, _reply_arguments(self._host_remote_screen(status)))
-        await self.view.send_apart(query.get_bot(), arguments)
+        # Tracked so it can take itself out of the chat again. A pairing code is read once and
+        # then it is a live secret sitting in a chat history, so it is released on the owner's
+        # next interaction the way a captured document is released when its session leaves the
+        # screen -- the same mechanism, for a stronger reason.
+        self._pairing_message = await self.view.send_apart(query.get_bot(), arguments)
 
     async def _host_remote_block(self) -> str:
         """This machine's reading for the sessions list, or nothing at all.
@@ -2236,6 +2260,29 @@ class PrivateBotBoundary:
                     protect_content=True,
                 ),
             )
+
+    async def _release_pairing_code(self, bot) -> None:
+        """Take the pairing-code message out of the chat at the owner's next interaction.
+
+        **Unconditional, unlike `_release_attachment`.** A captured document is *about* a
+        session, so it stays while the owner is still looking at that session; a pairing code
+        is about nothing that can still be on screen. It has one job, the owner does it in the
+        seconds after it arrives, and every second after that it is a live credential sitting
+        in a chat history -- on this device and every other one signed into the account.
+
+        So the next thing the owner does with the bot takes it away. That is as close to
+        "disappears once you have used it" as this medium allows: `copy_text` is handled
+        entirely by the client and reports nothing back, so no bot can know a code was
+        copied. The message says to delete it; this stops that being the owner's job.
+
+        A refusal is kept rather than forgotten -- `discard` answers whether the message is
+        actually gone, and dropping the id on a failure would leave a live secret in the chat
+        with nothing left that could ever try again.
+        """
+        if self._pairing_message is None:
+            return
+        if await self.view.discard(bot, self._pairing_message):
+            self._pairing_message = None
 
     async def _release_attachment(self, bot, showing: str | None) -> None:
         """Take a captured document out of the chat once its session is off the screen.

@@ -138,7 +138,7 @@ to know rather than a guard to rely on.
 
 **The pairing code is shown once.** `Pair a phone` mints a short-lived manual code, and both
 surfaces display it exactly once: the terminal in a modal that any key dismisses and that no
-snapshot ever captures, the bot in a single unforwardable message with no buttons under it.
+snapshot ever captures, the bot in a single unforwardable message carrying one client-side `Copy code` button -- which sends nothing to the bot, so it cannot re-send the secret -- and which takes itself out of the chat at your next interaction with the bot.
 Nothing stores it, nothing logs it, and nothing here can revoke one — anyone who types it into
 the ChatGPT app gets control of this machine until it expires, and a phone that pairs keeps its
 access afterwards. Turning Codex Remote Control off is what ends that access. If you lose a
