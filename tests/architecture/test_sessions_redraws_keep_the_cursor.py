@@ -229,3 +229,41 @@ def test_every_listing_redraw_is_reached_through_a_checked_call() -> None:
         f"these direct redraws of the sessions listing take the default cursor: {sorted(silent)}. "
         "Pass keep_cursor= or rest_on_nothing= explicitly, as every other exit does."
     )
+
+
+def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> None:
+    """`highlighted_session` and `owns_session_cursor` are two halves of one statement.
+
+    `RemoteAgentsTui.selected_session` asks `owns_session_cursor` which of two answers a
+    keypress gets: this screen's own cursor, or the console's published selection. A position
+    that draws sessions and defines the resolver but forgets the flag answers from the
+    *sessions pane's* row while its own cursor sits somewhere else — an unconfirmed `s` against
+    a session the owner can see is not the one they highlighted.
+
+    Written as a check rather than trusted because the Stage 1 gate paid for the lesson twice:
+    a predicate that recognises today's positions is silent about tomorrow's, and both times
+    the gap was at exactly this kind of boundary. `ChoiceScreen` is the base and declares both,
+    which is the pairing rather than an exception to it.
+    """
+    unpaired = []
+    for module, tree in _every_tui_module().items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            defines_resolver = any(
+                isinstance(child, ast.FunctionDef) and child.name == "highlighted_session"
+                for child in node.body
+            )
+            declares_flag = any(
+                isinstance(child, ast.AnnAssign | ast.Assign)
+                and "owns_session_cursor" in ast.unparse(child)
+                for child in node.body
+            )
+            if defines_resolver and not declares_flag:
+                unpaired.append(f"{module}::{node.name}")
+
+    assert not unpaired, (
+        f"these screens resolve a session from their own list without declaring that they own "
+        f"a cursor: {sorted(unpaired)}. Set `owns_session_cursor = True`, or "
+        "`selected_session` will answer them from another pane's selection."
+    )

@@ -772,6 +772,35 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
             return
         await super().choose(key)
 
+    #: This position draws a sessions list of its own, in its top-right pane, so a chord
+    #: pressed here acts on that cursor rather than on the console's published selection.
+    owns_session_cursor = True
+
+    def highlighted_session(self) -> str | None:
+        """The session under the sessions pane's cursor, or `None`.
+
+        Extracted from `action_session_detail` so this position answers the question exactly
+        once. `selected_session` asks it for the chord layer and `d` asks it for the detail;
+        two resolvers reading the same pane would be two chances to disagree about which row
+        an unconfirmed stop lands on.
+
+        Guarded rather than raising, for the reason `SessionsScreen`'s copy gives: this runs
+        from `check_action`, which the footer calls for every binding in the chain, and an
+        exception out of a footer redraw takes the app down. The prefix check is what keeps the
+        disabled "No sessions running" placeholder from ever being answered as a session.
+        """
+        found = self.query("#sessions-pane")
+        pane = found.first(OptionList) if found else None
+        if pane is None:
+            return None
+        index = pane.highlighted
+        if index is None or pane.option_count <= index:
+            return None
+        key = pane.get_option_at_index(index).id
+        if key is None or not key.startswith(_SESSION_KEY_PREFIX):
+            return None
+        return key.removeprefix(_SESSION_KEY_PREFIX)
+
     async def action_session_detail(self) -> None:
         """`d` on the highlighted session row opens today's detail screen unchanged.
 
@@ -779,14 +808,10 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         dashboard narrows nothing DEC-007's full control plane promised — opening is the
         fast path, the detail is one key away.
         """
-        pane = self.query_one("#sessions-pane", OptionList)
-        index = pane.highlighted
-        if index is None or pane.option_count <= index:
+        session_value = self.highlighted_session()
+        if session_value is None:
             return
-        key = pane.get_option_at_index(index).id
-        if key is None or not key.startswith(_SESSION_KEY_PREFIX):
-            return
-        await self.tui.show_detail(key.removeprefix(_SESSION_KEY_PREFIX))
+        await self.tui.show_detail(session_value)
 
     def action_host_remote_control(self) -> None:
         """Hand the key to this screen's own pump and return immediately.

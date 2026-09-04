@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from textual.app import ComposeResult, ScreenStackError
 from textual.containers import Vertical, VerticalScroll
@@ -1136,6 +1136,26 @@ class ChoiceScreen(Screen[None]):
             return
         choices.highlighted = None
         choices.highlighted = index
+
+    #: Whether this screen draws a sessions list with a cursor of its own.
+    #:
+    #: What it decides is where `RemoteAgentsTui.selected_session` looks: a position that owns
+    #: a cursor answers from it, and every other position answers from the console's published
+    #: selection. Getting that backwards is a chord acting on a row the owner is not looking
+    #: at, so a screen that draws sessions must say so rather than be recognised by its type --
+    #: `tests/architecture/test_sessions_redraws_keep_the_cursor.py` pins the two together, so
+    #: a position cannot gain `highlighted_session` and forget this.
+    owns_session_cursor: ClassVar[bool] = False
+
+    def highlighted_session(self) -> str | None:
+        """The session under this screen's cursor, or `None` where it has no sessions list.
+
+        Answering `None` here rather than leaving the method to the two positions that have
+        one: `selected_session` asks every screen, and an `AttributeError` out of a keypress
+        handler exits the app -- the failure mode `highlighted_session`'s own guard exists for
+        one level down.
+        """
+        return None
 
     def text_entry(
         self,

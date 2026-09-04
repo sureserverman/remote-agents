@@ -944,6 +944,40 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             return
         await self.show_sessions()
 
+    async def selected_session(self) -> str | None:
+        """Which session a key pressed *now*, on *this* screen, should act on.
+
+        Two answers, and which one applies is a question about the position rather than about
+        the process. A position that draws its own sessions list answers from its cursor; every
+        other position answers from the console's published selection, because it has no cursor
+        of its own and the owner's choice was made in a different pane.
+
+        `owns_session_cursor` decides that, and it is a declared flag rather than a type check
+        for the reason the Stage 1 gate paid for twice: a predicate that recognises today's
+        positions silently gives the wrong answer to tomorrow's. A new position that draws
+        sessions and forgets the flag would answer from the *sessions pane's* row while its own
+        cursor sat somewhere else — so
+        `tests/architecture/test_sessions_redraws_keep_the_cursor.py` fails when a screen
+        defines `highlighted_session` without it.
+
+        **Never cached.** One tmux read per keypress is the price of never acting on a stale
+        selection, and it is a `show-options` against a local socket. A cache would be correct
+        for exactly as long as nobody moved the cursor in the other pane, which is the whole
+        thing this has to survive.
+
+        DEC-007 is unchanged and is what makes the returned id safe to hold at all: the acting
+        surface re-reads the record and re-checks `available_actions` at issue time, so a
+        session this names but whose state now forbids the action is refused there.
+        """
+        screen = self.screen
+        if getattr(screen, "owns_session_cursor", False):
+            return screen.highlighted_session()
+        read = self.services.console_read_selection
+        if read is None:
+            return None
+        selected = await read()
+        return None if selected is None else str(selected)
+
     async def show_sessions(self) -> None:
         screen = self.screen
         if isinstance(screen, SessionsScreen):

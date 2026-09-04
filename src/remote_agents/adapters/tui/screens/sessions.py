@@ -345,6 +345,10 @@ class _SessionActionKeys:
             return True
         return remote_control_available(record)
 
+    #: This position draws its own sessions list, so a chord pressed here acts on its cursor
+    #: rather than on the console's published selection. True for the pane subclass too.
+    owns_session_cursor = True
+
     def highlighted_session(self) -> str | None:
         """The session id under the cursor, or None if the cursor is on nothing usable.
 

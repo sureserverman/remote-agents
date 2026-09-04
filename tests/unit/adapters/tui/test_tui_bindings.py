@@ -8,10 +8,12 @@ from datetime import UTC, datetime
 import pytest
 from backends import SessionUseCaseDouble, backend_for
 from console_selection import SelectionConsole
+from textual.widgets import OptionList
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
+from remote_agents.adapters.tui.panes import ProjectsPane
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -314,3 +316,71 @@ async def test_the_selection_capability_publishes_and_reads_when_wired() -> None
 
     assert console.published == [chosen, None]
     assert await context.console_read_selection() == chosen
+
+
+async def test_selected_session_on_a_sessions_position_answers_from_its_own_cursor() -> None:
+    """A position with a cursor never asks the console what it already knows.
+
+    Reading the published option here would answer with whatever the *pane* has highlighted,
+    which on the full sessions position is a different process's cursor entirely — and on the
+    pane itself would be a round trip to read back what it had just written.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    records = (_record(), _record())
+    app = RemoteAgentsTui(
+        replace(
+            _context(_Listing(records)),
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 1
+
+        assert await app.selected_session() == choices.get_option_at_index(1).id
+        assert console.reads == 0, "a position with its own cursor read the console anyway"
+
+
+async def test_selected_session_elsewhere_answers_from_the_published_selection() -> None:
+    """The projects pane has no sessions list, so the answer comes from the pane that does."""
+    chosen = SessionId.new()
+    console = SelectionConsole(selected=chosen)
+    app = ProjectsPane(
+        replace(
+            _context(_Listing(())),
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert not getattr(app.screen, "owns_session_cursor", False)
+
+        assert await app.selected_session() == str(chosen)
+        assert console.reads == 1
+
+        # Never cached: the owner can move the cursor in the other pane between two presses,
+        # and the second press must act on where it is now.
+        moved = SessionId.new()
+        console.selected = moved
+        assert await app.selected_session() == str(moved)
+        assert console.reads == 2, "the second press reused a cached selection"
+
+
+async def test_selected_session_is_nothing_off_a_console() -> None:
+    """No cursor here and no console to ask, so there is nothing for a chord to act on.
+
+    The chord layer is not offered at all in this case (Task 3.1), but this is the value it is
+    gated on, and "nothing" has to be a returned answer rather than a raised one.
+    """
+    app = ProjectsPane(_context(_Listing(())))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert app.services.console_read_selection is None
+        assert await app.selected_session() is None
