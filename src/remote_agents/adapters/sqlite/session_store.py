@@ -93,7 +93,34 @@ class SQLiteSessionStore:
         return _record_from_row(row) if row is not None else None
 
     async def list(self, states: Collection[SessionState] | None = None) -> Sequence[SessionRecord]:
-        """Return durable projections, optionally filtered by approved lifecycle states."""
+        """Return durable projections in insertion order, optionally filtered by state.
+
+        **The order is a promise now, where it used to be a coincidence.** This was a bare
+        `SELECT`, so the row order was whatever the query planner chose — and what it chose,
+        on a rowid table with no index worth using, was a full scan, which emits rowid order.
+        Every reader has therefore been seeing insertion order since the table existed, and
+        none of them was ever told so. That agreement is a property of the plan rather than of
+        the SQL, and it is not this adapter's to keep: an index added by a later migration, or
+        a build of SQLite that costs the choice differently, reorders these rows without a line
+        of this file changing.
+
+        The cost of that landing wrong is specific, not hypothetical. The local surface
+        restores its highlight by session id rather than by index (`tui/screens/base.py`), so a
+        reorder does not move the *session* the cursor is on — it moves the *line* it sits on.
+        DEC-052 named a cursor moving on its own as the central hazard of a timed reload and
+        DEC-062 closed the index-based half of it; this closes the half underneath, where the
+        ids are stable and the rows they name are not. On a ten-second refresh nobody pressed,
+        with `s` and `c` bound under the cursor, the owner reads that as the wrong row lighting
+        up.
+
+        `rowid` and not `created_at`: the timestamps are ISO strings written per record and two
+        sessions launched inside one second sort arbitrarily against each other, whereas the
+        rowid *is* the insertion order — monotonic, assigned by the write, and never rewritten
+        by an UPDATE. So the contract this states is the one every caller already relies on:
+        insertion order, growing at the tail. Appended after the `WHERE` rather than baked into
+        the base string, because the other way round is a syntax error on exactly the filtered
+        branch the dashboard uses.
+        """
         query = (
             "SELECT session_id, project_id, profile_id, display_identity, state, created_at, "
             "resume_profile_id, resume_source_id, terminal_reason, orphan_provenance, "
@@ -104,6 +131,7 @@ class SQLiteSessionStore:
         if states:
             values = tuple(state.value for state in states)
             query += f" WHERE state IN ({', '.join('?' for _ in values)})"
+        query += " ORDER BY rowid"
         rows = self._connection.execute(query, values).fetchall()
         return tuple(_record_from_row(row) for row in rows)
 
