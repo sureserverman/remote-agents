@@ -363,7 +363,13 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
     app = RemoteAgentsTui(_context())
     async with app.run_test(size=(100, 30)) as pilot:
         await pilot.pause()
-        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("c", "gamma")), highlight=2)
+        # The resting row's key is deliberately one that **survives** into the next fill, at a
+        # different index. That is what leaves the generation guard as the only thing standing:
+        # a key the new list does not hold would be refused by the row guard on its own, and
+        # this test would then pass with the generation check deleted. Measured — it did, 90 of
+        # 90, until this line named "x" instead of "c". The shape is realistic rather than
+        # contrived: the same session surviving two fills is the ordinary case.
+        app.screen.show_choices((("a", "alpha"), ("b", "beta"), ("x", "gamma")), highlight=2)
         superseded = app.screen._resting_generation
         await pilot.pause()
 
@@ -376,10 +382,14 @@ async def test_a_superseded_cursor_placement_stands_down() -> None:
         marked_before, rows = _highlighted(app)
         assert rows == ["one", "two"]
 
-        # The superseded fill's index (2) clamps onto the two-row list at row 1 -- "two",
-        # the row it must not reach. Its key, "c", is not on this list at all, which is the
-        # second guard agreeing with the first rather than a different verdict.
-        app.screen._rest_cursor(choices, 2, superseded, "c")
+        # The superseded fill's index (2) clamps onto the two-row list at row 1 -- "two", the
+        # row it must not reach. Its key "x" *is* on this list, and is the row the cursor is
+        # already on, so the row guard is satisfied and waves it through: the generation guard
+        # is the only thing that refuses it. That separation is the point of this test, and it
+        # is why the row guard cannot replace the generation guard -- the row guard compares
+        # the *key* and the write uses the *index*, so a placement whose key survives into a
+        # shorter fill would land the cursor on a row the owner never chose.
+        app.screen._rest_cursor(choices, 2, superseded, "x")
         await pilot.pause()
         marked_after, _ = _highlighted(app)
         assert marked_after == marked_before == "one", (

@@ -630,15 +630,44 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         await self._seed_context_gauges()
 
     async def _seed_context_gauges(self) -> None:
-        """Fill the app's gauge cache once, then redraw, without the list-open pass."""
+        """Fill the app's gauge cache once, then redraw, without the list-open pass.
+
+        **Guarded exactly as `_auto_reload` is, and it was not.** This is the fourth
+        unserialised fill of this listing — the interval, `on_reveal`, a resize, and this —
+        and it has the same shape as the interval: read records, await something slow, then
+        draw the records read *before* that await. It carried neither of the two guards that
+        method documents, on the one path that runs at mount, where the per-session provider
+        sweep is at its slowest.
+
+        The failure that leaves is the one `on_screen_resume` already describes in the other
+        direction — "a session that ended during the detour is put back on screen by the stale
+        listing". Where the sweep outruns the ten-second interval: the tick reads a list without
+        the session that just ended, draws it, and correctly clears the cursor; then this
+        resumes and redraws its stale list with `keep_cursor=True`, putting the ended session
+        back under the cursor `s` acts on with no confirmation.
+
+        `_reading` stops a tick running underneath, so the two cannot interleave and leave the
+        scheduler to decide which lands last. `_visit`, captured before the await and compared
+        after, drops a listing belonging to a visit the owner has since left.
+
+        The residual, stated: this can still draw records as old as its own sweep — it redraws
+        what it read, which is the point of a seed. What it can no longer do is overwrite a
+        *newer* listing with them.
+        """
         if self.tui.services.backend.usage is None:
             return
+        visiting = self._visit
+        self._reading = True
         try:
             records = await self.tui.read_sessions()
+            await self.tui.refresh_context_windows(records)
         except Exception:
             _LOG.debug("the session context gauges could not be seeded", exc_info=True)
             return
-        await self.tui.refresh_context_windows(records)
+        finally:
+            self._reading = False
+        if visiting != self._visit:
+            return
         self._draw_listing(records, keep_cursor=True)
 
     def on_screen_suspend(self) -> None:
@@ -954,9 +983,21 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         pane border. A resize changes how wide the rows are drawn and nothing else; it has no
         business deciding where the cursor is.
 
-        Two narrowings, and the first is not an optimisation. A single layout pass emits
-        several `Resize` events at one width, so comparing against `_laid_out_width` is what
-        keeps "the width changed" from meaning "the terminal moved at all".
+        Two narrowings, and the first is not an optimisation — but it is not what an earlier
+        version of this paragraph claimed either. It said "a single layout pass emits several
+        `Resize` events at one width", which is true only of a height-only resize. **Measured**
+        on a 100→60 terminal: this handler is dispatched *before* `Screen._on_resize`, because
+        `MessagePump._get_dispatch_methods` walks the MRO and reaches this override first — and
+        `Screen._on_resize` is where the children are actually re-laid. So the first delivery
+        carries the new *screen* width beside the old *child* width (60 and 96), and only a
+        second, post-layout delivery reports the child at 56.
+
+        Comparing against `_laid_out_width` therefore used to swallow that first event by
+        coincidence — the stale read happened to equal the memo — and correctness rested on a
+        second `Resize` that nothing in Textual promises. The re-lay is now deferred through
+        `call_after_refresh`, which runs after the layout this event triggers, so the width is
+        read once and read correctly. The memo then means what it says: skip when the width the
+        rows were columned for has not changed.
 
         The second replaces each row's prompt in place instead of clearing and refilling.
         `OptionList._replace_option_prompt` mutates the `Option` the list already holds, so the
@@ -974,6 +1015,18 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         a lone `Back` row on a screen whose `_drawn` still names sessions, and a resize landing
         there must re-column what it can and leave the rest alone rather than take the screen
         down with `OptionDoesNotExist`.
+        """
+        if not (self.showing and self._drawn):
+            return
+        self.call_after_refresh(self._relay_columns)
+
+    def _relay_columns(self) -> None:
+        """Re-column the drawn rows for the width the widget actually has, post-layout.
+
+        Split from `on_resize` so the width is read after the layout that event triggers
+        rather than before it — see that docstring for the measurement. Re-checks its own
+        preconditions because it runs a refresh later, by which time the screen may have been
+        left or the listing refilled.
         """
         if not (self.showing and self._drawn):
             return

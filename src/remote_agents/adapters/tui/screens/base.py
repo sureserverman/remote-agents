@@ -93,8 +93,15 @@ def restore_highlight_by_id(
       session*, silently, on a ten-second timer nobody pressed. DEC-052 named that as its
       central hazard and DEC-062 closed it for the pane, where `s` and `c` end a session with
       no confirmation. The dashboard binds no stop keys — its blast radius is `d` opening the
-      wrong detail — and takes the same answer anyway, which is DEC-062's rejected alternative
-      3 as written: both positions, never one.
+      wrong detail — and takes the same answer anyway, so that the one code path publishing
+      the console-wide selection cannot disagree with itself about where the cursor is.
+
+      That last clause is the actual justification, and it is stated because an earlier version
+      of this docstring borrowed DEC-062's rejected alternative 3 ("both positions, never one")
+      instead. That alternative reasons from `SessionsScreen` and `SessionsPaneScreen` carrying
+      *the same keys from the same list*; the dashboard's pane is a third position carrying
+      neither, so the argument does not transfer and citing it made the extension look already
+      decided when it is a new decision.
 
     DEC-007 is honoured by `"none"` rather than traded away. Its rule is that a *resting*
     cursor is never on something that mutates, and no cursor at all satisfies that strictly:
@@ -114,6 +121,18 @@ def restore_highlight_by_id(
     mitigation would undo itself ten seconds later, on the very timer it exists to defend
     against. A populated pane with no held row is a cursor deliberately resting on nothing;
     an unpopulated one is a screen that has not drawn yet.
+
+    **The exception, stated because the sentence above does not predict it.** "Populated" is
+    measured as `option_count > 0`, and an empty listing draws a *disabled placeholder* row —
+    so a pane going from "No sessions running" to its first real session counts as populated,
+    holds no key the new list has, and comes out resting on nothing rather than on row 0. The
+    owner's first session therefore appears with no cursor until an arrow press. That is
+    parity, not a divergence: `SessionsScreen` reaches the same place through
+    `show_choices`'s own empty-state substitution, and it errs the safe way — a list carrying
+    unconfirmed stop keys opening with no cursor costs an arrow press, while opening with one
+    on a row nobody chose is the hazard DEC-052 named. Pinned by
+    `test_the_first_real_session_on_an_empty_pane_rests_on_nothing`, so the next reader finds
+    it asserted rather than inferring it from this paragraph.
     """
     if not keys:
         return
@@ -1046,9 +1065,7 @@ class ChoiceScreen(Screen[None]):
                 entries[resting][0],
             )
 
-    def _rest_cursor(
-        self, choices: OptionList, index: int, generation: int, key: str
-    ) -> None:
+    def _rest_cursor(self, choices: OptionList, index: int, generation: int, key: str) -> None:
         """Re-assert the cursor on `index` once the list has a laid-out region to scroll in.
 
         `generation` is what makes this safe to defer. The index was computed against the

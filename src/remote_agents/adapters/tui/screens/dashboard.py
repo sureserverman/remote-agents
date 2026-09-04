@@ -1042,7 +1042,14 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         held_id = held_option_id(pane)
         # Measured before the clear, and it is the difference between "the row the owner was
         # on has gone" and "this pane has not drawn yet" -- `held_id` is `None` for both.
-        was_populated = pane.option_count > 0
+        #
+        # **Enabled rows only, and the placeholder is why.** An empty listing draws a disabled
+        # "No sessions running" row, so `option_count > 0` called an empty pane populated: the
+        # owner's *first* session then arrived with no cursor, because no key of the old fill
+        # was in the new one. That is a row nobody ever chose leaving, which is not what this
+        # flag is asking about. Caught in review; the first version of this line shipped the
+        # regression and a test pinning it as though it were intended.
+        was_populated = any(not option.disabled for option in pane.options)
         pane.clear_options()
         pane.border_title = sessions_title(len(records))
         if not records:
@@ -1071,14 +1078,20 @@ class DashboardScreen(LimitsRegion, FeedRegion, ProjectsPaneScreen):
         # On the row it held if that row survived the rebuild, and on **nothing** if it did
         # not. Row 0 of a list that just lost a row is a different session, silently, on a
         # timer nobody pressed — DEC-052's central hazard, closed for `SessionsScreen` by
-        # DEC-062 and taken here too, which is that entry's rejected alternative 3 as written:
-        # both positions, never one.
+        # DEC-062 and extended here.
         #
-        # This pane binds no stop keys, so on its own the cost of the old fallback was `d`
-        # opening the wrong detail rather than `s` ending the wrong session. It is closed
-        # anyway because the two positions have to agree about where the cursor is: the
-        # selection every console pane acts on is published from one code path, and a position
-        # that quietly answers "row 0" would publish a session the owner is not looking at.
+        # **Extended, not covered — and an earlier version of this comment got that wrong.** It
+        # cited DEC-062's rejected alternative 3 as "both positions, never one". That
+        # alternative is about `SessionsScreen` and `SessionsPaneScreen`, which it justifies
+        # with "both carry the same keys from the same list": scoping the mitigation to one
+        # would leave the other holding live stop keys. This pane is a *third* position and it
+        # binds neither `s` nor `c`, so that argument does not reach it and cannot be quoted as
+        # though it did.
+        #
+        # The reason that does reach it is its own: the selection every console pane acts on is
+        # published from one code path, and a position that quietly answers "row 0" would
+        # publish a session the owner is not looking at. Extending DEC-062's property to a
+        # position it did not name is a new decision, recorded rather than assumed.
         #
         # An earlier version of this comment said "the cursor always rests somewhere (DEC-007's
         # discipline)". DEC-007's rule is that a *resting* cursor is never on something that

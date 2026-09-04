@@ -947,7 +947,19 @@ class RemoteAgentsTui(App[AttachRequest | None]):
     async def show_sessions(self) -> None:
         screen = self.screen
         if isinstance(screen, SessionsScreen):
-            await screen.reload()
+            # `keep_cursor=True`: pressed here, `ctrl+s` means "re-read this list", not
+            # "navigate to it" — the screen is already the one it names. Re-reading and
+            # re-choosing are different acts, and this list's row is the handle on two
+            # unconfirmed stops (DEC-052, DEC-062), so a reload that rests the cursor on row 0
+            # turns `ctrl+s` then `s` into a stop against a session the owner never selected.
+            #
+            # This is the **sixth** redraw exit of the class `on_reveal` enumerates, and it was
+            # missed by the fifth's sweep: that sweep grepped `self.reload(` across two screen
+            # modules, and this call is `screen.reload()` in a third file. The class was named
+            # right and enumerated too narrowly, which is precisely what a sweep exists to
+            # prevent — so `test_sessions_redraws_keep_the_cursor.py` now parses every module
+            # under `adapters/tui` rather than the two that happened to be in scope.
+            await screen.reload(keep_cursor=True)
             return
         await self.switch_flow(SessionsScreen())
 

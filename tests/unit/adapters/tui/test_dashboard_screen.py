@@ -905,3 +905,46 @@ async def test_a_resize_keeps_the_dashboard_cursor_on_its_session() -> None:
         assert pane.get_option_at_index(pane.highlighted).id == held, (
             "the dashboard resize moved the cursor off the owner's session"
         )
+
+
+async def test_the_first_real_session_on_an_empty_pane_gets_a_cursor() -> None:
+    """The empty→populated transition, which the first `was_populated` got wrong.
+
+    An empty listing draws a *disabled* "No sessions running" placeholder, so a flag measured
+    as `option_count > 0` called an empty pane populated. The owner's first session then
+    arrived with no cursor at all: `held_id` was not in the new keys, the `when_gone="none"`
+    branch fired, and `d` and Enter became silent no-ops until an arrow press.
+
+    It was written up first as accepted parity with `SessionsScreen`, on the argument that it
+    errs safe. Review took that apart, correctly: this pane **binds no stop keys** — the same
+    comment two paragraphs up in `dashboard.py` says so — and where nothing destructive is
+    bound there is no unsafe side to err away from. The entire cost was a dead `d`. Nor is it
+    DEC-062's accepted cost 2, which is about a background refresh dropping *the owner's row*,
+    not about a first arrival.
+
+    A row nobody ever chose leaving is not the question `was_populated` asks, so it now counts
+    enabled rows.
+    """
+    launcher = _Launcher(())
+    context = _context()
+    context = replace(context, backend=replace(context.backend, sessions=launcher))
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+        assert pane.option_count == 1, "the empty state draws exactly one placeholder row"
+        assert pane.get_option_at_index(0).disabled
+
+        launcher.records = (_distinct("1", "one"),)
+        await screen._reload_sessions_pane()
+
+        assert pane.option_count == 1
+        assert pane.highlighted == 0, (
+            "the owner's first session arrived with no cursor: the disabled empty-state "
+            "placeholder was counted as a populated pane, so its departure read as the "
+            "owner's row vanishing"
+        )
