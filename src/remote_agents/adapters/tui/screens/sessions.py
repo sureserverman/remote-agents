@@ -749,12 +749,20 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         redraw of this listing that resets the cursor to row 0 is a hazard, because `s` and
         `c` act on the row under the cursor without asking (DEC-018) and the import-time guard
         above says so in terms: a key must not be able to act on a row the owner did not put
-        the cursor on. Four exits redraw this list, and they were fixed one at a time as each
+        the cursor on. Five exits redraw this list, and they were fixed one at a time as each
         was found — `after_command` after a stop, `redraw_after_failure` after one that
-        raised, `confirm_force`'s abort, and `ChoiceScreen.refuse` — of which the last two
-        both come through *here*. Measured before this: three RUNNING sessions, cursor on row
-        2, `f` then escape, then `s` — one graceful stop issued against **row 0**, a session
-        the owner never selected.
+        raised, `confirm_force`'s abort, `ChoiceScreen.refuse`, and `refresh_contents` on
+        Ctrl+R — of which the middle two both come through *here*. Measured before this: three
+        RUNNING sessions, cursor on row 2, `f` then escape, then `s` — one graceful stop issued
+        against **row 0**, a session the owner never selected.
+
+        **The fifth is the one this funnel does not catch, and it is worth naming as such.**
+        `refresh_contents` does not navigate, so it never reaches `on_reveal`; it carries its
+        own `keep_cursor=True` and says why there. An earlier version of this paragraph said
+        four exits and called the funnel the place that "closes a whole class" — the funnel
+        closes every exit that arrives by *navigation*, which is a smaller class than the one
+        the hazard belongs to. `test_sessions_redraws_keep_the_cursor.py` is what makes a sixth
+        arrival visible without waiting to be measured through a wrong stop.
 
         So the fix belongs at the funnel rather than at each mouth. `keep_cursor` restores by
         row *key* and rests on **nothing** when that key has gone, which is the mechanism
@@ -772,8 +780,20 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         the store has a second writer, so this list can go stale with the owner sitting on it
         and no navigation to trigger a re-read. Until this task, Ctrl+R here re-read the
         project catalogue and unwound to the project picker.
+
+        **`keep_cursor=True`, and this is the fifth exit** in the class `on_reveal` enumerates.
+        Moving that fix to the `on_reveal` funnel closed four mouths at once, and this one is
+        not among them for the reason that makes it easy to miss: Refresh does not navigate, so
+        it never reaches `on_reveal` at all. Reloading with the default rested the cursor on
+        row 0, and `Ctrl+R` then `s` issued a graceful stop against a session the owner never
+        selected — the same measured shape as the `f`-escape-`s` sequence that funnel was built
+        for.
+
+        Re-reading and re-choosing are different acts. The owner pressed a key meaning "show me
+        what the store holds now"; nothing in that asks for a different row, and on this list
+        the row is the handle on two unconfirmed stops (DEC-052, DEC-062).
         """
-        await self.reload()
+        await self.reload(keep_cursor=True)
 
     async def reload(self, *, rest_on_nothing: bool = False, keep_cursor: bool = False) -> None:
         """Refresh readiness, then list what the shared store actually holds — on request.

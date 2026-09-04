@@ -738,3 +738,39 @@ def test_the_configured_interval_is_a_sane_number_of_seconds() -> None:
     from remote_agents.adapters.tui.screens.sessions import _SESSIONS_AUTO_REFRESH
 
     assert 2.0 <= _SESSIONS_AUTO_REFRESH <= 60.0, _SESSIONS_AUTO_REFRESH
+
+
+async def test_a_keyed_refresh_keeps_the_cursor_on_the_row_the_owner_chose() -> None:
+    """Ctrl+R re-reads the list; it does not re-choose the row.
+
+    The fifth exit in the class `on_reveal`'s docstring enumerates. `refresh_contents` reloaded
+    with `reload()`'s default `keep_cursor=False`, so `_draw_listing` took the
+    `show_choices(rows)` branch and rested the cursor on row 0 — and `Ctrl+R` then `s` issued a
+    graceful stop against a session the owner never selected. The four exits named there were
+    each found this way, one at a time; this is the same defect at the one mouth that was not
+    reached by moving the fix to the `on_reveal` funnel, because Refresh does not come through
+    `on_reveal`.
+
+    Driven through the real key rather than by calling `refresh_contents`, because the binding
+    is the app's (`app.py`, `ctrl+r` -> `action_refresh`) and the claim under test is about what
+    the owner's keypress does, not about what one method does when called by hand.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+
+        after = app.screen.query_one("#choices", OptionList)
+        assert after.highlighted is not None, "the refresh left the list with no cursor at all"
+        resting_id = after.get_option_at_index(after.highlighted).id
+
+    assert resting_id == chosen, "Ctrl+R re-chose the row instead of re-reading the list"
