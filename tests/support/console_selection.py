@@ -15,6 +15,8 @@ which happened to be right", and the second is a pane writing on a path nobody m
 
 from __future__ import annotations
 
+import asyncio
+
 from remote_agents.domain.models import SessionId
 
 
@@ -27,12 +29,29 @@ class SelectionConsole:
         #: What `read` answers. Settable mid-test, because the interesting cases are the ones
         #: where the selection changes underneath a pane that is about to act on it.
         self.selected = selected
+        #: Per-call publication delays, in issue order. See `publish`.
+        self.delays: list[float] = []
         #: How many times the surface read. Pinned by the tests that assert a chord re-reads
         #: rather than caching: one read per press is the price of never being stale, and a
         #: cache would be invisible in any assertion about the *value*.
         self.reads = 0
 
     async def publish(self, session_id: SessionId | None) -> None:
+        """Record a publication, after whatever delay `delays` prescribes for it.
+
+        The delay exists because without one this double **cannot fail**. Its body has no
+        suspension point, so every publication scheduled onto the event loop completes in the
+        order it was issued, whatever the code under test does — and a test asserting "the last
+        write wins" then passes against an implementation that races, because the double is
+        incapable of racing. Found by a Tier-2 review, which named it as the same
+        "X does not happen" vacuity one level removed.
+
+        `delays` is popped per call, so a test can make the *first* publication the slow one and
+        watch what the implementation does with the second.
+        """
+        delay = self.delays.pop(0) if self.delays else 0.0
+        if delay:
+            await asyncio.sleep(delay)
         self.published.append(session_id)
 
     async def read(self) -> SessionId | None:

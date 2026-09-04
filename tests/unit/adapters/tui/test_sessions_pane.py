@@ -14,6 +14,7 @@ already opened the detail; this is that pair, on a screen of its own.
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -1351,3 +1352,135 @@ async def test_the_full_sessions_position_publishes_nothing() -> None:
         assert choices.highlighted is None, "the vanished-row branch did not run"
 
     assert console.published == [], f"the full sessions position published {console.published}"
+
+
+async def test_a_slow_publication_never_overwrites_a_newer_one() -> None:
+    """The last row the owner moved to is the one that stays published.
+
+    Each publication is a `set-option` shelled out to tmux — a real fork/exec with variable
+    latency — and the cursor can move again long before one returns. Issued as independent
+    workers, an earlier highlight's write can land *after* a later one's, and the option is then
+    stuck naming a row the owner has left. Nothing corrects it: it is simply the answer every
+    other pane's read gives until the cursor moves again.
+
+    That matters here more than it would anywhere else in this surface, because the next stage
+    points `alt+s` and `alt+c` at this value and neither asks for confirmation. DEC-007's
+    re-read at issue time does not cover it — that re-checks whether the *named* session may be
+    stopped, not whether it is the session the owner is looking at. A stale-but-live id passes
+    every check and stops the wrong agent.
+
+    Driven with the first publication made deliberately slower than the second, which is the
+    inversion a loaded host produces on its own.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+        # Let the opening fill's own publication finish before the delays are armed, so this
+        # measures two deliberate moves rather than the mount racing them.
+        await asyncio.sleep(0.05)
+        console.published.clear()
+        console.delays = [0.20, 0.0]
+
+        # Two moves, each handled on its own pass — which is what an arrow pressed twice does.
+        # Handling them together would hide the defect: the handler reads the cursor at
+        # *handling* time, so two messages drained in one pass both publish the current row and
+        # agree by accident.
+        choices.highlighted = 1
+        await pilot.pause()
+        choices.highlighted = 2
+        await pilot.pause()
+        landed = choices.get_option_at_index(2).id
+        await asyncio.sleep(0.4)
+
+        # Asserted inside the app's lifetime: `on_unmount` publishes `None` on the way out, so
+        # a check after the block would be reading teardown rather than the race.
+        assert console.published, "the moves published nothing"
+        assert str(console.published[-1]) == landed, (
+            f"a slower earlier publication landed last: {console.published}"
+        )
+
+
+async def test_an_empty_listing_publishes_no_selection() -> None:
+    """The last session ending leaves no cursor, so it must leave no selection.
+
+    `show_choices` substitutes a *disabled* placeholder row for an empty listing and highlights
+    it — and Textual posts no `OptionHighlighted` for a disabled option, so the move handler
+    never fires. The option went on naming the session that had just ended.
+    """
+    console = SelectionConsole()
+    only, _second, _third = _three()
+    launcher = _Launcher((only,))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None, "the opening fill published nothing to clear"
+
+        launcher.records = ()
+        await screen._auto_reload()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.highlighted_session() is None, "this test needs an empty listing"
+        assert console.published[-1] is None, "the last session ended and the option still named it"
+
+
+async def test_a_redraw_after_a_failed_stop_publishes_no_selection() -> None:
+    """The most dangerous of the four exits, and the one DEC-062 names by name.
+
+    `redraw_after_failure` rests the cursor on nothing *because* the row a stop raised on is
+    still there and `s`/`c` carry no confirmation — a repeated keypress would re-issue a stop
+    nobody chose. That mitigation is local to this pane. Off it, the option went on naming the
+    same row, so the same repeated keypress pressed in the *projects* pane would do exactly
+    what resting on nothing exists to prevent — against a session that is demonstrably still
+    live, because the stop that failed is why it is still there.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 2
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None
+
+        await screen.redraw_after_failure()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.query_one("#choices", OptionList).highlighted is None
+        assert console.published[-1] is None, (
+            "a failed stop left its row published for every other pane to act on"
+        )

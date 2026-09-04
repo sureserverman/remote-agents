@@ -16,6 +16,7 @@ be asked about one direction.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -905,6 +906,36 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         keep_cursor: bool = False,
         rest_on_nothing: bool = False,
     ) -> None:
+        """Draw the listing, then publish the cursor it actually left behind.
+
+        **A funnel, because publishing per branch got it wrong twice.** `_draw_rows` has four
+        exits and three of them can leave no usable cursor: an empty listing (whose disabled
+        placeholder Textual highlights *without* posting a message, so the move handler never
+        fires), `rest_on_nothing` after a stop that raised, and the vanished-row branch. Only
+        the last was publishing. The other two left the option naming the session that had just
+        ended, or — worse — the row a stop had just failed on, which is demonstrably still live.
+
+        `redraw_after_failure` is the one that matters most: it rests the cursor on nothing
+        precisely because `s` and `c` carry no confirmation and a repeated keypress would
+        re-issue a stop nobody chose (DEC-018, DEC-062). That mitigation is local to this pane,
+        and leaving the option set exported the hazard to every pane that reads it.
+
+        So the publication is derived from the *result* rather than asserted by each branch: one
+        call, after the draw, reading the cursor the draw produced. A fifth exit cannot forget
+        it, which is the same repair the `on_reveal` funnel made for `keep_cursor` and the same
+        lesson the Stage 1 gate paid for — a set enumerated by hand is a set with a member
+        missing.
+        """
+        self._draw_rows(records, keep_cursor=keep_cursor, rest_on_nothing=rest_on_nothing)
+        self._publish_selection(self.highlighted_session())
+
+    def _draw_rows(
+        self,
+        records: tuple[SessionRecord, ...],
+        *,
+        keep_cursor: bool = False,
+        rest_on_nothing: bool = False,
+    ) -> None:
         """Draw a listing, optionally leaving the cursor on the row it was already on.
 
         **Guarded on `showing`, and the guard is load-bearing rather than defensive.** Every
@@ -1007,15 +1038,6 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         current = held_option_id(choices)
         keys = [key for key, _text in rows]
         highlight = keys.index(current) if current in keys else None
-        if highlight is None:
-            # Published from the branch rather than from the move handler, because there is no
-            # move to hear: `watch_highlighted` returns immediately on `None`, so Textual posts
-            # no `OptionHighlighted` for a cleared cursor. Without this the option would go on
-            # naming the session that just left, and a chord pressed in another pane would stop
-            # it -- unconfirmed (DEC-018), with nothing under a cursor anywhere to say so. The
-            # rest-on-nothing mitigation (DEC-052, DEC-062) is worth nothing off this pane
-            # unless the publication is cleared with it.
-            self._publish_selection(None)
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     def on_resize(self, event: events.Resize) -> None:
@@ -1312,16 +1334,50 @@ class SessionsPaneScreen(SessionsScreen):
             return
         await self.tui._open_or_leave(key)
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: The selection waiting to be written, and whether one is waiting. A *slot*, not a
+        #: queue: intermediate rows an arrow swept through are not worth a tmux round trip
+        #: each, and the only value that has to reach the option is the last one.
+        self._pending_selection: SessionId | None = None
+        self._selection_pending = False
+        #: Serializes the writes. See `_write_selection` for why one is not enough on its own.
+        self._selection_lock = asyncio.Lock()
+
     def _publish_selection(self, session_value: str | None) -> None:
         """This pane owns the console's cursor, so this pane is the one writer of it.
 
         Scheduled rather than awaited. Publishing is a side effect of the cursor moving, not a
         step in answering a key, and the callers are a message handler and a redraw branch —
         neither may block on a tmux round trip while the owner is still holding an arrow down.
-        A failure is swallowed to a log for the same reason the console's other capabilities
-        swallow theirs: a console that cannot write the option is one whose chords report "no
-        session selected" (DEC-027 warns, never asks), which is a worse surface and not an
-        unsafe one.
+
+        **Coalesced into a slot rather than issued per call, and that is a correctness fix
+        rather than a saving.** Each publication shells out to tmux, a fork/exec with latency
+        nothing bounds, and independent workers complete in whatever order the OS returns them.
+        Measured: with an earlier write made slower than a later one, the option was left
+        naming the row the owner had *left* — and nothing corrects it, so that is simply the
+        answer every other pane reads until the cursor moves again. The next stage points
+        `alt+s` and `alt+c` at this value with no confirmation, and DEC-007's re-read does not
+        cover it: that re-checks whether the *named* session may be stopped, not whether it is
+        the one the owner is looking at. A stale-but-live id passes every check and ends the
+        wrong agent.
+
+        A failure is swallowed to a log, and what that costs is worth stating exactly rather
+        than reassuringly. `set-option` failing does not clear the option, so after one
+        successful write a failure leaves the *previous* selection standing while the cursor
+        moves on — not "no session selected", which is what an earlier version of this said.
+        The next successful publication corrects it, and DEC-007's re-read at issue time is
+        what stops a stale-but-parseable id being acted on blindly.
+
+        **Accepted cost, recorded because it has no fix at this layer.** A pane that dies
+        without unmounting — SIGKILL, a crash, `tmux kill-pane` — leaves its last selection
+        published for the console's lifetime. Two things bound it and neither removes it: the
+        option is session-scoped, so it dies with `ra-console` (pinned live), and a sessions
+        pane that restarts republishes on its first fill, because the opening draw goes through
+        the same funnel. What is not bounded is a console whose sessions pane stays dead: its
+        last row remains selected with no cursor anywhere on screen to show it. This is the
+        same shape as DEC-062's residual — a hazard reduced to a narrow window rather than
+        closed — and Stage 3's chords inherit it.
         """
         publish = self.services.console_publish_selection
         if publish is None:
@@ -1337,9 +1393,38 @@ class SessionsPaneScreen(SessionsScreen):
             try:
                 selected = SessionId.parse(session_value)
             except ValueError:
-                _LOG.debug("a row key that is not a session id was not published")
-                return
-        self.run_worker(publish(selected), name="publish-selection", exit_on_error=False)
+                # Publish *nothing*, rather than return and leave the previous value standing.
+                # "Nothing" is the honest answer to a row this screen cannot name; returning
+                # would make the last comprehensible row the answer to an incomprehensible one,
+                # which is the same defect as not publishing a cleared cursor.
+                _LOG.debug("a row key that is not a session id cleared the selection")
+        self._pending_selection = selected
+        self._selection_pending = True
+        self.run_worker(self._write_selection(), name="publish-selection", exit_on_error=False)
+
+    async def _write_selection(self) -> None:
+        """Write the pending selection, one writer at a time, latest value wins.
+
+        The lock is what makes the order true; the loop is what makes the *value* true. Without
+        the loop, a caller that arrived while the lock was held would write its own value after
+        the holder's — correct order, wrong answer, because the holder may have been superseded
+        twice while it waited. Re-reading the slot inside the lock means whoever writes last
+        writes the newest thing anyone asked for.
+
+        Failures are logged here rather than left to Textual's worker channel, which is visible
+        only under `textual console`: an operator asking "why did my chords stop following the
+        cursor" reads the application's own log.
+        """
+        publish = self.services.console_publish_selection
+        if publish is None:
+            return
+        async with self._selection_lock:
+            while self._selection_pending:
+                self._selection_pending = False
+                try:
+                    await publish(self._pending_selection)
+                except Exception:
+                    _LOG.debug("the console selection could not be published", exc_info=True)
 
     async def on_option_list_option_highlighted(self, event: object) -> None:
         """Every cursor move, because the owner's arrow is the only event that means "this one".
@@ -1357,13 +1442,14 @@ class SessionsPaneScreen(SessionsScreen):
         lives on the console *session* and outlives this process, so a pane exiting without
         clearing it leaves its final row selected for whatever reads next.
         """
-        publish = self.services.console_publish_selection
-        if publish is None:
+        if self.services.console_publish_selection is None:
             return
-        try:
-            await publish(None)
-        except Exception:
-            _LOG.debug("the console selection could not be cleared on unmount", exc_info=True)
+        # Through the same slot and the same lock as every other publication, then awaited.
+        # Writing directly would race whatever worker is still draining: this clear must be the
+        # *last* thing written, and the lock is the only thing that can promise that.
+        self._pending_selection = None
+        self._selection_pending = True
+        await self._write_selection()
 
     async def action_session_detail(self) -> None:
         """`d` on the highlighted row opens today's detail screen, unchanged."""

@@ -384,3 +384,24 @@ async def test_selected_session_is_nothing_off_a_console() -> None:
         await pilot.pause()
         assert app.services.console_read_selection is None
         assert await app.selected_session() is None
+
+
+async def test_a_console_that_cannot_be_asked_selects_nothing() -> None:
+    """A read that raises must not take the app down with it.
+
+    `read_selection` shells out to tmux and a server that has gone away exits non-zero, which
+    `AsyncTmuxRunner` raises. This resolver runs from a keypress, and every sibling in this
+    package catches for exactly that reason — an exception out of a key handler exits the app.
+    This one was the exception, and it is the one a destructive chord will call on every press.
+    """
+
+    async def unreachable() -> SessionId | None:
+        raise RuntimeError("no server on that socket")
+
+    app = ProjectsPane(replace(_context(_Listing(())), console_read_selection=unreachable))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        assert await app.selected_session() is None
+        assert app.is_running, "a failed selection read ended the surface"

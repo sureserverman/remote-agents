@@ -564,10 +564,17 @@ class TmuxGateway:
         the console session itself, which is the thing the caller is running inside — if it is
         gone, the caller is too.
 
-        A failure here is still not fatal to the caller: publishing is how the sessions pane
-        tells the others what it has, and a console that cannot write the option is a console
-        whose chords fall back to "no session selected" (DEC-027 warns, never asks). That is a
-        worse surface, not an unsafe one.
+        A failure here is not fatal to the caller, but it is **not** harmless either, and an
+        earlier version of this paragraph said it was. It claimed a console that cannot write
+        the option is one "whose chords fall back to no session selected". That is true only
+        before the first successful write: `set-option` failing does not clear the option, so
+        after one success every later failure leaves the *previous* value standing while the
+        cursor moves on. The chords then act on a stale row rather than on nothing.
+
+        It is still not raised, because the caller is a cursor move and there is nothing useful
+        for it to do about a tmux that will not answer. What contains the consequence is
+        DEC-007's re-read at issue time — the named session must still exist and still permit
+        the action — plus the fact that the next successful publication corrects it.
         """
         await self._runner.run(*self._base_argv(), *publish_selection_args(session_id))
 

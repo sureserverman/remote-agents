@@ -231,6 +231,18 @@ def test_every_listing_redraw_is_reached_through_a_checked_call() -> None:
     )
 
 
+def _is_trivially_none(function: ast.AsyncFunctionDef | ast.FunctionDef) -> bool:
+    """Whether a resolver is the base class's "this screen has no sessions list" answer."""
+    body = [
+        node
+        for node in function.body
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    ]
+    return (
+        len(body) == 1 and isinstance(body[0], ast.Return) and ast.unparse(body[0]) == "return None"
+    )
+
+
 def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> None:
     """`highlighted_session` and `owns_session_cursor` are two halves of one statement.
 
@@ -250,10 +262,20 @@ def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> No
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            defines_resolver = any(
-                isinstance(child, ast.FunctionDef) and child.name == "highlighted_session"
-                for child in node.body
+            resolver = next(
+                (
+                    child
+                    for child in node.body
+                    if isinstance(child, ast.AsyncFunctionDef | ast.FunctionDef)
+                    and child.name == "highlighted_session"
+                ),
+                None,
             )
+            # `AsyncFunctionDef` too: matching only the sync spelling let an `async def`
+            # override slip past. A body that is only a docstring and `return None` is the
+            # base's "this screen has no sessions list", not a position claiming one, so it is
+            # not asked for the flag.
+            defines_resolver = resolver is not None and not _is_trivially_none(resolver)
             declares_flag = any(
                 isinstance(child, ast.AnnAssign | ast.Assign)
                 and "owns_session_cursor" in ast.unparse(child)
@@ -278,7 +300,13 @@ def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> No
 #: surface asserting a choice nobody made.
 _PUBLISHERS = frozenset(
     {
+        # The slot: takes a value, coalesces, and asks for a write.
         "_publish_selection",
+        # The writer: the *only* function that reaches `console_publish_selection`, holding the
+        # lock that makes "last value wins" true. A second reacher would be a second
+        # unsynchronised writer, which is the defect the lock exists for.
+        "_write_selection",
+        # The three moments that mean the owner chose something.
         "_draw_listing",
         "on_option_list_option_highlighted",
         "on_unmount",
@@ -302,16 +330,23 @@ def test_the_selection_is_published_from_a_closed_set_of_moments() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
         ):
-            for call in ast.walk(holder):
-                if not isinstance(call, ast.Call):
-                    continue
-                rendered = ast.unparse(call)
-                publishes = rendered.startswith("self._publish_selection(") or (
-                    rendered.startswith("publish(")
-                    and holder.name in {"_publish_selection", "on_unmount"}
-                )
-                if publishes and holder.name not in _PUBLISHERS:
-                    offenders.append(f"{module}::{holder.name}")
+            if holder.name in _PUBLISHERS:
+                continue
+            for node in ast.walk(holder):
+                rendered = ast.unparse(node)
+                # Two spellings, and the second is the one the first version could not see.
+                # Calling the hook is the ordinary route; reaching `console_publish_selection`
+                # **directly** bypasses the slot, the lock and the coalescing entirely, so such
+                # a site is not merely a fourth publisher but a second unsynchronised writer.
+                # The docstring claimed `_publish_selection` was "the one place the capability
+                # is reached" and nothing checked it -- the clause that should have was dead,
+                # gated on names that were already exempt. Found by a gate evaluator.
+                if isinstance(node, ast.Call) and rendered.startswith("self._publish_selection("):
+                    offenders.append(f"{module}::{holder.name} (calls the hook)")
+                elif isinstance(node, ast.Attribute) and rendered.endswith(
+                    "console_publish_selection"
+                ):
+                    offenders.append(f"{module}::{holder.name} (reaches the capability)")
 
     assert not offenders, (
         f"these publish a console selection from outside the closed set: {sorted(offenders)}. "

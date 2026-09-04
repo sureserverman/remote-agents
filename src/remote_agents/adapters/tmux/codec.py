@@ -43,7 +43,23 @@ SURFACE_SLOT = "surface"
 # other direction. It is not identity, it says nothing about which pane is which, and no reader
 # may treat it as either.
 #
-# It dies with `ra-console`, so a stale selection cannot outlive the console that published it.
+# DEC-038's *other* mechanism does still apply and is named here so a reader does not have to
+# rediscover it: a session-scoped option is reported by every pane in that session through
+# tmux's pane -> session fallback. Under DEC-040 the console window hosts a displaced agent's
+# pane, so that pane answers this option too. Harmless, because neither `PANE_FORMAT` nor
+# `ARRANGEMENT_FORMAT` expands it and no reader asks a pane for it — but it is the reason this
+# option must never be read *per pane* to mean anything about that pane.
+#
+# Measured on tmux 3.4: user options do **not** inherit session <- global, so a `set -g` of
+# this name left over from someone debugging is invisible to a session-scoped
+# `show-options -qv`. The sibling `CONSOLE_SLOT_OPTION` asserts its own non-inheritance and this
+# one now does too, because "where could a value we did not write come from" is the question a
+# reader of a chord's input actually has. Written without respelling the option: the vocabulary
+# test counts occurrences, and it caught this comment doing so -- which is the check working.
+#
+# It dies with `ra-console`, so a stale selection cannot outlive the console that published it
+# -- though it *can* outlive the sessions **pane** that published it, which is a different and
+# narrower residual, recorded on `SessionsPaneScreen._publish_selection`.
 SELECTED_SESSION_OPTION = "@remote_agents_selected_session"
 
 # The four identity option names, spelled **once each** and referenced everywhere else in this

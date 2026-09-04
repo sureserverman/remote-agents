@@ -952,22 +952,37 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         other position answers from the console's published selection, because it has no cursor
         of its own and the owner's choice was made in a different pane.
 
-        `owns_session_cursor` decides that, and it is a declared flag rather than a type check
-        for the reason the Stage 1 gate paid for twice: a predicate that recognises today's
-        positions silently gives the wrong answer to tomorrow's. A new position that draws
-        sessions and forgets the flag would answer from the *sessions pane's* row while its own
-        cursor sat somewhere else — so
-        `tests/architecture/test_sessions_redraws_keep_the_cursor.py` fails when a screen
-        defines `highlighted_session` without it.
+        `owns_session_cursor` decides that. It is read with `getattr(..., False)` because not
+        every screen is a `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside
+        that hierarchy — so the attribute genuinely may be absent, and the default is the safe
+        answer for a screen with no sessions list. An earlier version of this paragraph called
+        that "a declared flag rather than a type check", which is the shape it disclaims: a
+        probe with a silent default. It is a probe. What makes it safe is not the read but
+        `tests/architecture/test_sessions_redraws_keep_the_cursor.py`, which fails when a screen
+        defines a real `highlighted_session` without declaring the flag — the Stage 1 gate's
+        lesson, that a predicate recognising today's positions is silent about tomorrow's.
 
         **Never cached.** One tmux read per keypress is the price of never acting on a stale
         selection, and it is a `show-options` against a local socket. A cache would be correct
         for exactly as long as nobody moved the cursor in the other pane, which is the whole
         thing this has to survive.
 
-        DEC-007 is unchanged and is what makes the returned id safe to hold at all: the acting
-        surface re-reads the record and re-checks `available_actions` at issue time, so a
-        session this names but whose state now forbids the action is refused there.
+        **What DEC-007 does and does not cover, stated precisely because two docstrings in this
+        stage overstated it.** The acting surface re-reads the record and re-checks
+        `available_actions` at issue time, so an id naming a session whose state now forbids the
+        action is refused. That is a question about *legality*, not about *chosenness*: any
+        well-formed id naming a session the policy still permits passes end to end. So DEC-007
+        contains a stale-and-now-invalid selection completely, and a stale-but-still-valid one
+        not at all. What has to prevent the second is the publication being right, which is why
+        the write side is a single serialized slot derived from the drawn cursor rather than
+        three hand-placed calls.
+
+        The read is guarded because it is the one resolver in this package that is not. Every
+        sibling — `highlighted_session` on both positions, `_live_entry` — catches, for the
+        reason each records: this runs from a keypress, and an exception out of one exits the
+        app. `read_selection` shells out to tmux, and a server that has gone away exits
+        non-zero, which `AsyncTmuxRunner` raises. Nothing selected is the right answer to a
+        console that cannot be asked.
         """
         screen = self.screen
         if getattr(screen, "owns_session_cursor", False):
@@ -975,7 +990,11 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         read = self.services.console_read_selection
         if read is None:
             return None
-        selected = await read()
+        try:
+            selected = await read()
+        except Exception:
+            _LOG.debug("the console selection could not be read", exc_info=True)
+            return None
         return None if selected is None else str(selected)
 
     async def show_sessions(self) -> None:

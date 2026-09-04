@@ -1150,10 +1150,13 @@ class ChoiceScreen(Screen[None]):
     def highlighted_session(self) -> str | None:
         """The session under this screen's cursor, or `None` where it has no sessions list.
 
-        Answering `None` here rather than leaving the method to the two positions that have
-        one: `selected_session` asks every screen, and an `AttributeError` out of a keypress
-        handler exits the app -- the failure mode `highlighted_session`'s own guard exists for
-        one level down.
+        Declared here so the pairing above is a statement every screen makes rather than one
+        two screens happen to make. It is **not** reached by `selected_session`, which calls
+        the resolver only where `owns_session_cursor` is true — an earlier version of this
+        docstring said it was, and justified itself with an `AttributeError` that cannot
+        happen. Left in place because a base that declares the flag and not the method invites
+        the next reader to conclude the two are independent, which is the drift the paired
+        architecture check exists to stop.
         """
         return None
 
