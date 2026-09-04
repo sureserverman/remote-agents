@@ -122,17 +122,20 @@ def restore_highlight_by_id(
     against. A populated pane with no held row is a cursor deliberately resting on nothing;
     an unpopulated one is a screen that has not drawn yet.
 
-    **The exception, stated because the sentence above does not predict it.** "Populated" is
-    measured as `option_count > 0`, and an empty listing draws a *disabled placeholder* row —
-    so a pane going from "No sessions running" to its first real session counts as populated,
-    holds no key the new list has, and comes out resting on nothing rather than on row 0. The
-    owner's first session therefore appears with no cursor until an arrow press. That is
-    parity, not a divergence: `SessionsScreen` reaches the same place through
-    `show_choices`'s own empty-state substitution, and it errs the safe way — a list carrying
-    unconfirmed stop keys opening with no cursor costs an arrow press, while opening with one
-    on a row nobody chose is the hazard DEC-052 named. Pinned by
-    `test_the_first_real_session_on_an_empty_pane_rests_on_nothing`, so the next reader finds
-    it asserted rather than inferring it from this paragraph.
+    **What "populated" must not be measured as, and why the caller decides it.** An empty
+    listing draws a *disabled placeholder* row, so `option_count > 0` calls an empty pane
+    populated — and the owner's first real session then arrives with the placeholder's
+    departure read as their own row vanishing, leaving no cursor at all. The caller therefore
+    counts **enabled** rows (`dashboard.py`), because only the caller knows which of its rows
+    are real.
+
+    **The two sessions positions genuinely differ here, and this is the place to say so.** The
+    dashboard pane rests the owner's first session on row 0; `SessionsScreen` reaches
+    `show_choices`'s own empty-state substitution and comes out resting on nothing. Measured,
+    on this tree. That divergence is pre-existing on the `SessionsScreen` side and is not this
+    helper's to reconcile — it errs safe there, since that position is the one where `s` and
+    `c` end a session with no confirmation. Pinned from the dashboard side by
+    `test_the_first_real_session_on_an_empty_pane_gets_a_cursor`.
     """
     if not keys:
         return
@@ -1016,11 +1019,20 @@ class ChoiceScreen(Screen[None]):
             # Resting on nothing, and **cleared whether or not this fill takes the keyboard**.
             # The `focus` flag says where the *keyboard* goes; the cursor is a different
             # question, and on a list carrying unconfirmed stop keys it is the safety-relevant
-            # one. `clear_options` does not reset `highlighted`, and `validate_highlighted`
-            # clamps rather than rejects — so a fill that skipped this because `focus` was
-            # False would leave the old index pointing at whatever row now sits there, which is
-            # precisely the silent move this branch exists to prevent. Guarding it on `focus`
-            # would make the mitigation depend on where the keyboard happened to be.
+            # one.
+            #
+            # **Belt-and-braces, not load-bearing — and this comment used to claim the
+            # opposite.** It said "`clear_options` does not reset `highlighted`". Measured on
+            # the pinned Textual 8.2.8, `clear_options` ends with `self.highlighted = None`,
+            # and neither `add_options` nor `_update_lines` puts a cursor back — so by the time
+            # this branch runs the highlight is already `None`. The sibling comment nineteen
+            # lines below says the reverse and is the correct one; one function asserting both
+            # left whoever read it next to guess, on a safety-relevant assignment.
+            #
+            # The assignment stays, unconditional and ungated on `focus`, because the property
+            # it states — this list rests on nothing — is what makes `s` and `c` legal at all
+            # (DEC-052, DEC-062), and that should not rest on a framework detail surviving an
+            # upgrade. What is no longer claimed is that it is the only thing holding it.
             #
             # The focus call keeps its guard, because that half really is about the keyboard:
             # taking it from a filter the owner is typing into is the defect `focus` exists for.

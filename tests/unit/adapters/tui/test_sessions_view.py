@@ -1010,3 +1010,57 @@ async def test_the_gauge_seed_holds_the_reading_flag_across_its_await() -> None:
 
         assert seen == [True], f"the seed did not hold `_reading` across its await: {seen}"
         assert screen._reading is False, "the seed left `_reading` set"
+
+
+async def test_the_gauge_seed_stands_down_when_any_fill_landed_during_its_await() -> None:
+    """`_visit` is not enough, and the docstring that said it was is the reason this exists.
+
+    The seed's first guard compared `_visit`, which is bumped only by `on_screen_resume` and
+    `on_reveal` — navigation. `refresh_contents` (Ctrl+R) and `after_command` bump nothing, and
+    `reload` deliberately does not stand down for `_reading`, because a keyed re-read is the
+    owner asking again. So: the seed's provider sweep runs long, the owner presses Ctrl+R,
+    `reload` reads fresh records and draws them, the seed resumes with `_visit` unchanged and
+    redraws its stale list over the top. That is exactly the thing the seed's docstring claimed
+    it could no longer do.
+
+    The cursor survives it — both draws restore by key — but `_drawn` is rebound to the stale
+    records, so `check_action` re-offers `s` and `c` on a row that has already gone until the
+    next tick.
+
+    Guarded on the fill counter instead, which every redraw takes whatever route it arrived by:
+    `show_choices` bumps `_resting_generation` on every exit, so a seed that finds it moved
+    knows a listing newer than its own is on screen and has nothing to add.
+    """
+    first, second = _record(), _record()
+    launcher = _Listing((first, second))
+    app = RemoteAgentsTui(_context_with_usage(launcher))
+
+    async with app.run_test() as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+
+        drawn: list[int] = []
+        original = screen._draw_listing
+
+        def counting_draw(records, **kwargs):
+            drawn.append(len(records))
+            return original(records, **kwargs)
+
+        async def keyed_refresh_lands(records):
+            # The owner presses Ctrl+R while the provider sweep is still running. No
+            # navigation, so `_visit` does not move.
+            screen._draw_listing = original  # type: ignore[method-assign]
+            await screen.refresh_contents()
+            screen._draw_listing = counting_draw  # type: ignore[method-assign]
+
+        app.refresh_context_windows = keyed_refresh_lands  # type: ignore[method-assign]
+        screen._draw_listing = counting_draw  # type: ignore[method-assign]
+        visiting = screen._visit
+        await screen._seed_context_gauges()
+
+        assert screen._visit == visiting, "this test is only meaningful without a navigation"
+        assert drawn == [], (
+            "the gauge seed redrew its stale listing over a fresher one the owner asked for"
+        )

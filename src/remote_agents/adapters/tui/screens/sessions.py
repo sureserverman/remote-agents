@@ -650,13 +650,30 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         scheduler to decide which lands last. `_visit`, captured before the await and compared
         after, drops a listing belonging to a visit the owner has since left.
 
-        The residual, stated: this can still draw records as old as its own sweep — it redraws
-        what it read, which is the point of a seed. What it can no longer do is overwrite a
-        *newer* listing with them.
+        **And the fill counter, which is the guard the other two do not add up to.** An earlier
+        version of this docstring closed with "what it can no longer do is overwrite a *newer*
+        listing" while holding only the first two, and that was false: `_visit` moves on
+        navigation alone, `refresh_contents` (Ctrl+R) and `after_command` bump nothing, and
+        `reload` deliberately does not stand down for `_reading` because a keyed re-read is the
+        owner asking again. So a Ctrl+R landing mid-sweep drew fresh records and this then
+        redrew its stale ones over the top. `_resting_generation` is taken by every
+        `show_choices` exit, so comparing it catches a fill by whatever route it arrived.
+
+        The residual, stated correctly this time: this still draws records as old as its own
+        sweep when nothing else has drawn — it redraws what it read, which is the point of a
+        seed, and the next tick corrects it. What it cannot do is land on top of a newer
+        listing.
+
+        One interlock it does not repair: `_reading` is a flag rather than a counter, so a
+        `reload` finishing mid-sweep clears it and a tick can then start beside this. The fill
+        counter makes that harmless here — whichever draws second, the other stands down — but
+        `_auto_reload`'s "never over work in flight" is weaker than it reads, and the flag is
+        shared, so widening it is not this method's to do.
         """
         if self.tui.services.backend.usage is None:
             return
         visiting = self._visit
+        filled = self._resting_generation
         self._reading = True
         try:
             records = await self.tui.read_sessions()
@@ -666,7 +683,7 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             return
         finally:
             self._reading = False
-        if visiting != self._visit:
+        if visiting != self._visit or filled != self._resting_generation:
             return
         self._draw_listing(records, keep_cursor=True)
 
