@@ -901,3 +901,123 @@ async def test_the_sessions_cursor_survives_resize_and_tick(tmp_path: Path) -> N
             await _run("tmux", "-L", console_socket, "kill-server")
         except RuntimeError:
             pass
+
+
+async def test_the_published_selection_follows_the_cursor_over_real_tmux(tmp_path: Path) -> None:
+    """The selection round-trips through a real tmux 3.4 server, written and read by two processes.
+
+    **What this proves, and what it deliberately cannot.** The cursor -> publish half is driven
+    in `tests/unit/adapters/tui/test_sessions_pane.py`; what no unit test can answer is whether
+    a session-scoped user option survives a real server and is visible to a *different process*
+    reading it back. That is what runs here: the gateway publishes exactly as the pane's
+    capability does, and a separate `tmux show-options` process reads it.
+
+    The half that is missing is missing for a reason already recorded in
+    `adapters/tui/attach.py::hosting_mode`, not for want of trying. A pane surface inside a
+    disposable console classifies as FOREIGN, so `console_publish_selection` is never wired and
+    a keypress there publishes nothing. That strictness is deliberate and was paid for: when
+    the predicate was widened to accept a test socket, a surface inside a throwaway console
+    drove the owner's **real** one — panes split into their live console window, a root binding
+    installed on their server — because the composition root hardcodes the composer's server to
+    `remote-agents`. Driving the cursor here would mean either reintroducing that, or pointing
+    this test at the owner's production console. Neither is a test worth having.
+
+    So the gap stays named rather than papered over: until the composer's server stops being
+    hardcoded, no live test can drive a pane surface's own keypress into a console.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    for sequence in (1, 2):
+        await _record_numbered(home, SessionId.new(), sequence)
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
+
+    async def read_option_from_another_process() -> str:
+        return (
+            await _run(
+                "tmux",
+                "-L",
+                console_socket,
+                "show-options",
+                "-qv",
+                "-t",
+                "ra-console:",
+                "@remote_agents_selected_session",
+            )
+        ).strip()
+
+    try:
+        assert await composer.ensure() is True
+
+        # Never published: an option that was never set reads back as the empty string, which
+        # is the same thing "nothing is selected" writes. That equivalence is the reason the
+        # decoder needs no branch for it, and it is a claim about tmux, so it is checked here.
+        assert await read_option_from_another_process() == ""
+        assert await gateway.read_selection() is None
+
+        chosen = SessionId.new()
+        await gateway.publish_selection(chosen)
+        assert await read_option_from_another_process() == str(chosen)
+        assert await gateway.read_selection() == chosen
+
+        # The cursor resting on nothing, which is the publication DEC-062's mitigation is
+        # worthless without.
+        await gateway.publish_selection(None)
+        assert await read_option_from_another_process() == ""
+        assert await gateway.read_selection() is None
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_the_selection_dies_with_the_console_that_published_it(tmp_path: Path) -> None:
+    """Session scope is what makes a stale selection impossible to inherit.
+
+    The option is deliberately on the console *session* rather than on a pane (DEC-038 governs
+    identity, not this — see `SELECTED_SESSION_OPTION`). The cost of that choice would be a
+    selection outliving its console; this is the check that it does not. A fresh console on the
+    same socket name starts with nothing selected, so no chord can ever act on a session a
+    previous console had highlighted.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+
+    def _composer() -> ConsoleComposer:
+        return ConsoleComposer(
+            gateway,
+            ("sleep", "600"),
+            home,
+            projects_command=("true",),
+            pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+        )
+
+    try:
+        assert await _composer().ensure() is True
+        await gateway.publish_selection(SessionId.new())
+        assert await gateway.read_selection() is not None
+
+        await _run("tmux", "-L", console_socket, "kill-session", "-t", "ra-console:")
+        assert await _composer().ensure() is True
+
+        assert await gateway.read_selection() is None, (
+            "a new console inherited the previous one's selection"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
