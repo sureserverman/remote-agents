@@ -254,6 +254,8 @@ def local_context(config, connection, paths: ProductionPaths):
     console_sync = None
     console_flash = None
     console_show_projects = None
+    console_publish_selection = None
+    console_read_selection = None
     hide_in_console = None
     console_recovery = None
     if hosting_mode(os.environ) is HostingMode.CONSOLE:
@@ -292,6 +294,15 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync = composer.sync
         console_flash = composer.flash
         console_show_projects = composer.show_projects
+        # Straight onto the gateway rather than through the composer: publishing a selection is
+        # one `set-option` on the console session and needs none of the arrangement reasoning
+        # the composer exists for. Both wired on every console pane, because which of them a
+        # pane *uses* is a question about the screen it is showing, not about the process --
+        # `SessionsPaneScreen` publishes and every other position reads, and `selected_session`
+        # decides that by position. Wiring them per-pane here would put that decision in two
+        # places and let them disagree.
+        console_publish_selection = runtime.gateway.publish_selection
+        console_read_selection = runtime.gateway.read_selection
         # The stop paths ask the console to step out of the way before a pane is destroyed.
         # Wired only where a composer exists: elsewhere `SessionService` keeps the destruction
         # contract it has always had. The bot builds a composer of its own for this one
@@ -342,6 +353,8 @@ def local_context(config, connection, paths: ProductionPaths):
         console_sync=console_sync,
         console_flash=console_flash,
         console_show_projects=console_show_projects,
+        console_publish_selection=console_publish_selection,
+        console_read_selection=console_read_selection,
         console_recovery=console_recovery,
         # The declared boundary's answer to where a surface preference lives, not this
         # surface's own (DEC-046): the path is wired here and read through a total reader.

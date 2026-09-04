@@ -194,6 +194,25 @@ class ConsolePort(Protocol):
 
     async def mark_console_slot(self, pane_id: str, slot: ConsolePaneSlot) -> None: ...
 
+    async def publish_selection(self, session_id: SessionId | None) -> None:
+        """Record which session the console's sessions pane has highlighted.
+
+        Console state rather than pane identity, and session-scoped for that reason — the
+        codec's `SELECTED_SESSION_OPTION` carries the argument against DEC-038. `None` means
+        the cursor rests on nothing and must be published as such: an unpublished clear leaves
+        the last selection standing, which is the one thing a chord in another pane must never
+        act on (DEC-052, DEC-062).
+        """
+        ...
+
+    async def read_selection(self) -> SessionId | None:
+        """The session the console has selected, or `None` when nothing is.
+
+        Never cached. One read per chord press is the price of never acting on a stale
+        selection, and it is a `show-options` against a local socket.
+        """
+        ...
+
     async def normalize_console_layout(
         self, main_percent: int, column: Sequence[tuple[str, int]]
     ) -> None: ...

@@ -300,3 +300,56 @@ async def test_launch_still_makes_the_pane_survive_its_agent(tmp_path: Path) -> 
     )
 
     assert (*_BASE, "set-option", "-p", "-t", _EXACT, "remain-on-exit", "on") in runner.calls
+
+
+async def test_publishing_a_selection_writes_the_console_session_option() -> None:
+    """One writer, on the console session, so three reader processes see one answer."""
+    runner = RecordingRunner()
+    session_id = SessionId.new()
+
+    await gateway(runner).publish_selection(session_id)
+
+    assert runner.calls == [
+        (
+            *_BASE,
+            "set-option",
+            "-t",
+            "ra-console:",
+            "@remote_agents_selected_session",
+            str(session_id),
+        )
+    ]
+
+
+async def test_publishing_nothing_writes_an_empty_value_rather_than_skipping() -> None:
+    """A cleared cursor is a publication. Not writing it leaves the last one standing.
+
+    That is the stale selection a chord pressed in another pane would then act on, and two of
+    those chords end a session with no confirmation (DEC-018, DEC-052, DEC-062).
+    """
+    runner = RecordingRunner()
+
+    await gateway(runner).publish_selection(None)
+
+    assert runner.calls[0][-2:] == ("@remote_agents_selected_session", "")
+
+
+async def test_reading_a_selection_decodes_the_session_it_names() -> None:
+    session_id = SessionId.new()
+    runner = RecordingRunner(output=f"{session_id}\n")
+
+    assert await gateway(runner).read_selection() == session_id
+    assert runner.calls == [
+        (*_BASE, "show-options", "-qv", "-t", "ra-console:", "@remote_agents_selected_session")
+    ]
+
+
+async def test_an_unset_or_malformed_option_reads_as_no_selection() -> None:
+    """`-q` makes an unset option the empty string, so "never published" needs no branch.
+
+    And a value this process did not write decodes to nothing rather than to something
+    addressable — the chord layer acts on whatever comes back.
+    """
+    assert await gateway(RecordingRunner(output="")).read_selection() is None
+    assert await gateway(RecordingRunner(output="\n")).read_selection() is None
+    assert await gateway(RecordingRunner(output="ra-console")).read_selection() is None

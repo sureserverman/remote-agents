@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, backend_for
+from console_selection import SelectionConsole
 from tui_positions import position
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -276,3 +277,40 @@ def test_every_screen_that_advertises_refresh_actually_implements_it() -> None:
         "these screens declare `can_refresh` and override `refresh_contents` inconsistently "
         f"— (can_refresh, overrides) per screen: {disagreeing}"
     )
+
+
+async def test_the_selection_capability_is_absent_off_a_console() -> None:
+    """Declared absence, not a probe (DEC-046, DEC-061).
+
+    A surface that is not hosted by a console has no published selection to read and nothing
+    to publish to. Both capabilities are then `None`, and the Alt chord layer is not offered at
+    all rather than offered and inert — a dead-end key is worse than an absent one, which is
+    the same reasoning that gates `p` to the sessions pane.
+    """
+    context = _context(_Listing(()))
+
+    assert context.console_publish_selection is None
+    assert context.console_read_selection is None
+
+
+async def test_the_selection_capability_publishes_and_reads_when_wired() -> None:
+    """Two fields rather than one object, because no pane needs both.
+
+    Publishing belongs to the one position that owns a cursor; reading belongs to every
+    position that does not. Splitting them means a pane holding only the reader cannot
+    accidentally become a second writer of a fact that must have exactly one.
+    """
+    console = SelectionConsole()
+    chosen = SessionId.new()
+    context = replace(
+        _context(_Listing(())),
+        console_publish_selection=console.publish,
+        console_read_selection=console.read,
+    )
+
+    await context.console_publish_selection(chosen)
+    await context.console_publish_selection(None)
+    console.selected = chosen
+
+    assert console.published == [chosen, None]
+    assert await context.console_read_selection() == chosen

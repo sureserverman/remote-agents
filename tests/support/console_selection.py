@@ -1,0 +1,40 @@
+"""A stand-in for the console's published selection, for surfaces that read or write it.
+
+The two capabilities are plain callables on `TuiContext` (DEC-046: the surface is handed what
+it may do, never a handle it probes), so a double for them is a recorder rather than a fake
+tmux. Shared here rather than rewritten per test file for the reason the vocabulary tests give
+about option names: three test modules writing their own recorder is three chances to disagree
+about what "no selection" is, and the answer — `None`, never a sentinel string — is exactly the
+thing the production decoder exists to guarantee.
+
+`published` is a *list*, not a last-value, and that is deliberate. The sessions pane publishes
+on every highlight change, on the vanished-row branch, and on unmount; a double that kept only
+the latest could not tell "published once, correctly" from "published four times, the last of
+which happened to be right", and the second is a pane writing on a path nobody meant it to.
+"""
+
+from __future__ import annotations
+
+from remote_agents.domain.models import SessionId
+
+
+class SelectionConsole:
+    """Records what a surface publishes, and serves whatever the test says is selected."""
+
+    def __init__(self, selected: SessionId | None = None) -> None:
+        #: Every publication in order, including the `None`s. See the module docstring.
+        self.published: list[SessionId | None] = []
+        #: What `read` answers. Settable mid-test, because the interesting cases are the ones
+        #: where the selection changes underneath a pane that is about to act on it.
+        self.selected = selected
+        #: How many times the surface read. Pinned by the tests that assert a chord re-reads
+        #: rather than caching: one read per press is the price of never being stale, and a
+        #: cache would be invisible in any assertion about the *value*.
+        self.reads = 0
+
+    async def publish(self, session_id: SessionId | None) -> None:
+        self.published.append(session_id)
+
+    async def read(self) -> SessionId | None:
+        self.reads += 1
+        return self.selected

@@ -17,6 +17,7 @@ from remote_agents.adapters.tmux.codec import (
     console_slot_mark_args,
     console_target,
     console_zoom_args,
+    decode_selection,
     display_message_args,
     exact_pane_target,
     exact_session_target,
@@ -26,6 +27,8 @@ from remote_agents.adapters.tmux.codec import (
     pane_title_args,
     parse_arrangement,
     parse_pane,
+    publish_selection_args,
+    read_selection_args,
     rejoin_console_pane_args,
     split_console_pane_args,
     swap_pane_args,
@@ -551,6 +554,31 @@ class TmuxGateway:
             await self._runner.run(*self._base_argv(), *console_slot_mark_args(pane_id, slot))
         except RuntimeError as error:
             raise _target_missing_or(error, pane_id) from error
+
+    async def publish_selection(self, session_id: SessionId | None) -> None:
+        """Record which session the console has selected, for every pane process to read.
+
+        Not wrapped in `_target_missing_or`, and the difference from its neighbours is the
+        point: those address a *pane* that an exchange may have moved or an owner may have
+        killed, so "the target is gone" is a real answer they must translate. This addresses
+        the console session itself, which is the thing the caller is running inside — if it is
+        gone, the caller is too.
+
+        A failure here is still not fatal to the caller: publishing is how the sessions pane
+        tells the others what it has, and a console that cannot write the option is a console
+        whose chords fall back to "no session selected" (DEC-027 warns, never asks). That is a
+        worse surface, not an unsafe one.
+        """
+        await self._runner.run(*self._base_argv(), *publish_selection_args(session_id))
+
+    async def read_selection(self) -> SessionId | None:
+        """Read the published selection back, refusing anything that is not a session id.
+
+        `show-options -qv` returns the empty string for an option never set, so an unpublished
+        console and a console resting on nothing give the same answer without either caller
+        having to know which it is.
+        """
+        return decode_selection(await self._runner.run(*self._base_argv(), *read_selection_args()))
 
     async def swap_panes(self, source_pane: str, target_pane: str) -> None:
         """Exchange two panes between their windows, taking neither session with it.
