@@ -267,3 +267,54 @@ def test_a_screen_that_resolves_a_session_declares_that_it_owns_a_cursor() -> No
         f"a cursor: {sorted(unpaired)}. Set `owns_session_cursor = True`, or "
         "`selected_session` will answer them from another pane's selection."
     )
+
+
+#: The only functions allowed to publish a console selection, and what each is for.
+#:
+#: `_publish_selection` is the funnel every publication goes through and the one place the
+#: capability is reached; the other three are its callers. A fourth caller is not forbidden
+#: because publishing is dangerous — it is forbidden because the set of moments that *mean*
+#: "the owner chose this" is small and closed, and a publication from anywhere else is the
+#: surface asserting a choice nobody made.
+_PUBLISHERS = frozenset(
+    {
+        "_publish_selection",
+        "_draw_listing",
+        "on_option_list_option_highlighted",
+        "on_unmount",
+    }
+)
+
+
+def test_the_selection_is_published_from_a_closed_set_of_moments() -> None:
+    """Three callers and one funnel, enumerated by parsing rather than by grepping a line.
+
+    The gate check this replaces was `! grep -rn 'publish_selection(' ... | grep -v '<names>'`,
+    which cannot pass for any correct implementation: it filters *lines* by the names of
+    *enclosing functions*, and a call line never contains the name of the function it sits in.
+    That is the same grep-versus-parse fragility this file was created for, one check later, so
+    the repair is the same one.
+    """
+    offenders = []
+    for module, tree in _every_tui_module().items():
+        for holder in (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+        ):
+            for call in ast.walk(holder):
+                if not isinstance(call, ast.Call):
+                    continue
+                rendered = ast.unparse(call)
+                publishes = rendered.startswith("self._publish_selection(") or (
+                    rendered.startswith("publish(")
+                    and holder.name in {"_publish_selection", "on_unmount"}
+                )
+                if publishes and holder.name not in _PUBLISHERS:
+                    offenders.append(f"{module}::{holder.name}")
+
+    assert not offenders, (
+        f"these publish a console selection from outside the closed set: {sorted(offenders)}. "
+        f"Publication means the owner chose a session; the moments that mean that are "
+        f"{sorted(_PUBLISHERS)} and nothing else."
+    )
