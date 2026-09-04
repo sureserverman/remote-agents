@@ -1425,7 +1425,17 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # that is its own process's resting position — every console pane — `go_back` refuses
         # to pop, so the row is a key that does nothing, drawn at the moment the owner most
         # needs the screen to be honest.
-        target.show_choices(((_BACK, "Back"),) if len(self.screen_stack) > 1 else ())
+        # `highlight=0` stated rather than defaulted, because `target` may be a sessions
+        # position and this is a fill reaching one from a third module — the same shape as the
+        # sixth redraw exit found at the Stage 1 gate. Row 0 is the right answer here: the only
+        # row is Back, and where there is no Back there are no rows at all.
+        #
+        # Safe today, but it was safe by *accident*: both rows this can draw (`_BACK`, `_EMPTY`)
+        # are `\x00`-prefixed and `highlighted_session()` filters that prefix, so the cursor
+        # landing on one leaves `s` and `c` inert. That is an invariant of another method
+        # holding one up here — the shape `_draw_listing` was already called out for once — so
+        # the answer is given locally instead of inherited.
+        target.show_choices(((_BACK, "Back"),) if len(self.screen_stack) > 1 else (), highlight=0)
         # **The status states the failure, it does not merely point at the exit.** It read
         # "Press escape to return to the project list." — a sentence that reports nothing —
         # while the *why* went to a toast that expires after 20 seconds. A gate evaluator
