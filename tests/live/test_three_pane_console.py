@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,14 @@ from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
 from remote_agents.domain.models import SessionId
 from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+
+#: Strips the SGR escapes a `capture-pane -e` carries, so two captures compare as text.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+#: A background-colour SGR, in either the 256-colour or the truecolor spelling.
+_BACKGROUND = re.compile(r"\x1b\[[0-9;]*?48;[52];")
+#: The display identity's sequence marker, which is the part of a row that survives a
+#: re-lay at a different width.
+_SEQUENCE = re.compile(r"#\d+")
 
 _REGISTRY = """version: 1
 projects:
@@ -751,6 +760,141 @@ async def test_a_pane_surface_in_a_test_console_never_reaches_the_production_ser
         assert hosting_mode({"TMUX": f"{inside},1,0"}) is HostingMode.FOREIGN, (
             "a surface in a disposable console would build a composer against the owner's "
             "production tmux server"
+        )
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def _record_numbered(home: Path, session_id: SessionId, sequence: int) -> None:
+    """Like `_record_session`, but numbered, so three rows can be told apart on screen."""
+    from datetime import UTC, datetime
+
+    from remote_agents.domain.models import (
+        ProfileId,
+        ProjectId,
+        SessionDisplayIdentity,
+        SessionRecord,
+        SessionState,
+    )
+
+    connection, store = _store(home)
+    try:
+        await store.save(
+            SessionRecord(
+                session_id,
+                ProjectId("qualification"),
+                ProfileId("claude"),
+                SessionDisplayIdentity("qualification", "claude", "regular", sequence),
+                SessionState.RUNNING,
+                datetime.now(UTC),
+            )
+        )
+    finally:
+        connection.close()
+
+
+def _highlighted_session(capture: str) -> str | None:
+    """Which *session* is drawn with the cursor's background, from an `-e` capture.
+
+    Read off the escapes rather than by index, because the whole question is whether the row
+    under the cursor is still the row the owner chose — an index would answer a different
+    question and answer it wrongly on exactly the tick a row leaves. A session row is
+    recognised by its project name; the pane's border and title carry backgrounds too.
+
+    The `#N` display sequence and not the row's rendered text, and the difference is not
+    pedantry: re-laying the columns for a narrower pane is exactly what a resize is now
+    supposed to do, so the drawn row legitimately changes while the session under the cursor
+    does not. Comparing whole rows made this test fail on the fix working — measured, with
+    `#3` lit in both captures and only the column widths between them.
+    """
+    for line in capture.splitlines():
+        if "qualification" not in line:
+            continue
+        # `48;` is the *background* half of an SGR, which is what `render_line` paints under
+        # the highlighted row and under no other row of this list. Measured rather than
+        # assumed: the theme resolves to a 256-colour background (`48;5;23`), and every
+        # unhighlighted row carries `38;5;23` — the same number as a *foreground*. A detector
+        # written for `48;2;` truecolor found nothing at all and reported "no cursor".
+        if _BACKGROUND.search(line):
+            marker = _SEQUENCE.search(_ANSI.sub("", line))
+            return marker.group(0) if marker else None
+    return None
+
+
+async def test_the_sessions_cursor_survives_resize_and_tick(tmp_path: Path) -> None:
+    """cursor_survives_resize_and_tick — the whole of Stage 1, on the console the owner gets.
+
+    Three RUNNING sessions, the cursor moved off row 0 by real arrow keys, then the two things
+    that used to move it back: the sessions pane resized (every DEC-040 exchange and every drag
+    emits these) and one full ten-second refresh tick. Both were separate mechanisms — the
+    resize reran the whole clear/refill and re-armed the deferred placement, and the tick
+    re-read a store whose order was the planner's choice — and neither is visible in a unit
+    test of a single screen, which is why this runs against real tmux and real pane processes.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    for sequence in (1, 2, 3):
+        await _record_numbered(home, SessionId.new(), sequence)
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={
+            slot: (
+                "env",
+                f"HOME={home}",
+                str(Path(__file__).resolve().parents[2] / ".venv" / "bin" / "python3"),
+                "-m",
+                "remote_agents",
+                "pane",
+                slot.name.lower(),
+            )
+            for slot in ConsolePaneSlot
+        },
+    )
+    try:
+        assert await composer.ensure() is True
+        await asyncio.sleep(25.0)
+
+        arrangement = await gateway.pane_arrangement()
+        sessions_pane = next(
+            pane.pane_id for pane in arrangement if pane.console_slot == "sessions"
+        )
+
+        async def capture() -> str:
+            return await _run(
+                "tmux", "-L", console_socket, "capture-pane", "-pe", "-t", sessions_pane
+            )
+
+        # One key at a time: a batched send-keys drops keys during a TUI redraw.
+        for _ in range(2):
+            await _run("tmux", "-L", console_socket, "send-keys", "-t", sessions_pane, "Down")
+            await asyncio.sleep(1.0)
+
+        chosen = _highlighted_session(await capture())
+        assert chosen, "no row is drawn with the cursor after two Downs"
+
+        for width in (48, 64):
+            await _run(
+                "tmux", "-L", console_socket, "resize-pane", "-t", sessions_pane, "-x", str(width)
+            )
+            await asyncio.sleep(2.0)
+
+        assert _highlighted_session(await capture()) == chosen, "a resize moved the cursor"
+
+        # One full refresh tick, plus room for the read to land and redraw.
+        await asyncio.sleep(13.0)
+
+        assert _highlighted_session(await capture()) == chosen, (
+            "the ten-second tick moved the cursor"
         )
     finally:
         try:

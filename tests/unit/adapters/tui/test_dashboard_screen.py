@@ -861,3 +861,47 @@ async def test_resting_on_nothing_survives_the_next_reload() -> None:
         # A second tick, with nothing else changing.
         await screen._reload_sessions_pane()
         assert pane.highlighted is None, "the next tick put the cursor back on row 0"
+
+
+async def test_a_resize_keeps_the_dashboard_cursor_on_its_session() -> None:
+    """The other sessions position's resize, checked rather than assumed.
+
+    `DashboardScreen.on_resize` reruns the whole of `_draw_session_rows`, which clears the pane
+    and adds it back — the same clear/refill shape narrowed out of `SessionsScreen.on_resize`,
+    on a pane whose rows are also sessions. It looks like a member of that class and it is
+    worth saying why it is not.
+
+    Two reasons, and both are properties of this pane rather than promises. It does not draw
+    through `show_choices`, so no `_resting_generation` is taken and no `_rest_cursor` is
+    scheduled — there is no deferred placement for an arrow press to race, which is the whole
+    of what Task 1.3 removed. And the refill restores by key through `restore_highlight_by_id`,
+    so the cursor lands back on the session it was on rather than on an index.
+
+    What the refill does still do is replace the `Option` objects, so a selection queued across
+    a dashboard resize is dropped by DEC-069 where the same selection on the sessions pane is
+    now honoured. That is the conservative side of that entry and not a defect, but the two
+    positions genuinely differ and a reader should find that written down rather than infer it.
+    """
+    one, two, three = _distinct("1", "one"), _distinct("2", "two"), _distinct("3", "three")
+    context = _context()
+    context = replace(
+        context, backend=replace(context.backend, sessions=_Launcher((one, two, three)))
+    )
+    app = RemoteAgentsTui(context)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, DashboardScreen)
+        await screen._reload_sessions_pane()
+        pane = screen.query_one("#sessions-pane", OptionList)
+        pane.highlighted = 2
+        held = pane.get_option_at_index(2).id
+
+        await pilot.resize_terminal(80, 24)
+        await pilot.pause()
+
+        assert pane.highlighted is not None, "the resize left the pane with no cursor"
+        assert pane.get_option_at_index(pane.highlighted).id == held, (
+            "the dashboard resize moved the cursor off the owner's session"
+        )

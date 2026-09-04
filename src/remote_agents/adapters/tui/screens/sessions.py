@@ -610,7 +610,14 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
 
     async def populate(self) -> None:
         self.hide_entry()
-        await self.reload()
+        # `keep_cursor=False` spelled out, though it is the default. This is the screen's first
+        # fill: there is no cursor to keep, so row 0 is right — and saying so is what
+        # `test_sessions_redraws_keep_the_cursor.py` asks of every exit. The check is not that
+        # each one keeps the cursor (they do not; `redraw_after_failure` deliberately rests it
+        # on nothing) but that each one *decided*. Five exits were found one at a time, each
+        # measured through a wrong stop rather than caught; an omitted argument is how the
+        # sixth would arrive.
+        await self.reload(keep_cursor=False)
         # Started here rather than in an `on_mount` of this screen's own: the base class makes
         # `on_mount` a template method precisely so a screen cannot forget the chrome by
         # defining one, and `populate` is the hook it leaves for exactly this.
@@ -905,7 +912,11 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             self.show_choices(rows, highlight=None)
             return
         if not keep_cursor:
-            self.show_choices(rows)
+            # `highlight=0` spelled out, though it is the default. The caller that reaches here
+            # is a first fill, which has no cursor to preserve; every caller that does have one
+            # passes `keep_cursor=True` and takes the keyed branch below. Stating it is what
+            # keeps a sixth redraw exit from arriving by simply not passing an argument.
+            self.show_choices(rows, highlight=0)
             return
         # Restore by row *key*, not by index. A session that ended between two ticks shortens
         # the list above the cursor, so the index the owner was on now names a different
