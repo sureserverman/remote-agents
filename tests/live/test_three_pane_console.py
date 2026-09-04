@@ -1,4 +1,9 @@
-"""Opt-in proof, on real tmux, that the console comes up as three panes and its keys work.
+"""Opt-in proof, on real tmux, that the console comes up whole and its keys work.
+
+The count lives in `ConsolePaneSlot` and nowhere else here. This file said "three panes" in
+its title and in an assertion, and both went stale on 2026-08-31 when the console gained a
+fourth — red on `main` for four days, unnoticed because live tests are opt-in and no gate
+ran the whole file.
 
 Everything the composer does was proven headless in `tests/unit/application`; what cannot be
 proven there is the arrangement a real tmux server actually produces, and whether a real
@@ -114,7 +119,7 @@ async def _type(host_socket: str, key: str) -> None:
     await asyncio.sleep(1.0)
 
 
-async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
+async def test_the_console_comes_up_whole_and_its_keys_reach_every_pane(
     tmp_path: Path,
 ) -> None:
     _live_or_skip()
@@ -150,7 +155,13 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
         assert windows == ["0"], f"the console is one window, not {windows}"
 
         panes = await _panes(console_socket)
-        assert len(panes) == 3, panes
+        # Derived from the slot vocabulary rather than written out. This assertion said `3` and
+        # had been red on `main` since 2026-08-31, when `ConsolePaneSlot` gained `LIMITS` and
+        # the console became four panes ("Give the console its own agent-limits pane"). Nothing
+        # noticed for four days because live tests are opt-in and no gate ran this file. A
+        # literal count is a second declaration of how many panes there are, and the enum is the
+        # first; this now reads the one that cannot go stale.
+        assert len(panes) == len(ConsolePaneSlot), panes
 
         arrangement = await gateway.pane_arrangement()
         by_slot = {pane.console_slot: pane for pane in arrangement if pane.console_slot}
@@ -158,14 +169,17 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
 
         # Proportions, read off the server rather than asserted from the argv that asked
         # for them: the left pane takes ~60% of the width, and the feed ~a third of the
-        # right-hand column's height.
-        left = next(row for row in panes if row[1] == by_slot["surface"].pane_id)
-        sessions = next(row for row in panes if row[1] == by_slot["sessions"].pane_id)
-        feed = next(row for row in panes if row[1] == by_slot["feed"].pane_id)
-        total_width = left[2] + sessions[2] + 1
-        assert 0.55 <= left[2] / total_width <= 0.65, (left, sessions)
-        column = sessions[3] + feed[3] + 1
-        assert 0.28 <= feed[3] / column <= 0.40, (sessions, feed)
+        # right-hand column's height. The column is every right-hand slot, not two of them —
+        # written as `sessions + feed` it silently omitted the limits pane's rows and measured
+        # the feed against a column shorter than the one it is in.
+        by_id = {row[1]: row for row in panes}
+        left = by_id[by_slot["surface"].pane_id]
+        feed = by_id[by_slot["feed"].pane_id]
+        right = [by_id[pane.pane_id] for slot, pane in by_slot.items() if slot != "surface"]
+        total_width = left[2] + right[0][2] + 1
+        assert 0.55 <= left[2] / total_width <= 0.65, (left, right)
+        column = sum(row[3] for row in right) + len(right) - 1
+        assert 0.28 <= feed[3] / column <= 0.40, (right, feed)
 
         # The key budget — one key — installed on this socket and nowhere else.
         keys = await _run("tmux", "-L", console_socket, "list-keys", "-T", "root")
@@ -202,13 +216,16 @@ async def test_the_console_comes_up_as_three_panes_and_its_keys_reach_them(
         # it. The claim that a displayed agent swallows the prefix is false — tmux intercepts
         # it in the *client*, before any key reaches the pane — and this is where that is
         # proved rather than asserted, because it is the whole argument for a one-key budget.
+        slots = len(ConsolePaneSlot)
         seen = [by_slot["surface"].pane_id]
-        for _ in range(3):
+        for _ in range(slots):
             await _type(host_socket, "C-b")
             await _type(host_socket, "o")
             seen.append(await _active_pane(console_socket))
-        assert len(set(seen[:3])) == 3, f"prefix+o did not reach all three panes: {seen}"
-        assert seen[3] == seen[0], f"three presses over three panes must cycle back: {seen}"
+        assert len(set(seen[:slots])) == slots, f"prefix+o did not reach every pane: {seen}"
+        assert seen[slots] == seen[0], (
+            f"one press per pane must cycle back to where it started: {seen}"
+        )
     finally:
         for socket in (host_socket, console_socket):
             try:
