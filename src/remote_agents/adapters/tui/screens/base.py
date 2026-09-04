@@ -989,9 +989,17 @@ class ChoiceScreen(Screen[None]):
             # and a fresh screen has not laid out), so `watch_highlighted`'s
             # `scroll_to_highlight` finds no line for the index and returns without scrolling.
             # A resting row below the fold would therefore be highlighted but off screen.
-            self.call_after_refresh(self._rest_cursor, choices, resting, self._resting_generation)
+            self.call_after_refresh(
+                self._rest_cursor,
+                choices,
+                resting,
+                self._resting_generation,
+                entries[resting][0],
+            )
 
-    def _rest_cursor(self, choices: OptionList, index: int, generation: int) -> None:
+    def _rest_cursor(
+        self, choices: OptionList, index: int, generation: int, key: str
+    ) -> None:
         """Re-assert the cursor on `index` once the list has a laid-out region to scroll in.
 
         `generation` is what makes this safe to defer. The index was computed against the
@@ -1014,8 +1022,39 @@ class ChoiceScreen(Screen[None]):
 
         `watch_highlighted` returns immediately on `None`, so the clear posts nothing —
         subscribers see one `OptionHighlighted` per fill, not a None-then-real pair.
+
+        `key` is the second half of the guard, and it answers what `generation` structurally
+        cannot. The generation rejects a placement whose fill was *superseded by another fill*;
+        it says nothing about the owner, because moving the cursor is not a fill and takes no
+        new generation. So between this callback being scheduled and it running, an arrow press
+        delivered on the OptionList's own pump moves the cursor, the generation still matches,
+        and the placement writes the fill's index back over it — mechanism A of the
+        wrong-highlight defect. Passing the *row* the placement was resting on, rather than
+        trusting its index, lets it ask whether the cursor is still there: if the cursor now
+        names a different row, or no row at all, the owner (or a rest-on-nothing branch) put it
+        there deliberately and this callback has nothing left to do.
+
+        Standing down loses nothing this method exists for. Its job is the second
+        `scroll_to_highlight`, and a cursor that moved has already had one from
+        `watch_highlighted` — the arrow's own — against a widget that by then has a laid-out
+        region. There is no case where the deferred pass is the only thing that would scroll.
+
+        The row rather than the index, because `validate_highlighted` clamps: after a fill that
+        shortened the list, index `n` still resolves, to whatever row now sits there. Comparing
+        indices would call that a match and write over it. This is the same reasoning DEC-069
+        applies to a queued selection — identity, not position.
+
+        DEC-052/DEC-062 are why this is worth the parameter: on the sessions positions `s` and
+        `c` end a session with no confirmation, against the row under the cursor. A placement
+        that silently returns the cursor to the fill's choice is a stop against the wrong agent,
+        with nothing on screen to say so.
         """
         if generation != self._resting_generation or not choices.options:
+            return
+        resting_on = choices.highlighted
+        if resting_on is None or not 0 <= resting_on < len(choices.options):
+            return
+        if choices.options[resting_on].id != key:
             return
         choices.highlighted = None
         choices.highlighted = index
