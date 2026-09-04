@@ -47,7 +47,7 @@ from remote_agents.application.session_actions import (
     remote_control_directions,
 )
 from remote_agents.application.session_views import session_row_parts
-from remote_agents.domain.models import SessionRecord
+from remote_agents.domain.models import SessionId, SessionRecord
 from remote_agents.domain.remote_control import RemoteControlState
 
 _LOG = logging.getLogger(__name__)
@@ -878,6 +878,22 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             self._reading = False
         self._draw_listing(records, rest_on_nothing=rest_on_nothing, keep_cursor=keep_cursor)
 
+    def _publish_selection(self, session_value: str | None) -> None:
+        """Publish which session this position has selected. Nothing, on this position.
+
+        **`SessionsScreen` deliberately does not publish, and the reason is the same one that
+        gates `p` to the pane** (`SessionsPaneScreen.BINDINGS`). Hosting is decided by the tmux
+        socket name, so a plain `remote-agents tui` started from any shell on the console's
+        server is classified CONSOLE and gets `console_publish_selection` wired — and a cursor
+        moving in that unrelated process would redirect the chords of the owner's *real*
+        console, from a window that is not one of its three panes at all.
+
+        A hook rather than a capability check, because "am I one of the console's panes" is a
+        question about which screen this is, and the screen is the thing that knows. Checking
+        the wiring instead would answer "is a console reachable", which is true in both cases.
+        """
+        return None
+
     def _draw_listing(
         self,
         records: tuple[SessionRecord, ...],
@@ -987,6 +1003,15 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         current = held_option_id(choices)
         keys = [key for key, _text in rows]
         highlight = keys.index(current) if current in keys else None
+        if highlight is None:
+            # Published from the branch rather than from the move handler, because there is no
+            # move to hear: `watch_highlighted` returns immediately on `None`, so Textual posts
+            # no `OptionHighlighted` for a cleared cursor. Without this the option would go on
+            # naming the session that just left, and a chord pressed in another pane would stop
+            # it -- unconfirmed (DEC-018), with nothing under a cursor anywhere to say so. The
+            # rest-on-nothing mitigation (DEC-052, DEC-062) is worth nothing off this pane
+            # unless the publication is cleared with it.
+            self._publish_selection(None)
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     def on_resize(self, event: events.Resize) -> None:
@@ -1282,6 +1307,59 @@ class SessionsPaneScreen(SessionsScreen):
             await self.tui.go_back()
             return
         await self.tui._open_or_leave(key)
+
+    def _publish_selection(self, session_value: str | None) -> None:
+        """This pane owns the console's cursor, so this pane is the one writer of it.
+
+        Scheduled rather than awaited. Publishing is a side effect of the cursor moving, not a
+        step in answering a key, and the callers are a message handler and a redraw branch —
+        neither may block on a tmux round trip while the owner is still holding an arrow down.
+        A failure is swallowed to a log for the same reason the console's other capabilities
+        swallow theirs: a console that cannot write the option is one whose chords report "no
+        session selected" (DEC-027 warns, never asks), which is a worse surface and not an
+        unsafe one.
+        """
+        publish = self.services.console_publish_selection
+        if publish is None:
+            return
+        # The screen holds a row *key* -- a string, because that is what an `Option` id is --
+        # and the port takes a `SessionId`. Converted here rather than widening the port,
+        # because "this is a session" is exactly what the boundary should be asserting.
+        # `highlighted_session` already refuses every `\x00`-prefixed sentinel, so a key that
+        # will not parse means a row this screen does not understand; it publishes nothing
+        # rather than a guess.
+        selected: SessionId | None = None
+        if session_value is not None:
+            try:
+                selected = SessionId.parse(session_value)
+            except ValueError:
+                _LOG.debug("a row key that is not a session id was not published")
+                return
+        self.run_worker(publish(selected), name="publish-selection", exit_on_error=False)
+
+    async def on_option_list_option_highlighted(self, event: object) -> None:
+        """Every cursor move, because the owner's arrow is the only event that means "this one".
+
+        Not on open, not on a timer, not read from the chord at press time: the panes with no
+        cursor act on whatever this one has highlighted, and highlighting is the act.
+        """
+        self._publish_selection(self.highlighted_session())
+
+    async def on_unmount(self) -> None:
+        """A pane that is gone has no cursor, so it must not leave one published.
+
+        Awaited rather than scheduled, unlike every other publication here: this is the last
+        thing the process does, and a worker started now has nothing left to run on. The option
+        lives on the console *session* and outlives this process, so a pane exiting without
+        clearing it leaves its final row selected for whatever reads next.
+        """
+        publish = self.services.console_publish_selection
+        if publish is None:
+            return
+        try:
+            await publish(None)
+        except Exception:
+            _LOG.debug("the console selection could not be cleared on unmount", exc_info=True)
 
     async def action_session_detail(self) -> None:
         """`d` on the highlighted row opens today's detail screen, unchanged."""

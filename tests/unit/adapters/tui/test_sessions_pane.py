@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
+from console_selection import SelectionConsole
 from textual.geometry import Region
 from textual.widgets import OptionList
 from tui_positions import position
@@ -27,7 +28,11 @@ from tui_positions import position
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import SessionsPane
-from remote_agents.adapters.tui.screens.sessions import SessionDetailScreen, SessionsPaneScreen
+from remote_agents.adapters.tui.screens.sessions import (
+    SessionDetailScreen,
+    SessionsPaneScreen,
+    SessionsScreen,
+)
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_catalog import CatalogProject
 from remote_agents.domain.models import (
@@ -1185,3 +1190,164 @@ async def test_the_panes_own_tick_keeps_its_gauges_moving(monkeypatch) -> None:
             "the console pane's gauges never refresh after mount, so they are frozen at their "
             "launch-time values for the life of the process"
         )
+
+
+def _three() -> tuple[SessionRecord, ...]:
+    return tuple(
+        _record(SessionId.parse(f"{d * 8}-{d * 4}-4{d * 3}-8{d * 3}-{d * 12}"), f"p{d}")
+        for d in ("1", "2", "3")
+    )
+
+
+async def test_the_pane_publishes_the_row_the_owner_moves_to() -> None:
+    """One writer for a fact three other processes read.
+
+    The console's other panes have no cursor of their own; a chord pressed in any of them acts
+    on whatever this pane has highlighted. That only works if moving the cursor is what
+    publishes — not opening a detail, not a timer, not the chord asking at press time — because
+    the owner's arrow is the only event that means "this one".
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, SessionsPaneScreen)
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("down")
+        await pilot.pause()
+
+        assert console.published, "moving the cursor published nothing at all"
+        assert console.published[-1] is not None
+        assert str(console.published[-1]) == choices.get_option_at_index(1).id
+
+
+async def test_a_vanished_row_publishes_no_selection_at_all() -> None:
+    """The publication DEC-062's mitigation is worthless without.
+
+    `_draw_listing` rests the cursor on nothing when the row it held has left the list, and
+    that is what makes a bare `s` safe on this pane. Off the pane it is worth nothing unless
+    the *publication* is cleared too: an option still naming the departed session would let a
+    chord pressed in the projects pane stop it — with no confirmation, and with nothing on
+    screen under a cursor to say what it was about to act on.
+
+    Textual posts no highlight message for a cleared cursor (`watch_highlighted` returns on
+    `None`), so this cannot ride the move handler and is published from the branch itself.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        await pilot.pause()
+
+        launcher.records = (first, second)
+        await screen._auto_reload()
+        await pilot.pause()
+
+        assert choices.highlighted is None, "this test needs the cursor cleared to mean anything"
+        assert console.published[-1] is None, (
+            "the pane kept publishing a session that had left the list"
+        )
+
+
+async def test_leaving_the_pane_publishes_no_selection() -> None:
+    """A pane that is gone has no cursor, so it must not leave one behind.
+
+    The option lives on the console session and outlives this process; a pane that exits
+    without clearing it leaves the last row it held selected for whatever reads next.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 1
+        await pilot.pause()
+        assert console.published[-1] is not None, "the cursor move published nothing to clear"
+        console.published.clear()
+
+    # Driven through Textual's real teardown rather than by calling `on_unmount` by hand: the
+    # claim is that a pane exiting clears its selection, and the handler being called is the
+    # half a hand-written call assumes.
+    assert console.published[-1] is None, f"leaving published {console.published}"
+
+
+async def test_the_full_sessions_position_publishes_nothing() -> None:
+    """`remote-agents tui` is not one of the console's panes, and must not write its selection.
+
+    Hosting is decided by the tmux socket name, so a plain `remote-agents tui` started from any
+    shell on the console's server is classified CONSOLE and gets the capability wired — the
+    same trap `p` is gated against at `SessionsPaneScreen.BINDINGS`. A cursor moving in that
+    unrelated process would otherwise redirect the chords of the owner's real console.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = RemoteAgentsTui(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.action_sessions()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsScreen)
+        assert not isinstance(screen, SessionsPaneScreen)
+        console.published.clear()
+
+        # Both routes the pane publishes on, driven here where neither may.
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+        await pilot.press("down")
+        await pilot.pause()
+
+        # ...and the vanished-row branch, which is the one that calls the shared hook. Without
+        # this the test passes against a `SessionsScreen` that publishes: the base hook is
+        # reached from `_draw_listing` alone, so a cursor move on this position exercises
+        # nothing. Measured — the first version of this test did not fail when the hook was
+        # given a body.
+        choices.highlighted = 2
+        await pilot.pause()
+        launcher.records = (first, second)
+        await screen._auto_reload()
+        await pilot.pause()
+        assert choices.highlighted is None, "the vanished-row branch did not run"
+
+    assert console.published == [], f"the full sessions position published {console.published}"
