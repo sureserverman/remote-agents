@@ -30,9 +30,11 @@ through content that random tokens will always make unequal.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from telegram import Bot
 from telegram.error import BadRequest
 
 OWNER_USER_ID = 7
@@ -50,6 +52,34 @@ class Sent:
     document: bytes | None = None
     filename: str | None = None
     protect_content: bool = False
+
+
+def reject_arguments_the_real_bot_would_refuse(method: str, kwargs: dict) -> None:
+    """Fail a fake call that the real `telegram.Bot` method would not accept.
+
+    Every bot double in this suite took `**kwargs` and recorded whatever it was handed, which
+    meant a call could be *wrong at the API boundary* and green in every test. On 2026-09-04
+    that shipped: the pairing-code reply carried `protect_content` -- a `sendMessage`
+    parameter that `editMessageText` does not have -- through the live view's edit path, so
+    every press raised `TypeError` in production and no code ever reached the owner. Nothing
+    here could see it, because the fake accepted the argument the real one rejects.
+
+    Checked against `inspect.signature` of the actual method rather than a hand-written list,
+    so this keeps working when python-telegram-bot adds or removes a parameter, and covers
+    every argument rather than the one that happened to bite. Verified against the installed
+    version: `send_message` and `send_document` accept `protect_content`, `edit_message_text`
+    does not, and none of the three declares `**kwargs`.
+    """
+    signature = inspect.signature(getattr(Bot, method))
+    parameters = signature.parameters.values()
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return
+    unexpected = sorted(set(kwargs) - {parameter.name for parameter in parameters})
+    if unexpected:
+        raise TypeError(
+            f"ExtBot.{method}() got an unexpected keyword argument {unexpected[0]!r} -- "
+            "the real bot would raise this too"
+        )
 
 
 class FakeChat:
@@ -185,11 +215,13 @@ class LoneMessageBot:
         self._owner = owner
 
     async def send_message(self, **kwargs: object) -> SimpleNamespace:
+        reject_arguments_the_real_bot_would_refuse("send_message", kwargs)
         kwargs.pop("chat_id", None)
         self._owner.replies.append(kwargs)
         return SimpleNamespace(message_id=self._owner.message_id)
 
     async def edit_message_text(self, **kwargs: object) -> None:
+        reject_arguments_the_real_bot_would_refuse("edit_message_text", kwargs)
         kwargs.pop("chat_id", None)
         kwargs.pop("message_id", None)
         self._owner.replies.append(kwargs)
@@ -232,14 +264,24 @@ class FakeBot:
             raise AssertionError(f"addressed chat {chat_id}, which is not the owner's")
 
     async def send_message(self, *, chat_id: int, text: str, **kwargs: object) -> Sent:
+        reject_arguments_the_real_bot_would_refuse("send_message", kwargs)
         self._require_chat(chat_id)
         if self.send_error is not None:
             raise self.send_error
-        return self._chat._add("bot", text, reply_markup=kwargs.get("reply_markup"))
+        # `protect_content` is recorded rather than dropped: it is the difference between a
+        # secret the owner's other clients can save and one they cannot, so a test asserting
+        # it needs somewhere to read it from.
+        return self._chat._add(
+            "bot",
+            text,
+            reply_markup=kwargs.get("reply_markup"),
+            protect_content=bool(kwargs.get("protect_content", False)),
+        )
 
     async def edit_message_text(
         self, *, chat_id: int, message_id: int, text: str, **kwargs: object
     ) -> None:
+        reject_arguments_the_real_bot_would_refuse("edit_message_text", kwargs)
         self._require_chat(chat_id)
         if self.edit_error is not None:
             raise self.edit_error

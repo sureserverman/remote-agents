@@ -1020,6 +1020,15 @@ class PrivateBotBoundary:
             if state.action == "session.inspect":
                 await self._send_inspection(query, state.entity_id)
                 return
+            # Beside `session.inspect` and for the same reason: this one cannot be an *edit*
+            # of the live view. `protect_content` is a parameter of `sendMessage` and not of
+            # `editMessageText`, so routing the code through `_render` raised
+            # `TypeError: ExtBot.edit_message_text() got an unexpected keyword argument
+            # 'protect_content'` on every press and no code ever reached the owner. Found in
+            # production on 2026-09-04, by the owner pressing the button.
+            if state.action == "host.remote.pair":
+                await self._send_pairing_code(query, token=query.data or "", message_id=message_id)
+                return
             if state.action in _TEXT_ENTRY_ACTIONS:
                 await self._begin_guided_text_entry(query, state.action, state.entity_id)
                 return
@@ -1177,8 +1186,8 @@ class PrivateBotBoundary:
             return _reply_arguments(await self._host_remote_control_confirm_reply(entity_id))
         if action == "host.remote.confirm":
             return await self._host_remote_control_act_reply(entity_id, token, message_id)
-        if action == "host.remote.pair":
-            return await self._host_pair_reply(token, message_id)
+        # `host.remote.pair` is deliberately absent: it is handled before this dispatcher
+        # runs, because its message must be *sent* rather than edited into the live view.
         if action == "session.trust":
             return await self._trust_reply(entity_id, token, message_id)
         if action == "session.inspect":
@@ -2001,8 +2010,20 @@ class PrivateBotBoundary:
         # that reading is exactly what the owner needs in order to decide what to do next.
         return _reply_arguments(self._host_remote_screen(status))
 
-    async def _host_pair_reply(self, token: str, message_id: int) -> dict[str, object]:
+    async def _send_pairing_code(self, query, *, token: str, message_id: int) -> None:
         """Mint one pairing code and send it once, with no keyboard under it.
+
+        **Sent apart from the live view, never edited into it.** Two independent reasons, and
+        the first one is why no code ever reached the owner until 2026-09-04: `protect_content`
+        exists on `sendMessage` and not on `editMessageText`, so an edit carrying it raises
+        `TypeError` before anything is delivered. The second reason outlives the first --
+        editing the secret into the anchor would put it in the one message this bot keeps
+        rewriting, so the next screen would silently overwrite the code the owner was still
+        reading, and every earlier screen would have carried it in its edit history.
+
+        The live view is still redrawn, with the ordinary host screen: the owner pressed a
+        button and something must acknowledge it. The code follows as its own terminal
+        message, which lands at the bottom of the chat where it is read.
 
         **No keyboard, deliberately.** Every other screen in this bot ends in buttons, and
         one here would be a control that re-renders a message whose whole content is a
@@ -2020,7 +2041,8 @@ class PrivateBotBoundary:
         """
         control = self.backend.host_remote_control
         if control is None:
-            return _reply_arguments(self._host_unavailable())
+            await self._render(query, _reply_arguments(self._host_unavailable()))
+            return
         # Re-read before minting, exactly as the terminal does. The button was drawn against
         # a reading that may be a screen old, and a link that has dropped since would mint a
         # live code that pairs nothing -- which reads to an owner as a broken feature rather
@@ -2028,27 +2050,35 @@ class PrivateBotBoundary:
         # that could never have worked does not spend its one-shot.
         status = await control.status()
         if not pair_available(status):
-            return _reply_arguments(self._host_remote_screen(status))
+            await self._render(query, _reply_arguments(self._host_remote_screen(status)))
+            return
         if not self.callbacks.claim_mutation(
             token,
             owner_id=self.owner_user_id,
             chat_id=self.owner_chat_id,
             message_id=message_id,
         ):
-            return _reply_arguments(self._message("That action has already run."))
+            await self._render(
+                query, _reply_arguments(self._message("That action has already run."))
+            )
+            return
         try:
             code = await control.pair(PairCommand(token))
         except Exception as error:
             # The type only -- see the sibling in `adapters/tui/app.py` for why `exception`
             # would put a still-live pairing code into this process's logs.
             _LOG.error("a pairing code could not be minted: %s", type(error).__name__)
-            return _reply_arguments(
-                self._message(
-                    f"No {escape(HOST_REMOTE_CONTROL_TITLE)} pairing code reached you. If "
-                    "one was minted before the failure it expires on its own; nothing about "
-                    "this machine's setting changed."
-                )
+            await self._render(
+                query,
+                _reply_arguments(
+                    self._message(
+                        f"No {escape(HOST_REMOTE_CONTROL_TITLE)} pairing code reached you. If "
+                        "one was minted before the failure it expires on its own; nothing "
+                        "about this machine's setting changed."
+                    )
+                ),
             )
+            return
         expires = _expiry_phrase(code.expires_at)
         # `render_message` rather than `self._message`, which is the fourth screen in this
         # class to skip the navigation bar and the first to do so for a reason of its own.
@@ -2057,7 +2087,7 @@ class PrivateBotBoundary:
         # the owner stopped looking. The two permanent exceptions above skip the bar so a
         # wait cannot be pressed into a second launch; this one skips it so a secret cannot
         # be pressed into a second copy.
-        return _reply_arguments(
+        arguments = _reply_arguments(
             render_message(
                 f"<b>{escape(HOST_REMOTE_CONTROL_TITLE)} pairing code</b>\n"
                 f"<code>{escape(code.code)}</code>\n\n"
@@ -2071,9 +2101,14 @@ class PrivateBotBoundary:
             ),
             # Marked unforwardable like a captured pane, and for a stronger reason than the
             # one that earned it there: a pane carries whatever an agent printed, and this
-            # carries a key to the machine.
+            # carries a key to the machine. `protect_content` is a `sendMessage` parameter,
+            # which is the other half of why this goes out through `send_apart`.
             protect_content=True,
         )
+        # The acknowledgement first, so the code is the last thing in the chat -- it is what
+        # the owner is looking for, and a screen drawn after it would push it up.
+        await self._render(query, _reply_arguments(self._host_remote_screen(status)))
+        await self.view.send_apart(query.get_bot(), arguments)
 
     async def _host_remote_block(self) -> str:
         """This machine's reading for the sessions list, or nothing at all.

@@ -18,10 +18,12 @@ What is pinned:
 """
 
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 from backends import FakeHostRemoteControl, SessionUseCaseDouble, backend_for
+from fake_telegram import FakeChat, Sent
 
 from remote_agents.adapters.telegram.presenters import unpadded
 from remote_agents.adapters.telegram.service import (
@@ -363,15 +365,57 @@ async def test_a_host_with_no_toggle_leaves_the_sessions_list_as_it_was() -> Non
 # --- Pairing ---------------------------------------------------------------------------
 
 
-async def _pair(bot: PrivateBotBoundary) -> dict[str, object]:
-    """One whole owner press of Pair, through the token the screen actually minted."""
-    screen = await bot._host_remote_control_reply()
-    bot.callbacks.bind_pending(CHAT, 1)
-    token = _token(screen, "Pair a phone")
-    state = bot.callbacks.resolve(token, owner_id=OWNER, chat_id=CHAT, message_id=1)
-    assert state is not None and state.action == "host.remote.pair"
-    bot.callbacks.bind_pending(CHAT, 1)
-    return await bot._host_pair_reply(token, 1)
+async def _remote_screen(bot: PrivateBotBoundary) -> FakeChat:
+    """A chat already showing `/remote`, which is where the Pair button is drawn."""
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    await bot.remote_command(chat.message_update("/remote"), None)
+    return chat
+
+
+async def _pair_token(bot: PrivateBotBoundary, chat: FakeChat) -> str:
+    """Draw the remote screen into `chat` and return the token its Pair button carries."""
+    if not chat.bot_messages:
+        await bot.remote_command(chat.message_update("/remote"), None)
+    anchor = chat.messages[chat.bot_messages[0].message_id]
+    return next(
+        button.callback_data
+        for row in anchor.reply_markup.inline_keyboard
+        for button in row
+        if unmarked(unpadded(button.text)) == "Pair a phone"
+    )
+
+
+async def _pair(bot: PrivateBotBoundary) -> Sent:
+    """One whole owner press of Pair, driven through `callback` like a real thumb.
+
+    **This used to call `bot._host_pair_reply(token, 1)` directly, and that is why the
+    feature shipped broken.** Calling the reply builder proves what the message would say; it
+    proves nothing about how the message is *delivered*, and delivery was the defect: the
+    arguments carried `protect_content`, the live view sent them to `editMessageText`, and
+    the real bot raises `TypeError` for that argument. Every assertion below passed while no
+    owner could ever receive a code.
+
+    So the press now goes through `PrivateBotBoundary.callback` against `FakeChat`, whose bot
+    validates arguments against the real `telegram.Bot` signatures. What comes back is the
+    outbound call the owner would actually have received.
+    """
+    chat = FakeChat(chat_id=CHAT, owner_id=OWNER)
+    await bot.remote_command(chat.message_update("/remote"), None)
+    anchor = chat.messages[chat.bot_messages[0].message_id]
+    token = next(
+        button.callback_data
+        for row in anchor.reply_markup.inline_keyboard
+        for button in row
+        if unmarked(unpadded(button.text)) == "Pair a phone"
+    )
+    before = {message.message_id for message in chat.bot_messages}
+    await bot.callback(chat.press(token), None)
+
+    # The code is sent apart from the live view, so it is the NEW message -- not the anchor,
+    # which the same press redraws with the ordinary host screen.
+    fresh = [message for message in chat.bot_messages if message.message_id not in before]
+    assert len(fresh) == 1, f"expected exactly one new message, got {len(fresh)}"
+    return fresh[0]
 
 
 @pytest.mark.parametrize(
@@ -405,18 +449,21 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     reply = await _pair(_bot(control))
 
-    text = reply["text"]
+    text = reply.text
     assert "ZZZZ-9999" in text
     # No *buttons*, which is the property that matters: an empty markup renders nothing, and
     # what must not be there is a control that could re-send the message. Every other screen
     # in this bot ends in the navigation bar; this one deliberately does not.
-    markup = reply["reply_markup"]
-    assert not markup.inline_keyboard, (
-        f"a keyboard under a secret can re-send it: {markup.inline_keyboard}"
+    markup = reply.reply_markup
+    assert markup is None or not markup.inline_keyboard, (
+        f"a keyboard under a secret can re-send it: {markup}"
     )
     # Unforwardable and unsavable in the client, like a captured pane and for a stronger
-    # reason: a pane carries what an agent printed, this carries a key to the machine.
-    assert reply.get("protect_content") is True
+    # reason: a pane carries what an agent printed, this carries a key to the machine. This
+    # is the assertion the old direct-call test could not really make: it read the argument
+    # off a dict nobody had sent, and the real bot rejects that argument on the path the
+    # code was actually taking.
+    assert reply.protect_content is True
     # The four things the message has to teach, asserted as properties rather than as the
     # sentences that carry them -- the wording was rewritten once already and the test that
     # pinned its old words would have failed for a message that got *better*.
@@ -430,11 +477,10 @@ async def test_the_code_is_sent_once_with_no_keyboard_under_it() -> None:
 async def test_the_pairing_token_is_the_idempotency_key() -> None:
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     bot = _bot(control)
-    screen = await bot._host_remote_control_reply()
-    token = _token(screen, "Pair a phone")
+    chat = await _remote_screen(bot)
+    token = await _pair_token(bot, chat)
 
-    bot.callbacks.bind_pending(CHAT, 1)
-    await bot._host_pair_reply(token, 1)
+    await bot.callback(chat.press(token), None)
 
     assert control.claimed == {token}
 
@@ -443,40 +489,55 @@ async def test_a_replayed_pair_press_mints_no_second_code() -> None:
     """Two codes from one press is two live secrets, and only one is on the owner's screen."""
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     bot = _bot(control)
-    screen = await bot._host_remote_control_reply()
-    token = _token(screen, "Pair a phone")
+    chat = await _remote_screen(bot)
+    token = await _pair_token(bot, chat)
+    anchor = chat.bot_messages[0].message_id
 
-    bot.callbacks.bind_pending(CHAT, 1)
-    await bot._host_pair_reply(token, 1)
-    replayed = await bot._host_pair_reply(token, 1)
+    await bot.callback(chat.press(token), None)
+    sent_after_first = len(chat.bot_messages)
+    await bot.callback(chat.press(token, on=anchor), None)
 
+    # The property that matters, and the only one worth pinning: one press, one code. The
+    # *wording* the second press gets is deliberately not asserted -- driven through the real
+    # `callback`, a spent token is refused by the callback registry before the pairing path
+    # runs at all, so the screen says "no longer available" rather than "already run". The
+    # old direct-call test asserted the latter because it bypassed the registry entirely.
     assert control.calls.count("pair") == 1
-    assert "already run" in replayed["text"]
+    assert len(chat.bot_messages) == sent_after_first, "a replay must not send a second code"
 
 
 async def test_a_failed_mint_says_so_without_repeating_what_the_provider_printed() -> None:
     control = FakeHostRemoteControl(HostConnection.CONNECTED)
     control.fail_with = RuntimeError("relay refused code ZZZZ-9999 at /home/user/.codex")
     bot = _bot(control)
-    screen = await bot._host_remote_control_reply()
-    token = _token(screen, "Pair a phone")
+    chat = await _remote_screen(bot)
+    anchor = chat.bot_messages[0].message_id
 
-    bot.callbacks.bind_pending(CHAT, 1)
-    reply = await bot._host_pair_reply(token, 1)
+    await bot.callback(chat.press(await _pair_token(bot, chat)), None)
 
-    assert "ZZZZ-9999" not in reply["text"]
-    assert ".codex" not in reply["text"]
+    text = chat.messages[anchor].text
+    assert "ZZZZ-9999" not in text
+    assert ".codex" not in text
     # And it does not claim nothing happened: a mint can fail after the relay produced a live
     # code this process never rendered and cannot revoke.
-    assert "expires on its own" in reply["text"]
-    assert "setting changed" in reply["text"]
+    assert "expires on its own" in text
+    assert "setting changed" in text
+    assert len(chat.bot_messages) == 1, "a failed mint must not send a message of its own"
 
 
 async def test_pairing_on_a_host_with_no_toggle_says_it_is_unavailable() -> None:
-    bot = _bot(None)
-    bot.callbacks.bind_pending(CHAT, 1)
-    reply = await bot._host_pair_reply("token", 1)
-    assert "unavailable" in reply["text"].lower()
+    """The capability is gone between the screen being drawn and the button being pressed."""
+    control = FakeHostRemoteControl(HostConnection.CONNECTED)
+    bot = _bot(control)
+    chat = await _remote_screen(bot)
+    token = await _pair_token(bot, chat)
+    anchor = chat.bot_messages[0].message_id
+    bot.backend = replace(bot.backend, host_remote_control=None)
+
+    await bot.callback(chat.press(token), None)
+
+    assert "unavailable" in chat.messages[anchor].text.casefold()
+    assert len(chat.bot_messages) == 1, "nothing was sent apart"
 
 
 async def test_the_deadline_is_a_duration_and_survives_being_run_tomorrow() -> None:
@@ -495,11 +556,11 @@ async def test_the_deadline_is_a_duration_and_survives_being_run_tomorrow() -> N
     # The form, not the arithmetic. The count floors rather than rounds, deliberately -- a
     # deadline that overstates the time left is the one direction that costs the owner
     # something -- so pinning an exact number here would be pinning the rounding rule twice.
-    assert "Valid for about" in reply["text"], reply["text"]
-    assert "more minutes, until" in reply["text"], reply["text"]
+    assert "Valid for about" in reply.text, reply.text
+    assert "more minutes, until" in reply.text, reply.text
 
     stale = FakeHostRemoteControl(HostConnection.CONNECTED)
     stale.expires_in_minutes = -1
     expired = await _pair(_bot(stale))
 
-    assert "expired" in expired["text"], "an already-dead code must say so, not count down"
+    assert "expired" in expired.text, "an already-dead code must say so, not count down"

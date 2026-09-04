@@ -155,6 +155,36 @@ def _surface_backend(code: str = SECRET, *, for_terminal: bool = False):
     return control, backend_for(host_remote_control=control, **extra)
 
 
+async def _press_pair(bot, chat=None):
+    """Drive one real Pair press through `callback`, and answer the message it sent.
+
+    Every test below called `bot._host_pair_reply(token, 1)` until 2026-09-04. That proved
+    what the message would *say* and nothing about whether it could be delivered -- and it
+    could not: the arguments carried `protect_content`, which `editMessageText` does not
+    accept, so every press raised in production while these tests stayed green. Driving the
+    real callback against `FakeChat` puts the delivery back under test.
+
+    Answers `None` when nothing was sent apart, which is itself the assertion some of these
+    tests want: a refusal is a screen, not a second message carrying a secret.
+    """
+    from fake_telegram import FakeChat
+
+    chat = chat or FakeChat(chat_id=_CHAT, owner_id=_OWNER)
+    if not chat.bot_messages:
+        await bot.remote_command(chat.message_update("/remote"), None)
+    anchor = chat.messages[chat.bot_messages[0].message_id]
+    token = next(
+        button.callback_data
+        for row in anchor.reply_markup.inline_keyboard
+        for button in row
+        if "Pair" in button.text
+    )
+    before = {message.message_id for message in chat.bot_messages}
+    await bot.callback(chat.press(token), None)
+    fresh = [message for message in chat.bot_messages if message.message_id not in before]
+    return (fresh[0] if fresh else None), chat
+
+
 async def test_the_bot_renders_the_code_and_keeps_none_of_it(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -165,17 +195,11 @@ async def test_the_bot_renders_the_code_and_keeps_none_of_it(
     bot = build_private_bot(_OWNER, _CHAT, backend=backend)
 
     with caplog.at_level(logging.DEBUG):
-        screen = await bot._host_remote_control_reply()
-        token = next(
-            button.callback_data
-            for row in screen.keyboard
-            for button in row
-            if "Pair" in button.text
-        )
-        bot.callbacks.bind_pending(_CHAT, 1)
-        reply = await bot._host_pair_reply(token, 1)
+        sent, _chat = await _press_pair(bot)
 
-    assert SECRET in reply["text"], "a test that never rendered the secret proves nothing"
+    assert sent is not None and SECRET in sent.text, (
+        "a test that never rendered the secret proves nothing"
+    )
     assert control.calls.count("pair") == 1
     # Everything that is not the one message.
     assert SECRET not in caplog.text
@@ -191,14 +215,13 @@ async def test_the_bot_puts_no_control_under_the_secret_that_could_re_send_it() 
 
     _, backend = _surface_backend()
     bot = build_private_bot(_OWNER, _CHAT, backend=backend)
-    screen = await bot._host_remote_control_reply()
-    token = next(
-        button.callback_data for row in screen.keyboard for button in row if "Pair" in button.text
-    )
-    bot.callbacks.bind_pending(_CHAT, 1)
-    reply = await bot._host_pair_reply(token, 1)
+    sent, _chat = await _press_pair(bot)
 
-    assert not reply["reply_markup"].inline_keyboard
+    assert sent is not None, "no message carried the code"
+    markup = sent.reply_markup
+    assert markup is None or not markup.inline_keyboard
+    # And it is unforwardable, which only a real send can carry.
+    assert sent.protect_content is True
 
 
 def test_no_persistence_path_names_a_pairing_code() -> None:
@@ -293,22 +316,22 @@ async def test_a_failed_mint_puts_nothing_in_the_bot_s_log(
     control.fail_with = RuntimeError(f"relay refused code {SECRET}")
     bot = build_private_bot(_OWNER, _CHAT, backend=backend)
 
-    screen = await bot._host_remote_control_reply()
-    token = next(
-        button.callback_data for row in screen.keyboard for button in row if "Pair" in button.text
-    )
     with caplog.at_level(logging.DEBUG):
-        bot.callbacks.bind_pending(_CHAT, 1)
-        reply = await bot._host_pair_reply(token, 1)
+        sent, chat = await _press_pair(bot)
 
-    assert "no" in reply["text"].lower() and "pairing code" in reply["text"].lower(), (
+    # A failure is a screen, not a message of its own -- so the text is on the anchor, and
+    # nothing was sent apart. Both halves matter: the second is the assertion that a failed
+    # mint cannot have quietly delivered something.
+    assert sent is None, "a failed mint must not send a message"
+    text = chat.messages[chat.bot_messages[0].message_id].text
+    assert "no" in text.lower() and "pairing code" in text.lower(), (
         "the failure path was not actually driven"
     )
     # It must NOT claim nothing happened: `pair` can fail after the relay minted a live code
     # this process never rendered and cannot revoke, so "nothing changed" is the one sentence
     # an owner could act wrongly on.
-    assert "expires on its own" in reply["text"]
-    assert SECRET not in reply["text"]
+    assert "expires on its own" in text
+    assert SECRET not in text
     # `caplog.text` is the FORMATTED output, traceback included -- which is the whole point.
     assert SECRET not in caplog.text
     for record in caplog.records:
@@ -367,18 +390,18 @@ async def test_the_bot_will_not_mint_against_a_reading_that_has_gone_stale() -> 
 
     control, backend = _surface_backend()
     bot = build_private_bot(_OWNER, _CHAT, backend=backend)
-    screen = await bot._host_remote_control_reply()
-    token = next(
-        button.callback_data for row in screen.keyboard for button in row if "Pair" in button.text
-    )
+    from fake_telegram import FakeChat
+
+    chat = FakeChat(chat_id=_CHAT, owner_id=_OWNER)
+    await bot.remote_command(chat.message_update("/remote"), None)
 
     control.connection = HostConnection.DISABLED  # the link drops before the press lands
 
-    bot.callbacks.bind_pending(_CHAT, 1)
-    reply = await bot._host_pair_reply(token, 1)
+    sent, chat = await _press_pair(bot, chat)
 
     assert control.calls.count("pair") == 0, "a stale press minted a live code"
-    assert SECRET not in reply["text"]
+    assert sent is None, "a refused press must not send a message"
+    assert SECRET not in chat.messages[chat.bot_messages[0].message_id].text
 
 
 def test_a_code_carrying_markup_cannot_crash_the_screen_that_shows_it() -> None:
@@ -410,75 +433,31 @@ async def test_the_live_view_never_re_sends_the_pairing_message_by_itself() -> N
     The existing assertion that the message carries no keyboard could not see this. It tests
     the mechanism the author had in mind; the re-send path was never the keyboard.
     """
-    from remote_agents.adapters.telegram.live_view import LiveView
-    from remote_agents.adapters.telegram.service import (
-        _UNREMEMBERED_ACTIONS,
-        build_private_bot,
-    )
-
-    class _Anchors:
-        def __init__(self) -> None:
-            self._anchor: int | None = 100
-
-        def anchor(self, _chat: int) -> int | None:
-            return self._anchor
-
-        def record_anchor(self, _chat: int, message_id: int) -> None:
-            self._anchor = message_id
-
-        def clear_anchor(self, _chat: int) -> None:
-            self._anchor = None
-
-    class _Bot:
-        def __init__(self) -> None:
-            self.sent: list[dict] = []
-
-        async def edit_message_text(self, **_kw: object) -> None:
-            return None
-
-        async def send_message(self, **kw: object):
-            self.sent.append(kw)
-
-            class _Message:
-                message_id = 200 + len(self.sent)
-
-            return _Message()
-
-        async def delete_message(self, **_kw: object) -> None:
-            return None
+    from remote_agents.adapters.telegram.service import build_private_bot
 
     control, backend = _surface_backend()
     boundary = build_private_bot(_OWNER, _CHAT, backend=backend)
-    screen = await boundary._host_remote_control_reply()
-    token = next(
-        button.callback_data for row in screen.keyboard for button in row if "Pair" in button.text
+
+    sent, chat = await _press_pair(boundary)
+    assert sent is not None and SECRET in sent.text, (
+        "a test that never rendered the secret proves nothing"
     )
-    boundary.callbacks.bind_pending(_CHAT, 1)
-    reply = await boundary._host_pair_reply(token, 1)
-    assert SECRET in reply["text"], "a test that never rendered the secret proves nothing"
+    carrying_before = [message for message in chat.bot_messages if SECRET in message.text]
+    assert len(carrying_before) == 1, "the code should be in exactly one message"
 
-    view = LiveView(chat_id=_CHAT, anchors=_Anchors(), callbacks=boundary.callbacks)
-    bot = _Bot()
-    # Driven through the SERVICE's own decision, not by handing `LiveView` the flag
-    # directly. An earlier version of this test passed `remember=False` itself, so
-    # deleting the service's choice to pass it left every assertion green -- the test
-    # proved `LiveView` could keep a secret while the code that must ask it to stopped
-    # asking.
-    boundary.view = view
+    # One activity-notification pass, which is what actually re-sent the code before.
+    await boundary.view.move_to_bottom(chat.bot)
 
-    class _Query:
-        def get_bot(self):
-            return bot
-
-    await boundary._render(
-        _Query(), reply, remember="host.remote.pair" not in _UNREMEMBERED_ACTIONS
+    carrying_after = [message for message in chat.bot_messages if SECRET in message.text]
+    assert len(carrying_after) == 1, (
+        f"the live view re-sent the pairing code with no press: "
+        f"{len(carrying_after)} messages carry it"
     )
-    await view.move_to_bottom(bot)  # one activity-notification pass
-
-    leaked = [message for message in bot.sent if SECRET in str(message.get("text", ""))]
-    assert not leaked, (
-        f"the live view re-sent the pairing code with no press: {len(leaked)} message(s)"
-    )
+    # The property is now structural rather than a flag: `move_to_bottom` re-sends the last
+    # thing the live view *remembered*, and the code is never given to the live view at all --
+    # it is sent apart. Asserted here through the whole path rather than by reading the flag,
+    # because the flag was the old mechanism and this test outlives it.
+    assert SECRET not in str(boundary.view._last_arguments)
 
 
 async def test_a_remembered_screen_is_still_re_sent_so_the_guard_is_not_vacuous() -> None:
