@@ -977,12 +977,14 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         the write side is a single serialized slot derived from the drawn cursor rather than
         three hand-placed calls.
 
-        The read is guarded because it is the one resolver in this package that is not. Every
-        sibling — `highlighted_session` on both positions, `_live_entry` — catches, for the
-        reason each records: this runs from a keypress, and an exception out of one exits the
-        app. `read_selection` shells out to tmux, and a server that has gone away exits
-        non-zero, which `AsyncTmuxRunner` raises. Nothing selected is the right answer to a
-        console that cannot be asked.
+        The read is guarded because it is the only resolver here that can raise at all. Its
+        siblings — `highlighted_session` on both positions, `_live_entry` — do not catch;
+        they *guard*, querying instead of asserting, because the only thing that could go
+        wrong for them is a widget not being there yet. This one shells out to tmux, and a
+        server that has gone away exits non-zero, which `AsyncTmuxRunner` raises. The shared
+        reason is the one each of them records: this runs from a keypress, and an exception out
+        of one exits the app. Nothing selected is the right answer to a console that cannot be
+        asked.
         """
         screen = self.screen
         if getattr(screen, "owns_session_cursor", False):
@@ -1478,17 +1480,15 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # that is its own process's resting position — every console pane — `go_back` refuses
         # to pop, so the row is a key that does nothing, drawn at the moment the owner most
         # needs the screen to be honest.
-        # `highlight=0` stated rather than defaulted, because `target` may be a sessions
-        # position and this is a fill reaching one from a third module — the same shape as the
-        # sixth redraw exit found at the Stage 1 gate. Row 0 is the right answer here: the only
-        # row is Back, and where there is no Back there are no rows at all.
-        #
-        # Safe today, but it was safe by *accident*: both rows this can draw (`_BACK`, `_EMPTY`)
-        # are `\x00`-prefixed and `highlighted_session()` filters that prefix, so the cursor
-        # landing on one leaves `s` and `c` inert. That is an invariant of another method
-        # holding one up here — the shape `_draw_listing` was already called out for once — so
-        # the answer is given locally instead of inherited.
-        target.show_choices(((_BACK, "Back"),) if len(self.screen_stack) > 1 else (), highlight=0)
+        # Through the position's own hook, never `show_choices` from here. An earlier version
+        # of this call did fill the screen directly and argued it was "safe by accident,
+        # because both rows are `\x00`-prefixed and `highlighted_session()` filters them" —
+        # which is true of the screen's own keys and **false** of the console selection this
+        # stage publishes. A fill from a third module bypasses every rule the position enforces
+        # about its own fills, and on the sessions positions the rule is that a fill publishes
+        # the cursor it produced. This was the fifth cursor-changing path found outside the
+        # funnel; the hook is what stops there being a sixth.
+        target.draw_failure_rows(((_BACK, "Back"),) if len(self.screen_stack) > 1 else ())
         # **The status states the failure, it does not merely point at the exit.** It read
         # "Press escape to return to the project list." — a sentence that reports nothing —
         # while the *why* went to a toast that expires after 20 seconds. A gate evaluator

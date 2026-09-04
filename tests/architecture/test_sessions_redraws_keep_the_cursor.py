@@ -306,8 +306,11 @@ _PUBLISHERS = frozenset(
         # lock that makes "last value wins" true. A second reacher would be a second
         # unsynchronised writer, which is the defect the lock exists for.
         "_write_selection",
-        # The three moments that mean the owner chose something.
+        # The four moments that mean the owner chose something -- or stopped having chosen.
         "_draw_listing",
+        # A read that failed redraws the position with no rows, so the cursor it had is gone.
+        # This was the fifth cursor-changing path found outside the funnel.
+        "draw_failure_rows",
         "on_option_list_option_highlighted",
         "on_unmount",
     }
@@ -352,4 +355,35 @@ def test_the_selection_is_published_from_a_closed_set_of_moments() -> None:
         f"these publish a console selection from outside the closed set: {sorted(offenders)}. "
         f"Publication means the owner chose a session; the moments that mean that are "
         f"{sorted(_PUBLISHERS)} and nothing else."
+    )
+
+
+def test_only_a_screen_fills_itself() -> None:
+    """`show_choices` is called on `self`, never on another object's screen.
+
+    The rule that would have caught the fifth cursor-changing path, stated as a rule instead of
+    as a fourth enumeration. `RemoteAgentsTui.report_store_failure` filled the position that
+    asked by calling `target.show_choices(...)` from `app.py` — outside `_draw_listing`, so
+    outside the funnel that publishes the console selection, so a failed read left the previous
+    session published with no cursor anywhere on screen.
+
+    Three hand-built enumerations on this branch each missed a member, and each time the miss
+    was at the boundary of where the enumerator happened to look. This asks a different question
+    — one with no boundary to get wrong: filling a position is the position's own business, so a
+    fill through anything but `self` is a module reaching past whatever rules that position
+    enforces about its own fills. A screen that needs to be filled from outside gets a hook, as
+    `draw_failure_rows` now is.
+    """
+    outsiders = []
+    for module, tree in _every_tui_module().items():
+        for call in _calls_named(tree, "show_choices"):
+            receiver = ast.unparse(call.func).rsplit(".", 1)[0]
+            if receiver not in {"self", "super()"}:
+                outsiders.append(f"{module}: {ast.unparse(call)[:70]}")
+
+    assert not outsiders, (
+        f"these fill a screen that is not their own: {sorted(outsiders)}. A fill from outside "
+        "bypasses whatever the position enforces about its own fills — on the sessions "
+        "positions, that a fill publishes the cursor it produced. Add a hook on the screen and "
+        "call that instead."
     )

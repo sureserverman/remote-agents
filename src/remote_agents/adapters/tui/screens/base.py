@@ -1137,6 +1137,21 @@ class ChoiceScreen(Screen[None]):
         choices.highlighted = None
         choices.highlighted = index
 
+    def draw_failure_rows(self, entries: tuple[tuple[str, str | Content], ...]) -> None:
+        """Fill this position after a read it asked for failed.
+
+        A hook rather than `report_store_failure` calling `show_choices` on the screen directly,
+        and the difference is not tidiness. Filling a position from another module means every
+        rule that position enforces about its own fills — chiefly, on the sessions positions,
+        that a fill publishes the cursor it produced — is bypassed by construction. That is
+        exactly how the fifth cursor-changing path came to exist: the funnel was built, and this
+        call was outside it.
+
+        The base answer is the ordinary one, `highlight=0`: the only row this ever draws is Back
+        or nothing, and where there is a Back it is the one action left.
+        """
+        self.show_choices(entries, highlight=0)
+
     #: Whether this screen draws a sessions list with a cursor of its own.
     #:
     #: What it decides is where `RemoteAgentsTui.selected_session` looks: a position that owns

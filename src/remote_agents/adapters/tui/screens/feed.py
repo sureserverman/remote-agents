@@ -1,7 +1,7 @@
 """The notifications feed: what an agent was last observed doing, newest first, inert.
 
 The feed has lived as a region inside the combined dashboard since the durable table
-landed. Under the three-pane console it is also a surface of its own, in a process of its
+landed. Under the console it is also a surface of its own, in a process of its
 own — so what it renders is *shared* between the two rather than written twice: `FeedRegion`
 holds the render and the news detector, and both screens mix it in.
 

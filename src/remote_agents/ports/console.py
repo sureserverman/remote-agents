@@ -21,7 +21,12 @@ from remote_agents.domain.models import SessionId
 
 
 class ConsolePaneSlot(Enum):
-    """Which of the console's three panes a pane is — by what it *is*, not where it sits.
+    """Which of the console's panes a pane is — by what it *is*, not where it sits.
+
+    **The count lives in this enum and is not written out anywhere.** It said "three" here
+    while carrying four members, having gained `LIMITS` on 2026-08-31, and a live test that had
+    spelled `3` out was red on `main` for four days behind the opt-in flag. Prose restating the
+    size of the thing it is describing is a second declaration that nothing keeps true.
 
     Position answers "which pane is the left slot", which is the question an exchange asks.
     It cannot answer "which pane is missing", because a console down to two panes has two
@@ -53,7 +58,7 @@ class ConsoleBindingAction(Enum):
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
-    the console's three panes and costs no agent anything. The action is removed rather than
+    the console's panes and costs no agent anything. The action is removed rather than
     left unbound: an unbindable member invites the next author to spend a key on the argument
     that was just disproved.
     """
@@ -122,7 +127,7 @@ class HostedPane:
     """
 
     console_slot: str | None = None
-    """Which of the console's three panes this is, by its own mark, or None for anything else.
+    """Which of the console's panes this is, by its own mark, or None for anything else.
 
     Declared last because the adapter builds this dataclass positionally from one listing
     line, so field order here *is* the wire order there.

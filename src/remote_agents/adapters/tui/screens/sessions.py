@@ -23,6 +23,7 @@ from types import MappingProxyType
 
 from textual import events
 from textual.binding import Binding
+from textual.content import Content
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, OptionList, TextArea
@@ -883,6 +884,18 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             self._reading = False
         self._draw_listing(records, rest_on_nothing=rest_on_nothing, keep_cursor=keep_cursor)
 
+    def draw_failure_rows(self, entries: tuple[tuple[str, str | Content], ...]) -> None:
+        """Fill after a failed read, and publish the cursor that fill leaves behind.
+
+        The same obligation every other fill of this listing carries, arriving through the one
+        route that used to escape it. On a console pane there is no screen to go back to, so
+        this draws nothing, and `show_choices` substitutes the *disabled* empty-state row —
+        which Textual highlights without posting a message, so the move handler never fires.
+        The cursor ends on nothing while the option went on naming the session before it.
+        """
+        super().draw_failure_rows(entries)
+        self._publish_selection(self.highlighted_session())
+
     def _publish_selection(self, session_value: str | None) -> None:
         """Publish which session this position has selected. Nothing, on this position.
 
@@ -1343,6 +1356,15 @@ class SessionsPaneScreen(SessionsScreen):
         self._selection_pending = False
         #: Serializes the writes. See `_write_selection` for why one is not enough on its own.
         self._selection_lock = asyncio.Lock()
+        #: The last value successfully written, so an unchanged cursor costs nothing. Measured
+        #: before this: one quiet ten-second tick published the same id **three** times — the
+        #: funnel, then `show_choices`'s synchronous highlight through the move handler, then
+        #: `_rest_cursor`'s deferred re-assert through it again — so an idle console spent
+        #: eighteen `fork`/`exec`s a minute restating a fact that had not changed. Only updated
+        #: on success, so a failed write is retried by the next identical value rather than
+        #: swallowed.
+        self._written_selection: SessionId | None = None
+        self._ever_written = False
 
     def _publish_selection(self, session_value: str | None) -> None:
         """This pane owns the console's cursor, so this pane is the one writer of it.
@@ -1405,11 +1427,13 @@ class SessionsPaneScreen(SessionsScreen):
     async def _write_selection(self) -> None:
         """Write the pending selection, one writer at a time, latest value wins.
 
-        The lock is what makes the order true; the loop is what makes the *value* true. Without
-        the loop, a caller that arrived while the lock was held would write its own value after
-        the holder's — correct order, wrong answer, because the holder may have been superseded
-        twice while it waited. Re-reading the slot inside the lock means whoever writes last
-        writes the newest thing anyone asked for.
+        The lock is what makes the order true. The **slot** is what makes the value true: a
+        waiter reads `_pending_selection` rather than a value it captured, so whoever writes
+        last writes the newest thing anyone asked for. The loop is coalescing on top of that,
+        not correctness — an earlier version of this docstring credited it with the value half,
+        and replacing `while` with `if` turns no test red, which is the honest measure of that
+        claim. It earns its place by letting one holder absorb a burst rather than handing the
+        lock round it.
 
         Failures are logged here rather than left to Textual's worker channel, which is visible
         only under `textual console`: an operator asking "why did my chords stop following the
@@ -1421,10 +1445,16 @@ class SessionsPaneScreen(SessionsScreen):
         async with self._selection_lock:
             while self._selection_pending:
                 self._selection_pending = False
+                wanted = self._pending_selection
+                if self._ever_written and wanted == self._written_selection:
+                    continue
                 try:
-                    await publish(self._pending_selection)
+                    await publish(wanted)
                 except Exception:
                     _LOG.debug("the console selection could not be published", exc_info=True)
+                else:
+                    self._written_selection = wanted
+                    self._ever_written = True
 
     async def on_option_list_option_highlighted(self, event: object) -> None:
         """Every cursor move, because the owner's arrow is the only event that means "this one".

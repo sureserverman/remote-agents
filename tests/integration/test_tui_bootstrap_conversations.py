@@ -164,6 +164,20 @@ def test_no_further_capability_leaked_into_the_context() -> None:
         # and an *exchange* that writes no record and touches no lifecycle (DEC-040). It is not
         # a new kind of capability, it is the return trip of one already here.
         "console_show_projects",
+        # The console-wide selection: which session the sessions pane has highlighted, so that
+        # the panes without a cursor can act on it. Two fields rather than one, and the split is
+        # the decision this test exists to make visible — **publishing is the sessions pane's
+        # alone and reading is every other position's**, so a pane holding only the reader
+        # cannot become a second writer of a fact that must have exactly one. Same family as
+        # `console_flash` otherwise: console hosting's alone, `None` in a bare terminal, wired
+        # rather than probed for (DEC-046/DEC-061).
+        #
+        # These are the first console capabilities that carry a *session id*, and that is what
+        # makes them worth arguing over rather than nodding through: the chord layer above them
+        # ends sessions without confirmation (DEC-018), so what the surface is being handed is
+        # the ability to act on a row it is not showing.
+        "console_publish_selection",
+        "console_read_selection",
         # Added by Stage 5's Task 5.2, and listed here because that is what this test is for.
         # It is *not* the console family above: it is wired on every host, not only a hosted
         # one, and it is a **path** rather than a callable -- the declared writable boundary's

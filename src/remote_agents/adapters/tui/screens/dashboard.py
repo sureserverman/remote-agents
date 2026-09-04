@@ -269,7 +269,7 @@ class LimitsRegion:
 
     Written when the console gained a limits pane of its own. Before that the render lived as a
     private method on `DashboardScreen`, which is exactly why the console had none: the pane is
-    composed by a screen only `remote-agents tui` mounts, and the console's three panes are
+    composed by a screen only `remote-agents tui` mounts, and the console's panes are
     three separate processes that never mount it. Copying the method into a fourth would have
     been the second renderer DEC-043 exists to prevent.
     """
@@ -486,7 +486,7 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
 
     **This is the surface the owner's second ask actually named.** "Put them in the TUI too, on
     the right, between the sessions and notifications panes, in their own pane" describes the
-    three-pane console — its right column *is* sessions over notifications — and the console is
+    console — whose right column *is* sessions over limits over notifications — and it is
     what `remote-agents` runs with no arguments. The pane was first built on `DashboardScreen`,
     which only `remote-agents tui` mounts, so the one arrangement the words map onto was the one
     arrangement without it.

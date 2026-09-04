@@ -1484,3 +1484,47 @@ async def test_a_redraw_after_a_failed_stop_publishes_no_selection() -> None:
         assert console.published[-1] is None, (
             "a failed stop left its row published for every other pane to act on"
         )
+
+
+async def test_a_failed_store_read_publishes_no_selection() -> None:
+    """The fifth cursor-changing path, and the third one this branch enumerated by hand and missed.
+
+    `report_store_failure` fills the position that asked directly, from `app.py`, so it never
+    reaches `_draw_listing`'s funnel. On a console pane there is no screen to go back to, so it
+    draws nothing — and `show_choices` substitutes the *disabled* empty-state row, for which
+    Textual posts no highlight. The cursor ends on nothing and the option went on naming the
+    session it named before.
+
+    Scenario: cursor on X, every other pane's chord resolving to X. The store blips — a locked
+    database, a tmux hiccup — and the owner presses Ctrl+R. The pane says "No managed sessions
+    on this host" with an error status and no cursor anywhere on screen, and `alt+s` in the feed
+    pane still stops X, unconfirmed. That is the sentence this stage was written around: the
+    mitigation is local to the pane, and leaving the option set exports the hazard to three
+    panes that cannot see it.
+    """
+    console = SelectionConsole()
+    records = _three()
+    app = SessionsPane(
+        _context(
+            records,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        screen.query_one("#choices", OptionList).highlighted = 2
+        await asyncio.sleep(0.05)
+        assert console.published[-1] is not None
+
+        app.report_store_failure(RuntimeError("the store could not be read"), screen)
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+
+        assert screen.highlighted_session() is None, "this test needs a cursor on nothing"
+        assert console.published[-1] is None, (
+            "a failed read left the last row published for every other pane to act on"
+        )

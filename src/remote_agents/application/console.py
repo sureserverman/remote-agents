@@ -48,7 +48,10 @@ JUMP_HOME_KEY = "F12"
 
 @dataclass(frozen=True, slots=True)
 class ConsolePane:
-    """One of the console's three panes: what it is, what runs in it, and where it goes."""
+    """One of the console's panes: what it is, what runs in it, and where it goes.
+
+    The count is `ConsolePaneSlot`'s and is not restated here; it was "three" in this file
+    while the enum carried four."""
 
     slot: ConsolePaneSlot
     #: Which console pane this one splits off when it has to be built.
@@ -147,7 +150,7 @@ class ConsoleBinding:
 #: displayed agent consumes the prefix key along with everything else the owner types". That
 #: premise is false, and the gate evaluator proved it before this code did: tmux intercepts
 #: the prefix **in the client**, before any key reaches the pane, so `prefix + o` already
-#: cycles the console's three panes at no cost to any agent. The repo already contained the
+#: cycles the console's panes at no cost to any agent. The repo already contained the
 #: contradiction — the README tells the owner to detach with `Ctrl-b d` from inside this very
 #: console. A key that buys one keystroke over an existing chord is not worth taking from
 #: every agent on the server forever, so it is not taken.

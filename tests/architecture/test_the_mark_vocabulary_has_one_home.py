@@ -28,7 +28,7 @@ _SOURCE = pathlib.Path(__file__).resolve().parents[2] / "src" / "remote_agents"
 #:
 #: **Four are identity and two are not**, and the difference is worth keeping visible here
 #: rather than flattening it into "six marks". `@remote_agents_console_slot` says which of the
-#: console's three panes this is; `@remote_agents_selected_session` says which session the
+#: console's panes this is; `@remote_agents_selected_session` says which session the
 #: console has highlighted. Neither says "this pane is a session", and DEC-038's pane-scope
 #: rule is about the ones that do — the selection is deliberately *session*-scoped for the
 #: reason its constant records. What they share, and the only thing this test asserts, is that
