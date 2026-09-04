@@ -774,3 +774,86 @@ async def test_a_keyed_refresh_keeps_the_cursor_on_the_row_the_owner_chose() -> 
         resting_id = after.get_option_at_index(after.highlighted).id
 
     assert resting_id == chosen, "Ctrl+R re-chose the row instead of re-reading the list"
+
+
+async def test_a_resize_re_lays_the_columns_without_clearing_the_list() -> None:
+    """A width change re-columns the rows it already has; it does not refill the list.
+
+    `on_resize` reran the whole clear/refill through `_draw_listing`, and in the console that
+    is every DEC-040 exchange and every drag. Each one bumped `_resting_generation` and
+    scheduled a fresh `_rest_cursor`, so every resize re-armed the window mechanism A lives in
+    — the arrow that lands between a fill and its deferred placement. Narrowing this is what
+    stops a resize being a cursor event at all.
+
+    The identity assertion is the one that matters, and it is not decoration. `show_choices`
+    clears and refills, so a row that survives a re-render is a *different* `Option` object
+    with the same id — which is the predicate DEC-069 drops a queued selection on. Re-laying in
+    place keeps the object, so a selection queued across a resize is now honoured rather than
+    dropped. That is the intended reading (a resize changes no rows, so nothing the owner
+    aimed at has moved), and it is asserted here so the narrowing is deliberate and visible
+    rather than a side effect noticed later.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+        choices.highlighted = 2
+        chosen = choices.get_option_at_index(2).id
+        generation_before = app.screen._resting_generation
+        objects_before = list(choices.options)
+        prompt_before = str(choices.get_option_at_index(0).prompt)
+
+        await pilot.resize_terminal(60, 30)
+        await pilot.pause()
+
+        assert app.screen._resting_generation == generation_before, (
+            "the resize cleared and refilled the list, re-arming the deferred placement"
+        )
+        assert [id(option) for option in choices.options] == [
+            id(option) for option in objects_before
+        ], "the resize replaced the Option objects instead of re-laying them"
+        assert choices.highlighted == 2
+        assert choices.get_option_at_index(2).id == chosen
+        assert str(choices.get_option_at_index(0).prompt) != prompt_before, (
+            "the columns were never re-laid for the new width"
+        )
+
+
+async def test_a_resize_that_does_not_change_the_width_redraws_nothing() -> None:
+    """Height alone is not a reason to touch the rows.
+
+    Counted through `replace_option_prompt` rather than through the drawn output, because the
+    re-lay at an unchanged width produces byte-identical prompts — so every assertion on what
+    is *on screen* passes whether or not the work was done, and the thing being narrowed here
+    is the work.
+    """
+    first, second, third = _record(), _record(), _record()
+    launcher = _Listing((first, second, third))
+    app = RemoteAgentsTui(_context(launcher))
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await app.action_sessions()
+        await pilot.pause()
+        choices = app.screen.query_one("#choices", OptionList)
+
+        relays = 0
+        original = choices.replace_option_prompt
+
+        def counting_replace(*args: object, **kwargs: object) -> object:
+            nonlocal relays
+            relays += 1
+            return original(*args, **kwargs)  # type: ignore[arg-type]
+
+        choices.replace_option_prompt = counting_replace  # type: ignore[method-assign]
+
+        await pilot.resize_terminal(100, 20)
+        await pilot.pause()
+        assert relays == 0, "a height-only resize re-laid the columns for no reason"
+
+        await pilot.resize_terminal(70, 20)
+        await pilot.pause()
+        assert relays, "a width change did not re-lay the columns"

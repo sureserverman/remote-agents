@@ -603,6 +603,10 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         #: and compared by `_auto_reload` across its await — see that method and `_visiting`.
         #: `showing` cannot answer this, because it is `True` again on the way back.
         self._visit = 0
+        #: The content width the drawn rows were columned for, or `None` when nothing is drawn.
+        #: `on_resize` compares against it so a height-only resize — and the several resizes a
+        #: single layout pass emits at one width — do no work at all.
+        self._laid_out_width: int | None = None
 
     async def populate(self) -> None:
         self.hide_entry()
@@ -869,6 +873,10 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         if not records:
             self.show_choices(())
             self.set_status(self.empty_status, hint="")
+            # Nothing is columned, so nothing is laid out at any width. Cleared rather than
+            # left behind: a resize arriving while the list is empty must not be able to match
+            # a width recorded for rows that are gone, and the next fill records its own.
+            self._laid_out_width = None
             return
         # The counts are the facts; the keys are the hint. Both from the tuple the rows are drawn
         # from -- one read (the rule `_sessions_reply` states for its own header).
@@ -877,7 +885,13 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
             session_row_parts(record, self.tui.context_window_for(record.session_id))
             for record in records
         ]
-        contents = session_contents(parts, choices.content_size.width or None)
+        width = choices.content_size.width or None
+        # Recorded so `on_resize` can tell a width change from the several same-width resizes a
+        # single layout pass emits. Set on every fill rather than only in `on_resize`, because
+        # a fill is also a lay-out and leaving it stale would make the next genuine width
+        # change look like a repeat.
+        self._laid_out_width = width
+        contents = session_contents(parts, width)
         rows = tuple(
             (str(record.session_id), content)
             for record, content in zip(records, contents, strict=True)
@@ -919,9 +933,54 @@ class SessionsScreen(_SessionActionKeys, ChoiceScreen):
         self.show_choices(rows, focus=choices.has_focus, highlight=highlight)
 
     def on_resize(self, event: events.Resize) -> None:
-        """Lay the columns out again for the new width, from the rows already drawn."""
-        if self.showing and self._drawn:
-            self._draw_listing(tuple(self._drawn.values()), keep_cursor=True)
+        """Lay the columns out again for the new width, from the rows already drawn.
+
+        **Neither a refill nor a cursor event.** This used to rerun the whole of
+        `_draw_listing`, which clears the list and adds it back — so every resize bumped
+        `_resting_generation`, scheduled a fresh `_rest_cursor`, and re-armed the window an
+        arrow press can land in between a fill and its deferred placement. In the console that
+        is every DEC-040 exchange and every drag, which made a cursor hazard out of dragging a
+        pane border. A resize changes how wide the rows are drawn and nothing else; it has no
+        business deciding where the cursor is.
+
+        Two narrowings, and the first is not an optimisation. A single layout pass emits
+        several `Resize` events at one width, so comparing against `_laid_out_width` is what
+        keeps "the width changed" from meaning "the terminal moved at all".
+
+        The second replaces each row's prompt in place instead of clearing and refilling.
+        `OptionList._replace_option_prompt` mutates the `Option` the list already holds, so the
+        objects survive — which is the predicate **DEC-069** drops a queued selection on. Under
+        the old refill a selection queued across a resize was dropped as stale; it is now
+        honoured, because the row the owner aimed at is the row that is still there. That is
+        the intended reading and it narrows DEC-069's reach, so it is stated rather than left
+        to be discovered: the shapes that still replace objects are the ones that genuinely
+        re-decide the rows — every `show_choices` fill, and so every `reload`, tick and
+        navigation. `test_a_queued_burst_reaches_the_screen_twice` pins DEC-069's own
+        discriminator and is unaffected, because it re-renders nothing.
+
+        Rows the list does not hold are skipped rather than raising. `_drawn` and the drawn
+        options agree on every path that fills from records, but `report_store_failure` leaves
+        a lone `Back` row on a screen whose `_drawn` still names sessions, and a resize landing
+        there must re-column what it can and leave the rest alone rather than take the screen
+        down with `OptionDoesNotExist`.
+        """
+        if not (self.showing and self._drawn):
+            return
+        choices = self.query_one("#choices", OptionList)
+        width = choices.content_size.width or None
+        if width == self._laid_out_width:
+            return
+        self._laid_out_width = width
+        records = tuple(self._drawn.values())
+        parts = [
+            session_row_parts(record, self.tui.context_window_for(record.session_id))
+            for record in records
+        ]
+        held = {option.id for option in choices.options}
+        for record, content in zip(records, session_contents(parts, width), strict=True):
+            key = str(record.session_id)
+            if key in held:
+                choices.replace_option_prompt(key, content)
 
     async def choose(self, key: str) -> None:
         if key == _BACK:
