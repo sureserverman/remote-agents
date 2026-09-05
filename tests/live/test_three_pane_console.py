@@ -1038,3 +1038,117 @@ async def test_the_selection_dies_with_the_console_that_published_it(tmp_path: P
             await _run("tmux", "-L", console_socket, "kill-server")
         except RuntimeError:
             pass
+
+
+async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
+    tmp_path: Path,
+) -> None:
+    """Who may read the console's selection, decided against a real tmux arrangement.
+
+    **This is the half of Stage 3 that real tmux can answer, and the unit tests cannot.** The
+    chord itself is a Textual binding inside a pane process, and BL-041 records why no live test
+    can drive one: `hosting_mode` classifies a pane surface inside a *disposable* console as
+    FOREIGN, deliberately, because the composition root hardcodes the composer's server — the
+    one time that strictness was relaxed, a surface in a throwaway console drove the owner's
+    real one. So the keypress is covered by `tests/unit/adapters/tui/test_tui_bindings.py`, and
+    what runs here is the decision that keypress depends on.
+
+    `holds_console_slot` filters a real `list-panes -a` for two facts at once: the pane carries
+    one of the console's slot marks, **and** the console is still the window showing it. The
+    unit cases assert that filter against hand-written listing lines; only a real server can say
+    whether the marks this composer actually writes decode back through
+    `ARRANGEMENT_FORMAT` — and, more to the point, what a real `swap-pane -d` does to the answer.
+
+    That exchange is the case the gate exists for. The mark travels **with the pane** by design
+    (DEC-038), so a projects pane parked in an agent's own window keeps the slot it was given
+    and would go on reading the console's selection from a window that is not one of its panes —
+    while two of the keys behind that selection end a session with no confirmation (DEC-018).
+    Nothing about that is visible in a fabricated listing line: it is a fact about tmux moving
+    panes between sessions, so it is asserted where tmux is real.
+    """
+    _live_or_skip()
+
+    home = _fabricated_home(tmp_path)
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+    composer = ConsoleComposer(
+        gateway,
+        ("sleep", "600"),
+        home,
+        projects_command=("true",),
+        pane_commands={slot: ("sleep", "600") for slot in ConsolePaneSlot},
+    )
+
+    try:
+        assert await composer.ensure() is True
+
+        arrangement = await gateway.pane_arrangement()
+        marked = {pane.console_slot: pane.pane_id for pane in arrangement if pane.console_slot}
+        assert len(marked) == len(ConsolePaneSlot), (
+            f"the console did not come up with one marked pane per slot: {marked}"
+        )
+
+        # Every one of the console's own panes may read the selection.
+        for slot, pane_id in marked.items():
+            assert await gateway.holds_console_slot(pane_id) is True, (
+                f"the console's own {slot} pane was refused the selection it is entitled to read"
+            )
+
+        # A pane on the same server that is not one of the console's is not entitled to it —
+        # hazard case 1, a plain `remote-agents tui` started from any shell on this socket.
+        outsider_session = f"ra-outsider-{SessionId.new().value.hex[:8]}"
+        await _run(
+            "tmux",
+            "-L",
+            console_socket,
+            "new-session",
+            "-d",
+            "-s",
+            outsider_session,
+            "sleep",
+            "600",
+        )
+        outsider = (
+            await _run(
+                "tmux",
+                "-L",
+                console_socket,
+                "list-panes",
+                "-t",
+                f"{outsider_session}:",
+                "-F",
+                "#{pane_id}",
+            )
+        ).strip()
+        assert outsider, "the outsider session produced no pane"
+        assert await gateway.holds_console_slot(outsider) is False, (
+            "a pane that is merely on the console's server was allowed to read its selection"
+        )
+
+        # Hazard case 2, driven rather than described: exchange the console's left pane out into
+        # that session, exactly as DEC-040's `show_detail` does with an agent.
+        # `console_slot` is decoded as the *wire* string, not the enum -- `HostedPane` keeps it
+        # that way on purpose, so a console left running by an older version decodes as "not a
+        # slot I know" instead of raising mid-listing. The projects pane is the one an exchange
+        # moves (DEC-040), and its value is `surface` for the same compatibility reason.
+        exiled = marked[ConsolePaneSlot.PROJECTS.value]
+        await gateway.swap_panes(exiled, outsider)
+
+        after = {pane.pane_id: pane for pane in await gateway.pane_arrangement()}
+        assert after[exiled].console_slot, (
+            "the slot mark did not travel with the pane, so this test is no longer about DEC-038"
+        )
+        assert after[exiled].on_console is False, (
+            "the exchange did not move the pane off the console"
+        )
+        assert await gateway.holds_console_slot(exiled) is False, (
+            "an exchanged-out console pane kept its right to read the console's selection"
+        )
+
+        # And the pane swapped *in* — on the console, carrying no mark of ours — is refused too.
+        assert await gateway.holds_console_slot(outsider) is False
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass

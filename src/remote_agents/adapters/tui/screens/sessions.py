@@ -508,6 +508,15 @@ async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen
     await screen.tui.show_detail(session_value, opening)
 
 
+#: The chords that take the owner somewhere. The three stop keys do not: `s` and `c` act in
+#: place and `f` asks a modal, which pops without revealing anything (a modal dismiss does not
+#: run the revealed screen's `on_reveal`). Only these need the position they leave to be marked
+#: as an excursion, and marking the others would leave a stale mark for the next return.
+CHORD_NAVIGATES = frozenset(CHORD_KEYS) - {
+    key for key, action, *_ in SESSION_ACTION_KEYS if action in ACTION_LABELS
+}
+
+
 async def perform_chord(key: str, session_value: str, *, screen: ChoiceScreen) -> None:
     """Route one Alt chord to the same work its bare letter does on a row.
 
@@ -516,6 +525,11 @@ async def perform_chord(key: str, session_value: str, *, screen: ChoiceScreen) -
     is a row action. Written as a router over the shared performers rather than as a fourth
     implementation, which is the whole point of the two functions above.
     """
+    if key in CHORD_NAVIGATES:
+        # The owner is being taken off this position by a key about a session in another pane,
+        # so the position is marked before the push: what it draws when the excursion returns
+        # is the list they left, not the clean one a completed flow earns.
+        screen.mark_excursion()
     if key == _DETAIL_KEY:
         await screen.tui.show_detail(session_value)
         return

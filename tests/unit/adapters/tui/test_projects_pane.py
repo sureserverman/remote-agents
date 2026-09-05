@@ -638,3 +638,51 @@ async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
         drawn = str(app.screen.query_one("#hint", Static).content)
 
     assert CHORD_HINT in drawn, f"a redraw dropped the Alt layer from the hint row: {drawn!r}"
+
+
+async def test_a_chord_excursion_returns_to_the_filter_the_owner_typed() -> None:
+    """`/`, `ab`, `M-i`, escape — the state the Stage 3 gate requires to survive.
+
+    The stop chords stopped disturbing this pane when `tui.stop`'s callbacks went onto the
+    `shows_the_acted_session` seam. The *navigating* chords reached it by a different route:
+    `perform_chord` sends `d a i r m` to `show_detail`, and escape from the pushed screen is
+    the app's `go_back`, which awaits the revealed screen's `on_reveal` — and that method
+    deliberately returns this position to a clean, unfiltered list.
+
+    Deliberately, for a **flow**: the owner chose a project, walked into the agent list, and
+    came back, so the query was one they had finished with. An excursion is not that. They never
+    left this list and never chose anything here; a key about a row in another pane took them
+    away and brought them straight back.
+
+    Both behaviours are asserted — this one here, the flow one by
+    `test_returning_to_the_project_list_clears_the_filter_and_rests_on_the_rows` — because the
+    fix is a distinction, and a test for only one half would be satisfied by deleting it.
+    """
+    chosen = _record()
+    console = SelectionConsole(selected=chosen.session_id)
+    app = ProjectsPane(
+        _context(
+            sessions=_Launcher((chosen,)),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.click("#filter")
+        await pilot.press(*"opaque-shift")
+        await settle_filter(pilot)
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.value == "opaque-shift"
+
+        await pilot.press("alt+i")
+        await pilot.pause()
+        assert position(app) == "SESSION_DETAIL", "the chord did not open the detail"
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.value == "opaque-shift", "the excursion discarded the filter the owner typed"
+        assert entry.has_focus, "the excursion left the keyboard off the filter"

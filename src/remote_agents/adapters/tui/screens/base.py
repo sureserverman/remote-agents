@@ -878,6 +878,24 @@ class ChoiceScreen(Screen[None]):
         region.set_class(not text, "-empty")
         region.update(text)
 
+    #: Set on the position the owner is being taken *away from* by an excursion — a chord that
+    #: opens a session screen about a row in another pane — and cleared by the first
+    #: `consume_excursion` after it. One-shot, because it describes one departure.
+    _left_by_excursion: bool = False
+
+    def mark_excursion(self) -> None:
+        """Record that what is leaving this position is not the owner choosing to leave it."""
+        self._left_by_excursion = True
+
+    def consume_excursion(self) -> bool:
+        """Whether the return being drawn is from an excursion, clearing the mark either way.
+
+        Read-and-clear rather than read, so a mark set by a chord that then went nowhere cannot
+        outlive the redraw it was meant for and change the *next* return's answer.
+        """
+        was, self._left_by_excursion = self._left_by_excursion, False
+        return was
+
     def hint_content(self, base: str) -> str | Content:
         """What this position's hint row actually says, given the keys it wants to advertise.
 
