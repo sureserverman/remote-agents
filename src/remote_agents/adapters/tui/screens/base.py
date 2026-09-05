@@ -23,10 +23,23 @@ from textual.widgets import Footer, Header, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from remote_agents.adapters.tui.model import _BACK, _EMPTY
+from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
+from remote_agents.application.session_actions import (
+    ACTION_LABELS,
+    FORCE,
+    available_actions,
+    explain_state,
+)
 
 if TYPE_CHECKING:
     from remote_agents.adapters.tui.app import RemoteAgentsTui
     from remote_agents.adapters.tui.context import TuiContext
+
+    # Imported for the annotation only. `RowStopAction` lives in `screens/sessions.py`, which
+    # imports this module, so a runtime import would be a cycle. Textual dispatches a message to
+    # `on_<snake_case_class_name>` off the message class itself, never off the annotation, so
+    # the handler below works with the name unresolved at runtime.
+    from remote_agents.adapters.tui.screens.sessions import RowStopAction
 
 _LOG = logging.getLogger(__name__)
 
@@ -1151,6 +1164,184 @@ class ChoiceScreen(Screen[None]):
         or nothing, and where there is a Back it is the one action left.
         """
         self.show_choices(entries, highlight=0)
+
+    @property
+    def shows_the_acted_session(self) -> bool:
+        """Whether a stop issued from here changes something this position is displaying.
+
+        **The question every callback below turns on, and it did not exist before the Alt
+        layer.** `tui.stop`'s callers used to be the two sessions positions and the detail, so
+        "re-read yourself afterwards" was unconditionally right and the seams said exactly that.
+        A chord makes the receiving screen the projects, limits or feed pane, or a wizard step
+        pushed on top of one — positions whose rows have nothing to do with the session that
+        just stopped, and for which re-reading is not a refresh but destruction: the projects
+        pane's `on_reveal` calls `render_projects()`, which clears the filter `Input` and moves
+        focus off it. The owner's originating ask was that the left pane keep typed text; a stop
+        chord that wiped the filter would defeat it on the success path.
+
+        Derived from the two flags rather than listed, so a position added later gets the right
+        answer by declaring what it is instead of by being remembered here. Both flags are
+        pinned against real behaviour by architecture tests.
+        """
+        return self.owns_session_cursor or self.about_one_session
+
+    async def after_stop(self) -> None:
+        """Re-read this position after a stop it can see the result of, and nothing otherwise."""
+        if self.shows_the_acted_session:
+            await self.after_command()
+
+    async def redraw_after_stop_failure(self) -> None:
+        """Redraw after a stop that raised — only where there are rows describing that session.
+
+        `redraw_after_failure`'s base implementation collapses the list to a lone `Back`, which
+        is right for a screen describing one record and destructive anywhere else: on the
+        projects pane it would replace the whole catalogue with one row reading "Go back and
+        open the session again to see its current state", from a position that has no session
+        and nothing to go back to. `stop` announces the failure as a toast regardless, so a
+        position that shows nothing about the session still says what happened.
+        """
+        if self.shows_the_acted_session:
+            await self.redraw_after_failure()
+
+    def report_stop_result(self, text: str) -> None:
+        """Write a stop's outcome into the status line, where the status line is about it.
+
+        The fourth callback on this seam, and the one whose absence is *permanent*: `after_stop`
+        is a no-op on a position that shows no sessions, so nothing re-renders afterwards to put
+        the line back. A projects pane would keep "Graceful stop did not take effect. ..." where
+        "Choose a project -- 6 available" belongs, and a wizard step would lose the instruction
+        telling the owner what to type.
+
+        `stop` announces the same failure as a toast regardless, and that toast carries the
+        summary *and* the remedy -- so a position with no business showing this still reports it,
+        in the sink that is not the position's own description of itself.
+        """
+        if self.shows_the_acted_session:
+            self.set_status(text)
+
+    async def refuse_stop(self, message: str | None = None) -> None:
+        """Report a stop the policy will not allow, onto whichever position asked for it.
+
+        A position showing the session redraws and lets the redraw speak — that is `refuse`, and
+        for the vanished case it is why `message` is optional there: the re-read writes "That
+        session is no longer available." itself, and announcing it too would show one event
+        twice. A position showing nothing about the session has no such redraw, so it must say
+        it in words or the chord would do nothing and say nothing.
+        """
+        if self.shows_the_acted_session:
+            await self.refuse(message)
+            return
+        self.announce(message or "That session is no longer available.", severity="warning")
+
+    async def on_row_stop_action(self, message: RowStopAction) -> None:
+        """The screen handler `RowStopAction` is delivered to. DEC-025's required shape.
+
+        **On `ChoiceScreen` rather than on the sessions positions, since the Alt layer.** The
+        chord posts this message to whichever screen the owner is looking at — the projects,
+        limits or feed pane, or a wizard step pushed on top of one — so the handler has to exist
+        wherever a chord can be pressed. Defined here, every position that can receive one can
+        answer it, and the answer is the same code the row key has always run.
+
+        Before that it lived on `SessionsScreen`, and a stop chord pressed anywhere else
+        resolved a session, posted, and had the message bubble to the App, find no handler, and
+        be dropped in silence. `tests/unit/adapters/tui/test_tui_bindings.py` pinned exactly
+        that intermediate so it could not be mistaken for the working state.
+
+        Guarded again here rather than trusting the check the key already made: a posted
+        message is delivered later, and `dispatch_opening` on the detail states the same rule
+        for the same reason — the two entry paths agree instead of relying on the pump staying
+        serialized forever.
+
+        `FORCE` is separated by name rather than by branch order, exactly as
+        `SessionDetailScreen.choose` does and for the same reason: FORCE is a member of
+        `ACTION_LABELS`, so without this the next branch would reach `tui.stop` with no modal
+        in between and one keypress would force-stop a session. DEC-018 permits an unconfirmed
+        `s` and `c` and says nothing of the kind about force.
+        """
+        if not self.showing or self.tui.busy:
+            return
+        if message.action == FORCE:
+            await self.confirm_force(message.session_value)
+            return
+        await self.tui.stop(message.action, message.session_value, self)
+
+    async def confirm_force(self, session_value: str) -> None:
+        """Re-read the record, ask the modal over this list, and issue only on a `True`.
+
+        **The same chain `SessionDetailScreen.confirm_force` runs, entered from the list**, and
+        the shape is copied deliberately rather than shared: read under the guard, re-check the
+        policy before asking, ask, refresh on an abort without letting go, and take the guard
+        off only for the call that takes it itself. What differs is *whether* the refusals and
+        the refresh land anywhere at all — `refuse_stop` and `after_stop` both turn on
+        `shows_the_acted_session`, so a session that moved under a rendered row is reported onto
+        the list the owner is looking at, and the same event on a pane that shows no sessions is
+        said in a toast and changes nothing on screen.
+
+        **Defined on `ChoiceScreen`, and emphatically not on a plain mixin**, which is a
+        requirement rather than a preference. `tests/architecture/
+        test_confirmations_are_asked_from_screen_handlers.py` asserts that every direct caller
+        of `ask_to_confirm` is a method on a class whose name ends in `Screen` — because
+        DEC-025's whole protection is that the caller runs on the *screen's* message pump, so a
+        suspension there holds back the events that would pop the modal out from under it. The
+        plan for this task said "a mixin every `ChoiceScreen` carries"; a mixin is not a screen
+        and would fail that sweep, so the base screen class *is* the mixin. Every position
+        inherits it, and the sessions positions keep the exact behaviour they had.
+
+        **What differs per position is `shows_the_acted_session`, and that is the point of
+        putting this here rather than parameterising it.** A position that shows the session
+        re-reads itself and reports refusals onto its own rows; a position that does not — the
+        projects, limits and feed panes, and every wizard step — neither refreshes nor redraws,
+        because re-reading a list that has nothing to do with the stopped session is not a
+        refresh but destruction (the projects pane's `on_reveal` clears the filter the owner
+        typed). So an abort on the sessions pane re-reads the listing and an abort on the feed
+        pane does nothing at all, with no branch here asking which screen it is on.
+
+        The guard is held across the read *and* the whole modal for the reasons the detail's
+        twin gives at length: `action_back` runs on the app's pump while this runs on the
+        screen's, so without it an escape landing inside the read pops this screen and the
+        modal is pushed onto whatever the pop revealed. It is released before the stop, because
+        `tui.stop` takes it itself and refuses outright when it is already held.
+        """
+        async with self.holding_the_guard():
+            try:
+                record = await self.tui.current_record(session_value)
+            except Exception as error:
+                # The detail's twin lets this raise, because `render_detail` has already
+                # reported a failed read by the time it runs. Nothing has reported one here:
+                # this is the first read on this path, and an exception escaping a binding
+                # action exits the app.
+                self.tui.report_store_failure(error, self)
+                return
+            if record is None:
+                await self.refuse_stop()
+                return
+            if FORCE not in available_actions(record.state, record.orphan_provenance):
+                # Asked before the question rather than only after the answer. `stop`
+                # re-checks regardless — that is DEC-007's fourth mitigation and it is what
+                # makes this safe rather than necessary — but a surface that opens a kill
+                # confirmation it already knows it will refuse is asking the owner to
+                # authorise nothing.
+                await self.refuse_stop(
+                    f"{ACTION_LABELS[FORCE]} is no longer available for this session. "
+                    f"{explain_state(record.state, record.orphan_provenance)}"
+                )
+                return
+            if not self.showing:
+                return
+            try:
+                confirmed = await self.tui.ask_to_confirm(ForceConfirmModal.for_record(record))
+            except Exception as error:
+                _LOG.exception("the force confirmation could not be shown")
+                self.announce(f"The confirmation could not be shown: {error} Nothing was stopped.")
+                return
+            if not confirmed:
+                # Abort re-reads, for the reason the detail's twin gives: the owner may have
+                # opened it only to look, and the session can have moved on while it was open.
+                # Through `after_stop`, so an abort on a pane that shows no sessions leaves that
+                # pane exactly as the owner left it — Escape must cost them nothing.
+                await self.after_stop()
+                return
+        await self.tui.stop(FORCE, session_value, self)
 
     #: Whether this screen draws a sessions list with a cursor of its own.
     #:

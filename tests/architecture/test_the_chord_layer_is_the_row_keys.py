@@ -12,6 +12,8 @@ proves nothing was spelled by hand, and this proves the derivation produced the 
 
 from __future__ import annotations
 
+import inspect
+
 from textual.binding import Binding
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
@@ -263,4 +265,98 @@ def test_no_screen_declares_two_of_the_three_position_flags() -> None:
     assert not keys_without_cursor, (
         "these screens bind the row keys but own no cursor, so a chord would resolve from the "
         f"published selection while the bare letter resolves from nothing: {keys_without_cursor}"
+    )
+
+
+def test_every_screen_can_answer_the_stop_handler_it_now_inherits() -> None:
+    """A universal handler is only universal if every screen can take the calls it makes.
+
+    Task 3.2 moved `on_row_stop_action` and `confirm_force` down to `ChoiceScreen`, so every
+    position inherits a handler that calls `self.confirm_force(session_value)`. Screens that had
+    written their *own* `confirm_force` before it was a base method did not have to match a
+    signature, and one did not: `SessionDetailScreen.confirm_force` took no argument. The result
+    was not a lint error or a failing test — it was `TypeError` raised inside a message handler,
+    which Textual turns into `App._handle_exception`, which ends the surface. Two keys from any
+    pane: `alt+d`, then `alt+f`.
+
+    Nothing in this repo would have caught it. There is no type checker installed, so the LSP
+    violation is invisible to CI, and no test pressed a stop chord on a detail. So the property
+    is asserted here instead, over the whole call graph the inherited handler touches rather
+    than over the one method that happened to break — the defect is *a screen overriding
+    something the base now calls with arguments it does not accept*, and `confirm_force` was one
+    instance of it.
+
+    Compatibility, not identity: an override may widen (a defaulted parameter is fine). What it
+    may not do is refuse the call the base makes.
+    """
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+    from remote_agents.adapters.tui.screens.base import ChoiceScreen
+
+    #: Every method the inherited stop path calls on a screen — `on_row_stop_action` and
+    #: `confirm_force` directly, plus everything `RemoteAgentsTui.stop` and
+    #: `report_store_failure` call on the `screen` they are handed, since the handler passes
+    #: itself to both.
+    #:
+    #: **Hand-maintained, which is the assumption that produced the defect this test exists
+    #: for** — so it is stated rather than left implicit. Nothing overrides most of these today;
+    #: the list is a superset on purpose, because a name that is here and unused costs nothing
+    #: and a name that is missing is the next `TypeError` out of a message handler.
+    reached = (
+        "confirm_force",
+        "on_reveal",
+        "refuse",
+        "refuse_stop",
+        "redraw_after_failure",
+        "redraw_after_stop_failure",
+        "after_command",
+        "after_stop",
+        "report_stop_result",
+        "announce",
+        "awaiting",
+        "set_status",
+        "draw_failure_rows",
+        "subject_session",
+        "highlighted_session",
+        "read_failure_route",
+    )
+    # `shows_the_acted_session` is deliberately absent, and its absence is the one worth
+    # stating: it is the predicate every routed callback branches on, so an override of it is
+    # the highest-leverage way to reintroduce this class — but it is a `property`, and
+    # `inspect.signature(...).bind` below would need the descriptor unwrapped to say anything
+    # useful about it. A property cannot take the wrong arguments, which is what this test
+    # checks, so it is out of scope here rather than overlooked; what guards *it* is
+    # `test_the_chord_layer_is_offered_exactly_where_the_bare_keys_are` and the two flags it
+    # derives from, each pinned against real behaviour.
+
+    offenders: list[str] = []
+    for name in reached:
+        base = inspect.getattr_static(ChoiceScreen, name, None)
+        if base is None or isinstance(base, property) or not callable(base):
+            # A property cannot be called with the wrong arguments, which is the only thing
+            # this checks — `read_failure_route` is one. Skipped by kind rather than by name,
+            # so a method that later becomes a property does not start raising in here.
+            continue
+        base_signature = inspect.signature(base)
+        # What the base's own callers can pass: one placeholder per parameter it declares.
+        arguments = [
+            None
+            for parameter in list(base_signature.parameters.values())[1:]
+            if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+            and parameter.default is parameter.empty
+        ]
+        for screen in ALL_SCREENS:
+            if not issubclass(screen, ChoiceScreen):
+                continue
+            override = inspect.getattr_static(screen, name, None)
+            if override is None or override is base or isinstance(override, property):
+                continue
+            try:
+                inspect.signature(override).bind(screen, *arguments)
+            except TypeError as error:
+                offenders.append(f"{screen.__name__}.{name}{inspect.signature(override)} — {error}")
+
+    assert not offenders, (
+        "these overrides cannot accept the call the inherited stop handler makes, so pressing "
+        "the chord on that position raises out of a message handler and ends the surface: "
+        f"{offenders}"
     )

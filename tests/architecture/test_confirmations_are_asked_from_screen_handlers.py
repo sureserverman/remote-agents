@@ -294,3 +294,54 @@ def test_the_sweep_examines_every_definition_of_a_shared_name() -> None:
         f"every definition of a reaching name must be reported so a failure can name the "
         f"offending one; got {reaching['choose']}"
     )
+
+
+def test_the_chord_layer_reaches_a_confirmation_only_by_posting_to_a_screen() -> None:
+    """The Alt layer's own path through DEC-025, asserted by name rather than by category.
+
+    The `global binding` case above already forbids any `action_*` in `app.py` from reaching
+    `ask_to_confirm`, and `action_chord` is one — but the chord's path runs through three
+    **module-level functions** in `screens/sessions.py` (`perform_chord`,
+    `perform_row_action`, `perform_row_remote_control`), which no existing case names. They are
+    free functions, so `test_every_confirmation_is_asked_from_a_screen` would catch a direct
+    call with `class=None`; this states the property positively and in the chord's own terms,
+    so a failure says *the chord layer lost its posting boundary* rather than *some function
+    is not a screen method*.
+
+    The boundary is the whole design. `alt+f` from the feed pane must draw the force modal on
+    the **feed pane's** message pump, because that is the pump whose suspension holds back the
+    events that could pop the modal out from under it (DEC-025, DEC-068). It gets there by
+    `perform_row_action` posting `RowStopAction` and stopping — never by awaiting the question
+    itself on the App's pump, which is measured to deadlock the whole surface.
+
+    So: nothing on the chord's synchronous path may reach the guarded call, and the handler on
+    the far side of the post must reach it from a screen.
+    """
+    reaching = _reaching()
+
+    on_the_chords_path = [
+        "action_chord",
+        "perform_chord",
+        "perform_row_action",
+        "perform_row_remote_control",
+    ]
+    offenders = {name: reaching[name] for name in on_the_chords_path if name in reaching}
+    assert not offenders, (
+        "these are on the Alt layer's synchronous path, which runs on the App's message pump, "
+        f"and they now reach `{_GUARDED}`: {sorted(offenders)}. A chord must *post* "
+        "`RowStopAction` to the screen and return; awaiting the question here suspends the "
+        "App's pump and the whole surface stops answering — measured, not theoretical."
+    )
+
+    assert "on_row_stop_action" in reaching, (
+        "the handler `RowStopAction` is delivered to no longer reaches a confirmation, so "
+        "either force stopped asking (DEC-018 permits that for `s` and `c` and for nothing "
+        "else) or this sweep has lost the path it exists to watch."
+    )
+    for module, cls in reaching["on_row_stop_action"]:
+        assert cls is not None and cls.endswith("Screen"), (
+            f"{module}: the RowStopAction handler is defined on {cls}, which is not a screen. "
+            "It must be, because the chord layer delivers this message to whichever position "
+            "the owner is looking at, and DEC-025's protection is that the receiving handler "
+            "runs on that screen's own pump. A plain mixin is not a screen."
+        )

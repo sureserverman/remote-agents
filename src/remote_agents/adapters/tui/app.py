@@ -150,7 +150,36 @@ _NOTHING_SELECTED = "No session is selected."
 
 
 class RemoteAgentsTui(App[AttachRequest | None]):
-    """Choose a project and an agent, launch it, and hand back an attach command."""
+    """Choose a project and an agent, launch it, and hand back an attach command.
+
+    **This app declares priority bindings, and DEC-025's correction asked to be told when it
+    first did.** That correction records that the decision's position "holds today only
+    because this app declares no priority bindings of its own" — priority bindings are checked
+    from the App down before the focused widget (`App._check_bindings`), so an app-level
+    binding that *awaited* something would suspend the App's own message pump with nothing
+    beneath it to hold the events back.
+
+    The Alt chord layer (see `BINDINGS`) is the first. It does not disturb the position,
+    because **no chord awaits a modal on this pump**: `action_chord` resolves a session and
+    hands the work to `perform_chord`, whose stop branch *posts* `RowStopAction` to the screen
+    the owner is looking at and returns. The question is then asked by
+    `ChoiceScreen.on_row_stop_action`, on that screen's own pump, which is exactly the shape
+    DEC-025 requires and DEC-068 restates. `action_chord` does await two tmux reads — the
+    read-side gate and the selection — and neither can push a screen or open a dialog.
+
+    **The correction's hazard is two-sided, and so is the answer.** The other side is a
+    priority binding firing *while a modal is open* and popping it out from under the suspended
+    handler that asked — the same protection, read in the other direction. That is closed by
+    `_offers_chords`, which refuses every chord behind any `ModalScreen`, and it is why that
+    refusal is a rule about the modal rather than about which session the screen underneath
+    knows.
+
+    Pinned rather than asserted, on both sides: `tests/architecture/
+    test_confirmations_are_asked_from_screen_handlers.py` fails if any function on the chord's
+    synchronous path ever reaches `ask_to_confirm`, and
+    `test_a_chord_behind_a_modal_does_not_fire_when_the_key_is_really_pressed` drives a real
+    keypress at an open confirmation.
+    """
 
     # Scoped to `ChoiceScreen`, not to every `OptionList` in the app. A bare type selector
     # here also reached the confirmation modal's list, and app CSS outranks a screen's own
@@ -1524,15 +1553,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         from seeing an exception instead of an explanation. This re-read-and-recheck is
         DEC-007's fourth mitigation and it is why a stale row cannot issue a stale command.
 
-        `screen` is whichever position asked, so a failure reports where the owner is looking.
-        Since the confirmation became a modal dismissed by the answer, no confirmation screen is
-        ever still on the stack by the time this runs.
+        `screen` is whichever position asked. Since the confirmation became a modal dismissed by
+        the answer, no confirmation screen is ever still on the stack by the time this runs.
 
-        **It is no longer the session detail for every action.** `s`, `c` and `f` are issued
-        from the sessions *list* now — that is ask 6 — so this method has two kinds of caller,
-        and what differs between them is where a failure should leave the owner. That is why
-        the redraw and its status line are the screen's own (`redraw_after_failure`) rather
-        than written here.
+        **There are three kinds of caller now, and the third is why nothing below writes to the
+        screen directly.** `s`, `c` and `f` are issued from the session detail, from the
+        sessions *list* (ask 6), and — since the Alt layer — from **any console pane**, whose
+        rows have nothing to do with the session being stopped. So "a failure reports where the
+        owner is looking" is no longer unconditional: re-reading the projects pane is not a
+        refresh but destruction, because its `on_reveal` clears the filter the owner typed.
+
+        Every call this method makes on `screen` therefore goes through the seam rather than
+        acting: `refuse_stop`, `after_stop`, `redraw_after_stop_failure` and
+        `report_stop_result` each act only where `shows_the_acted_session` is true, and
+        `announce` is left alone because a toast belongs to the surface rather than to the
+        position. **`redraw_after_failure` is deliberately not among them** — it is the base
+        redraw that collapses a listing to a lone `Back`, right for a screen describing one
+        record and destructive on a catalogue, and `redraw_after_stop_failure` is the routed
+        wrapper that decides whether it is reached at all.
         """
         if self.busy:
             return
@@ -1547,7 +1585,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 # raise into the handler underneath and report "did not complete" over a
                 # session that was never identified — a different sentence for the same
                 # nothing-happened.
-                await screen.refuse()
+                await screen.refuse_stop()
                 return
             # Two calls rather than one, because the spinner belongs around the dispatch and
             # not around the re-read: `awaiting` covers the rows and rewrites the status line,
@@ -1559,7 +1597,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             )
             record = resolution.record
             if record is None:
-                await screen.refuse()
+                await screen.refuse_stop()
                 return
             if resolution.refusal is not None:
                 # Every refusal that reaches here with a record is a policy refusal, and this
@@ -1571,7 +1609,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                 # from. **Loosening `current_record`'s matching, or passing a `profile_id`
                 # here, makes it reachable and this line wrong**, which is the whole reason
                 # the assumption is written down rather than left implicit across two files.
-                await screen.refuse(
+                await screen.refuse_stop(
                     f"{_ACTION_LABELS[action]} is no longer available for this session. "
                     f"{explain_state(record.state, record.orphan_provenance)}"
                 )
@@ -1587,7 +1625,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # The redraw *and* the sentence are the screen's, because the right one differs by
             # position — see `ChoiceScreen.redraw_after_failure`. The toast is not: what failed
             # and what to do about it is the same on every screen.
-            await screen.redraw_after_failure()
+            await screen.redraw_after_stop_failure()
             screen.announce(
                 f"{_ACTION_LABELS[action]} did not complete: {error} "
                 "The session was left as it is; retry if you still want to."
@@ -1598,7 +1636,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # one's result is on screen", and both branches await a re-read, so releasing
             # first would leave a window where the command has landed but the rows still
             # describe the session as it was.
-            await screen.after_command()
+            await screen.after_stop()
             if failure is None:
                 # Said at all, because the bot has always said it and this surface never did.
                 # A graceful stop that works ends the session. On the detail the redraw then
@@ -1636,7 +1674,7 @@ class RemoteAgentsTui(App[AttachRequest | None]):
                     if action == FORCE
                     else f"{_ACTION_LABELS[action]} did not take effect."
                 )
-                screen.set_status(f"{opening} {failure.summary}")
+                screen.report_stop_result(f"{opening} {failure.summary}")
                 # The summary opens the notification too, rather than the remedy alone. A
                 # toast is read on its own and gone a few seconds later, so one that starts
                 # mid-explanation asks the owner to have been looking at the status line at
@@ -1666,6 +1704,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         Reporting nowhere is the right outcome when the asker has been left: the message
         describes a read the owner is no longer waiting on, the log line above is the durable
         record, and the position they *are* looking at re-reads on its own terms.
+
+        **There are two gates, not one.** The second is `shows_the_acted_session`: every word
+        below is about the *sessions* store, so a position that shows no sessions — the
+        projects, limits and feed panes, which a chord's own re-read reaches (DEC-007) — gets
+        the toast and keeps its rows and its status line. The failure is never silent; what it
+        is not allowed to do is rewrite a listing it is not about.
         """
         _LOG.exception("session read failed", exc_info=error)
         target = screen if screen is not None else self.body
@@ -1683,6 +1727,16 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         # about its own fills, and on the sessions positions the rule is that a fill publishes
         # the cursor it produced. This was the fifth cursor-changing path found outside the
         # funnel; the hook is what stops there being a sixth.
+        # **On the seam too, and for the same reason as the rest of the stop callbacks.** Every
+        # word below is about the *sessions* store, so on a position that shows no sessions --
+        # the projects, limits and feed panes, reached here by a chord's re-read (DEC-007) --
+        # replacing the rows with a lone `Back` and writing "The managed sessions could not be
+        # read" describes something that position does not show and destroys what it does. The
+        # toast still fires, so the failure is never silent; what it is not allowed to do is
+        # rewrite a listing it is not about.
+        if not target.shows_the_acted_session:
+            target.announce(f"The managed sessions could not be read: {error}")
+            return
         target.draw_failure_rows(((_BACK, "Back"),) if len(self.screen_stack) > 1 else ())
         # **The status states the failure, it does not merely point at the exit.** It read
         # "Press escape to return to the project list." — a sentence that reports nothing —
