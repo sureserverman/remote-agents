@@ -1528,3 +1528,117 @@ async def test_a_failed_store_read_publishes_no_selection() -> None:
         assert console.published[-1] is None, (
             "a failed read left the last row published for every other pane to act on"
         )
+
+
+async def test_the_published_selection_equals_the_cursor_after_every_operation() -> None:
+    """The invariant itself, asserted after everything that can move the cursor.
+
+    **This is the check that ends the class the five scenario tests above only sample.** Each
+    of those names one situation — a vanished row, an empty listing, a failed stop, a failed
+    read, a move — and each was written after a review found the situation nobody had listed.
+    Five were found that way, in three rounds, every one just outside the boundary the previous
+    fix drew: three hand-picked publish sites, then a funnel over `_draw_listing`, then a fill
+    reaching the pane from `app.py` entirely outside it.
+
+    An enumeration cannot close that, because the members share nothing — what makes one a
+    member is a publication that is *missing*, and no search finds an absent call. So this
+    asserts the property instead of listing the paths: after each operation, whatever the pane
+    last published is exactly what its cursor now names. It has no boundary to get wrong, and it
+    fails on the path nobody thought of, which is the only kind left.
+
+    The operations are driven through the real app, so anything Textual does on its own — a
+    highlight moved on mount, a clear on `clear_options`, a disabled row that posts no message —
+    is inside the test rather than assumed about it.
+
+    **What it does not cover, so it does not read as covering everything:** teardown. The
+    invariant is asserted while the pane is alive, and `on_unmount`'s clear happens after the
+    last assertion, so reverting it leaves this green —
+    `test_leaving_the_pane_publishes_no_selection` is what holds that. Reverting the draw funnel
+    or the failure-fill hook does fail this test; both were checked.
+    """
+    console = SelectionConsole()
+    first, second, third = _three()
+    launcher = _Launcher((first, second, third))
+    app = SessionsPane(
+        _context(
+            (),
+            sessions=launcher,
+            console_publish_selection=console.publish,
+            console_read_selection=console.read,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, SessionsPaneScreen)
+        choices = screen.query_one("#choices", OptionList)
+        choices.focus()
+
+        async def holds(what: str) -> None:
+            await asyncio.sleep(0.03)
+            await pilot.pause()
+            published = console.published[-1] if console.published else None
+            expected = screen.highlighted_session()
+            assert (str(published) if published is not None else None) == expected, (
+                f"after {what}: published {published!r}, cursor on {expected!r}"
+            )
+
+        await holds("the opening fill")
+
+        for key in ("down", "down", "up", "end", "home"):
+            await pilot.press(key)
+            await holds(f"pressing {key}")
+
+        choices.highlighted = 2
+        await holds("assigning the cursor directly")
+
+        await screen._auto_reload()
+        await holds("a tick with the list unchanged")
+
+        launcher.records = (first, third)
+        await screen._auto_reload()
+        await holds("a tick that removed the row above the cursor")
+
+        choices.highlighted = 1
+        launcher.records = (first,)
+        await screen._auto_reload()
+        await holds("a tick that removed the highlighted row")
+
+        launcher.records = (first, second, third)
+        await screen._auto_reload()
+        await holds("a tick that brought rows back")
+
+        await screen.refresh_contents()
+        await holds("Ctrl+R")
+
+        await screen.on_reveal()
+        await holds("returning to the screen")
+
+        await screen.redraw_after_failure()
+        await holds("a redraw after a stop that raised")
+
+        await screen._seed_context_gauges()
+        await holds("the gauge seed")
+
+        await pilot.resize_terminal(80, 24)
+        await holds("a resize")
+
+        # The failed read is driven *here*, with the cursor on a real session, and the order
+        # matters: run after the empty-list steps below it is vacuous, because the pane comes
+        # back from empty resting on nothing, so both sides of the assertion are `None` and a
+        # regression in this path is invisible. Measured — the first version of this test had
+        # it last and did not fail when the failure fill was reverted to a direct
+        # `show_choices` from `app.py`, which is the exact defect that motivated the hook.
+        choices.highlighted = 1
+        await holds("moving to a row before the read fails")
+        app.report_store_failure(RuntimeError("unreadable"), screen)
+        await holds("a failed store read")
+
+        launcher.records = ()
+        await screen._auto_reload()
+        await holds("the last session ending")
+
+        launcher.records = (second,)
+        await screen._auto_reload()
+        await holds("the first session arriving on an empty pane")

@@ -77,9 +77,18 @@ class TuiContext:
     # Which session the console has selected, published by the one pane that owns a cursor and
     # read by the three that do not. A *pair* of wired capabilities rather than a shared
     # object, for the same reason as everything above it: the surface is handed what it may do
-    # (DEC-046), never a handle it probes. Both `None` off a console, which is the declared
-    # absence DEC-061 asks for — the Alt chord layer is then not offered at all rather than
-    # offered and inert.
+    # (DEC-046, whose rejected alternative is literally a backend reached through an
+    # `object | None` behind five `getattr` probes), never a handle it probes. Both are `None`
+    # off a console, so the Alt chord layer is not offered at all rather than offered and
+    # inert — a dead-end key being worse than an absent one, which is the reason `p` is gated
+    # to the pane rather than shown everywhere.
+    #
+    # An earlier version of this comment cited DEC-061 for that last point. DEC-061 is
+    # *"Usage is read from each provider's own files; Claude's limits are borrowed and
+    # labelled as borrowed"* — provider usage files and no network egress. Its "absence is a
+    # first-class answer" paragraph is about a reading nobody reported, not about whether a
+    # capability is wired, and every other citation of it in this tree is in the usage domain.
+    # The rule wanted here has no DEC; it is stated above in its own words.
     #
     # Publishing is the sessions pane's alone; reading is every other pane's. They are separate
     # fields because no pane needs both, and a pane holding only the reader cannot accidentally

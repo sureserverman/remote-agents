@@ -1363,6 +1363,22 @@ class SessionsPaneScreen(SessionsScreen):
         #: eighteen `fork`/`exec`s a minute restating a fact that had not changed. Only updated
         #: on success, so a failed write is retried by the next identical value rather than
         #: swallowed.
+        #:
+        #: **Accepted cost: the memo is this process's record of what *it* wrote, not a reading
+        #: of the option.** Where two `SessionsPaneScreen` processes run on one console — a
+        #: state `ConsoleComposer.ensure` detects, reports, and tells the owner to restart out
+        #: of, rather than one it repairs — each memoises its own last value, so after B writes
+        #: Y the option stays Y while A's cursor sits on X and A never re-asserts. Before the
+        #: coalescing A's next tick would have republished X, so the option flapped between the
+        #: two; this makes it stably wrong instead. That is a real narrowing and it is recorded
+        #: rather than fixed, because a flapping selection in a console that is already
+        #: misassembled is noise rather than a mitigation, and the supported repair for that
+        #: state is the restart `ensure` already prescribes. Re-reading the option before each
+        #: write would close it at the price of a second tmux round trip per publication.
+        #:
+        #: `on_unmount`'s skip is the benign half of the same mechanism: a pane exiting with a
+        #: memo of `None` leaves whatever the *other* writer published, which is the right
+        #: answer while that writer is still alive.
         self._written_selection: SessionId | None = None
         self._ever_written = False
 

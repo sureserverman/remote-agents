@@ -282,7 +282,7 @@ def test_every_screen_that_advertises_refresh_actually_implements_it() -> None:
 
 
 async def test_the_selection_capability_is_absent_off_a_console() -> None:
-    """Declared absence, not a probe (DEC-046, DEC-061).
+    """Declared absence, not a probe (DEC-046).
 
     A surface that is not hosted by a console has no published selection to read and nothing
     to publish to. Both capabilities are then `None`, and the Alt chord layer is not offered at

@@ -952,6 +952,24 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         other position answers from the console's published selection, because it has no cursor
         of its own and the owner's choice was made in a different pane.
 
+        **That sentence describes a console pane, and this line is reached by two processes
+        that are not one.** Measured: `hosting_mode` classifies by tmux socket name, so a plain
+        `remote-agents tui` started from any shell on the console's server has
+        `console_read_selection` wired and answers from the *real* console's selection on every
+        position that owns no cursor — as does the projects pane after a DEC-040 exchange parks
+        it in an agent's own window. A third case needs no console at all: a screen that already
+        knows its session (`SessionDetailScreen`, Rename, Inspect, the confirm modals) owns no
+        cursor either, so it answers from whatever the sessions pane highlights rather than from
+        the session it is displaying.
+
+        The **write** side is gated against exactly this trap, twice —
+        `SessionsScreen._publish_selection` is a no-op and `p` is bound only on the pane. The
+        read side is not, and Stage 3's Task 3.1 is where it gets its gate: only a process
+        holding one of the console's own slot marks may answer from the published selection, and
+        a screen that knows its own session answers from that instead. Until then this returns
+        an answer no caller acts on — nothing in production calls it yet — and the residual is
+        named here rather than left for a reader of `app.py` to reconstruct.
+
         `owns_session_cursor` decides that. It is read with `getattr(..., False)` because not
         every screen is a `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside
         that hierarchy — so the attribute genuinely may be absent, and the default is the safe
