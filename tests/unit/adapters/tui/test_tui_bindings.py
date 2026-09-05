@@ -727,7 +727,7 @@ async def test_an_alt_chord_is_refused_while_a_modal_is_asking() -> None:
         (RemoteAgentsTui, True, False),
     ],
 )
-async def test_which_surfaces_are_offered_the_chord_layer(
+async def test_which_surfaces_are_offered_the_alt_chord_layer(
     surface: type[RemoteAgentsTui], wired: bool, offered: bool
 ) -> None:
     """Every position the layer reaches, and the two it must not — asserted as one table.
@@ -953,7 +953,9 @@ async def test_an_alt_stop_from_a_console_pane_never_reaches_that_pane_s_own_row
         assert not isinstance(app.screen, ForceConfirmModal), "a cleanup asked first"
 
 
-async def test_the_standalone_sessions_position_is_offered_the_chord_layer_off_a_console() -> None:
+async def test_the_standalone_sessions_position_is_offered_the_alt_chord_layer_off_a_console() -> (
+    None
+):
     """`ctrl+s` from the plain dashboard reaches `SessionsScreen`, a different class from the pane.
 
     It is the other holder of `carries_row_keys`, and the table above never reaches it — the
@@ -1323,3 +1325,49 @@ async def test_an_unreadable_store_does_not_repaint_a_pane_that_shows_no_session
         assert any("could not be read" in said for said in announcements(app)), (
             "the unreadable store was not reported at all"
         )
+
+
+@pytest.mark.parametrize("surface", [ProjectsPane, SessionsPane, LimitsPane, FeedPane])
+async def test_alt_d_from_every_console_pane_opens_the_detail_and_escape_comes_home(
+    surface: type[RemoteAgentsTui],
+) -> None:
+    """The Stage 3 gate's judgment check, at unit scope across all four panes.
+
+    The check as written says to drive the *real* console. That cannot be automated — BL-041:
+    `hosting_mode` classifies a pane surface inside a disposable console as FOREIGN, deliberately,
+    and the only other console on this host is the owner's live one. So this covers the property
+    for all four panes and the live drive is reported as blocked rather than claimed.
+
+    Two halves, and the second is the one a single-screen assertion cannot give: `M-d` opens the
+    detail of the session the *sessions pane* highlights — on three of these panes that is a row
+    they are not showing — and Escape comes back to this pane's own position rather than to
+    whatever the stack happened to reveal.
+    """
+    chosen = _record()
+    console = SelectionConsole(selected=chosen.session_id)
+    app = surface(
+        replace(
+            _context(_Listing((chosen,))),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        home = position(app)
+
+        await pilot.press("alt+d")
+        await pilot.pause()
+        opened = position(app)
+        named = getattr(app.screen, "session_value", None)
+
+        await pilot.press("escape")
+        await pilot.pause()
+        returned = position(app)
+
+    assert opened == "SESSION_DETAIL", f"{surface.__name__}: alt+d reached {opened}"
+    assert named == str(chosen.session_id), (
+        f"{surface.__name__}: the detail names {named}, not the selected session"
+    )
+    assert returned == home, f"{surface.__name__}: escape landed on {returned}, not {home}"
