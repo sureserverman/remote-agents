@@ -56,7 +56,7 @@ from remote_agents.adapters.tui.screens.confirm import (
 )
 from remote_agents.adapters.tui.screens.launch import ProjectsScreen
 from remote_agents.adapters.tui.screens.palette import NavigationCommands
-from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, perform_chord
+from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS, CHORD_STOPS, perform_chord
 from remote_agents.adapters.tui.theme import THEMES, VARIABLE_DEFAULTS
 from remote_agents.application.commands import (
     LaunchCommand,
@@ -436,10 +436,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
             # that could never be false and left this one open.
             return True
         if action == "chord":
-            return self._offers_chords(screen)
+            return self._offers_chords(screen, str(parameters[0]) if parameters else "")
         return screen.check_action(action, parameters)
 
-    def _offers_chords(self, screen: Screen[object]) -> bool:
+    def _offers_chords(self, screen: Screen[object], key: str) -> bool:
         """Whether the Alt layer applies to the position on screen — the synchronous half.
 
         Two refusals, and neither can be deferred to the action: `check_action` is what
@@ -480,6 +480,30 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         console's own is a tmux read, and `check_action` is synchronous — so that half lives in
         `_resolve_session`, and a refused process gets a word rather than a hidden key.
         """
+        if key in CHORD_STOPS and getattr(screen, "entry_is_a_commitment", False):
+            # **A screen whose typed text is a commitment does not carry the three keys that end
+            # a session.** `entry_is_a_commitment` already means "typed work a global key would
+            # discard silently", and these bindings are `priority=True`, so the `Input` never
+            # sees the keystroke: on the rename box, a slipped Alt turns the next `s` into an
+            # unconfirmed, irreversible stop (DEC-018) of the very session being renamed, and on
+            # the project-name step into a stop of whatever another pane highlights.
+            #
+            # **Refused rather than greyed, and greying is not actually on the table.** The
+            # flow-jump protection returns `None` for a key the *footer draws*, so the owner
+            # sees it dimmed; these bindings are `show=False`, so `None` and `False` are
+            # indistinguishable to them and greying would buy a second code path and no signal.
+            #
+            # The coarser of two in-repo predicates, deliberately: `work_in_flight` would refuse
+            # only once the box actually holds text, and a key that works until you type a
+            # character is worse to learn than one that is never there. Accepted cost, stated
+            # because it is real: on an empty rename box `alt+s` was the best-targeted stop in
+            # the app — its subject is on screen and named — and it is refused too.
+            #
+            # The navigating chords stay: they push a screen and Escape comes back to the typed
+            # text intact, which is the excursion path. The projects *filter* is deliberately
+            # not a commitment (leaving that position is the ordinary thing to do there), so the
+            # owner's originating ask -- bare letters type, Alt letters act -- is untouched.
+            return False
         if isinstance(screen, ModalScreen) or not isinstance(screen, ChoiceScreen):
             # `perform_chord` reaches `screen.tui`, `screen.announce` and `screen.showing`, all
             # of which are `ChoiceScreen`'s. Every screen this app pushes is one today, so the
@@ -1072,11 +1096,12 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         **The argument for each, and both gates, live in `_resolve_session`.** This is a thin
         reader over it that drops the refusal wording — read that method rather than this one.
 
-        **Its callers are `action_chord` and this project's tests, and nothing else.** That was
-        true when the resolver was written and it is still true: `action_chord` calls
-        `_resolve_session` directly, because it needs the refusal too. Kept public because it is
-        the honest name for the question and Task 3.3's hint row will ask it; recorded here so a
-        reader does not go looking for the production caller that would explain it.
+        **Two production callers, and they run on different clocks.** `action_chord` reaches
+        `_resolve_session` directly, because it needs the refusal wording too; this method is
+        called by `ChordHintRow.refresh_chord_hint`, on a timer, on every console pane that draws
+        the hint row — so the resolver runs without anyone pressing anything, and its cost is not
+        only paid per keypress. That sentence used to say the callers were `action_chord` and the
+        tests; Task 3.3 made it false and it was reported fixed a round before it was.
 
         Each flag is read with `getattr(..., False)` because not every screen is a
         `ChoiceScreen` — the modals in `confirm.py` are `ModalScreen`s outside that hierarchy —
@@ -1089,8 +1114,10 @@ class RemoteAgentsTui(App[AttachRequest | None]):
         grows the behaviour and forgets the declaration. That is the Stage 1 gate's lesson: a
         predicate recognising today's positions is silent about tomorrow's.
 
-        **Never cached.** One tmux read per keypress is the price of never acting on a stale
-        selection, and it is a `show-options` against a local socket. A cache would be correct
+        **Never cached.** Two tmux reads per press — the gate, then the selection — are the
+        price of never acting on a stale one, both `show-options`/`list-panes` against a local
+        socket. (The plan costed this layer at one read per press; the read-side gate made it
+        two, and the hint row's poll pays the same pair per pane per tick.) A cache would be correct
         for exactly as long as nobody moved the cursor in the other pane, which is the whole
         thing this has to survive.
 

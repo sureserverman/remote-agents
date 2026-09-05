@@ -596,10 +596,15 @@ class FeedScreen(ChordHintRow, FeedRegion, ChoiceScreen):
         self.query_one("#feed-pane", OptionList).focus()
         if self._timer is None:
             self._timer = self.set_interval(self._FEED_AUTO_REFRESH, self._auto_reload)
-        # Read-only, like the limits pane, so the hint row is the Alt layer alone -- and it is
-        # the layer's least obvious home, because this pane shows notifications *about* sessions
-        # while owning none of them. Saying the chords here is what tells the owner that the
-        # session they are reading a notification about can be acted on without leaving.
+        # Read-only, so the hint row is the Alt layer alone -- and this is the layer's least
+        # obvious home, because the pane shows notifications *about* sessions while owning none
+        # of them.
+        #
+        # **What the row says is "these keys work here", not "they act on the notification you
+        # are reading".** They act on whatever the *sessions pane* has selected, which need not
+        # be the session this row is about, and two of them end it without asking (DEC-018). An
+        # earlier version of this comment said the opposite, which is the one misreading of this
+        # pane with an irreversible consequence.
         self.set_hint(self.hint_content(self.chord_hint_base))
         self.start_chord_hint()
 

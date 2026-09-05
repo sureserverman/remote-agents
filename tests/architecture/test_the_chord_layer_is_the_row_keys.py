@@ -360,3 +360,109 @@ def test_every_screen_can_answer_the_stop_handler_it_now_inherits() -> None:
         "the chord on that position raises out of a message handler and ends the surface: "
         f"{offenders}"
     )
+
+
+def test_no_screen_declares_an_alt_binding_of_its_own() -> None:
+    """Criterion 2 reads `RemoteAgentsTui.BINDINGS`; this reads every screen's.
+
+    The gate's grep catches an `alt+` key **spelled** anywhere in the TUI tree, and the check
+    above proves the App's own set is exactly the row keys. Between them sits a shape neither
+    sees: a *derived* `alt+` binding declared on a screen — built from a table, so no literal to
+    grep, and not on the App, so not in the set. It would shadow or duplicate the layer with
+    nothing failing.
+
+    Nothing declares one today. The check exists because the two it sits between are each
+    narrower than they sound, and the stage's own history is of enumerations that were right
+    about the members and wrong about the boundary.
+    """
+    from remote_agents.adapters.tui.screens import ALL_SCREENS
+
+    def keys_of(binding: object) -> list[str]:
+        """Every key one `BINDINGS` entry declares.
+
+        Two shapes and one separator: Textual accepts a `Binding` or a bare tuple, and either
+        may carry several keys comma-joined (`"ctrl+s,alt+s"`). Splitting matters here — the
+        tuple form's first element would otherwise be compared whole, so `"alt+s,chord"` reads
+        as one key that does not start with `alt+` and the check goes quiet.
+        """
+        declared = binding.key if isinstance(binding, Binding) else binding[0]
+        return [part.strip() for part in str(declared).split(",")]
+
+    offenders = {
+        screen.__name__: sorted(
+            key
+            for klass in screen.__mro__
+            for binding in klass.__dict__.get("BINDINGS", ())
+            for key in keys_of(binding)
+            if key.startswith("alt+")
+        )
+        for screen in ALL_SCREENS
+    }
+    declared = {name: keys for name, keys in offenders.items() if keys}
+
+    assert not declared, (
+        "the Alt layer is the App's alone, so that one table decides the whole vocabulary — "
+        f"these screens declare `alt+` bindings of their own: {declared}"
+    )
+
+
+def test_only_a_chord_marks_a_position_as_left_by_an_excursion() -> None:
+    """The mark belongs to the chord, and the row keys share the code that would set it.
+
+    `perform_row_action` and `perform_row_remote_control` are reached from two callers: the bare
+    row key on a sessions position, and a chord from anywhere. Only the chord takes the owner
+    *off* a position that will later consume a mark, so only the chord may set one. A row key
+    that marked its own screen would be inert today — `SessionsScreen` never calls
+    `consume_excursion` — which is exactly what makes it worth pinning: a one-shot flag nobody
+    reads is a trap for the next cursor-owning position to inherit `ProjectsScreen.on_reveal`.
+
+    **Asserted structurally, and that is the second choice.** The behavioural version — press a
+    bare `i` on the sessions pane and assert no mark — could not be made to navigate in a unit
+    fixture, and a version that did not navigate passed against a mutation that put the mark
+    back. A test that cannot fail is worse than one that tests a narrower thing honestly, so
+    this reads the call sites instead: `mark_excursion` may be called from `perform_chord`, and
+    from `perform_row_remote_control` only under its own `mark_excursion` guard, which only the
+    chord passes.
+    """
+    import ast
+    from pathlib import Path
+
+    module = Path("src/remote_agents/adapters/tui/screens/sessions.py")
+    tree = ast.parse(module.read_text(encoding="utf-8"))
+
+    callers: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        for sub in ast.walk(node):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == "mark_excursion"
+            ):
+                callers[node.name] = callers.get(node.name, 0) + 1
+
+    assert set(callers) == {"perform_chord", "perform_row_remote_control"}, (
+        f"the excursion mark is set from {sorted(callers)}; only the chord may set it, and "
+        "`perform_row_action` is shared with the bare row keys"
+    )
+
+    # And inside the remote-control helper, every mark sits under the parameter the chord passes.
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "perform_row_remote_control"
+    )
+    assert "mark_excursion" in {argument.arg for argument in helper.args.kwonlyargs}, (
+        "`perform_row_remote_control` marks unconditionally, so the bare `m` row key marks too"
+    )
+    guarded = [
+        sub
+        for sub in ast.walk(helper)
+        if isinstance(sub, ast.If)
+        and isinstance(sub.test, ast.Name)
+        and sub.test.id == "mark_excursion"
+    ]
+    assert len(guarded) == callers["perform_row_remote_control"], (
+        "not every mark in `perform_row_remote_control` sits under its `mark_excursion` guard"
+    )

@@ -495,7 +495,7 @@ class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
         await self.advance_to(ProjectChooserScreen(project))
 
 
-class LimitsPaneScreen(ChordHintRow, LimitsRegion, ChoiceScreen):
+class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
     """The console's right-middle pane: the account's rate-limit windows and nothing else.
 
     **This is the surface the owner's second ask actually named.** "Put them in the TUI too, on
@@ -563,6 +563,12 @@ class LimitsPaneScreen(ChordHintRow, LimitsRegion, ChoiceScreen):
     LimitsPaneScreen #limits-pane {
         height: 1fr; border: none; text-wrap: nowrap; text-overflow: ellipsis;
     }
+    /* And no hint row, which is also why this pane does not advertise the Alt chord layer even
+       though it offers it. Task 3.3 named all three read-only panes; this one hides `#status`
+       and its border already, on the argument that two rows to restate a heading is too much on
+       a pane whose content is two lines -- and a third row for a keymap is the same argument
+       again. The layer still works here; the feed pane next door names it, and Task 4.3's docs
+       carry it. Stated rather than left as a `set_hint` call whose output nothing draws. */
     LimitsPaneScreen #hint { display: none; }
     """
 
@@ -612,10 +618,6 @@ class LimitsPaneScreen(ChordHintRow, LimitsRegion, ChoiceScreen):
         await self._reload_limits()
         if self._timer is None:
             self._timer = self.set_interval(self._LIMITS_AUTO_REFRESH, self._auto_reload)
-        # This pane has no keys of its own -- every limit here is a read -- so its hint row is
-        # the Alt layer alone, and it exists only on a console. `chord_hint_base` stays empty.
-        self.set_hint(self.hint_content(self.chord_hint_base))
-        self.start_chord_hint()
 
     async def on_reveal(self) -> None:
         await self._reload_limits()

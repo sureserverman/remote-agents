@@ -18,8 +18,13 @@ from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
 from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens.confirm import ForceConfirmModal
+from remote_agents.adapters.tui.screens.project import NameScreen
 from remote_agents.adapters.tui.screens.sessions import (
+    CHORD_KEYS,
+    CHORD_NAVIGATES,
+    CHORD_STOPS,
     InspectScreen,
+    RenameScreen,
     SessionDetailScreen,
     SessionsScreen,
 )
@@ -1371,3 +1376,112 @@ async def test_alt_d_from_every_console_pane_opens_the_detail_and_escape_comes_h
         f"{surface.__name__}: the detail names {named}, not the selected session"
     )
     assert returned == home, f"{surface.__name__}: escape landed on {returned}, not {home}"
+
+
+async def test_a_wizard_step_over_a_pane_keeps_the_navigating_chords_and_refuses_the_stops() -> (
+    None
+):
+    """The layer on a screen whose whole affordance is typing letters — both halves.
+
+    **Navigating chords still work**, which is the stage goal reaching a position pushed on top
+    of a console pane: the owner is naming a new project, the sessions pane's row needs looking
+    at, `alt+d` opens it and Escape comes back to the half-typed name.
+
+    **The three stop chords are refused**, and this is a deliberate narrowing of that goal.
+    These bindings are `priority=True`, so the focused `Input` never sees the keystroke — on a
+    text-entry screen a slipped Alt turns the next `s` into an unconfirmed, irreversible stop
+    (DEC-018) of a session in another pane. `entry_is_a_commitment` is the flag this repo
+    already uses for "typed work a global key would discard silently"; carrying an unconfirmed
+    stop onto exactly those screens is the same hazard with a worse outcome.
+
+    The projects *filter* is deliberately not a commitment — leaving that position is the
+    ordinary thing to do there — so the owner's originating ask is untouched: in the pane
+    itself bare letters type and Alt letters act, all eight of them.
+    """
+    chosen = _record()
+    console = SelectionConsole(selected=chosen.session_id)
+    app = ProjectsPane(
+        replace(
+            _context(_Listing((chosen,))),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await app.push_screen(NameScreen("infra"))
+        await pilot.pause()
+        assert position(app) == "NAME"
+        await pilot.press(*"my-new-project")
+        await pilot.pause()
+        # `text_entry` reuses `#filter` as the one entry widget every screen composes.
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.value == "my-new-project"
+
+        offered = {key: app.check_action("chord", (key,)) for key in CHORD_KEYS}
+
+        await pilot.press("alt+d")
+        await pilot.pause()
+        opened = position(app)
+        await pilot.press("escape")
+        await pilot.pause()
+        returned = position(app)
+        kept = app.screen.query_one("#filter", Input).value
+
+    assert {key for key, yes in offered.items() if yes} == set(CHORD_NAVIGATES), (
+        f"the wrong chords are offered while a name is being typed: {offered}"
+    )
+    assert not any(offered[key] for key in CHORD_STOPS), "a stop chord is live on a text entry"
+    assert opened == "SESSION_DETAIL", f"alt+d from a wizard step reached {opened}"
+    assert returned == "NAME", f"escape landed on {returned}, not the half-typed name"
+    assert kept == "my-new-project", "the excursion discarded the name the owner was typing"
+
+
+async def test_no_stop_chord_survives_on_any_screen_that_commits_typed_text() -> None:
+    """The property, not the two screens that have it today — and it is asserted on *instances*.
+
+    **The first version of this test could not fail**, and the way it could not is worth keeping
+    written down. It passed screen *classes* to `_offers_chords`. A class object is not an
+    instance of `ChoiceScreen`, so execution never reached the rule under test: it fell through
+    to the `not isinstance(screen, ChoiceScreen)` guard and returned `False` for the wrong
+    reason. Delete the rule entirely and the assertions still held. Measured:
+    `_offers_chords(SessionsScreen, "s")` is `False` while `_offers_chords(SessionsScreen(), "s")`
+    is `True` — the one screen where that chord must be live.
+
+    So: instances, and a **positive control** on a screen that does not commit typed text, so
+    the loop cannot pass by refusing everything.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = ProjectsPane(
+        replace(
+            _context(_Listing(())),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    committing = (NameScreen("infra"), RenameScreen(str(SessionId.new())))
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+
+        for screen in committing:
+            assert screen.entry_is_a_commitment, f"{type(screen).__name__} is not the shape tested"
+            for key in CHORD_STOPS:
+                assert app._offers_chords(screen, key) is False, (
+                    f"{type(screen).__name__} carries the unconfirmed stop chord {key!r} while "
+                    "the owner is typing into it"
+                )
+            for key in CHORD_NAVIGATES:
+                assert app._offers_chords(screen, key) is True, (
+                    f"{type(screen).__name__} refused the navigating chord {key!r}, which costs "
+                    "the owner nothing and is the half of the layer that still works here"
+                )
+
+        # The positive control: the same keys on a position that commits no typed text.
+        for key in CHORD_STOPS:
+            assert app._offers_chords(SessionsScreen(), key) is True, (
+                f"the stop chord {key!r} is refused on the sessions position, so the loop above "
+                "proves nothing — everything is being refused"
+            )

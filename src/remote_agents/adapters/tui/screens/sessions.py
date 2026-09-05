@@ -358,11 +358,15 @@ def chord_hint_content(base: str, *, live: bool) -> Content:
 class ChordHintRow:
     """The hint row's account of the Alt layer, for a pane whose own keys are not the row keys.
 
-    Mixed into the three console panes that carry a cursor over something other than sessions --
-    projects, limits and feed. The sessions pane is deliberately not one of them: its title
-    already advertises the same letters bare (`sessions_title`), and saying them twice on one
-    small pane, once with a modifier and once without, would describe two key sets where there
-    is one.
+    Mixed into the console panes that carry a cursor over something other than sessions. Today
+    that is the projects pane and the feed; the limits pane is deliberately excluded and says so
+    in its own CSS, and `DashboardScreen` inherits this by subclassing `ProjectsPaneScreen`
+    without being a console pane at all -- which is why `advertises_chords` asks about the
+    position rather than trusting the mixin's presence.
+
+    The sessions pane is not one of them either: its title already advertises the same letters
+    bare (`sessions_title`), and saying them twice on one small pane, once with a modifier and
+    once without, would describe two key sets where there is one.
 
     **The live/dim state is cached rather than read at render time.** Rendering is synchronous
     and the answer is a tmux read, so the read happens on the pane's own reload cycle and this
@@ -391,7 +395,7 @@ class ChordHintRow:
         pane's cursor, so reading it faster would only find the same answer sooner than the
         thing being watched can change it.
         """
-        if self.tui.services.console_holds_slot is None or self._chord_timer is not None:
+        if not self.advertises_chords() or self._chord_timer is not None:
             return
         self._chord_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._chord_hint_tick)
         self.call_after_refresh(self._chord_hint_tick)
@@ -400,8 +404,31 @@ class ChordHintRow:
         if self.showing:
             await self.refresh_chord_hint()
 
+    def advertises_chords(self) -> bool:
+        """Whether *this* position should draw the layer — which is not "is this a console".
+
+        **One screen inherits this mixin without being a console pane, and it is the one that
+        must not draw the row.** `DashboardScreen` subclasses `ProjectsPaneScreen`, so it
+        inherits the hint; but it owns a sessions cursor and binds none of the row keys, so
+        `_offers_chords` refuses it every chord (that refusal was Task 3.1's Critical). The
+        mixin's own carriers are the projects pane and the feed — the limits pane was removed
+        from it when its `#hint { display: none; }` came to light.
+
+        Drawing a lit `⌥ a i r s c f m d` there would advertise eight keys
+        the app answers `False` for, two of which are unconfirmed stops — the dead-end key this
+        stage keeps refusing, in its worst form: not merely inert, but inert *and* about
+        stopping agents.
+
+        So the row mirrors the layer's own gate rather than the hosting: a position that owns a
+        sessions cursor draws no chord hint, because either it carries the bare letters already
+        (and its title says so) or it is refused the chords entirely.
+        """
+        return self.tui.services.console_holds_slot is not None and not getattr(
+            self, "owns_session_cursor", False
+        )
+
     def hint_content(self, base: str) -> str | Content:
-        if self.tui.services.console_holds_slot is None:
+        if not self.advertises_chords():
             # Not a console pane, so there is no layer to advertise. `hosting_mode` gates the
             # capability, so its absence is the declared absence of the whole feature (DEC-046)
             # -- exactly the condition `check_action` uses to refuse the chords themselves.
@@ -411,19 +438,27 @@ class ChordHintRow:
     async def refresh_chord_hint(self) -> None:
         """Re-read whether anything is selected, and redraw the row if the answer changed.
 
-        Asks `selected_session`, not the raw option: that is the same question the chord asks,
-        so a pane whose slot mark says it may not read the selection draws the layer dim rather
-        than bright-and-refused. Guarded like every other post-await continuation here -- this
-        runs from a timer, and the owner can leave between the read and the redraw.
+        Asks `selected_session`, not the raw option: on the positions that draw this row it is
+        the same question the chord asks, so a pane whose slot mark says it may not read the
+        selection draws the layer dim rather than bright-and-refused. (It is *not* the same
+        question on a cursor-owning screen, which resolves from its own list -- one more reason
+        `advertises_chords` keeps this row off those positions.)
+
+        Guarded like every other post-await continuation here: this runs from a timer, and the
+        owner can leave between the read and the redraw.
         """
-        if self.tui.services.console_holds_slot is None:
+        if not self.advertises_chords():
             return
         try:
             live = await self.tui.selected_session() is not None
         except Exception:  # pragma: no cover - `selected_session` catches its own
             return
-        if live == self._chord_live or not self.showing:
-            self._chord_live = live
+        if not self.showing:
+            # Stored *and* returned would leave the row claiming whatever it last drew while
+            # every later tick compares equal and never repaints -- on the feed pane nothing
+            # else redraws the hint, so it would say so until the answer changed again.
+            return
+        if live == self._chord_live:
             return
         self._chord_live = live
         self.set_hint(self.hint_content(self.chord_hint_base))
@@ -465,7 +500,9 @@ async def perform_row_action(action: str, session_value: str, *, screen: ChoiceS
     await screen.tui.show_detail(session_value, action)
 
 
-async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen) -> None:
+async def perform_row_remote_control(
+    session_value: str, *, screen: ChoiceScreen, mark_excursion: bool = False
+) -> None:
     """Remote Control, which is the one key that cannot name its action in advance.
 
     Shared by the row key and the chord for the reason `perform_row_action` states. The busy
@@ -485,6 +522,8 @@ async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen
         # read landing late pushes a detail onto whatever the owner navigated to instead.
         return
     if record is None:
+        if mark_excursion:
+            screen.mark_excursion()
         await screen.tui.show_detail(session_value)
         return
     if not remote_control_available(record):
@@ -505,16 +544,21 @@ async def perform_row_remote_control(session_value: str, *, screen: ChoiceScreen
     # so the omission is not read as an oversight.
     directions = remote_control_directions(record, record.remote_control_state)
     opening = _REMOTE_CONTROL_KEYS[directions[0]] if len(directions) == 1 else None
+    if mark_excursion:
+        screen.mark_excursion()
     await screen.tui.show_detail(session_value, opening)
 
 
-#: The chords that take the owner somewhere. The three stop keys do not: `s` and `c` act in
-#: place and `f` asks a modal, which pops without revealing anything (a modal dismiss does not
-#: run the revealed screen's `on_reveal`). Only these need the position they leave to be marked
-#: as an excursion, and marking the others would leave a stale mark for the next return.
-CHORD_NAVIGATES = frozenset(CHORD_KEYS) - {
-    key for key, action, *_ in SESSION_ACTION_KEYS if action in ACTION_LABELS
-}
+#: The three keys that end a session: `s` and `c` without asking (DEC-018) and `f` behind a
+#: modal. Named as a set because two rules turn on it -- these are the chords a screen holding
+#: typed text must not carry, and the ones that do not navigate.
+#:
+#: Derived from the action table rather than spelled, so a fourth lifecycle action added there
+#: is refused on a text-entry screen the day it appears rather than the day someone remembers.
+CHORD_STOPS = frozenset(key for key, action, *_ in SESSION_ACTION_KEYS if action in ACTION_LABELS)
+
+#: The chords that take the owner somewhere, which is every chord that is not a stop.
+CHORD_NAVIGATES = frozenset(CHORD_KEYS) - CHORD_STOPS
 
 
 async def perform_chord(key: str, session_value: str, *, screen: ChoiceScreen) -> None:
@@ -525,16 +569,25 @@ async def perform_chord(key: str, session_value: str, *, screen: ChoiceScreen) -
     is a row action. Written as a router over the shared performers rather than as a fourth
     implementation, which is the whole point of the two functions above.
     """
-    if key in CHORD_NAVIGATES:
-        # The owner is being taken off this position by a key about a session in another pane,
-        # so the position is marked before the push: what it draws when the excursion returns
-        # is the list they left, not the clean one a completed flow earns.
+    if key in CHORD_NAVIGATES - {_REMOTE_CONTROL_KEY}:
+        # Every one of these navigates unconditionally -- `d` opens the detail, and `a`, `i` and
+        # `r` are not in `ACTION_LABELS` so `perform_row_action` always reaches `show_detail`.
+        # `m` is the exception and marks itself, because only the record says whether it moves.
         screen.mark_excursion()
     if key == _DETAIL_KEY:
         await screen.tui.show_detail(session_value)
         return
     if key == _REMOTE_CONTROL_KEY:
-        await perform_row_remote_control(session_value, screen=screen)
+        # **Not marked above.** `m` is the one chord that decides what it means *after* reading
+        # the record, and three of its paths return without navigating -- a store read that
+        # raised, the owner having left, and the ordinary refusal of a session that is not a
+        # running Claude. Marking before the read would leave the mark set on a key that went
+        # nowhere, and the next genuine flow return would consume it and wrongly keep a query
+        # the owner had finished with. So it marks on its own two navigating paths, and only
+        # when a *chord* asked: the bare row key reaches the same function from a position that
+        # never consumes the mark, and setting a one-shot flag nobody reads is a trap for the
+        # next cursor-owning screen to inherit `ProjectsScreen.on_reveal`.
+        await perform_row_remote_control(session_value, screen=screen, mark_excursion=True)
         return
     action = _KEY_ACTIONS.get(key)
     if action is None:

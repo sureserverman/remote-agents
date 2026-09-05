@@ -28,7 +28,7 @@ from tui_filter import settle_filter
 
 from remote_agents.adapters.tui.app import RemoteAgentsTui
 from remote_agents.adapters.tui.context import TuiContext
-from remote_agents.adapters.tui.panes import ProjectsPane, SessionsPane
+from remote_agents.adapters.tui.panes import FeedPane, LimitsPane, ProjectsPane, SessionsPane
 from remote_agents.adapters.tui.screens import ALL_SCREENS
 from remote_agents.adapters.tui.screens.sessions import (
     _SESSIONS_AUTO_REFRESH,
@@ -925,3 +925,63 @@ async def test_the_sessions_pane_does_not_repeat_the_letters_its_title_already_c
         drawn = str(app.screen.query_one("#hint", Static).content)
 
     assert "⌥" not in drawn, f"the sessions pane repeated its own letters as chords: {drawn!r}"
+
+
+@pytest.mark.parametrize(
+    ("surface", "advertises"),
+    [
+        (ProjectsPane, True),
+        (FeedPane, True),
+        (LimitsPane, False),
+        (SessionsPane, False),
+        (RemoteAgentsTui, False),
+    ],
+)
+async def test_which_surfaces_draw_the_chord_hint(
+    surface: type[RemoteAgentsTui], advertises: bool
+) -> None:
+    """Which positions *say* the layer exists, as one table — and it is not "every console pane".
+
+    Three exclusions, each for its own reason, and each previously untested:
+
+    * **the sessions pane** already advertises the same letters bare in its border title, so a
+      second row would describe two key sets where there is one;
+    * **the limits pane** hides `#hint` in its own CSS — the pane's whole design is two lines
+      with no status and no border, and a third row for a keymap is the same argument again.
+      It still *offers* the chords; it does not name them (Task 4.3's docs do);
+    * **`RemoteAgentsTui`** rests on `DashboardScreen`, which inherits the hint mixin by
+      subclassing `ProjectsPaneScreen` while being refused every chord. Drawing a lit
+      `⌥ a i r s c f m d` there would advertise eight keys the app answers `False` for, two of
+      them unconfirmed stops — the dead-end key in its worst form.
+
+    Wired as a console throughout, so a `False` row means the position declined rather than
+    that there was nothing to declare.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = surface(
+        replace(
+            _context(),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        # Driven rather than waited for. Sleeping through the poll costs twelve seconds per row
+        # and — on the dashboard — measures the wrong thing: its own `_draw_session_rows` rewrites
+        # the hint on the next tick, so a settled reading is identical whether or not the layer
+        # was ever drawn there. The transient is the defect, so the refresh is called directly.
+        refresh = getattr(app.screen, "refresh_chord_hint", None)
+        if refresh is not None:
+            await refresh()
+        await pilot.pause()
+        drawn = str(app.screen.query_one("#hint", Static).content)
+        declared = getattr(app.screen, "advertises_chords", lambda: False)()
+
+    assert (CHORD_HINT in drawn) is advertises, (
+        f"{surface.__name__} hint row is {drawn!r}, which does not match advertises={advertises}"
+    )
+    assert declared is advertises, (
+        f"{surface.__name__} declares advertises_chords()={declared}, not {advertises}"
+    )

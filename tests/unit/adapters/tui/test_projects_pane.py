@@ -39,7 +39,7 @@ from remote_agents.adapters.tui.screens.dashboard import (
     ProjectsPaneScreen,
 )
 from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT
-from remote_agents.adapters.tui.screens.sessions import CHORD_HINT
+from remote_agents.adapters.tui.screens.sessions import CHORD_HINT, CHORD_NAVIGATES
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -98,13 +98,14 @@ class _Launcher(SessionUseCaseDouble):
         return self.records
 
 
-def _record() -> SessionRecord:
+def _record(state: SessionState = SessionState.RUNNING) -> SessionRecord:
+    """One session record. `state` exists so a test can drive a key the policy refuses."""
     return SessionRecord(
         _SESSION,
         ProjectId("opaque-infra"),
         ProfileId("claude"),
         SessionDisplayIdentity("remote-agents", "claude", "regular", 1),
-        SessionState.RUNNING,
+        state,
         datetime.now(UTC),
     )
 
@@ -686,3 +687,101 @@ async def test_a_chord_excursion_returns_to_the_filter_the_owner_typed() -> None
         entry = app.screen.query_one("#filter", Input)
         assert entry.value == "opaque-shift", "the excursion discarded the filter the owner typed"
         assert entry.has_focus, "the excursion left the keyboard off the filter"
+
+
+async def test_a_chord_that_went_nowhere_does_not_make_the_next_flow_return_keep_its_query() -> (
+    None
+):
+    """The excursion mark is one-shot *and* must not be set by a key that navigated nowhere.
+
+    `alt+m` is the one chord that decides what it means after reading the record, and it
+    ordinarily refuses: Remote Control is only for a running Claude session. Marking the
+    position before that read leaves the mark set on a key that went nowhere — and then the
+    owner's *next* genuine flow return consumes it and keeps a query they had finished with,
+    silently unpinning `test_returning_to_the_project_list_clears_the_filter_and_rests_on_the_
+    rows` for that one return.
+
+    Both halves of the distinction are already tested; this is the third state — a chord that
+    neither navigated nor was refused by the gate — and it is the one that leaks across.
+    """
+    stopped = _record(SessionState.PRESERVED)
+    console = SelectionConsole(selected=stopped.session_id)
+    app = ProjectsPane(
+        _context(
+            sessions=_Launcher((stopped,)),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.click("#filter")
+        await pilot.press(*"opaque-shift")
+        await settle_filter(pilot)
+        assert app.screen.query_one("#filter", Input).value == "opaque-shift"
+
+        # Refused: not a running Claude, so no navigation happens.
+        await pilot.press("alt+m")
+        await pilot.pause()
+        assert position(app) == "PROJECTS", "alt+m navigated when it should have refused"
+
+        # Now a genuine flow: choose a project, then come back out of it. Escape first, which
+        # hands the keyboard from the filter back to the rows *keeping* the query -- that is
+        # `ProjectsScreen.key_escape`, and it is the state the owner is in when they choose.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen.query_one("#filter", Input).value == "opaque-shift"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert position(app) != "PROJECTS", "enter did not enter a flow"
+        await app.action_back()
+        await pilot.pause()
+
+        entry = app.screen.query_one("#filter", Input)
+        assert entry.value == "", (
+            "a refused chord left an excursion mark, and the flow return consumed it"
+        )
+
+
+@pytest.mark.parametrize("key", sorted(CHORD_NAVIGATES))
+async def test_every_navigating_chord_marks_the_position_it_leaves(key: str) -> None:
+    """The property, in place of four hand-placed calls and one test that happened to cover one.
+
+    `mark_excursion` is called from four sites — the detail branch, the row-action branch, and
+    both of `perform_row_remote_control`'s navigating paths. A review predicted that only one of
+    them was pinned; mutating the other three left the suite green, which is exactly right: a
+    test per call site is a list, and the thing that must be true is a *property* — every chord
+    that takes the owner off this position marks it, so the return draws the list they left.
+
+    Asserted on the flag rather than on the filter because the depth of the excursion differs by
+    key (`alt+r` lands two screens away, `alt+d` one), and what is being tested is the mark, not
+    the number of Escapes. The filter's survival end-to-end is
+    `test_a_chord_excursion_returns_to_the_filter_the_owner_typed`.
+    """
+    running = _record()
+    console = SelectionConsole(selected=running.session_id)
+    app = ProjectsPane(
+        _context(
+            sessions=_Launcher((running,)),
+            console_read_selection=console.read,
+            console_holds_slot=console.holds_console_slot,
+        )
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        pane = app.screen
+        assert not pane._left_by_excursion
+
+        await pilot.press(f"alt+{key}")
+        await pilot.pause()
+
+        left = app.screen is not pane
+        marked = pane._left_by_excursion
+
+    assert left, f"alt+{key} did not navigate, so it is not a navigating chord"
+    assert marked, (
+        f"alt+{key} took the owner off the projects pane without marking it, so the return "
+        "will discard the filter they typed"
+    )
