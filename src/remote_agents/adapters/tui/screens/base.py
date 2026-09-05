@@ -90,8 +90,8 @@ def restore_highlight_by_id(
 
     By key and never by index, because **rows are inserted and removed** and the index the
     owner was on therefore names a different thing after any reload. That is the whole of the
-    justification. An earlier version of this said "these lists are newest-first and grow at
-    the head", which is true of the feed and false of the sessions list — that one is
+    justification. An earlier version of this said "these lists put the newest row first and
+    grow at the head", which is true of the feed and false of the sessions list — that one is
     insertion-ordered and grows at the tail (`SessionStore.list`, `ORDER BY rowid`). A reason
     that holds for one caller and not the other is worse than none: it invites the next reader
     to conclude the helper does not apply to their list.

@@ -1154,7 +1154,7 @@ uv run --locked remote-agents
 4. With the agent in front, confirm the sessions pane lists it. Press `d` on its row and confirm
    the detail opens **in the sessions pane** — every stop, inspect, rename and Remote Control
    affordance is here, and the agent stays displayed. Escape back to the list and confirm the
-   status line names the row keys: `a i r s c f m`, plus `d` and `p`. On a running row, confirm
+   list's **border title** names the row keys: `a i r s c f m`, plus `d` and `p`. On a running row, confirm
    `c` is *absent* from the keys panel (Clean up is offered only from PRESERVED) while `s` is
    present — a key must not be offered where the policy would refuse the action.
 5. **The cursor drill, which is what makes `s` safe to have at all.** With two or more sessions
@@ -1182,6 +1182,40 @@ uv run --locked remote-agents
 11. Run `remote-agents doctor --json` and confirm `console.panes_splittable` is `true`. It read
     `console.window_linkable` until the console stopped linking windows; if you have scripts
     reading that field, they need the new name.
+12. **The Alt layer, driven from a pane that is not the sessions pane.** The row keys of step 4
+    are also chords on the whole console, with Alt held: `⌥a` Copy attach, `⌥i` Inspect output,
+    `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
+    Control, and `⌥d` the detail. Each acts on the session the **sessions pane** highlights, not
+    on anything under the cursor of the pane you press it in. With two or more sessions listed,
+    highlight one in the sessions pane, move to the projects pane with `Ctrl-b o`, press `/` and
+    type two letters of a project name. Confirm three things at once: the filter still holds
+    exactly what you typed — bare letters type here and do not act — the muted hint row beneath
+    it reads `⌥ a i r s c f m d` and is *not* dimmed, because a session is selected, and `⌥d`
+    opens the detail of the sessions pane's highlighted row. Escape, and confirm the filter
+    still holds your two letters. Repeat `⌥i` from the feed pane on the same session. The limits
+    pane offers the same chords and does not name them, because it draws no hint row at all; the
+    sessions pane does not name them either, since its own frame already lists the same letters
+    bare, and neither do the session detail and rename screens, which carry them silently.
+
+    **Three refusals are deliberate**, and each is a key that visibly does nothing. First, press
+    `r` on a sessions-pane row, which takes you to the rename box, and there press `⌥s`:
+    confirm no session is stopped. The three stops are refused wherever the text you are typing
+    is a commitment — the rename box and the new-project name step — while the navigating chords
+    still work and Escape returns to the text intact. Second, redo the cursor drill of step 5
+    and, with the cursor resting on nothing, press a chord from the projects pane: confirm it
+    reports `No session is selected.` and does nothing. A vanished row leaves no selection as
+    well as no cursor, on either sessions position. Third, only a pane the console is currently
+    showing may read that selection: a plain `remote-agents tui` started from a shell on this
+    server, and the projects surface after step 3's exchange parked it in the agent's own
+    window, are both told `Session chords act on the console's own panes.` The question is
+    asked at the moment the key is pressed, not once at start-up, which is why an exchange
+    changes the answer for a process that never restarted.
+13. **The prefix route, from inside a displayed agent.** Display an agent in the left pane again
+    as in step 3 and put the keyboard in it. Press `Ctrl-b` (or your own prefix) and then `M-d`.
+    Confirm the sessions pane opens the detail of its highlighted row and that the agent's own
+    pane received no keystroke — its output is unchanged. The eight chords are bound in tmux's
+    *prefix* table rather than as root keys, so they cost a displayed agent nothing and the
+    console's root-key budget is still the single `F12` of step 7.
 
 ## Terminal and service on one database
 
