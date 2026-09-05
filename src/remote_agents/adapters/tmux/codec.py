@@ -456,6 +456,13 @@ def console_binding_args(
         raise ValueError(
             "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
         )
+    if not isinstance(table, ConsoleKeyTable):
+        # The annotation is enforced by nobody — this repo runs ruff and pytest, no type
+        # checker — so a string here would otherwise reach `table.value` and raise
+        # `AttributeError` deep in the argv build. The test that used to pin a `ValueError`
+        # was deleted on the argument that a closed set leaves no third value to pass; this
+        # is what makes that argument true at runtime rather than only for a type checker.
+        raise ValueError(f"a console binding's table is a ConsoleKeyTable, not {table!r}")
     if action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
         if table is not ConsoleKeyTable.PREFIX:
             # The forwarding keys are affordable *because* they are prefix keys — eight of them

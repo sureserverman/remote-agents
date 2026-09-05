@@ -205,8 +205,8 @@ def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mar
 
     **The pane is resolved at press time, by tmux, from the slot mark.** A pane id captured at
     install would forward the key into whatever holds that number once the pane is rebuilt; the
-    mark travels with the pane and outlives it (DEC-038). Nothing of ours has to still be right
-    when the key is pressed.
+    mark travels with the pane and outlives it (DEC-038). No *pane id* of ours has to still be
+    right when the key is pressed — one *name* does, and the guard asserted below is why.
 
     The `##{...}` is not a typo and is the whole reason this is asserted at argv level:
     `run-shell` expands its string as a tmux **format** before `/bin/sh` sees it, so the doubling
@@ -239,12 +239,20 @@ def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mar
     # that same server, so without this clause the chord fired from any client on the socket --
     # an owner in a plain `remote-agents attach` sending an unconfirmed stop (DEC-018) to a row
     # they could not see. Reproduced on a real server before it was closed; DEC-073(3).
-    assert "##{client_session}" in script, (
-        f"the forwarding chord does not ask which client pressed it: {script}"
+    #
+    # **The whole clause, not its parts.** Two substring assertions were the first attempt and
+    # both survived an inverted guard: `!= "ra-console"` still contains `= "ra-console"`, and
+    # `|| true` in place of `|| exit 0` was asserted by nothing at all. Either mutant keeps CI
+    # green while the chord fires from *every* client except the console, or from all of them —
+    # which is the DEC-018 hole this fence exists for, reopened by a test that only checks the
+    # fence is mentioned.
+    guard = (
+        f'test "$(tmux display-message -p "##{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0;"
     )
-    assert f'= "{CONSOLE_SESSION_NAME}"' in script, (
-        "the guard does not compare the pressing client's session against the console's, so "
-        f"the chord fires from any client on this server: {script}"
+    assert guard in script, (
+        "the forwarding chord does not refuse a client attached to anything but the console, "
+        f"so it fires from any client on this server (DEC-073(3)): {script}"
     )
 
 

@@ -28,6 +28,7 @@ from remote_agents.domain.models import (
 )
 from remote_agents.ports.console import (
     ConsoleBindingAction,
+    ConsoleKeyTable,
     ConsolePaneSlot,
     HostedPane,
 )
@@ -142,7 +143,11 @@ class RecordingConsole:
         )
 
     async def install_console_binding(
-        self, key: str, action, command: tuple[str, ...] = (), table: str = "root"
+        self,
+        key: str,
+        action,
+        command: tuple[str, ...] = (),
+        table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
     ) -> None:
         # `table` is recorded, not ignored: the composer installing a forwarding chord into the
         # root table would take eight keys from every agent on this server against a budget of

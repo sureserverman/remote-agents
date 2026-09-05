@@ -38,7 +38,7 @@ from remote_agents.domain.models import (
     SessionRecord,
     SessionState,
 )
-from remote_agents.ports.console import ConsolePaneSlot, HostedPane
+from remote_agents.ports.console import ConsoleKeyTable, ConsolePaneSlot, HostedPane
 
 _A = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _B = SessionId.parse("11234567-89ab-cdef-0123-456789abcdef")
@@ -79,7 +79,9 @@ class RecordingConsole:
     async def create_console(self, command: tuple[str, ...], cwd: Path) -> None:
         raise AssertionError("an existing console must not be recreated")
 
-    async def install_console_binding(self, key: str, action, command=(), table="root") -> None:
+    async def install_console_binding(
+        self, key: str, action, command=(), table=ConsoleKeyTable.ROOT
+    ) -> None:
         return None
 
     async def mark_console_slot(self, pane_id: str, slot=None) -> None:

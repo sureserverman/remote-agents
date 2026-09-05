@@ -1212,9 +1212,12 @@ uv run --locked remote-agents
     window, are both told `Session chords act on the console's own panes.` The question is
     asked at the moment the key is pressed, not once at start-up, which is why an exchange
     changes the answer for a process that never restarted.
-13. **The chord layer is the console's, not the server's.** From a terminal outside the console,
-    attach straight to a running agent — `remote-agents attach <session>`, the command the
-    session detail hands you — and press your prefix then `M-d`. Nothing must happen: the
+13. **The chord layer is the console's, not the server's.** First press `F12` to bring the
+    projects surface home: while an agent is *displayed*, DEC-039's attach command names the
+    session showing that pane — `ra-console` — so attaching with it would put you on the console
+    and the chord would fire correctly, reading as a broken guard. With no agent displayed,
+    confirm the command the session detail hands you names `ra-<uuid>`, run it from a terminal
+    outside the console, and press your prefix then `M-d`. Nothing must happen: the
     sessions pane must not move and no detail must open. A tmux key table belongs to the
     *server* and every agent is attached to that server, so without the guard in the forwarding
     binding this key reaches the console's sessions pane — and with `M-s` it would stop a row

@@ -78,7 +78,7 @@ class ConsoleBindingAction(Enum):
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
 
-    **One member, and it used to be two.** A `FOCUS_NEXT_PANE` action bound a second root key
+    **Two members, and a third was removed.** A `FOCUS_NEXT_PANE` action bound a second root key
     to `select-pane -t :.+`, on the premise that a displayed agent consumes the prefix key
     along with everything else the owner types. That premise is false — tmux intercepts the
     prefix in the *client*, before any key reaches the pane, so `prefix + o` already cycles
