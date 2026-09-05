@@ -354,8 +354,30 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 )
 
 
+#: How a forwarding binding finds the sessions pane, in tmux's own language.
+#:
+#:
+#: **Resolved at press time, by the slot mark, by tmux itself.** A pane id captured when the
+#: binding was installed would forward the key into whatever holds that number after the pane is
+#: rebuilt; the mark travels with the pane and survives it (DEC-038). `list-panes -a` with a
+#: format filter is the whole lookup — no state of ours has to be right for the key to land.
+#:
+#: `$TMUX` is inherited by `run-shell`'s child, so the bare `tmux` here reaches the same server
+#: without the socket being spelled again. Measured on tmux 3.4 rather than read off the manual,
+#: together with the delivery itself: the emitted argv resolves the marked pane and the key
+#: arrives in it.
+def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
+    """The `sh -c` argv that forwards one key to the console's sessions pane."""
+    script = (
+        f'pane=$(tmux list-panes -a -F "#{{pane_id}}" '
+        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}"); '
+        f'test -n "$pane" && tmux send-keys -t "$pane" {key}'
+    )
+    return ("sh", "-c", script)
+
+
 def console_binding_args(
-    key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+    key: str, action: ConsoleBindingAction, command: tuple[str, ...] = (), table: str = "root"
 ) -> tuple[str, ...]:
     """Return the argv suffix that installs one console root binding, on our socket only.
 
@@ -396,13 +418,28 @@ def console_binding_args(
         raise ValueError(
             "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
         )
-    if action is not ConsoleBindingAction.SHOW_PROJECTS:  # pragma: no cover - one member
+    if table not in ("root", "prefix"):
+        raise ValueError(f"a console binding goes in the root or the prefix table, not {table!r}")
+    if action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
+        if table != "prefix":
+            # The forwarding keys are affordable *because* they are prefix keys — eight of them
+            # in the root table would take eight keys from every agent on this server, against a
+            # budget DEC-041 fixed at one. Refused here rather than left to a caller's care.
+            raise ValueError("a forwarding chord may only be bound in the prefix table")
+        if command:
+            raise ValueError("the forwarding binding builds its own command")
+        command = _forward_to_sessions_command(key)
+    elif action is ConsoleBindingAction.SHOW_PROJECTS:
+        if not command:
+            raise ValueError("the projects binding needs the command that returns the surface")
+    else:  # pragma: no cover - the enum has no third member
         raise ValueError(f"no argv is built for {action.value}")
-    if not command:
-        raise ValueError("the projects binding needs the command that returns the surface")
     # shlex.join for /bin/sh, then `#` -> `##` for tmux's own format pass, in that order:
-    # doubling first would let shlex quote the escape we just added.
-    return ("bind-key", "-n", key, "run-shell", shlex.join(command).replace("#", "##"))
+    # doubling first would let shlex quote the escape we just added. The doubling is also what
+    # carries the forwarding script's own `#{...}` formats through to the *inner* tmux: the outer
+    # pass turns `##{pane_id}` back into `#{pane_id}`, which is what the lookup needs to see.
+    placement = ("-n",) if table == "root" else ("-T", "prefix")
+    return ("bind-key", *placement, key, "run-shell", shlex.join(command).replace("#", "##"))
 
 
 def switch_client_argv(session_id: SessionId) -> tuple[str, ...]:

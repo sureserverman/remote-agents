@@ -142,9 +142,12 @@ class RecordingConsole:
         )
 
     async def install_console_binding(
-        self, key: str, action, command: tuple[str, ...] = ()
+        self, key: str, action, command: tuple[str, ...] = (), table: str = "root"
     ) -> None:
-        self.calls.append(("install_console_binding", key, action, command))
+        # `table` is recorded, not ignored: the composer installing a forwarding chord into the
+        # root table would take eight keys from every agent on this server against a budget of
+        # one, and the argv is otherwise identical, so nothing else here would notice.
+        self.calls.append(("install_console_binding", key, action, command, table))
         self._raise_if_armed()
 
     async def pane_arrangement(self) -> tuple[HostedPane, ...]:

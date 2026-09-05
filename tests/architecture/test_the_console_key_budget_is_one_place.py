@@ -89,3 +89,53 @@ def test_the_key_budget_is_declared_in_one_place() -> None:
         f"a key literal {sorted(installer_arguments)} is passed straight to the installer, "
         "bypassing CONSOLE_BINDINGS — which is where the budget is supposed to be decided."
     )
+
+
+def test_the_root_budget_is_still_one_key_and_the_prefix_layer_costs_none() -> None:
+    """The budget is about `bind-key -n`, and Stage 4 added eight keys without touching it.
+
+    **The distinction this asserts is the whole reason eight new keys were affordable.** A root
+    binding is a key every agent on this server can never receive; a prefix binding costs an
+    agent nothing, because tmux intercepts the prefix in the *client* before any key reaches a
+    pane — DEC-041's own finding, and the reason it could fix the root budget at one while
+    saying prefix-table bindings are free.
+
+    So the assertion is not "the console binds few keys". It is that the *root* set is still
+    exactly one, and that every forwarding chord went into the prefix table where it belongs.
+    A forwarding key that landed in the root table would take eight keys from every agent on
+    the server, silently, against a budget of one.
+    """
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
+    from remote_agents.ports.console import ConsoleBindingAction
+
+    assert len(CONSOLE_BINDINGS) == 1, (
+        f"the root key budget is one (DEC-041) and is now {len(CONSOLE_BINDINGS)}: "
+        f"{[binding.key for binding in CONSOLE_BINDINGS]}"
+    )
+    assert all(binding.table == "root" for binding in CONSOLE_BINDINGS)
+
+    prefix = console_prefix_bindings(CHORD_KEYS)
+    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS}, (
+        "the prefix layer is not the chord vocabulary, so a chord exists that cannot be "
+        "reached from inside a displayed agent"
+    )
+    assert all(binding.table == "prefix" for binding in prefix), (
+        "a forwarding chord is bound in the root table, which takes that key from every agent "
+        "on this server — the cost DEC-041 fixed at one key total"
+    )
+    assert all(binding.action is ConsoleBindingAction.FORWARD_TO_SESSIONS for binding in prefix)
+
+
+def test_every_binding_states_what_it_costs() -> None:
+    """`why` is required of both tables, and the reason differs between them.
+
+    A root key is paid for in the owner's *agents'* keyboards; a prefix key is paid for in the
+    owner's memory. Neither is free enough to take without an argument, and this is the field
+    the plan's gate reads when it asks whether a budget is worth its price.
+    """
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
+
+    for binding in (*CONSOLE_BINDINGS, *console_prefix_bindings(CHORD_KEYS)):
+        assert binding.why.strip(), f"{binding.key} is bound with no argument for its cost"

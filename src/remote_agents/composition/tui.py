@@ -22,7 +22,11 @@ from remote_agents.adapters.tmux.profiles import (
 )
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner, TmuxTerminal
 from remote_agents.adapters.tui import FRONTEND
-from remote_agents.application.console import RecoveryReport
+from remote_agents.application.console import (
+    CONSOLE_BINDINGS,
+    RecoveryReport,
+    console_prefix_bindings,
+)
 from remote_agents.composition.backend import (
     ProjectCatalogueProvider,
     compose_backend,
@@ -170,6 +174,13 @@ def _console_composer(gateway=None, home: Path | None = None):
     same file or the lock excludes nothing. One factory, one path, and a caller cannot forget
     it. Derived from the owner's home the way every other production path is.
     """
+    # **Imported here rather than at module scope**, and it is an invariant rather than a
+    # style: `remote_agents.bootstrap` imports this module, and `serve` must never load Textual
+    # — a failure in the terminal library must not be able to reach the bot
+    # (`test_the_composition_root_does_not_load_the_terminal_library`). This function only runs
+    # under console hosting, where Textual is loaded anyway. Same shape as `local_context`'s own
+    # deferred `hosting_mode` import, for the same reason.
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
     from remote_agents.application.console import ConsoleComposer
     from remote_agents.ports.console import ConsolePaneSlot
 
@@ -178,6 +189,12 @@ def _console_composer(gateway=None, home: Path | None = None):
         (sys.executable, "-m", "remote_agents", "tui"),
         home if home is not None else Path.home(),
         projects_command=_projects_command(),
+        # Root keys plus the prefix layer. **Joined here and nowhere else**, because the two
+        # halves live on opposite sides of a layer boundary: the argument for what a prefix
+        # binding is belongs to `application/console.py`, and the chord vocabulary is derived
+        # from the TUI's own row-key table. The composition root is the one place allowed to
+        # know both (the same split `attach_to`'s injected `switch_argv` makes).
+        bindings=CONSOLE_BINDINGS + console_prefix_bindings(CHORD_KEYS),
         arrangement_lock=ProductionPaths.for_home(
             home if home is not None else Path.home()
         ).console_lock_path,

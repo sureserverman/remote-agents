@@ -20,7 +20,9 @@ import pytest
 
 from remote_agents.adapters.tmux.codec import (
     CONSOLE_SESSION_NAME,
+    CONSOLE_SLOT_OPTION,
     SELECTED_SESSION_OPTION,
+    console_binding_args,
     console_layout_args,
     console_target,
     console_zoom_args,
@@ -32,6 +34,7 @@ from remote_agents.adapters.tmux.codec import (
     switch_client_argv,
 )
 from remote_agents.domain.models import SessionId
+from remote_agents.ports.console import ConsoleBindingAction
 
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _EXACT = "ra-01234567-89ab-cdef-0123-456789abcdef:"
@@ -192,3 +195,63 @@ def test_anything_that_is_not_a_session_decodes_to_no_selection(raw: str) -> Non
     safe answer for a value this process did not write.
     """
     assert decode_selection(raw) is None
+
+
+def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mark() -> None:
+    """The argv one forwarding chord installs, and the two escapes it depends on.
+
+    **`-T prefix`, never `-n`.** That is the difference between a key that costs every agent on
+    this server nothing and eight keys that cost them everything (DEC-041).
+
+    **The pane is resolved at press time, by tmux, from the slot mark.** A pane id captured at
+    install would forward the key into whatever holds that number once the pane is rebuilt; the
+    mark travels with the pane and outlives it (DEC-038). Nothing of ours has to still be right
+    when the key is pressed.
+
+    The `##{...}` is not a typo and is the whole reason this is asserted at argv level:
+    `run-shell` expands its string as a tmux **format** before `/bin/sh` sees it, so the doubling
+    is what carries the lookup's own `#{...}` through to the *inner* tmux. Measured on tmux 3.4
+    together with the delivery itself — the emitted argv resolves the marked pane and the key
+    arrives in it.
+    """
+    argv = console_binding_args("M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table="prefix")
+
+    assert argv[:4] == ("bind-key", "-T", "prefix", "M-s"), (
+        f"a forwarding chord must go in the prefix table, not the root one: {argv}"
+    )
+    assert argv[4] == "run-shell"
+    script = argv[5]
+    assert "-n" not in argv, "a forwarding chord in the root table would cost every agent a key"
+    assert "##{pane_id}" in script, "the inner tmux will not see a pane-id format to expand"
+    assert f"##{{{CONSOLE_SLOT_OPTION}}}" in script, "the lookup does not read the slot mark"
+    assert "sessions" in script, "the lookup does not name the sessions slot"
+    # The key the binding forwards must be the key it is bound to. Asserted on the `send-keys`
+    # clause rather than on the string's tail, which carries shlex's own closing quote.
+    assert 'send-keys -t "$pane" M-s' in script, f"the key forwarded is not the one bound: {script}"
+
+
+def test_a_forwarding_chord_is_refused_in_the_root_table() -> None:
+    """Refused where it is built, rather than left to a caller's care.
+
+    The eight chords are affordable *because* they are prefix keys. A caller that asked for one
+    in the root table would be spending eight keys from a budget of one — silently, since the
+    argv is otherwise identical and every test of the chord layer would still pass.
+    """
+    with pytest.raises(ValueError, match="prefix table"):
+        console_binding_args("M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table="root")
+
+    with pytest.raises(ValueError, match="root or the prefix"):
+        console_binding_args("F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",), table="global")
+
+
+def test_a_forwarding_chord_builds_its_own_command() -> None:
+    """It takes no command, because the one it needs is derived from the key it is bound to.
+
+    `SHOW_PROJECTS` runs *our program* and so must be handed it; this runs tmux against tmux and
+    can build itself. A caller passing one would be supplying a command that could disagree with
+    the key — which is exactly the drift the derivation exists to prevent.
+    """
+    with pytest.raises(ValueError, match="builds its own command"):
+        console_binding_args(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, ("true",), table="prefix"
+        )

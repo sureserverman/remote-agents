@@ -64,7 +64,7 @@ class RecordingConsole:
     async def create_console(self, command: tuple[str, ...], cwd: Path) -> None:
         self.calls.append(("create_console",))
 
-    async def install_console_binding(self, key: str) -> None:
+    async def install_console_binding(self, key: str, *_rest, **_kwargs) -> None:
         self.calls.append(("install_console_binding", key))
 
     async def pane_arrangement(self):

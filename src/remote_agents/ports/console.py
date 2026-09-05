@@ -63,6 +63,24 @@ class ConsoleBindingAction(Enum):
     that was just disproved.
     """
 
+    FORWARD_TO_SESSIONS = "forward_to_sessions"
+    """Resend this key to the console's sessions pane, wherever it currently is.
+
+    The prefix table's action, and the answer to the one place the Alt layer cannot reach: a
+    displayed agent owns the left pane's keyboard, so `alt+s` typed there goes to the agent.
+    `prefix` + the chord costs the agent nothing — DEC-041's own finding is that tmux
+    intercepts the prefix in the *client*, before any key reaches the pane — and lands on the
+    pane that already handles the bare row keys.
+
+    Resolved at press time by the pane's slot mark rather than by a pane id captured at install:
+    the sessions pane can be rebuilt while the binding stands, and a stale id would forward the
+    key into whatever now holds that number. tmux does the lookup itself, filtering
+    `list-panes -a` on that mark, so no state of ours has to be right at press time for the key
+    to land. The mark's own name is spelled once, in the codec that writes it — see
+    `test_the_mark_vocabulary_has_one_home.py`, which caught this docstring spelling it a second
+    time, which is exactly the drift it exists for.
+    """
+
     SHOW_PROJECTS = "show_projects"
     """Return the projects surface to the console's left slot, wherever an exchange left it.
 
@@ -159,7 +177,11 @@ class ConsolePort(Protocol):
     ) -> str: ...
 
     async def install_console_binding(
-        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+        self,
+        key: str,
+        action: ConsoleBindingAction,
+        command: tuple[str, ...] = (),
+        table: str = "root",
     ) -> None: ...
 
     async def console_zoomed_pane(self) -> str | None: ...

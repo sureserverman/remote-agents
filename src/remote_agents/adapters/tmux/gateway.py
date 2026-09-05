@@ -837,10 +837,16 @@ class TmuxGateway:
         await self._runner.run(*self._base_argv(), *display_message_args(text))
 
     async def install_console_binding(
-        self, key: str, action: ConsoleBindingAction, command: tuple[str, ...] = ()
+        self,
+        key: str,
+        action: ConsoleBindingAction,
+        command: tuple[str, ...] = (),
+        table: str = "root",
     ) -> None:
-        """Install one console root binding, on this socket only; the codec validates the key."""
-        await self._runner.run(*self._base_argv(), *console_binding_args(key, action, command))
+        """Install one console binding, on this socket only; the codec validates key and table."""
+        await self._runner.run(
+            *self._base_argv(), *console_binding_args(key, action, command, table)
+        )
 
     def _base_argv(self) -> tuple[str, str, str]:
         """Return the only valid tmux server selector for this adapter."""

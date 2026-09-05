@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from remote_agents.adapters.tmux.codec import console_binding_args
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
@@ -1147,6 +1148,88 @@ async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
 
         # And the pane swapped *in* — on the console, carrying no mark of ours — is refused too.
         assert await gateway.holds_console_slot(outsider) is False
+    finally:
+        try:
+            await _run("tmux", "-L", console_socket, "kill-server")
+        except RuntimeError:
+            pass
+
+
+async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_agent(
+    tmp_path: Path,
+) -> None:
+    """The one position the Alt layer cannot reach, and the route that reaches it.
+
+    Under DEC-040 an agent exchanged into the left pane owns that pane's keyboard, so `alt+s`
+    typed there goes to the agent. `prefix` + the same chord does not: tmux intercepts the
+    prefix **in the client**, before any key reaches a pane — DEC-041's own finding, and the
+    reason eight prefix keys are affordable beside a root budget of one.
+
+    **Driven end to end against a real tmux 3.4 server**, which is what this stage's other live
+    case could not do. BL-041 blocks driving a *pane surface's* keypress, because
+    `hosting_mode` classifies a surface inside a disposable console as FOREIGN. It does not
+    block this: the binding is tmux's own, the lookup is tmux's own, and the delivery is tmux's
+    own, so a throwaway server can answer the whole question. What is asserted is the two
+    halves that matter and that no unit test can reach — the key **arrives** at the pane
+    carrying the sessions slot mark, and the pane the owner was typing in **never sees it**.
+
+    The escaping is why this is worth a live test rather than an argv assertion. `run-shell`
+    expands its string as a tmux *format* before `/bin/sh` sees it, so the lookup's own
+    `#{...}` must survive that pass; the codec doubles them, and only a real server can say
+    whether the doubling was right.
+    """
+    _live_or_skip()
+
+    console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
+
+    async def pane_text(pane: str) -> str:
+        return await _run("tmux", "-L", console_socket, "capture-pane", "-p", "-t", pane)
+
+    try:
+        # A console window with two panes: the left one standing in for a displayed agent, the
+        # right one marked as the sessions pane. Both echo what is typed at them, so "did this
+        # key arrive" is a question the capture can answer.
+        listener = 'sh -c "while read line; do echo GOT:$line; done"'
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-console", listener)
+        await _run("tmux", "-L", console_socket, "split-window", "-t", "ra-console:", listener)
+        panes = (
+            await _run(
+                "tmux", "-L", console_socket, "list-panes", "-t", "ra-console:", "-F", "#{pane_id}"
+            )
+        ).split()
+        displayed_agent, sessions_pane = panes[0], panes[1]
+        await gateway.mark_console_slot(sessions_pane, ConsolePaneSlot.SESSIONS)
+
+        await gateway.install_console_binding(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), "prefix"
+        )
+        installed = await _run("tmux", "-L", console_socket, "list-keys", "-T", "prefix")
+        assert "M-s" in installed, "the forwarding chord was not installed in the prefix table"
+
+        # Fire what the prefix key fires. Driving a real client's prefix would need an attached
+        # terminal; what the binding *does* is this command, and that is the half tmux owns.
+        forwarded = console_binding_args(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), "prefix"
+        )
+        await _run("tmux", "-L", console_socket, *forwarded[forwarded.index("run-shell") :])
+        await asyncio.sleep(1.0)
+
+        # `^[s` is the pane's own echo of the two bytes `M-s` *is* — ESC then `s`. That is the
+        # sequence a Textual app parses back into `alt+s` (`_xterm_parser`), so seeing it here
+        # is seeing the chord arrive, not an approximation of it. Asserted on the echo rather
+        # than on the listener's `GOT:` line, because `read` waits for a newline the chord does
+        # not carry — the first version of this test expected one and read the arrival as an
+        # absence.
+        arrived = await pane_text(sessions_pane)
+        assert "^[s" in arrived, (
+            f"the chord did not reach the pane carrying the sessions slot mark: {arrived!r}"
+        )
+        left_alone = await pane_text(displayed_agent)
+        assert "^[s" not in left_alone, (
+            "the displayed agent received the forwarded key, which is the cost DEC-041 says a "
+            f"prefix binding does not have: {left_alone!r}"
+        )
     finally:
         try:
             await _run("tmux", "-L", console_socket, "kill-server")
