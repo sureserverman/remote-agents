@@ -231,6 +231,22 @@ def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mar
     # clause rather than on the string's tail, which carries shlex's own closing quote.
     assert 'send-keys -t "$pane" M-s' in script, f"the key forwarded is not the one bound: {script}"
 
+    # **The guard, pinned here because this is the suite CI actually runs.** `tests/live` is not
+    # in `ci.yml`'s list and is skipped locally without an opt-in flag, so before this assertion
+    # the whole protection could be deleted and every gating test stayed green.
+    #
+    # What it protects: a tmux key table belongs to the *server*, and managed agents attach on
+    # that same server, so without this clause the chord fired from any client on the socket --
+    # an owner in a plain `remote-agents attach` sending an unconfirmed stop (DEC-018) to a row
+    # they could not see. Reproduced on a real server before it was closed; DEC-073(3).
+    assert "##{client_session}" in script, (
+        f"the forwarding chord does not ask which client pressed it: {script}"
+    )
+    assert f'= "{CONSOLE_SESSION_NAME}"' in script, (
+        "the guard does not compare the pressing client's session against the console's, so "
+        f"the chord fires from any client on this server: {script}"
+    )
+
 
 def test_a_forwarding_chord_is_refused_in_the_root_table() -> None:
     """Refused where it is built, rather than left to a caller's care.

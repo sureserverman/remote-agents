@@ -1289,6 +1289,19 @@ async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_
         await asyncio.sleep(0.5)
         before = await pane_text(sessions_pane)
         await attach_host("ra-agent:")
+        # **The precondition, asserted rather than assumed.** `attach_host` returns as soon as
+        # the outer *host* session exists, which says nothing about whether the inner
+        # `attach-session -t ra-agent:` succeeded. If it did not, the chord below is pressed at
+        # a pane with no tmux client behind it, nothing happens, and this case passes green
+        # while proving nothing about the guard — the exact shape of vacuity this stage has
+        # already shipped twice.
+        clients = await _run(
+            "tmux", "-L", console_socket, "list-clients", "-F", "#{client_session}"
+        )
+        assert "ra-agent" in clients, (
+            f"no client attached to the agent session, so the refusal proves nothing: {clients!r}"
+        )
+
         await press_the_chord()
 
         # A settle rather than a poll: this asserts an *absence*, so the only honest wait is

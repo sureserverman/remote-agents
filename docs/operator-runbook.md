@@ -1170,7 +1170,7 @@ uv run --locked remote-agents
 7. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
    returns to its own window. This is the console's only root key.
 8. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
-   confirm it shows the same four panes rather than building a fourth.
+   confirm it shows the same four panes rather than building a fifth.
 9. **The dangerous one.** With an agent displayed, run
    `tmux -L remote-agents kill-session -t ra-console` and confirm the agent's process is gone
    and its session name is not — this is DEC-040's accepted cost, and it is why step 7 comes
@@ -1212,7 +1212,15 @@ uv run --locked remote-agents
     window, are both told `Session chords act on the console's own panes.` The question is
     asked at the moment the key is pressed, not once at start-up, which is why an exchange
     changes the answer for a process that never restarted.
-13. **The prefix route, from inside a displayed agent.** Display an agent in the left pane again
+13. **The chord layer is the console's, not the server's.** From a terminal outside the console,
+    attach straight to a running agent — `remote-agents attach <session>`, the command the
+    session detail hands you — and press your prefix then `M-d`. Nothing must happen: the
+    sessions pane must not move and no detail must open. A tmux key table belongs to the
+    *server* and every agent is attached to that server, so without the guard in the forwarding
+    binding this key reaches the console's sessions pane — and with `M-s` it would stop a row
+    you cannot see, unasked (DEC-018). Detach with your prefix then `d`.
+
+14. **The prefix route, from inside a displayed agent.** Display an agent in the left pane again
     as in step 3 and put the keyboard in it. Press `Ctrl-b` (or your own prefix) and then `M-d`.
     Confirm the sessions pane opens the detail of its highlighted row and that the agent's own
     pane received no keystroke — its output is unchanged. The eight chords are bound in tmux's

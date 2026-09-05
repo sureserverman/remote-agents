@@ -69,7 +69,11 @@ class ConsoleKeyTable(Enum):
 
 
 class ConsoleBindingAction(Enum):
-    """What one console root binding does — a closed set, not a description.
+    """What one console binding does — a closed set, not a description.
+
+    Root *and* prefix since the Alt layer: `SHOW_PROJECTS` is the root key DEC-041's budget is
+    spent on, and `FORWARD_TO_SESSIONS` is prefix-only and refused anywhere else. Which table a
+    binding goes in is `ConsoleKeyTable`, not this.
 
     A binding's action decides tmux argv, so it is chosen from here rather than passed as
     free text (DEC-001).
@@ -95,8 +99,15 @@ class ConsoleBindingAction(Enum):
     Resolved at press time by the pane's slot mark rather than by a pane id captured at install:
     the sessions pane can be rebuilt while the binding stands, and a stale id would forward the
     key into whatever now holds that number. tmux does the lookup itself, filtering
-    `list-panes -a` on that mark, so no state of ours has to be right at press time for the key
-    to land. The mark's own name is spelled once, in the codec that writes it — see
+    `list-panes -a` on that mark, so no *pane id* of ours has to be right when the key lands.
+
+    **One name does have to be right, and it is the price of failing closed.** A tmux key table
+    belongs to the server, and managed agents attach to that same server — so the binding also
+    asks the pressing client which session it is attached to, and does nothing unless that is
+    the console (DEC-073(3)). Renaming the console session therefore makes every chord on this
+    route inert rather than making it fire from the wrong place.
+
+    The mark's own name is spelled once, in the codec that writes it — see
     `test_the_mark_vocabulary_has_one_home.py`, which caught this docstring spelling it a second
     time, which is exactly the drift it exists for.
     """

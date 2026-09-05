@@ -358,8 +358,12 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 #:
 #: **Resolved at press time, by the slot mark, by tmux itself.** A pane id captured when the
 #: binding was installed would forward the key into whatever holds that number after the pane is
-#: rebuilt; the mark travels with the pane and survives it (DEC-038). `list-panes -a` with a
-#: format filter is the whole lookup — no state of ours has to be right for the key to land.
+#: rebuilt; the mark travels with the pane and survives it (DEC-038), so no *pane id* of ours
+#: has to still be right when the key is pressed.
+#:
+#: One name does: the guard compares the pressing client's session against
+#: `CONSOLE_SESSION_NAME`, so renaming `ra-console` makes every chord on this route inert. That
+#: is the deliberate trade for failing closed — see `_forward_to_sessions_command`.
 #:
 #: `$TMUX` is inherited by `run-shell`'s child, so the bare `tmux` here reaches the same server
 #: without the socket being spelled again. Measured on tmux 3.4 rather than read off the manual,
@@ -397,7 +401,10 @@ def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
 
 
 def console_binding_args(
-    key: str, action: ConsoleBindingAction, command: tuple[str, ...] = (), table: str = "root"
+    key: str,
+    action: ConsoleBindingAction,
+    command: tuple[str, ...] = (),
+    table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
 ) -> tuple[str, ...]:
     """Return the argv suffix that installs one console binding, root or prefix, on our socket.
 
