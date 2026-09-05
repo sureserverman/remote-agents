@@ -36,6 +36,7 @@ from remote_agents.adapters.tmux.codec import (
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
 from remote_agents.ports.console import (
     ConsoleBindingAction,
+    ConsoleKeyTable,
     ConsolePaneSlot,
     HostedPane,
 )
@@ -841,7 +842,7 @@ class TmuxGateway:
         key: str,
         action: ConsoleBindingAction,
         command: tuple[str, ...] = (),
-        table: str = "root",
+        table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
     ) -> None:
         """Install one console binding, on this socket only; the codec validates key and table."""
         await self._runner.run(

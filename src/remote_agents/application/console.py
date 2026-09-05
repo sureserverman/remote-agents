@@ -33,6 +33,7 @@ from remote_agents.application.console_lock import ConsoleArrangementLock, Conso
 from remote_agents.domain.models import SessionId, SessionRecord, SessionState
 from remote_agents.ports.console import (
     ConsoleBindingAction,
+    ConsoleKeyTable,
     ConsolePaneSlot,
     ConsolePort,
     HostedPane,
@@ -134,7 +135,14 @@ class ConsoleBinding:
     key: str
     action: ConsoleBindingAction
     why: str
-    table: str = "root"
+    """Why this key is worth what it costs, in the terms the cost is paid in.
+
+    Not documentation for its own sake. A root binding is a key **every agent on this server
+    can never receive**, in every session, for as long as it is bound — so a binding without
+    an argument is a key taken from the owner's agents by accident. This field is what the
+    plan's gate reads when it asks whether the budget is worth its price.
+    """
+    table: ConsoleKeyTable = ConsoleKeyTable.ROOT
     """Which tmux key table this goes in, and it decides what the key *costs*.
 
     `root` is `bind-key -n`: no prefix, so the key is one every agent on this server can never
@@ -147,16 +155,14 @@ class ConsoleBinding:
     is still required here: the cost is not zero, it is paid in the owner's memory rather than
     in their agents' keyboards.
     """
-    """Why this key is worth what it costs, in the terms the cost is paid in.
-
-    Not documentation for its own sake. A root binding is a key **every agent on this server
-    can never receive**, in every session, for as long as it is bound — so a binding without
-    an argument is a key taken from the owner's agents by accident. This field is what the
-    plan's gate reads when it asks whether the budget is worth its price.
-    """
 
 
-#: The console's whole key budget: **one** root-table key.
+#: The console's whole **root** key budget: one key.
+#:
+#: Not its whole key budget any more — the console also takes eight prefix keys
+#: (`console_prefix_bindings`), which cost a different currency and are argued for separately.
+#: The two are kept apart deliberately: this number is the one DEC-041 fixed, and it is the one
+#: a reader must not see grow.
 #:
 #: The size is the decision, and this set got smaller at the Stage 2 gate rather than larger.
 #: It held a second key, F11, for cycling pane focus, argued on the premise that "the
@@ -216,7 +222,7 @@ def console_prefix_bindings(keys: Sequence[str]) -> tuple[ConsoleBinding, ...]:
             "a keystroke — tmux takes the prefix in the client — and costs the owner only the "
             "prefix they already press to detach. Without it the layer has exactly one blind "
             "spot, and it is the position DEC-040 puts the owner in most often.",
-            table="prefix",
+            table=ConsoleKeyTable.PREFIX,
         )
         for key in keys
     )

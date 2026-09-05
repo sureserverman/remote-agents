@@ -1143,10 +1143,10 @@ at, because that is the claim being accepted.
 uv run --locked remote-agents
 ```
 
-1. Confirm one window, three panes: the projects surface on the left, the sessions list
-   top-right, the notifications feed under it. Confirm the left pane rests with the keyboard in
+1. Confirm one window, four panes: the projects surface on the left, and on the right the
+   sessions list, the agent limits under it, and the notifications feed under those. Confirm the left pane rests with the keyboard in
    the filter and the projects list beneath it.
-2. Press `Ctrl-b o` (or your own prefix + `o`) and confirm focus moves through all three panes
+2. Press `Ctrl-b o` (or your own prefix + `o`) and confirm focus moves through all four panes
    and back. The console takes no key for this — if it stops working, your prefix changed, not
    this project's bindings.
 3. Launch a session from the projects pane. Confirm the agent appears in the **left** pane and
@@ -1154,7 +1154,8 @@ uv run --locked remote-agents
 4. With the agent in front, confirm the sessions pane lists it. Press `d` on its row and confirm
    the detail opens **in the sessions pane** — every stop, inspect, rename and Remote Control
    affordance is here, and the agent stays displayed. Escape back to the list and confirm the
-   list's **border title** names the row keys: `a i r s c f m`, plus `d` and `p`. On a running row, confirm
+   list's **border title** names the row keys `a i r s c f m`, and its **hint row** beneath the
+   status names `d` and `p`. On a running row, confirm
    `c` is *absent* from the keys panel (Clean up is offered only from PRESERVED) while `s` is
    present — a key must not be offered where the policy would refuse the action.
 5. **The cursor drill, which is what makes `s` safe to have at all.** With two or more sessions
@@ -1169,7 +1170,7 @@ uv run --locked remote-agents
 7. Press `F12`. Confirm the projects surface comes back to the left pane and the agent's pane
    returns to its own window. This is the console's only root key.
 8. Attach a second terminal with `tmux -L remote-agents attach-session -t ra-console:` and
-   confirm it shows the same three panes rather than building a fourth.
+   confirm it shows the same four panes rather than building a fourth.
 9. **The dangerous one.** With an agent displayed, run
    `tmux -L remote-agents kill-session -t ra-console` and confirm the agent's process is gone
    and its session name is not — this is DEC-040's accepted cost, and it is why step 7 comes
@@ -1187,7 +1188,8 @@ uv run --locked remote-agents
     `⌥r` Rename, `⌥s` Stop and close, `⌥c` Clean up, `⌥f` Force stop, `⌥m` Claude Remote
     Control, and `⌥d` the detail. Each acts on the session the **sessions pane** highlights, not
     on anything under the cursor of the pane you press it in. With two or more sessions listed,
-    highlight one in the sessions pane, move to the projects pane with `Ctrl-b o`, press `/` and
+    highlight one in the sessions pane, move to the projects pane (`Ctrl-b ←`; `Ctrl-b o` steps one pane at a time and the console
+   has four), press `/` and
     type two letters of a project name. Confirm three things at once: the filter still holds
     exactly what you typed — bare letters type here and do not act — the muted hint row beneath
     it reads `⌥ a i r s c f m d` and is *not* dimmed, because a session is selected, and `⌥d`
@@ -1262,8 +1264,8 @@ The console — the `ra-console` tmux session the bare `remote-agents` command e
 presentation only: it writes no record, and every failure inside it costs you the display and
 nothing else.
 
-**The console is one window of three panes** — projects left, sessions top-right, feed under
-them — and it shows an agent by **exchanging** that agent's pane into the left slot. The
+**The console is one window of four panes** — projects left, and on the right sessions, limits,
+then feed — and it shows an agent by **exchanging** that agent's pane into the left slot. The
 projects surface goes to live in the agent's own window until it is swapped back (DEC-040),
 which is why the sessions list and the feed stay on screen while you work in an agent.
 

@@ -333,9 +333,9 @@ uv run --locked remote-agents
 ```
 
 With no arguments, `remote-agents` enters the **console**: a tmux session named
-`ra-console` on the project's own server, whose single window is **three panes** — the
-projects surface on the left at about 60% of the width, the running sessions top-right, and
-the notifications feed under them. Each pane is its own process (`remote-agents pane
+`ra-console` on the project's own server, whose single window is **four panes** — the projects
+surface on the left at about 60% of the width, and on the right the running sessions, the agent
+limits under them, and the notifications feed under those. Each pane is its own process (`remote-agents pane
 projects|sessions|feed`), because a terminal app owns a whole terminal and cannot span panes.
 Run from inside the console it says so instead of nesting; run from inside somebody else's
 tmux it prints the attach command instead.
@@ -374,7 +374,7 @@ agent can ever receive. It earns that because the route back is the one thing th
 require remembering configuration: an agent fills the pane you were working in, and that is
 exactly when a console looks stuck.
 
-Everything else uses tmux's own keys. **Moving between the three panes is `Ctrl-b o`** (or
+Everything else uses tmux's own keys. **Moving between the four panes is `Ctrl-b o`** (or
 the same `o` under whatever prefix this host's `~/.tmux.conf` sets) — the prefix reaches the
 client before any key reaches a pane, so it works even while an agent is displayed. An
 earlier design took a second root key for this; it was removed once that turned out to be
@@ -430,6 +430,11 @@ a key is broken:
   This is the ordinary state from the moment the row you were on leaves the list until you
   move the cursor onto another one — not a window that closes by itself — see *Keys on the
   sessions list* below.
+- **From a client that is not the console.** A tmux key table belongs to the *server*, and
+  managed agents are attached to that same server — so the prefix route above would otherwise
+  fire from a plain `remote-agents attach`, stopping a row you cannot see. It does not: the
+  binding asks which session your client is attached to and does nothing unless it is the
+  console. `Ctrl-b M-d` from an agent attach is deliberately inert.
 - **From a process that is not one of the console's own panes.** Only a pane the console is
   currently showing may read the selection, and that is asked at the moment you press the key
   rather than once at start-up. A plain `remote-agents tui` started from a shell on the

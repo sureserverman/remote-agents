@@ -34,7 +34,7 @@ from remote_agents.adapters.tmux.codec import (
     switch_client_argv,
 )
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.console import ConsoleBindingAction
+from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable
 
 _SESSION = SessionId.parse("01234567-89ab-cdef-0123-456789abcdef")
 _EXACT = "ra-01234567-89ab-cdef-0123-456789abcdef:"
@@ -214,7 +214,9 @@ def test_a_prefix_binding_forwards_the_key_to_the_pane_carrying_the_sessions_mar
     together with the delivery itself — the emitted argv resolves the marked pane and the key
     arrives in it.
     """
-    argv = console_binding_args("M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table="prefix")
+    argv = console_binding_args(
+        "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.PREFIX
+    )
 
     assert argv[:4] == ("bind-key", "-T", "prefix", "M-s"), (
         f"a forwarding chord must go in the prefix table, not the root one: {argv}"
@@ -238,10 +240,17 @@ def test_a_forwarding_chord_is_refused_in_the_root_table() -> None:
     argv is otherwise identical and every test of the chord layer would still pass.
     """
     with pytest.raises(ValueError, match="prefix table"):
-        console_binding_args("M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table="root")
+        console_binding_args(
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, table=ConsoleKeyTable.ROOT
+        )
 
-    with pytest.raises(ValueError, match="root or the prefix"):
-        console_binding_args("F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",), table="global")
+    # A *third* table needs no runtime check any more: `ConsoleKeyTable` is a closed set, so
+    # there is no third value to pass. That check existed while `table` was a bare string and
+    # went away with the string — the enum earning its place, not a weakening. The root binding
+    # still builds, unaffected by any of this.
+    assert console_binding_args(
+        "F12", ConsoleBindingAction.SHOW_PROJECTS, ("true",), table=ConsoleKeyTable.ROOT
+    )[:3] == ("bind-key", "-n", "F12")
 
 
 def test_a_forwarding_chord_builds_its_own_command() -> None:
@@ -253,5 +262,5 @@ def test_a_forwarding_chord_builds_its_own_command() -> None:
     """
     with pytest.raises(ValueError, match="builds its own command"):
         console_binding_args(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, ("true",), table="prefix"
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, ("true",), table=ConsoleKeyTable.PREFIX
         )

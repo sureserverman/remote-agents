@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from remote_agents.domain.models import ProfileId, ProjectId, SessionId
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable, ConsolePaneSlot
 
 _DELIMITER = "|"
 
@@ -356,7 +356,6 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 
 #: How a forwarding binding finds the sessions pane, in tmux's own language.
 #:
-#:
 #: **Resolved at press time, by the slot mark, by tmux itself.** A pane id captured when the
 #: binding was installed would forward the key into whatever holds that number after the pane is
 #: rebuilt; the mark travels with the pane and survives it (DEC-038). `list-panes -a` with a
@@ -367,10 +366,31 @@ _BINDABLE_KEY_CHARACTERS = frozenset(
 #: together with the delivery itself: the emitted argv resolves the marked pane and the key
 #: arrives in it.
 def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
-    """The `sh -c` argv that forwards one key to the console's sessions pane."""
+    """The `sh -c` argv that forwards one key to the console's sessions pane.
+
+    **The first clause is a guard, not a nicety, and it is what makes this binding obey
+    DEC-073(3).** A tmux key table belongs to the *server*, not to a session, and managed agents
+    are attached on this same socket (`attach_argv`) — so without it `prefix` + the chord fires
+    from **any** client on the server, including a plain `remote-agents attach ra-<uuid>` with no
+    console pane on screen at all. That was reproduced before this line existed: the chord
+    delivered an unconfirmed graceful stop (DEC-018) to the sessions pane's cursor, on a row the
+    owner could not see, from a terminal that is not part of the console.
+
+    The read-side gate cannot cover this route. That gate runs inside the *pressing* process,
+    and on the prefix route the presser is tmux. So the same question — is this one of the
+    console's own surfaces? — is asked here instead, of the client that pressed the key.
+
+    `key` is interpolated into a shell string, which is safe **only** because
+    `console_binding_args` validates it as `[C-|M-]?[A-Za-z0-9]+` *before* calling this. That
+    ordering is load-bearing: weakening or moving that check is a shell-injection change, not a
+    refactor.
+    """
     script = (
+        f'test "$(tmux display-message -p "#{{client_session}}")" = "{CONSOLE_SESSION_NAME}" '
+        f"|| exit 0; "
         f'pane=$(tmux list-panes -a -F "#{{pane_id}}" '
-        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}"); '
+        f'-f "#{{==:#{{{CONSOLE_SLOT_OPTION}}},{ConsolePaneSlot.SESSIONS.value}}}" '
+        f"| head -n 1); "
         f'test -n "$pane" && tmux send-keys -t "$pane" {key}'
     )
     return ("sh", "-c", script)
@@ -379,12 +399,15 @@ def _forward_to_sessions_command(key: str) -> tuple[str, ...]:
 def console_binding_args(
     key: str, action: ConsoleBindingAction, command: tuple[str, ...] = (), table: str = "root"
 ) -> tuple[str, ...]:
-    """Return the argv suffix that installs one console root binding, on our socket only.
+    """Return the argv suffix that installs one console binding, root or prefix, on our socket.
 
-    `-n` is the root table: no prefix, which is the whole reason these keys cost something —
-    a root binding is a key every agent on this server can never receive, for as long as it
-    is bound. That is why the key is validated here rather than trusted, and why the *set* of
-    them is declared in one place in the application layer rather than accumulated.
+    **The two tables cost different things.** `-n` is the root table: no prefix, so the key is
+    one every agent on this server can never receive, for as long as it is bound — which is why
+    the key is validated here rather than trusted, and why the *set* is declared in one place in
+    the application layer rather than accumulated. `-T prefix` costs an agent nothing, because
+    tmux takes the prefix in the client; it costs something else instead, which
+    `_forward_to_sessions_command` carries: a key table is the *server's*, so a prefix binding
+    fires from every client on it unless the script asks who pressed it.
 
     A `SHOW_PROJECTS` binding with nothing to run is refused rather than installed as a key
     that quietly does nothing — which is not hypothetical: the composer's projects command
@@ -404,10 +427,18 @@ def console_binding_args(
     closes the gap. The same probe confirms the escape: `##{pane_id}` came back as the literal
     `#{pane_id}`.
 
-    Today's only caller passes a fixed tuple built from `sys.executable`, so nothing
-    owner-controlled reaches this — which is why it is escaped now, while it is cheap, rather
-    than when a future binding is built from a project path or a profile name and reintroduces
-    the class silently.
+    **A value *is* interpolated now, and the paragraph this replaces said the opposite.**
+    `SHOW_PROJECTS` still takes a fixed tuple built from `sys.executable`, so nothing
+    owner-controlled reaches it. `FORWARD_TO_SESSIONS` builds its own command by interpolating
+    `key` into a shell string (`_forward_to_sessions_command`), which is the "future binding
+    built from a value" the old paragraph warned about — it arrived in the same change that
+    left the warning standing.
+
+    It is safe, and it is safe for one reason worth naming precisely: the alphanumeric
+    validation immediately below runs **before** the action branch, so by the time the script is
+    built `key` has been proved to be `[C-|M-]?[A-Za-z0-9]+` — no quote, no `$`, no backtick, no
+    space, no `#` can survive it. **Moving or weakening that check is a shell-injection change,
+    not a refactor.**
     """
     body = key
     for modifier in ("C-", "M-"):
@@ -418,10 +449,8 @@ def console_binding_args(
         raise ValueError(
             "console binding key must be alphanumeric, optionally behind one C- or M- modifier"
         )
-    if table not in ("root", "prefix"):
-        raise ValueError(f"a console binding goes in the root or the prefix table, not {table!r}")
     if action is ConsoleBindingAction.FORWARD_TO_SESSIONS:
-        if table != "prefix":
+        if table is not ConsoleKeyTable.PREFIX:
             # The forwarding keys are affordable *because* they are prefix keys — eight of them
             # in the root table would take eight keys from every agent on this server, against a
             # budget DEC-041 fixed at one. Refused here rather than left to a caller's care.
@@ -438,7 +467,7 @@ def console_binding_args(
     # doubling first would let shlex quote the escape we just added. The doubling is also what
     # carries the forwarding script's own `#{...}` formats through to the *inner* tmux: the outer
     # pass turns `##{pane_id}` back into `#{pane_id}`, which is what the lookup needs to see.
-    placement = ("-n",) if table == "root" else ("-T", "prefix")
+    placement = ("-n",) if table is ConsoleKeyTable.ROOT else ("-T", table.value)
     return ("bind-key", *placement, key, "run-shell", shlex.join(command).replace("#", "##"))
 
 

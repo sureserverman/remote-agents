@@ -48,6 +48,26 @@ class ConsolePaneSlot(Enum):
     FEED = "feed"
 
 
+class ConsoleKeyTable(Enum):
+    """Which tmux key table a console binding goes in — and it decides what the key costs.
+
+    An enum rather than the two strings, beside `ConsolePaneSlot` and `ConsoleBindingAction`
+    for the same reason they are enums: the value reaches tmux argv, so it is chosen from a
+    closed set rather than passed as text (DEC-001's typed ports). The failure it forecloses is
+    quiet — `"Prefix"` type-checks, passes every test that does not construct it, raises at
+    install time, and is then swallowed by `ConsoleComposer`'s "the console stands without it",
+    leaving a console that looks fine with a chord that does nothing but a log line.
+    """
+
+    ROOT = "root"
+    """`bind-key -n`: no prefix. A key every agent on this server can never receive, for as
+    long as it is bound — the budget DEC-041 fixes at one."""
+
+    PREFIX = "prefix"
+    """`bind-key -T prefix`: costs an agent nothing, because tmux intercepts the prefix in the
+    *client* before any key reaches a pane. Paid for in the owner's memory instead."""
+
+
 class ConsoleBindingAction(Enum):
     """What one console root binding does — a closed set, not a description.
 
@@ -181,7 +201,7 @@ class ConsolePort(Protocol):
         key: str,
         action: ConsoleBindingAction,
         command: tuple[str, ...] = (),
-        table: str = "root",
+        table: ConsoleKeyTable = ConsoleKeyTable.ROOT,
     ) -> None: ...
 
     async def console_zoomed_pane(self) -> str | None: ...

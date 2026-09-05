@@ -28,12 +28,15 @@ from pathlib import Path
 
 import pytest
 
-from remote_agents.adapters.tmux.codec import console_binding_args
 from remote_agents.adapters.tmux.gateway import TmuxGateway
 from remote_agents.adapters.tmux.runtime import AsyncTmuxRunner
 from remote_agents.application.console import CONSOLE_BINDINGS, ConsoleComposer
 from remote_agents.domain.models import SessionId
-from remote_agents.ports.console import ConsoleBindingAction, ConsolePaneSlot
+from remote_agents.ports.console import (
+    ConsoleBindingAction,
+    ConsoleKeyTable,
+    ConsolePaneSlot,
+)
 
 #: Strips the SGR escapes a `capture-pane -e` carries, so two captures compare as text.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -1158,80 +1161,147 @@ async def test_the_read_side_gate_answers_a_real_console_and_a_real_exchange(
 async def test_a_prefix_chord_reaches_the_sessions_pane_from_inside_a_displayed_agent(
     tmp_path: Path,
 ) -> None:
-    """The one position the Alt layer cannot reach, and the route that reaches it.
+    """The route out of a displayed agent, driven from a real attached client.
 
     Under DEC-040 an agent exchanged into the left pane owns that pane's keyboard, so `alt+s`
-    typed there goes to the agent. `prefix` + the same chord does not: tmux intercepts the
-    prefix **in the client**, before any key reaches a pane — DEC-041's own finding, and the
-    reason eight prefix keys are affordable beside a root budget of one.
+    typed there goes to the agent. `prefix` + the same chord does not, and **that interception
+    is the claim** — tmux takes the prefix in the *client*, before any key reaches a pane, which
+    is DEC-041's whole argument for a one-key root budget.
 
-    **Driven end to end against a real tmux 3.4 server**, which is what this stage's other live
-    case could not do. BL-041 blocks driving a *pane surface's* keypress, because
-    `hosting_mode` classifies a surface inside a disposable console as FOREIGN. It does not
-    block this: the binding is tmux's own, the lookup is tmux's own, and the delivery is tmux's
-    own, so a throwaway server can answer the whole question. What is asserted is the two
-    halves that matter and that no unit test can reach — the key **arrives** at the pane
-    carrying the sessions slot mark, and the pane the owner was typing in **never sees it**.
+    So this attaches a client, exactly as `test_the_console_comes_up_whole_and_its_keys_reach_
+    every_pane` does and for the reason this module's docstring gives: a headless `run-shell`
+    proves the *argv*, and only a client proves the *binding*. An earlier version of this test
+    fired the binding's payload directly and called itself end-to-end; it could not have caught
+    a prefix that failed to be intercepted, because it never pressed one.
 
-    The escaping is why this is worth a live test rather than an argv assertion. `run-shell`
-    expands its string as a tmux *format* before `/bin/sh` sees it, so the lookup's own
-    `#{...}` must survive that pass; the codec doubles them, and only a real server can say
-    whether the doubling was right.
+    Three assertions, and the second is the one that needed a client:
+
+    * the chord reaches the pane carrying the sessions slot mark — `^[s` is what `M-s` *is*,
+      ESC then `s`, the sequence Textual parses back into `alt+s`;
+    * the pane standing in for the displayed agent never receives it, though it is the focused
+      pane and every ordinary keystroke goes there;
+    * a client attached to an **agent** session on the same socket does not fire it at all.
+
+    That third one is DEC-073(3) on this route, and it is not hypothetical: a tmux key table
+    belongs to the server, managed agents attach on this same socket, and before the guard in
+    `_forward_to_sessions_command` this chord fired from any client on it — delivering an
+    unconfirmed stop (DEC-018) to a row the owner could not see. Reproduced, then closed.
     """
     _live_or_skip()
 
     console_socket = f"remote-agents-test-{SessionId.new().value.hex}"
+    host_socket = f"remote-agents-test-host-{SessionId.new().value.hex}"
     gateway = TmuxGateway(console_socket, AsyncTmuxRunner())
 
     async def pane_text(pane: str) -> str:
         return await _run("tmux", "-L", console_socket, "capture-pane", "-p", "-t", pane)
 
+    async def attach_host(target: str) -> None:
+        await _run(
+            "tmux",
+            "-L",
+            host_socket,
+            "new-session",
+            "-d",
+            "-s",
+            "host",
+            "-x",
+            "200",
+            "-y",
+            "50",
+            "tmux",
+            "-L",
+            console_socket,
+            "attach-session",
+            "-t",
+            target,
+        )
+        await asyncio.sleep(2.0)
+
+    async def press_the_chord() -> None:
+        await _type(host_socket, "C-b")
+        await _type(host_socket, "M-s")
+
+    async def wait_for_chord(pane: str, *, seconds: float = 6.0) -> str:
+        """Poll the pane until the chord lands, rather than sleeping a guessed interval.
+
+        The forward is three processes deep — tmux runs `sh`, which runs two more `tmux` — so
+        how long it takes is a property of the host's load, not of the code. A fixed wait was
+        measured failing roughly one run in eight while the same test passed six times in a
+        row afterwards; a poll turns that into "slower on a busy machine" instead of "red".
+        """
+        deadline = asyncio.get_running_loop().time() + seconds
+        text = ""
+        while asyncio.get_running_loop().time() < deadline:
+            text = await pane_text(pane)
+            if "^[s" in text:
+                return text
+            await asyncio.sleep(0.2)
+        return text
+
+    idle = 'sh -c "while :; do read line; done"'
     try:
-        # A console window with two panes: the left one standing in for a displayed agent, the
-        # right one marked as the sessions pane. Both echo what is typed at them, so "did this
-        # key arrive" is a question the capture can answer.
-        listener = 'sh -c "while read line; do echo GOT:$line; done"'
-        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-console", listener)
-        await _run("tmux", "-L", console_socket, "split-window", "-t", "ra-console:", listener)
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-console", idle)
+        await _run("tmux", "-L", console_socket, "split-window", "-t", "ra-console:", idle)
         panes = (
             await _run(
-                "tmux", "-L", console_socket, "list-panes", "-t", "ra-console:", "-F", "#{pane_id}"
+                "tmux",
+                "-L",
+                console_socket,
+                "list-panes",
+                "-t",
+                "ra-console:",
+                "-F",
+                "#{pane_id}",
             )
         ).split()
         displayed_agent, sessions_pane = panes[0], panes[1]
         await gateway.mark_console_slot(sessions_pane, ConsolePaneSlot.SESSIONS)
+        # An agent session on the same socket, which is where managed agents actually live.
+        await _run("tmux", "-L", console_socket, "new-session", "-d", "-s", "ra-agent", idle)
 
         await gateway.install_console_binding(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), "prefix"
+            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), ConsoleKeyTable.PREFIX
         )
-        installed = await _run("tmux", "-L", console_socket, "list-keys", "-T", "prefix")
-        assert "M-s" in installed, "the forwarding chord was not installed in the prefix table"
-
-        # Fire what the prefix key fires. Driving a real client's prefix would need an attached
-        # terminal; what the binding *does* is this command, and that is the half tmux owns.
-        forwarded = console_binding_args(
-            "M-s", ConsoleBindingAction.FORWARD_TO_SESSIONS, (), "prefix"
+        assert "M-s" in await _run("tmux", "-L", console_socket, "list-keys", "-T", "prefix"), (
+            "the forwarding chord was not installed in the prefix table"
         )
-        await _run("tmux", "-L", console_socket, *forwarded[forwarded.index("run-shell") :])
-        await asyncio.sleep(1.0)
 
-        # `^[s` is the pane's own echo of the two bytes `M-s` *is* — ESC then `s`. That is the
-        # sequence a Textual app parses back into `alt+s` (`_xterm_parser`), so seeing it here
-        # is seeing the chord arrive, not an approximation of it. Asserted on the echo rather
-        # than on the listener's `GOT:` line, because `read` waits for a newline the chord does
-        # not carry — the first version of this test expected one and read the arrival as an
-        # absence.
-        arrived = await pane_text(sessions_pane)
+        # The keyboard rests on the left pane — the one standing in for a displayed agent.
+        await _run("tmux", "-L", console_socket, "select-pane", "-t", displayed_agent)
+        await attach_host("ra-console:")
+        await press_the_chord()
+
+        arrived = await wait_for_chord(sessions_pane)
         assert "^[s" in arrived, (
             f"the chord did not reach the pane carrying the sessions slot mark: {arrived!r}"
         )
         left_alone = await pane_text(displayed_agent)
         assert "^[s" not in left_alone, (
-            "the displayed agent received the forwarded key, which is the cost DEC-041 says a "
-            f"prefix binding does not have: {left_alone!r}"
+            "the focused pane received the forwarded key, so tmux did not intercept the "
+            f"prefix — which is the cost DEC-041 says a prefix binding does not have: "
+            f"{left_alone!r}"
+        )
+
+        # Now the same key from a client attached to an *agent*, which must do nothing.
+        await _run("tmux", "-L", host_socket, "kill-server")
+        await _run("tmux", "-L", console_socket, "send-keys", "-t", sessions_pane, "C-l")
+        await asyncio.sleep(0.5)
+        before = await pane_text(sessions_pane)
+        await attach_host("ra-agent:")
+        await press_the_chord()
+
+        # A settle rather than a poll: this asserts an *absence*, so the only honest wait is
+        # one at least as long as the arrival above was given to happen in.
+        await asyncio.sleep(6.0)
+        assert await pane_text(sessions_pane) == before, (
+            "a chord pressed from a plain agent attach reached the console's sessions pane; "
+            "a tmux key table is server-wide and DEC-073(3) says only the console's own "
+            "surfaces may act on the selection"
         )
     finally:
-        try:
-            await _run("tmux", "-L", console_socket, "kill-server")
-        except RuntimeError:
-            pass
+        for socket in (host_socket, console_socket):
+            try:
+                await _run("tmux", "-L", socket, "kill-server")
+            except RuntimeError:
+                pass

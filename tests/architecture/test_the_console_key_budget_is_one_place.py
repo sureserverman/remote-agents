@@ -107,20 +107,20 @@ def test_the_root_budget_is_still_one_key_and_the_prefix_layer_costs_none() -> N
     """
     from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
     from remote_agents.application.console import CONSOLE_BINDINGS, console_prefix_bindings
-    from remote_agents.ports.console import ConsoleBindingAction
+    from remote_agents.ports.console import ConsoleBindingAction, ConsoleKeyTable
 
     assert len(CONSOLE_BINDINGS) == 1, (
         f"the root key budget is one (DEC-041) and is now {len(CONSOLE_BINDINGS)}: "
         f"{[binding.key for binding in CONSOLE_BINDINGS]}"
     )
-    assert all(binding.table == "root" for binding in CONSOLE_BINDINGS)
+    assert all(binding.table is ConsoleKeyTable.ROOT for binding in CONSOLE_BINDINGS)
 
     prefix = console_prefix_bindings(CHORD_KEYS)
     assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS}, (
         "the prefix layer is not the chord vocabulary, so a chord exists that cannot be "
         "reached from inside a displayed agent"
     )
-    assert all(binding.table == "prefix" for binding in prefix), (
+    assert all(binding.table is ConsoleKeyTable.PREFIX for binding in prefix), (
         "a forwarding chord is bound in the root table, which takes that key from every agent "
         "on this server — the cost DEC-041 fixed at one key total"
     )
@@ -139,3 +139,37 @@ def test_every_binding_states_what_it_costs() -> None:
 
     for binding in (*CONSOLE_BINDINGS, *console_prefix_bindings(CHORD_KEYS)):
         assert binding.why.strip(), f"{binding.key} is bound with no argument for its cost"
+
+
+def test_the_composed_console_installs_the_prefix_layer_and_no_second_root_key() -> None:
+    """What the *production* composer is actually handed, which nothing else asserts.
+
+    The two tuples are pinned in isolation above, and `ConsoleComposer`'s default is
+    `CONSOLE_BINDINGS` alone — so every other test in this suite builds a composer that never
+    sees the prefix layer. Delete the `bindings=` argument at the composition root and each of
+    them stays green while the Stage 4 goal is silently unmet in production: the chords would
+    work everywhere except the one position they were added for.
+
+    It closes the other half too. DEC-041 names `len(CONSOLE_BINDINGS) == 1` as the guard that
+    stops the root budget growing quietly, and the composition root is now a route around it —
+    a `ConsoleBinding(..., ROOT)` appended there carries no key literal for the declaration
+    check to find and does not lengthen the tuple the budget check measures. So the assertion
+    is on the *composed* set: exactly one root key, and one prefix key per chord.
+    """
+    from remote_agents.adapters.tui.screens.sessions import CHORD_KEYS
+    from remote_agents.composition.tui import _console_composer
+    from remote_agents.ports.console import ConsoleKeyTable
+
+    composed = _console_composer()._bindings
+    root = [binding for binding in composed if binding.table is ConsoleKeyTable.ROOT]
+    prefix = [binding for binding in composed if binding.table is ConsoleKeyTable.PREFIX]
+
+    assert len(root) == 1, (
+        f"the composed console takes {len(root)} root keys, and the budget is one (DEC-041): "
+        f"{[binding.key for binding in root]}"
+    )
+    assert {binding.key for binding in prefix} == {f"M-{key}" for key in CHORD_KEYS}, (
+        "the production console does not install the prefix layer, so the Alt chords do not "
+        "reach the one position they were added for — inside a displayed agent"
+    )
+    assert len(composed) == len(root) + len(prefix), "a binding is in neither key table"
