@@ -209,7 +209,13 @@ class ProjectsScreen(ChoiceScreen):
         this to say nothing -- its status carries the sessions' counts.
         """
         order = _ORDER_SENTENCE[self.tui.project_order]
-        self.set_status(f"Choose a project — {count} available, {order}", hint=PROJECTS_HINT)
+        self.set_status(
+            f"Choose a project — {count} available, {order}",
+            # Through the seam rather than the constant: on the console's projects pane this
+            # line also carries the Alt layer, and `_describe_projects` runs on every redraw --
+            # so a pane that appended the chords once would lose them at the next render.
+            hint=self.hint_content(PROJECTS_HINT),
+        )
 
     def action_focus_filter(self) -> None:
         """`/`: hand the keyboard to the filter. Enter, down or escape hand it back."""

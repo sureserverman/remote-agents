@@ -427,15 +427,21 @@ async def test_selected_session_elsewhere_answers_from_the_published_selection()
         await pilot.pause()
         assert not getattr(app.screen, "owns_session_cursor", False)
 
+        # **Deltas, not totals.** Since Task 3.3 the pane also polls the selection on its own
+        # timer to keep the hint row's dim/lit state current, so an absolute count here would
+        # measure that poll as well and would drift with its cadence. What these assertions are
+        # about is what *this resolver* did, which is the delta across the call.
+        before = console.reads
         assert await app.selected_session() == str(chosen)
-        assert console.reads == 1
+        assert console.reads - before == 1
 
         # Never cached: the owner can move the cursor in the other pane between two presses,
         # and the second press must act on where it is now.
         moved = SessionId.new()
         console.selected = moved
+        before = console.reads
         assert await app.selected_session() == str(moved)
-        assert console.reads == 2, "the second press reused a cached selection"
+        assert console.reads - before == 1, "the second press reused a cached selection"
 
 
 async def test_selected_session_is_nothing_off_a_console() -> None:
@@ -509,12 +515,15 @@ async def test_an_alt_chord_acts_on_the_published_selection_and_leaves_the_filte
         entry = app.screen.query_one("#filter", Input)
         assert entry.has_focus and entry.value == "ab", "the filter never took the typed text"
 
+        reads, slot_reads = console.reads, console.slot_reads
         await pilot.press("alt+i")
         await pilot.pause()
 
         assert opened == [(str(chosen), "inspect")]
         assert entry.value == "ab", "the chord's letter was typed into the filter as well"
-        assert console.reads == 1 and console.slot_reads == 1
+        # Deltas: the hint row's own poll reads the same double (see the note in
+        # `test_selected_session_elsewhere_answers_from_the_published_selection`).
+        assert console.reads - reads == 1 and console.slot_reads - slot_reads == 1
 
 
 async def test_an_alt_chord_really_navigates_and_does_not_only_resolve() -> None:
@@ -616,11 +625,12 @@ async def test_an_alt_chord_with_nothing_selected_says_so_and_navigates_nowhere(
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
 
+        before = console.reads
         await pilot.press("alt+d")
         await pilot.pause()
 
         assert not isinstance(app.screen, SessionDetailScreen)
-        assert console.reads == 1
+        assert console.reads - before == 1
         # The other half of the pair: this owner *is* in a console pane, and the cursor really
         # is resting on nothing. Swap these two strings and both tests must fail.
         assert announcements(app, severity="warning") == ["No session is selected."]
@@ -647,9 +657,10 @@ async def test_a_screen_that_knows_its_own_session_answers_from_it() -> None:
         await pilot.pause()
         await app.push_screen(SessionDetailScreen(subject))
         await pilot.pause()
+        before = console.reads
 
         assert await app.selected_session() == subject
-        assert console.reads == 0, "a screen that knows its session asked the console anyway"
+        assert console.reads == before, "a screen that knows its session asked the console anyway"
 
 
 async def test_a_screen_that_is_about_a_session_it_cannot_name_refuses_the_chord() -> None:
@@ -673,9 +684,10 @@ async def test_a_screen_that_is_about_a_session_it_cannot_name_refuses_the_chord
         await pilot.pause()
         await app.push_screen(InspectScreen("captured output"))
         await pilot.pause()
+        before = console.reads
 
         assert await app.selected_session() is None
-        assert console.reads == 0
+        assert console.reads == before
 
 
 async def test_an_alt_chord_is_refused_while_a_modal_is_asking() -> None:
@@ -778,12 +790,13 @@ async def test_a_chord_behind_a_modal_does_not_fire_when_the_key_is_really_press
         await pilot.pause()
         app.push_screen(ForceConfirmModal("Force stop this session?"))
         await pilot.pause()
+        before = console.reads
 
         await pilot.press("alt+d")
         await pilot.pause()
 
         assert isinstance(app.screen, ForceConfirmModal), "a chord navigated out from under a modal"
-        assert console.reads == 0, "a chord behind a modal read the console's selection"
+        assert console.reads == before, "a chord behind a modal read the console's selection"
 
 
 async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_published_one() -> None:
@@ -808,6 +821,7 @@ async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_publish
         await pilot.pause()
         await app.push_screen(SessionDetailScreen(subject))
         await pilot.pause()
+        before = console.reads
 
         await pilot.press("alt+d")
         await pilot.pause()
@@ -815,7 +829,7 @@ async def test_a_chord_on_a_detail_acts_on_that_detail_s_session_not_the_publish
         assert isinstance(app.screen, SessionDetailScreen)
         assert app.screen.session_value == subject
         assert app.screen.session_value != str(published)
-        assert console.reads == 0
+        assert console.reads == before
 
 
 async def test_an_alt_stop_issues_one_graceful_stop_against_the_published_id() -> None:

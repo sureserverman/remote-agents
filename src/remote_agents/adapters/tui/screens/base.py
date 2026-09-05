@@ -856,21 +856,37 @@ class ChoiceScreen(Screen[None]):
         if hint is not None:
             self.set_hint(hint)
 
-    def set_hint(self, text: str) -> None:
+    def set_hint(self, text: str | Content) -> None:
         """Put the keymap -- or nothing -- on the muted row beneath the status.
 
         One line, like the status, and for the same reason: the row is fixed-height so the list
         beneath never moves. An empty hint hides the row rather than leaving a blank one, so a
         screen with nothing to hint gives the rows the line back.
+
+        `Content` as well as `str`, because a hint can now carry **two** emphases on one line:
+        the pane's own keys, and the console-wide Alt layer greyed further when there is no
+        selection for it to act on. The region is composed `markup=False`, so a marked-up
+        *string* would be drawn literally -- a `Content` object carries its spans instead of
+        asking this row to start parsing text it is given.
         """
         if not self.showing:
             return
-        if "\n" in text:
+        if isinstance(text, str) and "\n" in text:
             _LOG.warning("a multi-line hint was truncated to its first line: %r", text)
             text = text.split("\n", 1)[0]
         region = self.query_one("#hint", Static)
         region.set_class(not text, "-empty")
         region.update(text)
+
+    def hint_content(self, base: str) -> str | Content:
+        """What this position's hint row actually says, given the keys it wants to advertise.
+
+        A seam, and the base answer is "exactly what you asked for". It exists so a console pane
+        can add the Alt layer to its own keys without every call site knowing about chords, and
+        without this module -- which `screens/sessions.py` imports -- having to know the chord
+        vocabulary that lives there. The pane mixin overrides it; nothing else does.
+        """
+        return base
 
     async def refuse(
         self, message: str | None = None, *, severity: SeverityLevel = "warning"

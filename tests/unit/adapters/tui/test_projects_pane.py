@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from backends import SessionUseCaseDouble, tui_context_for
+from console_selection import SelectionConsole
 from textual.widgets import Input, OptionList, Static
 from tui_filter import settle_filter
 from tui_positions import position
@@ -37,6 +38,8 @@ from remote_agents.adapters.tui.screens.dashboard import (
     ProjectChooserScreen,
     ProjectsPaneScreen,
 )
+from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT
+from remote_agents.adapters.tui.screens.sessions import CHORD_HINT
 from remote_agents.application.profiles import ProfileAvailability
 from remote_agents.application.project_admin import CreatedProject, CreateProjectCommand
 from remote_agents.application.project_catalog import CatalogProject
@@ -590,3 +593,48 @@ async def test_a_host_that_wired_no_preferences_path_still_switches(tmp_path: Pa
 
         assert app.project_order == ALPHABETICAL
         assert list(tmp_path.iterdir()) == []
+
+
+async def test_the_hint_row_carries_this_pane_s_own_keys_and_the_console_wide_layer() -> None:
+    """One line, two key sets, and the pane's own keys come first.
+
+    The order is the argument: `enter choose · / filter · o order` are what this pane does to
+    the thing the owner is looking at, and the Alt layer acts on a session in another pane. A
+    hint that led with the chords would describe the neighbour before the position.
+
+    Asserted on the same row rather than on two, because `#hint` is fixed-height by contract —
+    the row is one line precisely so the list beneath it never moves.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = ProjectsPane(
+        _context(console_read_selection=console.read, console_holds_slot=console.holds_console_slot)
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        drawn = str(app.screen.query_one("#hint", Static).content)
+
+    assert drawn.startswith(PROJECTS_HINT), f"the pane's own keys are not first: {drawn!r}"
+    assert CHORD_HINT in drawn, f"the Alt layer is missing from the hint row: {drawn!r}"
+
+
+async def test_the_hint_row_keeps_the_layer_across_a_redraw() -> None:
+    """`_describe_projects` runs on every render, so the chords have to survive one.
+
+    This is the failure the `hint_content` seam exists for: appending the layer once, at mount,
+    would lose it the first time the owner typed into the filter — the pane redraws, the status
+    is rewritten from the catalogue, and the hint goes back to the pane's own keys alone.
+    """
+    console = SelectionConsole(selected=SessionId.new())
+    app = ProjectsPane(
+        _context(console_read_selection=console.read, console_holds_slot=console.holds_console_slot)
+    )
+
+    async with app.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        await pilot.click("#filter")
+        await pilot.press(*"opaque-shift")
+        await settle_filter(pilot)
+        drawn = str(app.screen.query_one("#hint", Static).content)
+
+    assert CHORD_HINT in drawn, f"a redraw dropped the Alt layer from the hint row: {drawn!r}"

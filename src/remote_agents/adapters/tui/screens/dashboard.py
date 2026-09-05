@@ -57,9 +57,9 @@ from remote_agents.adapters.tui.screens.feed import (
     NO_NOTIFICATIONS,
     FeedRegion,
 )
-from remote_agents.adapters.tui.screens.launch import ProfilesScreen, ProjectsScreen
+from remote_agents.adapters.tui.screens.launch import PROJECTS_HINT, ProfilesScreen, ProjectsScreen
 from remote_agents.adapters.tui.screens.resume import advance_to_resume_profiles
-from remote_agents.adapters.tui.screens.sessions import sessions_title
+from remote_agents.adapters.tui.screens.sessions import ChordHintRow, sessions_title
 from remote_agents.application.host_remote_control import (
     HOST_REMOTE_CONTROL_TITLE,
     host_remote_control_directions,
@@ -403,7 +403,7 @@ class LimitsRegion:
         pane.add_option(Option(line, id=_HOST_REMOTE_CONTROL_ROW, disabled=True))
 
 
-class ProjectsPaneScreen(ProjectsScreen):
+class ProjectsPaneScreen(ChordHintRow, ProjectsScreen):
     """The projects position with the chooser in front of the wizard — the console's left pane.
 
     The projects picker on its own sends a chosen project straight into the agent list. This
@@ -417,6 +417,9 @@ class ProjectsPaneScreen(ProjectsScreen):
     copies would only have to disagree once.
     """
 
+    #: This pane's own keys, which `hint_content` appends the Alt layer to on a console.
+    chord_hint_base = PROJECTS_HINT
+
     def __init__(self) -> None:
         super().__init__()
         #: What the console's start-only repair could not put right, held so it can be
@@ -426,6 +429,7 @@ class ProjectsPaneScreen(ProjectsScreen):
     async def populate(self) -> None:
         await super().populate()
         self._report_console_recovery()
+        self.start_chord_hint()
 
     def render_projects(self, query: str = "", *, keep_focus: bool = False) -> None:
         super().render_projects(query, keep_focus=keep_focus)
@@ -491,7 +495,7 @@ class ProjectsPaneScreen(ProjectsScreen):
         await self.advance_to(ProjectChooserScreen(project))
 
 
-class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
+class LimitsPaneScreen(ChordHintRow, LimitsRegion, ChoiceScreen):
     """The console's right-middle pane: the account's rate-limit windows and nothing else.
 
     **This is the surface the owner's second ask actually named.** "Put them in the TUI too, on
@@ -608,6 +612,10 @@ class LimitsPaneScreen(LimitsRegion, ChoiceScreen):
         await self._reload_limits()
         if self._timer is None:
             self._timer = self.set_interval(self._LIMITS_AUTO_REFRESH, self._auto_reload)
+        # This pane has no keys of its own -- every limit here is a read -- so its hint row is
+        # the Alt layer alone, and it exists only on a console. `chord_hint_base` stays empty.
+        self.set_hint(self.hint_content(self.chord_hint_base))
+        self.start_chord_hint()
 
     async def on_reveal(self) -> None:
         await self._reload_limits()

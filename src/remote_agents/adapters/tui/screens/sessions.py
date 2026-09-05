@@ -329,6 +329,106 @@ CHORD_KEYS: tuple[str, ...] = (
     _DETAIL_KEY,
 )
 
+#: The Alt layer as a pane advertises it, built from the chord table so the row of letters the
+#: owner reads is the row of letters that works.
+#:
+#: `⌥` rather than `alt`: it is the key's own glyph, it costs one column instead of three on a
+#: hint row that is already sharing a line with the pane's own keys, and it is what the owner's
+#: keyboard is labelled. The letters are spaced exactly as the sessions pane's title spaces them
+#: (`ROW_KEY_LETTERS`), so the two readings of the same set look like the same set.
+CHORD_HINT = "⌥ " + " ".join(CHORD_KEYS)
+
+
+def chord_hint_content(base: str, *, live: bool) -> Content:
+    """The hint row for a console pane: its own keys, then the Alt layer, dim when it is inert.
+
+    **Two emphases on one line, which is why this returns `Content` rather than a string.** The
+    row is `$text-muted` already; the chords go one step further to `$text-disabled` when the
+    sessions pane's cursor rests on nothing, because in that state every one of these keys warns
+    and does nothing (DEC-027). A key that is drawn identically whether or not it will work is
+    the "dead-end key" complaint this stage keeps refusing elsewhere -- offering it and greying
+    it is the honest middle, since what is missing is a *selection* rather than the capability.
+    """
+    keys = (CHORD_HINT, None if live else "$text-disabled")
+    if not base:
+        return Content.assemble(keys)
+    return Content.assemble((base, None), (" · ", None), keys)
+
+
+class ChordHintRow:
+    """The hint row's account of the Alt layer, for a pane whose own keys are not the row keys.
+
+    Mixed into the three console panes that carry a cursor over something other than sessions --
+    projects, limits and feed. The sessions pane is deliberately not one of them: its title
+    already advertises the same letters bare (`sessions_title`), and saying them twice on one
+    small pane, once with a modifier and once without, would describe two key sets where there
+    is one.
+
+    **The live/dim state is cached rather than read at render time.** Rendering is synchronous
+    and the answer is a tmux read, so the read happens on the pane's own reload cycle and this
+    holds what it last learned. The cost of the cache is a hint that can lag the other pane's
+    cursor by one tick; the cost of not having one would be a `show-options` on every redraw of
+    every pane, and a hint row that cannot be drawn without awaiting.
+    """
+
+    #: The pane's own keys, which the chords are appended to. Empty on a pane that has none.
+    chord_hint_base: str = ""
+
+    #: What the last read found. `False` until one has happened, so a pane that has never read
+    #: draws the layer dim rather than promising something it has not checked.
+    _chord_live: bool = False
+
+    #: This pane's own timer for the read above, or `None` off a console. Its own rather than
+    #: borrowed, because the panes that carry this hint do not all reload anything: the limits
+    #: and feed panes poll their own content, the projects pane polls nothing at all, and the
+    #: fact being watched belongs to none of them -- it is the *other* pane's cursor.
+    _chord_timer: Timer | None = None
+
+    def start_chord_hint(self) -> None:
+        """Take the first reading and keep it current. Called from a pane's `populate`.
+
+        Same cadence as the sessions pane's own reload, deliberately: what this watches is that
+        pane's cursor, so reading it faster would only find the same answer sooner than the
+        thing being watched can change it.
+        """
+        if self.tui.services.console_holds_slot is None or self._chord_timer is not None:
+            return
+        self._chord_timer = self.set_interval(_SESSIONS_AUTO_REFRESH, self._chord_hint_tick)
+        self.call_after_refresh(self._chord_hint_tick)
+
+    async def _chord_hint_tick(self) -> None:
+        if self.showing:
+            await self.refresh_chord_hint()
+
+    def hint_content(self, base: str) -> str | Content:
+        if self.tui.services.console_holds_slot is None:
+            # Not a console pane, so there is no layer to advertise. `hosting_mode` gates the
+            # capability, so its absence is the declared absence of the whole feature (DEC-046)
+            # -- exactly the condition `check_action` uses to refuse the chords themselves.
+            return base
+        return chord_hint_content(base, live=self._chord_live)
+
+    async def refresh_chord_hint(self) -> None:
+        """Re-read whether anything is selected, and redraw the row if the answer changed.
+
+        Asks `selected_session`, not the raw option: that is the same question the chord asks,
+        so a pane whose slot mark says it may not read the selection draws the layer dim rather
+        than bright-and-refused. Guarded like every other post-await continuation here -- this
+        runs from a timer, and the owner can leave between the read and the redraw.
+        """
+        if self.tui.services.console_holds_slot is None:
+            return
+        try:
+            live = await self.tui.selected_session() is not None
+        except Exception:  # pragma: no cover - `selected_session` catches its own
+            return
+        if live == self._chord_live or not self.showing:
+            self._chord_live = live
+            return
+        self._chord_live = live
+        self.set_hint(self.hint_content(self.chord_hint_base))
+
+
 #: Which action each row key names. The chord layer arrives holding a *key*; the row bindings
 #: arrive holding an *action*, because that is what `Binding` was given. One mapping, so the
 #: two entry points cannot disagree about what `s` means.
